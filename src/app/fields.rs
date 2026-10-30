@@ -411,6 +411,13 @@ impl App {
             Field::Gear => {
                 match self.live.get(Metric::Gear) {
                     // a 1x system (no front, 0): the rear alone, "11" (sensors.rs)
+                    Some(g) if gear_teeth(self.settings.chainrings, self.settings.cassette, g).is_some() => {
+                        if let Some((ring, cog)) = gear_teeth(self.settings.chainrings, self.settings.cassette, g) {
+                            l.push_u32(u32::from(ring));
+                            l.push_str("x");
+                            l.push_u32(u32::from(cog));
+                        }
+                    }
                     Some(g) => {
                         if g >> 8 != 0 {
                             l.push_u32(u32::from(g >> 8));

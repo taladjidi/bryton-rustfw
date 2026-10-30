@@ -331,6 +331,10 @@ pub struct Settings {
     pub ready_check: bool,
     /// SUNSET ALERT: an index into [`SUNSET_LEAD_MIN`]; 0 (OFF) in a file that predates it. Kept in settings.bin only.
     pub sunset_alert: usize,
+    /// CHAINRINGS: an index into [`CHAINRINGS`] (0: OFF, gear numbers); settings.bin only.
+    pub chainrings: usize,
+    /// CASSETTE: an index into [`CASSETTES`] (0: OFF); settings.bin only.
+    pub cassette: usize,
     /// CLIMBS (BIKE): the climbs ahead are MEDIUM+ (category 3 and harder, a score of 16000 or more) or all of them
     /// (data 152); ALL in a file that predates it.
     pub climbs_medium: bool,
@@ -410,6 +414,40 @@ pub const POWER_SMOOTH_S: [u32; 4] = [1, 3, 5, 10];
 
 /// SUNSET ALERT's choices, minutes before the sunset (0: off); the banner says it once a ride.
 pub const SUNSET_LEAD_MIN: [u16; 4] = [0, 15, 30, 60];
+
+/// CHAINRINGS presets: a name and the teeth, smallest ring first (the Di2's front gear 1; 0 for a 1x system, which
+/// reports no front, uses the first). Entry 0 is OFF. Front 1 = smallest is inferred (Di2 reports positions only).
+pub const CHAINRINGS: [(&str, &[u8]); 6] = [
+    ("OFF", &[]),
+    ("50/34", &[34, 50]),
+    ("52/36", &[36, 52]),
+    ("53/39", &[39, 53]),
+    ("48/31", &[31, 48]),
+    ("1X 42", &[42]),
+];
+
+/// CASSETTE presets: a name and the teeth, smallest cog first. The Di2's rear gear 1 is the largest cog (inferred),
+/// so gear `n` of a cassette is `teeth[len - n]`. Shimano's published 11 and 12-speed ratios.
+pub const CASSETTES: [(&str, &[u8]); 7] = [
+    ("OFF", &[]),
+    ("11-28 11S", &[11, 12, 13, 14, 15, 17, 19, 21, 23, 25, 28]),
+    ("11-30 11S", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30]),
+    ("11-32 11S", &[11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32]),
+    ("11-34 11S", &[11, 12, 13, 14, 16, 18, 20, 23, 26, 30, 34]),
+    ("11-30 12S", &[11, 12, 13, 14, 15, 16, 17, 19, 21, 24, 27, 30]),
+    ("11-34 12S", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30, 34]),
+];
+
+/// The teeth of a Di2 gear word ([`Metric::Gear`]: front << 8 | rear, from 1) under the chosen presets, as
+/// (front, rear); None when a preset is OFF or the gear is outside it.
+pub fn gear_teeth(chainrings: usize, cassette: usize, gear: u16) -> Option<(u8, u8)> {
+    let rings = CHAINRINGS.get(chainrings)?.1;
+    let cogs = CASSETTES.get(cassette)?.1;
+    let front = usize::from(gear >> 8);
+    let ring = *rings.get(front.saturating_sub(1))?;
+    let cog = *cogs.get(cogs.len().checked_sub(usize::from(gear & 0xff))?)?;
+    Some((ring, cog))
+}
 
 impl Settings {
     /// The theme's name as the menu shows it.
@@ -550,6 +588,8 @@ impl Settings {
             start_reminder: true,
             ready_check: true,
             sunset_alert: 0,
+            chainrings: 0,
+            cassette: 0,
             climbs_medium: false,
             climb_page: true,
             date_fmt: DateFormat::Dmy,
@@ -826,6 +866,14 @@ impl Settings {
                     l.push_str(" MIN");
                 }
             },
+            Setting::Chainrings => match CHAINRINGS.get(self.chainrings) {
+                Some((name, _)) if self.chainrings > 0 => l.push_str(name),
+                _ => l.push_str("OFF"),
+            },
+            Setting::Cassette => match CASSETTES.get(self.cassette) {
+                Some((name, _)) if self.cassette > 0 => l.push_str(name),
+                _ => l.push_str("OFF"),
+            },
             Setting::ClimbsMedium => l.push_str(if self.climbs_medium { "MEDIUM+" } else { "ALL" }),
             Setting::ClimbPage => l.push_str(if self.climb_page { "ON" } else { "OFF" }),
             Setting::DateFormat => l.push_str(match self.date_fmt {
@@ -964,6 +1012,8 @@ impl Settings {
             Setting::DateFormat => self.date_fmt = self.date_fmt.next(),
             Setting::ReadyCheck => self.ready_check = !self.ready_check,
             Setting::SunsetAlert => self.sunset_alert = (self.sunset_alert + 1) % SUNSET_LEAD_MIN.len(),
+            Setting::Chainrings => self.chainrings = (self.chainrings + 1) % CHAINRINGS.len(),
+            Setting::Cassette => self.cassette = (self.cassette + 1) % CASSETTES.len(),
             Setting::ZonesBy => self.zones_lthr = !self.zones_lthr,
             Setting::ZonesReset => self.zone_custom = false,
             Setting::Sex => self.female = !self.female,

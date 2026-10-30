@@ -334,3 +334,22 @@ fn old_page_in_register_14_survives_pairing() {
     let app2 = App::start(&mut sim2, Some(KEY));
     assert_eq!(app2.pages[0], page.into(), "kept");
 }
+
+/// CHAINRINGS and CASSETTE: with presets the Di2's gear 2-11 reads as teeth ("50x11": the largest ring, rear 11 of 11
+/// is the smallest cog), 2-10 as "50x12"; a gear outside the cassette, or a preset OFF, keeps the numbers.
+#[test]
+fn gear_field_shows_teeth() {
+    let (mut sim, mut app) = di2_app(di2, Remote::None);
+    run_to(&mut sim, &mut app, 3000);
+    assert_eq!(app.field_text(Field::Gear).as_str(), "2-11");
+    app.settings.chainrings = 1;
+    assert_eq!(app.field_text(Field::Gear).as_str(), "2-11", "one preset alone");
+    app.settings.cassette = 1;
+    assert_eq!(app.field_text(Field::Gear).as_str(), "50x11");
+    run_to(&mut sim, &mut app, 21_000);
+    assert_eq!(app.field_text(Field::Gear).as_str(), "50x12");
+    assert_eq!(crate::gear_teeth(1, 1, 0x0311), None, "front 3 of 2");
+    assert_eq!(crate::gear_teeth(1, 1, 0x0200), None, "rear 0");
+    assert_eq!(crate::gear_teeth(1, 1, 0x020c), None, "rear 12 of 11");
+    assert_eq!(crate::gear_teeth(5, 1, 0x000b), Some((42, 11)), "1x: no front reported");
+}

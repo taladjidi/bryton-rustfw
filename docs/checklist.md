@@ -367,8 +367,8 @@ Storage, USB and updates
 - [ ] Data reset: trips, odometer, factory settings (stock)
 - [ ] About: firmware version, UUID, position (stock): over USB only
 - [ ] Altitude calibration at saved places (stock)
-- [ ] Sensor names and gear teeth for Di2 (stock)
-- [ ] Remote button actions for Di2 hood buttons (stock, patch P12)
+- [x] Sensor names and gear teeth for Di2 (stock): sim (CHAINRINGS and CASSETTE presets); teeth from the Di2 itself open
+- [x] Remote button actions for Di2 hood buttons (stock, patch P12): sim (DI2 KEYS)
 
 ## History and analysis
 
