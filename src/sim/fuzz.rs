@@ -4915,6 +4915,66 @@ fn settings_file_start_cue_bytes() {
     assert!(off > 1000 && on > 1000 && wild > 1000 && cut > 1000, "{off} {on} {wild} {cut}");
 }
 
+/// The fault log (storage/faultlog.rs): the line of any marker word, and an append to a log as anything may have left
+/// it on the card (any size in its entry, right or wrong for its chain, any bytes in it): never a panic; an append
+/// ends the log with the line, within the cap; none fails (a size its chain cannot hold starts the log again). Created,
+/// appended and started again (the cap, a wrong size) are each reached.
+#[test]
+fn fault_log_files() {
+    use crate::fat::Fat;
+    use crate::fat::tests::Ram;
+    use crate::storage::faultlog::{CAP, FILE, LOG_DIR, append, line};
+    let mut r = xorshift(7);
+    for _ in 0..20_000 {
+        let w = r();
+        let l = line(w, (2026, (w % 13) as u8, (w % 32) as u8, (w % 24) as u8, (w % 60) as u8, 0), "fuzz");
+        assert!(l.as_str().ends_with('\n') && l.as_str().len() <= 256, "{w:#x}");
+    }
+    let base = crate::fat::tests::image();
+    let t = (0, 0);
+    let (mut created, mut appended, mut rotated) = (0, 0, 0);
+    for seed in 1..=300u32 {
+        let mut r = xorshift(seed);
+        let mut d = Ram(base.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let top = fat.ensure_dir(&mut d, fat.root(), crate::recorder::DIR, t).unwrap();
+        let mut size = None;
+        if seed % 4 != 0 {
+            // a log there: some sectors of anything, then a size in its entry
+            let dir = fat.ensure_dir(&mut d, top, LOG_DIR, t).unwrap();
+            let mut h = fat.create(&mut d, dir, FILE, t).unwrap();
+            let sectors = 1 + r() % 140;
+            let data: Vec<u8> = bytes(seed, sectors as usize * 512).collect();
+            fat.write_sectors(&mut d, &mut h, 0, &data).unwrap();
+            let s = match r() % 4 {
+                0 => r(),                       // anything
+                1 => CAP - r() % 300,           // near the cap
+                _ => r() % (sectors * 512 + 1), // within its chain
+            };
+            let at = h.entry_lba as usize * 512 + usize::from(h.slot) * 32 + 28;
+            d.0[at..at + 4].copy_from_slice(&s.to_le_bytes()); // the entry's size, raw
+            size = Some(s);
+        }
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let l = line(r(), (2026, 10, 30, 9, 0, 0), "fuzz");
+        let text = l.as_str().as_bytes();
+        match append(&mut fat, &mut d, top, text, t) {
+            Ok(()) => {
+                let got = crate::fat::tests::read_all(&mut fat, &mut d, "Rustfw/Log/faults.log").unwrap();
+                assert!(got.ends_with(text) && got.len() <= CAP as usize, "seed {seed}");
+                match size {
+                    None => created += 1,
+                    Some(s) if s > 0 && got.len() == text.len() => rotated += 1,
+                    Some(_) => appended += 1,
+                }
+            }
+            Err(e) => panic!("seed {seed}: {e:?}"),
+        }
+    }
+    std::println!("fault log: {created} created, {appended} appended, {rotated} started again");
+    assert!(created > 10 && appended > 10 && rotated > 10, "{created} {appended} {rotated}");
+}
+
 /// SUNSET ALERT (settings.bin byte 155, after DATE FORMAT): any length from 152 to 157 and any byte read as the module
 /// doc says (a byte under 4 is the choice, another value or a file cut before it reads OFF). The fuzz reaches a choice,
 /// a wild byte and a file cut before the byte.

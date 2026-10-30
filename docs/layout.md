@@ -21,6 +21,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `settings_file.rs`: `\Rustfw\settings.bin`, the settings' file (`SettingsCopy`: two copies, magic, version,
     length, sequence number, CRC-32; read with the pages' file, written between rides; which wins over the
     registers; the migration from them).
+  - `screenshot.rs`: SYSTEM > SCREENSHOT (the menus left, the screen under them written at the next pass, never with a
+    ride open). `faultlog.rs`: the fault marker found at the start, its line appended once the card is quiet.
   - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input` (global arms, then one `input_<screen>` per screen), `touch`.
   - `editor.rs`: the page editor on the page (`Screen::Edit`, its actions, keep or drop), pages added and deleted,
     and `\Rustfw\pages.bin` (read after the start, written between rides, the backup registers after it).
@@ -207,6 +209,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/storage/trash.rs`: HISTORY's DELETE: a ride moved (never erased) into `\Rustfw\Deleted` (its full copy
   into `\Rustfw\Deleted\Full`), `\Rustfw\delete.rec` naming the move so the next start finishes one a cut left;
   stock's `.sum` / `.csum` left as they are (module doc: why).
+- `src/storage/screenshot.rs`: the screenshot file, `\Screenshot\YYYYMMDDhhmmss.bmp` (stock's): a 16-bit BI_BITFIELDS
+  BMP filled from the rows, the room checked first, the chain written before its entry. `src/storage/faultlog.rs`: the
+  fault marker's layout (register 29, written by hw.rs's handler: kind, panic line or CFSR bits, logged, the count),
+  the log's line, and the append to `\Rustfw\Log\faults.log` (capped at 64 KB).
 - `src/storage/volume.rs`: STORAGE's survey of the card, read a pass at a time: the size and free space (FSInfo's count as an estimate, then the FAT counted), the rides in `\Activities` and the oldest five by name; the size and day texts.
 - `src/storage/history.rs`: the ride history: the index of stock's rides (filled by that scan, newest first) and a
   past ride's card, its file read once with the position (`fitread::Reader::with_position`).
@@ -271,6 +277,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `status_tests.rs` (QUICK STATUS), `switch_tests.rs` (page switches, names, moves, the auto scroll, swipe up),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
   `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
+  `diag_tests.rs` (SCREENSHOT and the fault log: the file equals the panel, a full card, cut at every sector),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).

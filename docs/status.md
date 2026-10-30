@@ -10,6 +10,14 @@ A feature not listed here was seen on the unit.
 
 - **QUICK STATUS (sim only)**: a tap on a plain field of a ride page opens six chosen fields. Still to see: the tap on a wet or gloved finger (a stray tap only opens a read-only overlay, 10 s), the six values updating each second, the picker in PAGES > QUICK FIELDS, and the choice kept after a restart (settings.bin bytes 156 to 162).
 
+- **Screenshots and the fault log (app/screenshot.rs, app/faultlog.rs, storage/screenshot.rs, storage/faultlog.rs;
+  hw.rs's marker now keeps the kind and detail)**: sim only, and both write the card (an `EMMC_WRITE=1` build). Still to
+  see: SYSTEM > SCREENSHOT on the overview and on a ride page, then the drive lent and `\Screenshot\` opened on the
+  computer (the picture as `tools/dev.py shot` shows it, the time it took); a fault on purpose (a `tools/dev.py poke`
+  to an unmapped address: a CPU fault with PRECISERR or IBUSERR) and a panic, then after the restart
+  `\Rustfw\Log\faults.log` read on the computer (one line each, the CFSR bits as named, the marker's register 29 read
+  with `dev.py peek` showing bit 10 set); and a fault mid-ride: the line written only after the resumed ride is saved.
+
 - **FONT = BARLOW (T3, sim only)**: DISPLAY > FONT cycles PIXEL and BARLOW, and the smooth text draws in the pixel cells. Still to see: the labels and values on the ride page and the menus with BARLOW (no box moves, the strip and the fields redraw whole once), and a restart with BARLOW kept (the file read, then the register mirror).
 - **Heart rate intervals with a power meter paired (sensors.rs `each_interval_once`, radio.rs)**: sim only. Still to see: DFA a1 and the hrv messages on a ride with the strap and a power meter after the fix, each interval once (the count of hrv intervals against the beats).
 - **Sensor names and the strap's battery (drivers/sensors.rs pages 7 and 80, app/menus.rs SENSORS row, app/fields.rs HR BATT)**: sim only. Still to see: the strap's percent on HR BATT (its page 7 on the owner's strap, ANT+ profile layout as openant reads it), a SENSORS row reading "POLAR HR" after the strap sends page 80, and the row back to "HEART RATE" after a forget.

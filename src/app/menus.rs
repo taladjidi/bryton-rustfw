@@ -317,7 +317,7 @@ impl App {
                 }
                 self.edit_row_value(menu, r, &mut value, &mut color);
             }
-            Row::Open(_) | Row::Nearby | Row::About | Row::EditPage(_) => {}
+            Row::Open(_) | Row::Nearby | Row::About | Row::EditPage(_) | Row::Screenshot => {}
             Row::BtTrainer => {
                 let heard = self.ftms_on() && self.trainer_heard();
                 value.push_str(match (self.sensors_store.bt, self.ble) {
@@ -719,6 +719,7 @@ impl App {
             }
             Some(Row::About) => self.open(Screen::About),
             Some(Row::GiveUpSave) => self.give_up_save(b, menu, sel),
+            Some(Row::Screenshot) => self.screenshot(),
             Some(Row::Notif(k)) => self.open(Screen::Notif(k, 0)),
             // paired and in use: forgotten; behind an ANT+ trainer (ANT FIRST): searched again, to take its place
             Some(Row::BtTrainer) if self.ftms_on() => {

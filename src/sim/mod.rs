@@ -1644,3 +1644,6 @@ mod recorder_tests;
 
 #[cfg(test)]
 mod drive_tests;
+
+#[cfg(test)]
+mod diag_tests;

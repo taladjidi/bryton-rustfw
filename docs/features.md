@@ -410,7 +410,8 @@ MENU
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, THEME
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
-     +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
+     +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >,
+                   SCREENSHOT
 ```
 
 - **SENSORS:** Start on a row: an off sensor searches; a searching one stops; a paired one heard asks "SURE?" and
@@ -456,7 +457,21 @@ MENU
   "~" (only a hint: stale after a power cut) until the FAT is counted over the passes, then the counted value, RIDES in `\Activities`, then the five oldest by name, each as its
   day and size; a tap opens the ride's HISTORY card, where DELETE is). STORAGE is read only, a pass at a time while the
   screen is open and no ride runs or waits to be saved (`--` until then, or while the card is lent to the computer);
-  DELETE restarts the count.
+  DELETE restarts the count. SCREENSHOT leaves the menus and saves the screen under them (the overview, or the ride
+  page they were opened over) as `\Screenshot\YYYYMMDDhhmmss.bmp`, stock's folder and name: a 16-bit BMP of the panel's
+  own pixels (150 KB), with the notice SCREENSHOT SAVED. A menu row rather than a key combination, so it never fires by
+  accident; not while a ride is open or waits to be saved (NOT DURING A RIDE), with the card lent (USB DRIVE ON) or on a
+  read-only build. Less than the file and 8 MB free (the recorder's reserve) is CARD FULL: NO SCREENSHOT, nothing
+  written (the FAT counted first after a failed write, so a stale count never lets it in); a second shot in the same
+  second is SCREENSHOT: TRY AGAIN. The file's entry is written last, so a power cut or a write error never leaves a
+  partial picture (a failed write of the pixels frees what it took; a failed entry leaves its clusters lost, never freed, since the entry may be on the card unseen).
+- **Fault log:** after a reset that followed a fault or a panic (the banner FAULT RESET n), one line goes to
+  `\Rustfw\Log\faults.log` once the card is quiet (no ride open or waiting to be saved: a ride resumed after the fault
+  is saved first): the time of the restart, what it was (a panic and its source line; a CPU fault and its CFSR bits,
+  such as PRECISERR or UNDEFINSTR; the stack canary), the faults in a row and the build. Once per fault (the marker
+  is marked logged; a failed write is said once and tried again a minute later); past 64 KB the log starts again
+  (emptied first). Not kept by the marker, so not logged: the PC and LR, the
+  panic's file, the uptime at the fault.
 - **Where the rows were** before this tree (2026-10-25), old path -> new path: SENSORS > LUX / TEMP C / HPA -> SYSTEM >
   BUILT IN; RIDER > MAX HR, FTP W, WEIGHT KG, W' KJ -> SETTINGS > ME > MAX HR, FTP, WEIGHT, W'; RIDER > WKT POWER ->
   DISPLAY > GAUGE POWER; DEVICE > LIGHT % / LIGHT OFF / TOUCH -> DISPLAY > BRIGHTNESS / OFF AFTER / TOUCH; DEVICE >
@@ -932,7 +947,8 @@ The register layout, for the words still written:
   13..15), the heart rate alert in 5 bpm steps (16..21), the single presses' actions (22..24, 25..27). Read from earlier
   builds: tag 0xc2 (the heart rate in bpm, the single presses in register 16).
 - **Others:** 5..8 and 10 the paired ANT+ sensors, 14 the shifting system, 17 and 18 the GNSS aiding, 20..27 the ride
-  pages and the overview (0xd / 0xe), 29 the fault marker, 30 a ride open on the card.
+  pages and the overview (0xd / 0xe), 29 the fault marker (0xfa, the kind and detail, logged, the faults in a row:
+  storage/faultlog.rs), 30 a ride open on the card.
 - **18, tags 0xa or 0x5:** AUTO OFF in bits 22..24 (an index into the AUTO OFF choices, 0 off), kept through a restart.
 
 ## Phone (BLE, no app)

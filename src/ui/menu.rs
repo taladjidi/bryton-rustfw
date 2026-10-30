@@ -494,6 +494,8 @@ pub enum Row {
     Drive,
     /// GIVE UP SAVE, first in SYSTEM only while a save is stuck (app/riding.rs, `give_up_save`).
     GiveUpSave,
+    /// SCREENSHOT: Select leaves the menus and saves the screen under them (app/screenshot.rs).
+    Screenshot,
     /// A setting.
     Set(Setting),
     /// ANT sensor `n` ([`crate::sensors::Kind::ALL`]): Select pairs or forgets it.
@@ -569,6 +571,7 @@ impl Row {
             Row::AltGps => "FROM GPS",
             Row::Drive => "USB DRIVE",
             Row::GiveUpSave => "GIVE UP SAVE",
+            Row::Screenshot => "SCREENSHOT",
             Row::Set(s) => s.label(),
             Row::Read(r) => match r {
                 Reading::Lux => "LUX",
@@ -884,7 +887,7 @@ pub const BIKE: [Row; 20] = [
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
-pub const SYSTEM: [Row; 8] = [
+pub const SYSTEM: [Row; 9] = [
     Row::Drive,
     Row::Stock(StockRow::Import),
     Row::Open(Menu::Gps),
@@ -892,6 +895,7 @@ pub const SYSTEM: [Row; 8] = [
     Row::Open(Menu::BuiltIn),
     Row::Open(Menu::Storage),
     Row::About,
+    Row::Screenshot,
     Row::Set(Setting::AutoOff),
 ];
 
