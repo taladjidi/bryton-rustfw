@@ -229,9 +229,10 @@ impl App {
     /// ends on; else nothing (the CLIMB page leaves the round and the screen moves on).
     fn close_segment_page(&mut self, b: &mut impl Board) {
         let card = self.seg_ui.result.is_some()
-            && matches!(self.screen, Screen::Main | Screen::Ride(_))
+            && matches!(self.screen, Screen::Main | Screen::Ride(_) | Screen::Status)
             && self.segments().is_some_and(|s| self.seg_ui.result.is_some_and(|r| s.seg().header.id == r.0));
         if card {
+            self.drop_status(); // the card returns to the page under it
             self.seg_ui.prev = self.screen;
             self.screen = Screen::SegmentResult;
             self.seg_ui.card_ms = 0;

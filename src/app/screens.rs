@@ -173,7 +173,7 @@ impl App {
     /// Draws the whole screen below the bar from the state (the panel was cleared, or a screenshot row).
     pub(crate) fn draw_screen(&self, c: &mut impl Canvas) {
         match self.screen {
-            Screen::Main | Screen::Ride(_) | Screen::Edit(..) => {
+            Screen::Main | Screen::Ride(_) | Screen::Edit(..) | Screen::Status => {
                 let (_, cy, _, ch) = c.clip();
                 for (i, (bx, w)) in self.widgets().enumerate() {
                     // a box wholly outside the clip (a banner's redraw over the page's lower half) would be computed
@@ -189,6 +189,7 @@ impl App {
                 let mut title = Line::<16>::new();
                 match menu {
                     Menu::Page(OVERVIEW) => title.push_str("OVERVIEW"),
+                    Menu::Page(QUICK) => title.push_str("QUICK STATUS"),
                     Menu::Steps if !self.plan.workout.name().is_empty() => title.push_str(self.plan.workout.name()),
                     Menu::Edit(k) => {
                         title.push_str("PAGE ");
@@ -252,6 +253,7 @@ impl App {
             Screen::Main => (OVERVIEW, &[Widget::Today, Widget::Date, Widget::Notices]),
             Screen::Ride(n) => (n, &[]),
             Screen::Edit(..) => (EDITED, &[]),
+            Screen::Status => (QUICK, &[]),
             _ => return all.into_iter().take(0),
         };
         let more = self.more_shown() == Some(page);
@@ -260,6 +262,7 @@ impl App {
             CLIMB => page::Page::from_cfg(CLIMB_PAGE).unwrap_or(BLANK),
             WORKOUT => page::Page::from_cfg(WORKOUT_PAGE).unwrap_or(BLANK),
             EDITED => self.page_ref(EDITED).copied().unwrap_or(BLANK),
+            QUICK => self.settings.quick_page,
             n if more => self.more_page(n),
             n => self.ride_page_ref(n).copied().unwrap_or(BLANK),
         };
