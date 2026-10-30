@@ -106,7 +106,7 @@ impl App {
         Some(self.basemap.stats)
     }
 
-    /// Gives the scan of stock's rides its cache (main.rs: 256 KB in AXI SRAM): read at the first pass, so the
+    /// Gives the scan of stock's rides its cache (main.rs: 192 KB in AXI SRAM): read at the first pass, so the
     /// overview's totals show at once, then only new or changed rides are read.
     pub fn set_scan_cache(&mut self, c: &'static mut stock::Cache) {
         self.stock.set_cache(c);
