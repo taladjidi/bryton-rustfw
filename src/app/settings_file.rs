@@ -146,7 +146,7 @@ impl SettingsCopy {
         put(&[u8::from(s.start_reminder), u8::from(s.ready_check)]);
         put(&[u8::from(s.climbs_medium), u8::from(s.climb_page), s.date_fmt as u8]);
         put(&[s.sunset_alert as u8]);
-        put(&[0, 0]); // bytes 156 and 157: the Di2 chainrings and cassette (another branch); zero until it merges
+        put(&[s.chainrings as u8, s.cassette as u8]);
         put(&[u8::from(s.quick_status)]);
         put(&s.quick_page.fields.map(|f| f as u8)[..6]);
         out[..4].copy_from_slice(MAGIC);
@@ -287,10 +287,11 @@ impl SettingsCopy {
         s.date_fmt = data.next().and_then(crate::DateFormat::from_byte).unwrap_or(d.date_fmt);
         // SUNSET ALERT (after DATE FORMAT): a file without it reads OFF; a byte out of its range reads OFF
         s.sunset_alert = data.next().map(usize::from).filter(|&v| v < SUNSET_LEAD_MIN.len()).unwrap_or(d.sunset_alert);
+        // CHAINRINGS and CASSETTE (after SUNSET ALERT): a file without them, or a byte out of range, reads OFF
+        s.chainrings = data.next().map(usize::from).filter(|&v| v < CHAINRINGS.len()).unwrap_or(d.chainrings);
+        s.cassette = data.next().map(usize::from).filter(|&v| v < CASSETTES.len()).unwrap_or(d.cassette);
         // QUICK STATUS and its six fields (after SUNSET ALERT): a file without them reads ON and the default fields; a
         // file cut inside the fields, or a byte past the last field, keeps the default for that field
-        data.next(); // the Di2 chainrings and cassette (bytes 156, 157)
-        data.next();
         s.quick_status = flag(data.next(), d.quick_status);
         let mut q = QUICK_FIELDS;
         for f in q.iter_mut() {
@@ -1072,5 +1073,31 @@ mod day_night_file_tests {
         let crc = inflate::crc32(wild[..CRC_AT].iter().copied());
         wild[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(read(&wild).map(|r| r.1.fields[0]), Some(QUICK_FIELDS[0]), "a byte out of range");
+    }
+
+    /// CHAINRINGS and CASSETTE (bytes 156, 157): kept; older files (156, 157 bytes) and out of range bytes read OFF.
+    #[test]
+    fn gear_presets_round_trip_and_older_files_read_off() {
+        let s = Settings { chainrings: 2, cassette: 5, ..Settings::from_word(0) };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(sec[28 + 156..28 + 158], [2, 5]);
+        let read =
+            |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.chainrings, c.settings.cassette));
+        assert_eq!(read(&sec), Some((2, 5)));
+        let fix = |sec: &mut [u8; 512], len: u16| {
+            sec[6..8].copy_from_slice(&len.to_le_bytes());
+            let crc = inflate::crc32(sec[..CRC_AT].iter().copied());
+            sec[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
+        };
+        for (len, want) in [(155u16, (0, 0)), (156, (0, 0)), (157, (2, 0))] {
+            let mut old = sec;
+            fix(&mut old, len);
+            assert_eq!(read(&old), Some(want), "a {len}-byte file");
+        }
+        let mut wild = sec;
+        wild[28 + 156] = 99;
+        wild[28 + 157] = 99;
+        fix(&mut wild, 158);
+        assert_eq!(read(&wild), Some((0, 0)));
     }
 }

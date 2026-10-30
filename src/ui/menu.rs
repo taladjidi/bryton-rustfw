@@ -154,6 +154,10 @@ pub enum Setting {
     LapMin,
     /// SUNSET ALERT: OFF, or the minutes before the sunset it says so (`sunset_alert`, [`crate::SUNSET_LEAD_MIN`]).
     SunsetAlert,
+    /// CHAINRINGS: the front chainrings' teeth, a preset (`chainrings`, [`crate::CHAINRINGS`]); OFF shows gear numbers.
+    Chainrings,
+    /// CASSETTE: the rear cogs' teeth, a preset (`cassette`, [`crate::CASSETTES`]); OFF shows gear numbers.
+    Cassette,
     /// LIVE SEGMENTS: the segments of the card are matched during a ride, on or off (`live_segments`).
     LiveSegments,
     /// The effort a live segment is ridden against: AUTO, PR, KOM, QOM or RECENT (`seg_target`).
@@ -239,11 +243,13 @@ impl Remote {
 }
 
 /// The Di2 buttons menu: an action for each press ([`crate::sensors::Press`]).
-pub const REMOTE: [Row; 4] = [
+pub const REMOTE: [Row; 6] = [
     Row::Set(Setting::Remote(0)),
     Row::Set(Setting::Remote(1)),
     Row::Set(Setting::Remote(2)),
     Row::Set(Setting::Remote(3)),
+    Row::Set(Setting::Chainrings),
+    Row::Set(Setting::Cassette),
 ];
 
 impl Setting {
@@ -306,6 +312,8 @@ impl Setting {
             Setting::PowerSmooth => "POWER SMOOTH",
             Setting::AutoLap => "AUTO LAP",
             Setting::SunsetAlert => "SUNSET ALERT",
+            Setting::Chainrings => "CHAINRINGS",
+            Setting::Cassette => "CASSETTE",
             Setting::LiveSegments => "LIVE SEGMENTS",
             Setting::SegTarget => "TARGET",
             Setting::Sound => "SOUND",
