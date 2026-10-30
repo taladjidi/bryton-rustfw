@@ -177,7 +177,10 @@ fn perf_budgets() {
         sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
         type Broadcast = fn(u64) -> [u8; 8]; // a sensor's page at a time
         let (power_fn, hr_fn): (Broadcast, Broadcast) = if fast { (power_fast, hr_fast) } else { (power_noisy, hr72) };
-        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fn, network: 0, ack: &[] });
+        let idle = screen == PAGES; // the overview with no ride: a bike at a standstill, no pedalling
+        if !idle {
+            sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fn, network: 0, ack: &[] });
+        }
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
         sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fn, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
@@ -192,7 +195,7 @@ fn perf_budgets() {
             }
             assert!(app.courses.as_deref().unwrap().on.is_some());
         }
-        sim.gnss.fix = Some(8000);
+        sim.gnss.fix = Some(if idle { 0 } else { 8000 });
         if screen != PAGES {
             app.press(&mut sim, Press::Short(Key::Start));
             app.screen = Screen::Ride(screen); // the page measured (a course loaded opens the course page)
@@ -219,8 +222,7 @@ fn perf_budgets() {
     type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, bool, (u64, u64));
     let cases: [Case; 11] = [
         // measured 4 px/s, 0 windows/s (the strip; was 53 with the big clock's digits once a minute)
-        // 126 px/s is the start reminder: one banner (10560 px) in the window, once per 5 minutes
-        ("overview", [values, graph, map], PAGES, None, false, (150, 3)),
+        ("overview", [values, graph, map], PAGES, None, false, (30, 3)),
         // made in the editor: 2162, 6 (7101, 10 with the zone fills, 8959 at VALUE_MARGIN 2): eight values at 3x in
         // 120 x 74 boxes, the readings once a second, the zone a bar
         ("eight values", [eight, graph, map], 0, None, false, (3_500, 12)),
