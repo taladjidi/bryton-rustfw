@@ -376,14 +376,14 @@ fn start_from_the_overview() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
-    app.settings.ready_check = false; // these tests are about what the start does, not the card
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Ride(0));
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 200);
-    assert_eq!(app.notes.text.as_str(), "RIDE STARTED");
+    assert_eq!(app.notes.kind, Banner::Ready, "the ready card over the ride that runs from the press");
     assert_consistent(&sim, &app);
     sim.save("ride_started");
+    run(&mut sim, &mut app, 3500);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.notes.text.as_str(), "PAUSED: HOLD START TO END");
     save_ride(&mut sim, &mut app);

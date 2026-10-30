@@ -87,7 +87,7 @@ fn the_ready_card_lists_gps_sensors_and_battery_and_never_delays_the_ride() {
     run(&mut sim, &mut app, 500);
     sim.save("ready_card");
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.notes.ms, None, "skipped");
+    assert_eq!(app.notes.text.as_str(), "RECORDING", "skipped, and said");
     assert_eq!(app.ride.state(), ride::State::Running, "Start on the card does not pause");
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.ride.state(), ride::State::Paused, "the next one does");
@@ -107,4 +107,38 @@ fn the_ready_card_lists_gps_sensors_and_battery_and_never_delays_the_ride() {
     app.settings.ready_check = false;
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.notes.text.as_str(), "RIDE STARTED");
+}
+
+/// Every combination of the eight kinds (not paired, heard, missing), with a low, a full or no battery: the card is
+/// two lines and both fit the banner; reaches names cut with "+N", all found, missing, and nothing paired.
+#[test]
+fn the_ready_card_always_fits_its_two_lines() {
+    let (_sim, mut app) = started();
+    let ids = SensorId { device: 7, trans: 5 };
+    let max = ui::W - 12;
+    let (mut cut, mut ok, mut missing, mut none, mut low_cut) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    for combo in 0..3u32.pow(Kind::ALL.len() as u32) {
+        let mut c = combo;
+        for k in Kind::ALL {
+            let st = c % 3;
+            c /= 3;
+            app.radio.sensors[k as usize] = if st == 0 { Sensor::Off } else { Sensor::Paired(ids) };
+            app.radio.heard_ms[k as usize] = if st == 1 { 100 } else { u32::MAX };
+        }
+        for battery in [Some(100), Some(5), None] {
+            app.strip.battery = battery;
+            assert!(app.ready_card());
+            let text = app.notes.text.as_str();
+            let mut rows = text.split('\n');
+            let (a, b) = (rows.next().unwrap(), rows.next().unwrap_or(""));
+            assert!(rows.next().is_none(), "two lines: {text:?}");
+            assert!(ui::LABEL.width(a) <= max && ui::LABEL.width(b) <= max, "fits: {text:?}");
+            cut += u32::from(b.contains('+'));
+            low_cut += u32::from(b.contains('+') && b.starts_with("LOW"));
+            ok += u32::from(b.ends_with("OK"));
+            missing += u32::from(b.contains("NO ") && !b.contains('+'));
+            none += u32::from(b == "NO SENSORS PAIRED");
+        }
+    }
+    assert!(cut > 10 && low_cut > 10 && ok > 10 && missing > 10 && none > 0, "{cut} {low_cut} {ok} {missing} {none}");
 }

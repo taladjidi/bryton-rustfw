@@ -458,7 +458,6 @@ fn give_up_save_frees_a_stuck_save() {
             crate::fat::write::tests::fill(&mut sim.emmc.image, 300, true);
         }
         let mut app = App::start(&mut sim, None);
-        app.settings.ready_check = false; // these tests are about what the start does, not the card
         app.set_usb(&mut sim, UsbDot::Ready);
         run(&mut sim, &mut app, 1000);
         let rows = |app: &App| (0..app.rows(Menu::System)).filter_map(|i| app.row(Menu::System, i)).collect::<Vec<_>>();
@@ -477,6 +476,7 @@ fn give_up_save_frees_a_stuck_save() {
         app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
         assert!(app.rec.clean.held() && app.ride.state() == ride::State::Running);
         assert_eq!(rows(&app)[0], menu::Row::GiveUpSave);
+        run(&mut sim, &mut app, 3500); // the ready card goes by itself (a key on it only skips it)
 
         app.open(Screen::Menu(Menu::System, 0));
         app.show(&mut sim);

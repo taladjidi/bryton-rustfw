@@ -341,7 +341,8 @@ impl App {
         }
         // the ready card: the ride runs since the press, so Start on it only skips the card (it must not pause)
         if card && i == Input::Select {
-            return;
+            self.tones.play(&BEEP_START); // so a rider who meant to pause knows it did not
+            return self.say("RECORDING");
         }
         // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines
         if cleared && i == Input::Back && !self.phone.ringing {

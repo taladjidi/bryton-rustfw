@@ -182,7 +182,6 @@ fn perf_budgets() {
         sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fn, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
         app.settings.light_level = 0; // steps without simulated time below: the light sensor not read early
-        app.settings.start_reminder = false; // a sensor broadcasting at a standstill: the reminder is measured elsewhere
         app.pages[..3].copy_from_slice(&pages);
         if course {
             app.set_course_memory(crate::storage::course_file::tests::memory());
@@ -220,7 +219,8 @@ fn perf_budgets() {
     type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, bool, (u64, u64));
     let cases: [Case; 11] = [
         // measured 4 px/s, 0 windows/s (the strip; was 53 with the big clock's digits once a minute)
-        ("overview", [values, graph, map], PAGES, None, false, (30, 3)),
+        // 126 px/s is the start reminder: one banner (10560 px) in the window, once per 5 minutes
+        ("overview", [values, graph, map], PAGES, None, false, (150, 3)),
         // made in the editor: 2162, 6 (7101, 10 with the zone fills, 8959 at VALUE_MARGIN 2): eight values at 3x in
         // 120 x 74 boxes, the readings once a second, the zone a bar
         ("eight values", [eight, graph, map], 0, None, false, (3_500, 12)),

@@ -89,28 +89,62 @@ impl App {
                 false
             }
         };
-        // the paired sensors (the trainer has its own screens), heard or missing; the second line is the warning
-        let paired =
-            |k: &&Kind| **k != Kind::Trainer && matches!(self.radio.sensors.get(**k as usize), Some(Sensor::Paired(_)));
-        let missing = Kind::ALL.iter().filter(paired).filter(|k| !self.sensor_heard(**k));
+        // the paired sensors, heard or missing (the trainer has its own screens; the shifting systems only when heard:
+        // they may stay silent at a standstill); the second line is the warning, names cut with "+N" to fit
+        let counted = |k: &&Kind| {
+            let paired = matches!(self.radio.sensors.get(**k as usize), Some(Sensor::Paired(_)));
+            paired && **k != Kind::Trainer && (!matches!(**k, Kind::Shifting | Kind::Di2) || self.sensor_heard(**k))
+        };
+        let mut names = [""; Kind::ALL.len()];
+        let mut miss = 0;
+        for k in Kind::ALL.iter().filter(counted).filter(|k| !self.sensor_heard(**k)) {
+            names[miss] = k.short();
+            miss += 1;
+        }
+        let mut total = miss;
+        if miss == 0 {
+            for k in Kind::ALL.iter().filter(counted) {
+                names[total] = k.short();
+                total += 1;
+            }
+        }
+        let mut l2 = Line::<40>::new();
         if low {
-            l.push_str("LOW BATT ");
+            l2.push_str("LOW BATT");
         }
-        if missing.clone().next().is_some() {
-            l.push_str("NO");
-            for k in missing {
-                l.push_str(" ");
-                l.push_str(k.short());
+        if total == 0 {
+            l2.push_str(if low { "" } else { "NO SENSORS PAIRED" });
+        } else {
+            if miss > 0 {
+                l2.push_str(if low { " NO" } else { "NO" });
             }
-        } else if Kind::ALL.iter().any(|k| paired(&k)) {
-            for k in Kind::ALL.iter().filter(paired) {
-                l.push_str(k.short());
-                l.push_str(" ");
+            for (i, n) in names.iter().take(total).enumerate() {
+                let sep = if l2.as_str().is_empty() { "" } else { " " };
+                let left = total - i - 1;
+                let tail = if left > 0 {
+                    " +9"
+                } else if miss == 0 {
+                    " OK"
+                } else {
+                    ""
+                };
+                let mut t = l2;
+                t.push_str(sep);
+                t.push_str(n);
+                t.push_str(tail);
+                if ui::LABEL.width(t.as_str()) > ui::W - 12 {
+                    l2.push_str(" +");
+                    l2.push_u32((total - i) as u32);
+                    break;
+                }
+                l2.push_str(sep);
+                l2.push_str(n);
+                if left == 0 && miss == 0 {
+                    l2.push_str(" OK");
+                }
             }
-            l.push_str("OK");
-        } else if !low {
-            l.push_str("NO SENSORS PAIRED");
         }
+        l.push_str(l2.as_str());
         self.say_as(l.as_str(), Banner::Ready);
         true
     }
