@@ -433,7 +433,7 @@ pub const CASSETTES: [(&str, &[u8]); 7] = [
     ("11-28 11S", &[11, 12, 13, 14, 15, 17, 19, 21, 23, 25, 28]),
     ("11-30 11S", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30]),
     ("11-32 11S", &[11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32]),
-    ("11-34 11S", &[11, 12, 13, 14, 16, 18, 20, 23, 26, 30, 34]),
+    ("11-34 11S", &[11, 13, 15, 17, 19, 21, 23, 25, 27, 30, 34]),
     ("11-30 12S", &[11, 12, 13, 14, 15, 16, 17, 19, 21, 24, 27, 30]),
     ("11-34 12S", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30, 34]),
 ];
@@ -444,7 +444,7 @@ pub fn gear_teeth(chainrings: usize, cassette: usize, gear: u16) -> Option<(u8, 
     let rings = CHAINRINGS.get(chainrings)?.1;
     let cogs = CASSETTES.get(cassette)?.1;
     let front = usize::from(gear >> 8);
-    let ring = *rings.get(front.saturating_sub(1))?;
+    let ring = if front == 0 && rings.len() == 1 { *rings.first()? } else { *rings.get(front.checked_sub(1)?)? };
     let cog = *cogs.get(cogs.len().checked_sub(usize::from(gear & 0xff))?)?;
     Some((ring, cog))
 }
@@ -1370,5 +1370,17 @@ mod tests {
         // the W' byte is 0..255 (0.5 kJ each): 255 x 500 J overflows a u16, so it clamps to the range's top
         let s = Settings::from_word(0).with_power_word(0xc1_00_ff_00); // W' byte in bits 8..15
         assert_eq!(s.wprime_j, *menu::WPRIME_RANGE.end());
+    }
+
+    /// Each cassette preset ascends, ends on the cog its name says, and has the cogs its "S" says.
+    #[test]
+    fn cassette_presets_are_consistent() {
+        for (name, teeth) in CASSETTES.iter().skip(1) {
+            assert!(teeth.windows(2).all(|w| w[0] < w[1]), "{name} ascends");
+            let big: u8 = name[3..5].parse().unwrap();
+            assert_eq!(teeth.last().copied(), Some(big), "{name} last cog");
+            let speeds: usize = name[6..8].parse().unwrap();
+            assert_eq!(teeth.len(), speeds, "{name} length");
+        }
     }
 }

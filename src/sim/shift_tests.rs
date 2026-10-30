@@ -353,3 +353,25 @@ fn gear_field_shows_teeth() {
     assert_eq!(crate::gear_teeth(1, 1, 0x020c), None, "rear 12 of 11");
     assert_eq!(crate::gear_teeth(5, 1, 0x000b), Some((42, 11)), "1x: no front reported");
 }
+
+/// Review: more gear_teeth edges, a hand-checked pair, and a sweep with no panic over every preset (and indices past
+/// the tables) and every gear word.
+#[test]
+fn gear_teeth_edges_and_sweep() {
+    assert_eq!(crate::gear_teeth(1, 1, 0x000b), None, "front 0 on a 2x system");
+    assert_eq!(crate::gear_teeth(1, 1, 0x011b), None, "rear 27 of 11");
+    assert_eq!(crate::gear_teeth(3, 6, 0x010c), Some((39, 11)), "53/39 small ring, 12-speed rear 12");
+    let mut some = 0u32;
+    for ch in 0..crate::CHAINRINGS.len() + 3 {
+        for ca in 0..crate::CASSETTES.len() + 3 {
+            for g in 0..=u16::MAX {
+                let t = crate::gear_teeth(ch, ca, g);
+                if ch == 0 || ca == 0 || ch >= crate::CHAINRINGS.len() || ca >= crate::CASSETTES.len() {
+                    assert_eq!(t, None, "{ch} {ca} {g:#x}");
+                }
+                some += u32::from(t.is_some());
+            }
+        }
+    }
+    assert!(some > 100, "the sweep reached real gears: {some}");
+}
