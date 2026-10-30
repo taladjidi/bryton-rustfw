@@ -637,14 +637,14 @@ fn gps_power_from_the_menu() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
     app.press(&mut sim, Press::Short(Key::Start));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::GpsPower));
-    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "AUTO");
+    assert_eq!(app.menu_row(Menu::Bike, 8).unwrap().1.as_str(), "AUTO");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "FULL");
+    assert_eq!(app.menu_row(Menu::Bike, 8).unwrap().1.as_str(), "FULL");
     assert_eq!(count(&sim, full), 2, "sent again");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "SAVER");
+    assert_eq!(app.menu_row(Menu::Bike, 8).unwrap().1.as_str(), "SAVER");
     assert_eq!((count(&sim, saver), sim.gnss.pm_mode), (1, 2), "sent once, at once");
     let kept = Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).gps_power;
     assert_eq!(kept, crate::GpsPower::Saver, "kept");

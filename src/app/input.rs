@@ -232,7 +232,9 @@ impl App {
         match n {
             COURSE => self.courses.as_deref().is_some_and(|c| c.on.is_some()),
             WORKOUT => self.plan.player.is_some(),
-            CLIMB => self.segment_now().is_some() || (self.on_climb() && !self.has_climb_page()),
+            CLIMB => {
+                self.segment_now().is_some() || (self.settings.climb_page && self.on_climb() && !self.has_climb_page())
+            }
             n => n < self.ride_count() && self.switched_on(n) && !(self.indoors() && self.indoor_blank(n)),
         }
     }

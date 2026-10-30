@@ -411,7 +411,7 @@ fn ride_history() {
     run(&mut sim, &mut app, 1000);
     let rows: Vec<_> = (1..6).map(|i| row(&app, i)).collect();
     assert_eq!(row(&app, 0).unwrap(), "FITNESS >", "first, what the rides give");
-    let want = ["THU 22 OCT 5.0", "TUE 20 OCT 14.4", "THU 1 OCT 12.0", "SAT 15 MAR 6.0"];
+    let want = ["22/10/2026 5.0", "20/10/2026 14.4", "01/10/2026 12.0", "15/03/2025 6.0"];
     assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "newest first");
     assert_consistent(&sim, &app);
     sim.save("history_list");
@@ -555,7 +555,7 @@ fn delete_rides() {
     assert_eq!(file(img, "Rustfw/Deleted/Full/261020080000.fit"), Some(full), "the full copy too");
     assert_eq!(crate::fat::write::tests::fsck(img), Ok(0));
     let rows: Vec<_> = (1..5).map(|i| row(&app, i)).collect();
-    let want = ["THU 22 OCT 5.0", "THU 1 OCT 12.0", "SAT 15 MAR 6.0"];
+    let want = ["22/10/2026 5.0", "01/10/2026 12.0", "15/03/2025 6.0"];
     assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "at once");
     let all = app.stock.out.all;
     assert_eq!((all.rides, all.dist_m, all.time_s), (all0.rides - 1, all0.dist_m - 14_400, all0.time_s - 1800));
@@ -585,7 +585,7 @@ fn delete_rides() {
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000-1.fit").is_some_and(|f| !f.is_empty()));
     assert_eq!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000.fit"), Some(Vec::new()), "the other kept");
-    assert_eq!(row(&app, 1).unwrap(), "THU 1 OCT 12.0");
+    assert_eq!(row(&app, 1).unwrap(), "01/10/2026 12.0");
 
     // refused during a ride, and with a ride waiting to be resumed or saved
     open_card(&mut sim, &mut app, 1);
@@ -668,7 +668,7 @@ fn delete_past_the_cache() {
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
     let row = |app: &App| app.menu_row(Menu::History, 1).map(|(l, v, _)| std::format!("{} {}", l.as_str(), v.as_str()));
     let (first, all0) = (row(&app), app.stock.out.all);
-    assert_eq!(first.as_deref(), Some("THU 22 OCT 5.0"));
+    assert_eq!(first.as_deref(), Some("22/10/2026 5.0"));
     app.press(&mut sim, Press::Short(Key::Start)); // row 1: the newest ride's card
     for _ in 0..100 {
         run(&mut sim, &mut app, u64::from(POLL_MS));
@@ -681,11 +681,11 @@ fn delete_past_the_cache() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.notes.text.as_str(), "RIDE DELETED");
     assert_eq!(app.stock.status(), crate::stock::Status::Running, "rides past the cache: read again");
-    assert_eq!(row(&app).as_deref(), Some("TUE 20 OCT 14.4"), "gone from the list at once");
+    assert_eq!(row(&app).as_deref(), Some("20/10/2026 14.4"), "gone from the list at once");
     while app.stock.status() == crate::stock::Status::Running {
         run(&mut sim, &mut app, u64::from(POLL_MS));
         assert!(sim.ms < 1_200_000);
     }
-    assert_eq!(row(&app).as_deref(), Some("TUE 20 OCT 14.4"));
+    assert_eq!(row(&app).as_deref(), Some("20/10/2026 14.4"));
     assert_eq!((app.stock.out.all.rides, app.stock.out.all.dist_m), (all0.rides - 1, all0.dist_m - 5000));
 }

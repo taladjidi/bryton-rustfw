@@ -475,10 +475,10 @@ impl App {
             }
             Row::Stock(r) => self.stock_value(r, &mut value),
             Row::Past(n) => {
-                // "SAT 24 OCT", "42.1" (km: a unit does not fit beside the date)
+                // "24/10/2026", "42.1" (km: a unit does not fit beside the date)
                 let r = self.stock.index.get(n)?;
                 let (y, mo, d, ..) = r.start;
-                label.push_str(date_text((y, mo, d)).as_str());
+                label.push_str(date_numbers((y, mo, d), self.settings.date_fmt).as_str());
                 push_trip(&mut value, r.dist_m, self.settings.imperial);
             }
             Row::Notif(k) => {
@@ -489,7 +489,7 @@ impl App {
             }
             Row::Workout(k) => {
                 let p = self.plan.calendar.get(k)?;
-                label.push_str(date_text(p.day).as_str());
+                label.push_str(date_numbers(p.day, self.settings.date_fmt).as_str());
                 push_hm(&mut value, p.total_s);
                 if self.workout_done(k) {
                     color = ui::GREEN;

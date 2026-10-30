@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (152 now, with START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (155 now, with CLIMBS, CLIMB PAGE and DATE FORMAT at 152..155, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -144,6 +144,7 @@ impl SettingsCopy {
         put(&s.birth_year.to_le_bytes());
         put(&[s.height_cm as u8, u8::from(s.max_hr_age)]);
         put(&[u8::from(s.start_reminder), u8::from(s.ready_check)]);
+        put(&[u8::from(s.climbs_medium), u8::from(s.climb_page), s.date_fmt as u8]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -275,6 +276,11 @@ impl SettingsCopy {
         // START REMINDER and READY CHECK (after MAX HR from age): a file without them reads both ON
         s.start_reminder = flag(data.next(), d.start_reminder);
         s.ready_check = flag(data.next(), d.ready_check);
+        // CLIMBS, CLIMB PAGE and DATE FORMAT (after READY CHECK): a file without them reads ALL, the climb page on and
+        // D/M/Y; a byte out of range reads D/M/Y
+        s.climbs_medium = flag(data.next(), d.climbs_medium);
+        s.climb_page = flag(data.next(), d.climb_page);
+        s.date_fmt = data.next().and_then(crate::DateFormat::from_byte).unwrap_or(d.date_fmt);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -653,7 +659,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 152);
+        assert_eq!(len, 155);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -774,7 +780,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 152);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 155);
         assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
         let back = SettingsCopy::from_sector(&sec).unwrap().settings;
         assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
@@ -815,7 +821,7 @@ mod day_night_file_tests {
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 152);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 155);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -839,7 +845,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 152);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 155);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -873,7 +879,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 152, "the length: 69 + 1 + 12 + 12 + 3 + 2");
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 155, "the length: 69 + 1 + 12 + 12 + 3 + 2");
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -915,7 +921,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 152);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 155);
         assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| {
@@ -938,6 +944,39 @@ mod day_night_file_tests {
         bad[28 + 99..28 + 103].copy_from_slice(&[2, 7, 255, 9]);
         recrc(&mut bad);
         assert_eq!(read(&bad).map(|r| r.0), Some((true, false, false, 0)));
+    }
+
+    /// CLIMBS, CLIMB PAGE and DATE FORMAT (data 152 to 154) are kept and read back; a file that stops before one reads
+    /// its default (ALL, on, D/M/Y), a byte out of range reads D/M/Y.
+    #[test]
+    fn climbs_and_date_format_round_trip_and_older_files_read_defaults() {
+        let s = Settings {
+            climbs_medium: true,
+            climb_page: false,
+            date_fmt: crate::DateFormat::Ymd,
+            ..Settings::from_word(0)
+        };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(sec[28 + 152..28 + 155], [1, 0, 2]);
+        let read = |sec: &[u8; 512]| {
+            SettingsCopy::from_sector(sec)
+                .map(|c| (c.settings.climbs_medium, c.settings.climb_page, c.settings.date_fmt))
+        };
+        assert_eq!(read(&sec), Some((true, false, crate::DateFormat::Ymd)));
+        for (len, want) in [
+            (152u16, (false, true, crate::DateFormat::Dmy)),
+            (153, (true, true, crate::DateFormat::Dmy)),
+            (154, (true, false, crate::DateFormat::Dmy)),
+        ] {
+            let mut old = sec;
+            old[6..8].copy_from_slice(&len.to_le_bytes());
+            recrc(&mut old);
+            assert_eq!(read(&old), Some(want), "a {len}-byte file");
+        }
+        let mut bad = sec;
+        bad[28 + 154] = 9;
+        recrc(&mut bad);
+        assert_eq!(read(&bad), Some((true, false, crate::DateFormat::Dmy)));
     }
 
     /// START REMINDER and READY CHECK (data 150, 151) are kept and read back; a file of 44 to 150 bytes reads both ON,
