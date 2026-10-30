@@ -17,6 +17,7 @@ A feature not listed here was seen on the unit.
   The owner's Sigeyi spider PM may not send page 0x13 at all, so its fields would stay "--" for a whole ride. To check:
   pair it, pedal for a few minutes with the TE L/R box on screen; a value means it sends 0x13, "--" all ride means it
   does not (or its bytes are 0xff, one-sided). Then note which, here.
+- **BATT HRS (sim only)**: the time left on the battery, from the drain of the last 20 minutes (drivers/battery.rs). Still to see: on a real ride from full, its value against the strip's percent over the first hour (the drain it reports should match the percent the strip loses, 1 h of ride to about 5 to 10 % at a riding draw, as `tools/dev.py bat` logs it), the value shown at 10 minutes (the first "--" ending) and while the unit is on the charger ("--"), and "--" on the idle overview, where the drain is under 3.4 % an hour until the cell has dropped.
 - **QUICK STATUS (sim only)**: a tap on a plain field of a ride page opens six chosen fields. Still to see: the tap on a wet or gloved finger (a stray tap only opens a read-only overlay, 10 s), the six values updating each second, the picker in PAGES > QUICK FIELDS, and the choice kept after a restart (settings.bin bytes 158 to 164).
 
 - **Screenshots and the fault log (app/screenshot.rs, app/faultlog.rs, storage/screenshot.rs, storage/faultlog.rs;
