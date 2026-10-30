@@ -20,8 +20,8 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [x] Up to three data pages per profile (stock): unit
 - [x] Layouts of one to six fields, uneven ones too (stock, Garmin): sim
 - [x] Edit a page's fields on the unit (stock, Garmin, Wahoo): sim
-- [~] More than three pages, pages turned on and off (Garmin, Karoo): sim; pages added and deleted, none switched off or reordered
-- [ ] Rename pages (Garmin)
+- [~] More than three pages, pages turned on and off (Garmin, Karoo): sim; pages added, deleted, switched off and moved
+- [~] Rename pages (Garmin): sim, four characters
 - [ ] Field size follows the box, wide boxes show more (Garmin, Karoo)
 - [x] Banners over any page for a few seconds (stock, Garmin): sim
 - [~] Quick Status panel (stock): sim; a swipe-down panel, no chosen fields
@@ -33,7 +33,7 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [x] Values in zone colours (stock): unit
 - [x] Font choice for every text, PIXEL or SMOOTH (ours): unit
 - [x] Cog on the overview opens the menu (ours): sim
-- [ ] Auto scroll through pages (stock, Garmin)
+- [~] Auto scroll through pages (stock, Garmin): sim
 - [x] Screen lock by holding Back and Lap (stock, Garmin): sim
 - [ ] Ready-to-ride dashboard: sensors, battery, GPS before the start (Wahoo)
 - [x] Indoor mode pages (stock, Garmin, Wahoo): unit
@@ -320,7 +320,7 @@ Touch and buttons
 
 - [x] Four keys: Page, Lap, Start, Back, with holds (stock): unit
 - [x] Touch: swipe between pages, hold for the menu, tap a menu row (stock): sim
-- [ ] Swipe up from the bottom to go home (stock)
+- [~] Swipe up from the bottom to go home (stock): sim, on a ride page after MORE
 - [ ] Tap a field to open Quick Status (stock)
 - [ ] Long press a field to change it (stock, Garmin, Karoo)
 - [ ] Pinch to zoom the map (Wahoo, Garmin)

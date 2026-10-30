@@ -1543,7 +1543,7 @@ fn menu_tree_by_chance() {
         .chain(crate::sensors::Kind::ALL.iter().map(|k| k.backup()))
         .collect();
     let (mut acts, mut rides) = (0, 0);
-    for seed in 1..=24u32 {
+    for seed in 1..=36u32 {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
@@ -1556,6 +1556,7 @@ fn menu_tree_by_chance() {
             x
         };
         let mut tapped = 0;
+        app.sw.meta.auto = if seed % 3 == 0 { 1 } else { 0 }; // the other seeds walk as they did
         for k in 0..2500 {
             let (a, b) = (next() % 100, next());
             // a tap on the row tapped last half the time: the second tap that acts
@@ -1576,12 +1577,35 @@ fn menu_tree_by_chance() {
             };
             let stored = |sim: &Sim| watched.iter().map(|&r| sim.backup[r]).collect::<Vec<_>>();
             let (before, editing) = (stored(&sim), app.editing);
+            if let Screen::Menu(Menu::Page(n), _) = app.screen()
+                && n < PAGES
+                && b % 3 == 0
+            {
+                // a page's menu: now and then the cursor on one of the switch rows, so the walk acts on them
+                let ops: Vec<usize> = (0..app.rows(Menu::Page(n)))
+                    .filter(|&r| matches!(app.row(Menu::Page(n), r), Some(crate::menu::Row::PageOp(..))))
+                    .collect();
+                if let Some(&r) = ops.get(b as usize / 3 % ops.len().max(1)) {
+                    app.screen = Screen::Menu(Menu::Page(n), r);
+                    app.update_menu_rows(&mut sim, Menu::Page(n), r);
+                }
+            }
             let (in_menu, avg) = (matches!(app.screen(), Screen::Menu(..)), app.settings.wkt_avg);
+            let snap = (app.sw.meta, app.pages);
             app.input(&mut sim, i);
             if matches!(app.screen(), Screen::End(_)) && b % 4 != 0 {
                 // SAVE most times, as Start held (or END RIDE, asked) did before the end-ride screen: a ride ended
                 // now and then leaves the walk the menus off a ride (the end-ride screen: end_ride_screen_by_chance)
                 app.input(&mut sim, Input::Select); // SAVE is selected when the screen opens
+            }
+            // the effects of the page switches, not only their rows selected
+            let moved = app.pages != snap.1 && app.pages.iter().all(|p| snap.1.contains(p));
+            for (what, hit) in [
+                ("shown", app.sw.meta.off != snap.0.off),
+                ("moved", moved),
+                ("renamed", app.sw.meta.names != snap.0.names && app.sw.meta.off == snap.0.off),
+            ] {
+                *reached.entry(what.into()).or_default() += u32::from(hit);
             }
             if stored(&sim) != before {
                 let act = matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
@@ -1602,8 +1626,25 @@ fn menu_tree_by_chance() {
                 assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
                 let name = std::format!("{m:?}");
                 *reached.entry(name.split('(').next().unwrap_or("").into()).or_default() += 1;
+                // the page switch rows (SHOW, MOVE, RENAME) and AUTO SCROLL, selected
+                let ops = matches!(app.row(m, s), Some(crate::menu::Row::PageOp(..) | crate::menu::Row::AutoScroll));
+                *reached.entry("switch rows".into()).or_default() += u32::from(ops);
             }
             rides += u32::from(app.screen() == Screen::Summary);
+            if k % 100 == 7
+                && app.auto_secs() > 0
+                && app.ride.state() == crate::ride::State::Running
+                && matches!(app.screen(), Screen::Ride(n) if n < PAGES)
+                && app.more_on.is_none()
+            {
+                // untouched for longer than the longest step: the auto scroll turns the page
+                let page = app.screen();
+                for _ in 0..22_000 / POLL_MS {
+                    app.step(&mut sim);
+                    sim.delay_ms(POLL_MS);
+                }
+                *reached.entry("auto scrolled".into()).or_default() += u32::from(app.screen() != page);
+            }
             for _ in 0..1 + b % 3 {
                 // one pass at least: a banner said by the input is drawn by the pass after it
                 app.step(&mut sim);
@@ -1652,6 +1693,10 @@ fn menu_tree_by_chance() {
     ];
     for m in all {
         assert!(reached.contains_key(m), "{m} never reached: {reached:?}");
+    }
+    assert!(reached.get("switch rows").is_some_and(|&n| n > 10), "page switch rows reached: {reached:?}");
+    for what in ["shown", "moved", "renamed", "auto scrolled"] {
+        assert!(reached.get(what).is_some_and(|&n| n > 0), "{what} never happened: {reached:?}");
     }
     assert!(acts > 50 && rides > 5, "{acts} settings stored, {rides} rides ended");
 }
@@ -1800,6 +1845,7 @@ fn pages_file() {
     use crate::page::{Page, Saved};
     use crate::ui::Field;
     let (mut good, mut bad, mut more_read, mut indoor_read, mut mtb_read) = (0u32, 0u32, 0usize, 0usize, 0usize);
+    let (mut meta_read, mut meta_fallback) = (0usize, 0usize);
     let p = Page::preset(5, [Field::Hr; 8]).unwrap();
     let whole = Saved {
         seq: 9,
@@ -1810,6 +1856,7 @@ fn pages_file() {
         more: [None; crate::PAGES],
         indoor: Some(crate::page::Set::indoor_default()),
         mtb: Some(crate::page::Set::mtb_default()),
+        meta: crate::page::Meta::DEFAULT,
     }
     .to_sector();
     let mut sim = super::Sim::new(9, 0, 0);
@@ -1913,6 +1960,25 @@ fn pages_file() {
             let crc = crate::fit::crc(ind_crc, &s[mtb..mtb_end]);
             let crc = if seed % 17 == 0 { crc ^ 1 } else { crc };
             s[mtb_end..mtb_end + 2].copy_from_slice(&crc.to_le_bytes());
+            // and the switches behind that: flags (the present bit now and then missing), an OFF mask, names of random
+            // codes (now and then out of the alphabet), a CRC chained to the MTB part's (now and then wrong)
+            let meta = mtb_end + 2;
+            let meta_end = meta + 2 + crate::PAGES * 3;
+            s[meta] = if seed % 19 == 0 { s[meta] & 0x7f } else { s[meta] | 0x80 };
+            for (k, name) in s[meta + 2..meta_end].chunks_exact_mut(3).enumerate() {
+                // four character codes of the alphabet (37 of 64 values), now and then raw bytes
+                let codes = bytes(seed * 7 + k as u32, 4);
+                let bits = codes
+                    .enumerate()
+                    .fold(0u32, |acc, (i, x)| acc | (u32::from(x) % if seed % 31 == 0 { 64 } else { 37 }) << (6 * i));
+                if seed % 23 != 0 {
+                    name.copy_from_slice(&bits.to_le_bytes()[..3]);
+                }
+            }
+            let mtb_good = crate::fit::crc(ind_crc, &s[mtb..mtb_end]);
+            let crc = crate::fit::crc(mtb_good, &s[meta..meta_end]);
+            let crc = if seed % 29 == 0 { crc ^ 1 } else { crc };
+            s[meta_end..meta_end + 2].copy_from_slice(&crc.to_le_bytes());
         }
         let mut file = [0u8; 1024];
         file[..512].copy_from_slice(&s);
@@ -1922,6 +1988,13 @@ fn pages_file() {
                 assert!(saved.pages[..saved.count].iter().all(|p| p.well_formed() && p.roomy()));
                 assert!(saved.more.iter().flatten().all(|p| p.well_formed() && p.roomy()));
                 more_read += saved.more.iter().flatten().count();
+                assert!(saved.meta.off < 1 << crate::PAGES && saved.meta.auto < 4);
+                assert!(saved.meta.names.iter().flatten().all(|c| crate::page::ALPHABET.contains(c)));
+                meta_read += usize::from(saved.meta != crate::page::Meta::DEFAULT);
+                // codes past the alphabet under a good CRC: the defaults, the pages whole
+                if seed % 2 == 1 && seed % 31 == 0 && seed % 19 != 0 && seed % 23 != 0 && seed % 29 != 0 {
+                    meta_fallback += usize::from(saved.meta == crate::page::Meta::DEFAULT);
+                }
                 if let Some(m) = saved.mtb {
                     assert!((1..=crate::page::MTB_PAGES).contains(&m.count));
                     assert!(m.pages[..m.count].iter().all(|p| p.well_formed() && p.roomy()));
@@ -1985,6 +2058,8 @@ fn pages_file() {
     assert!(good > 20 && bad > 1000 && drawn > 20 && more_read > 20, "{good} {bad} {drawn} {more_read}");
     assert!(indoor_read > 20, "the indoor part reached: {indoor_read}");
     assert!(mtb_read > 20, "the MTB part reached: {mtb_read}");
+    assert!(meta_read > 20, "the switches part reached: {meta_read}");
+    assert!(meta_fallback > 0, "a good CRC over bad name codes fell back to the defaults: {meta_fallback}");
 }
 
 /// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at

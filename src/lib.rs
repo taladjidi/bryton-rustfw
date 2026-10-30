@@ -255,6 +255,8 @@ pub struct App {
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
     store: PageStore,
+    /// The page switches, names and auto scroll (app/pagemeta.rs).
+    sw: Switches,
     /// `\Rustfw\settings.bin` (app/settings_file.rs): read yet, to be written, its copies.
     settings_store: SettingsStore,
     /// A write of pages.bin or settings.bin failed since the FAT copies were last compared (app/editor.rs).
@@ -471,6 +473,7 @@ impl App {
             climb: ClimbPage::new(),
             more_on: None,
             store,
+            sw: Switches::new(),
             settings_store,
             fats_suspect: false,
             edit: None,
@@ -613,6 +616,7 @@ impl App {
         self.settle_set(b);
         self.settle_segment(b); // before the climb: a segment that starts with a climb takes the screen
         self.settle_climb(b);
+        self.auto_scroll(b, pass_ms);
         if core::mem::take(&mut self.ramp.show) {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);

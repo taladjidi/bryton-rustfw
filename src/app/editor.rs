@@ -322,6 +322,7 @@ impl App {
         let boot = self.store.boot;
         let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| (i < s.count).then_some(s.pages[i]));
         let mut more_in = s.more;
+        let mut meta_ok = true; // names and OFF bits belong to the file's pages
         if self.store.newer || (boot != s.words && boot != s.was) {
             // changes the file did not get (a switch-off before it was written), or another build changed the
             // registers since: the registers' pages win where they differ from the file's
@@ -332,6 +333,7 @@ impl App {
                     && let Some(slot) = list.get_mut(i)
                 {
                     let page = Page::from_cfg(c);
+                    meta_ok &= *slot == page;
                     if *slot != page
                         && let Some(m) = more_in.get_mut(i)
                     {
@@ -344,6 +346,7 @@ impl App {
         } else if boot != s.words {
             self.save_page_registers_from(b, &s); // cut between the file and the registers: put right
         }
+        self.sw.meta = if meta_ok { s.meta } else { page::Meta { auto: s.meta.auto, ..page::Meta::DEFAULT } };
         self.indoor = s.indoor.unwrap_or_else(page::Set::indoor_default);
         self.mtb = s.mtb.unwrap_or_else(page::Set::mtb_default);
         self.set_shown = self.ride_profile(); // the pages on screen are drawn below
@@ -361,6 +364,7 @@ impl App {
         }
         self.more = more;
         self.page_count = n;
+        self.sw.meta.keep_one(n);
         self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         if let Screen::Ride(k) = self.screen {
             if k < PAGES && !self.page_on(k) {
@@ -395,6 +399,7 @@ impl App {
             more: self.more,
             indoor: Some(self.indoor),
             mtb: Some(self.mtb),
+            meta: self.sw.meta,
         };
         // no volume (a card stock never formatted, the tests' blank one): the registers only, nothing to say
         let Some(r) = self.write_copy(b, page::FILE, s.seq % 2, &s.to_sector()) else {
@@ -623,6 +628,9 @@ impl App {
             (*p, *m) = (new, None);
         }
         *count += 1;
+        if which == ride::Profile::Road {
+            self.sw.meta.insert(at);
+        }
         self.pages_changed(b);
         let mut l = Line::<20>::new();
         l.push_str("PAGE ");
@@ -642,6 +650,11 @@ impl App {
             more.copy_within(e.page + 1..PAGES, e.page);
             more[PAGES - 1] = None;
             *count -= 1;
+            if which == ride::Profile::Road {
+                self.sw.meta.remove(e.page);
+                let n = self.page_count;
+                self.sw.meta.keep_one(n);
+            }
             self.pages_changed(b);
         }
         self.leave_editor(b, false);

@@ -137,3 +137,9 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | The SEGMENT page ahead of the PR: the delta in green, the two marks on the bar (sim) | Behind: the accent, never red (sim) | The result card, a new PR (sim) |
 | ![SEGMENTS menu](img/segment-menu.png) | | |
 | MENU > SEGMENTS: the two settings, the segments of the card, the skipped files (sim) | | |
+## Page switches
+
+| | |
+|:-:|:-:|
+| ![Page menu](img/page-switches-menu.png) | ![Renamed page](img/page-renamed-list.png) |
+| PAGES > ROAD PAGES > a page: SHOW, MOVE UP, MOVE DOWN and RENAME under its fields (sim) | A page renamed "CA B" in the list (four characters at most; sim) |
