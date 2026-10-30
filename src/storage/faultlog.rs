@@ -26,7 +26,8 @@
 //! in a folder of its own so its growing entry is never in `\Rustfw`'s directory sectors, which hold `ride.rec`'s
 //! and the ride folders' entries (storage/recorder/mod.rs, "The app's files in `\Rustfw`"). An append rewrites the
 //! file's last sector with the line added, then its size ([`Fat::set_size`]): a cut between leaves the file as it
-//! was. A line that would take it past [`CAP`] starts it again (the old lines dropped).
+//! was. A line that would take it past [`CAP`] starts it again (the old lines dropped): the size set to 0 first, so a
+//! cut leaves the old log, an empty one or the new line alone.
 
 use crate::fat::{DiskWrite, Error, Fat};
 use crate::text::Line;
@@ -194,6 +195,10 @@ pub fn append(
     // a size its chain cannot hold (a damaged entry) starts it again, rather than refusing every line to come
     let held = u64::from(h.clusters) * u64::from(fat.cluster_bytes());
     let at = if u64::from(h.size) > held { 0 } else { start(h.size, len) };
+    if at == 0 && h.size > 0 && h.clusters > 0 {
+        // started again: emptied first, so a cut leaves the old log, an empty one or the new line, never a mix
+        fat.set_size(d, &mut h, 0, t)?;
+    }
     let (first, keep) = (at / 512, (at % 512) as usize);
     // the line crosses one sector boundary at most: two sectors
     let mut buf = [0u8; 1024];

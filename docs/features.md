@@ -449,12 +449,15 @@ MENU
   own pixels (150 KB), with the notice SCREENSHOT SAVED. A menu row rather than a key combination, so it never fires by
   accident; not while a ride is open or waits to be saved (NOT DURING A RIDE), with the card lent (USB DRIVE ON) or on a
   read-only build. Less than the file and 8 MB free (the recorder's reserve) is CARD FULL: NO SCREENSHOT, nothing
-  written; the file's entry is written last, so a power cut or a write error never leaves a partial picture.
+  written (the FAT counted first after a failed write, so a stale count never lets it in); a second shot in the same
+  second is SCREENSHOT: TRY AGAIN. The file's entry is written last, so a power cut or a write error never leaves a
+  partial picture (a failed write frees what it took).
 - **Fault log:** after a reset that followed a fault or a panic (the banner FAULT RESET n), one line goes to
   `\Rustfw\Log\faults.log` once the card is quiet (no ride open or waiting to be saved: a ride resumed after the fault
   is saved first): the time of the restart, what it was (a panic and its source line; a CPU fault and its CFSR bits,
   such as PRECISERR or UNDEFINSTR; the stack canary), the faults in a row and the build. Once per fault (the marker
-  is marked logged); past 64 KB the log starts again. Not kept by the marker, so not logged: the PC and LR, the
+  is marked logged; a failed write is said once and tried again a minute later); past 64 KB the log starts again
+  (emptied first). Not kept by the marker, so not logged: the PC and LR, the
   panic's file, the uptime at the fault.
 - **Where the rows were** before this tree (2026-10-25), old path -> new path: SENSORS > LUX / TEMP C / HPA -> SYSTEM >
   BUILT IN; RIDER > MAX HR, FTP W, WEIGHT KG, W' KJ -> SETTINGS > ME > MAX HR, FTP, WEIGHT, W'; RIDER > WKT POWER ->

@@ -34,8 +34,9 @@ impl App {
         }
         let local = self.rec_time().0;
         match self.write_shot(b, screenshot::name(local).as_str(), fat::write::dos_time(local)) {
-            Ok(()) => self.notice("SCREENSHOT SAVED"),
-            Err(fat::Error::Refused) => self.notice("CARD FULL: NO SCREENSHOT"), // or the name taken, this second
+            Ok(true) => self.notice("SCREENSHOT SAVED"),
+            Ok(false) => self.notice("SCREENSHOT: TRY AGAIN"), // one taken this second already
+            Err(fat::Error::Refused) => self.notice("CARD FULL: NO SCREENSHOT"),
             Err(_) => {
                 self.fats_unsure(); // the next writes compare the FAT copies first
                 self.notice("SCREENSHOT NOT SAVED");
@@ -43,11 +44,19 @@ impl App {
         }
     }
 
-    /// Writes the screen as file `name` (storage/screenshot.rs: the chain first, the entry last).
+    /// Writes the screen as file `name` (storage/screenshot.rs: the chain first, the entry last): false when the name
+    /// is taken. After a failed write (the FAT copies suspect, FSInfo's count with them) the FAT is counted again first,
+    /// as the recorder does, so a count left high never lets a shot into the ride's reserve.
     #[inline(never)] // its 4 KB buffer in its own frame
-    pub(crate) fn write_shot(&mut self, b: &mut impl Board, name: &str, t: (u16, u16)) -> Result<(), fat::Error> {
+    pub(crate) fn write_shot(&mut self, b: &mut impl Board, name: &str, t: (u16, u16)) -> Result<bool, fat::Error> {
         let mut fat = fat::Fat::mount(&mut emmc::Volume(&mut self.emmc, b))?;
-        let mut shot = screenshot::Shot::begin(&mut fat, &mut emmc::Volume(&mut self.emmc, b), name, t)?;
+        if self.fats_suspect {
+            fat.sync_fats(&mut emmc::Volume(&mut self.emmc, b))?;
+            self.fats_equal();
+        }
+        let Some(mut shot) = screenshot::Shot::begin(&mut fat, &mut emmc::Volume(&mut self.emmc, b), name, t)? else {
+            return Ok(false);
+        };
         let mut buf = [0u8; screenshot::CHUNK * 512];
         let mut at = 0u32;
         while at < screenshot::SIZE {
@@ -60,7 +69,6 @@ impl App {
             }
             at += buf.len() as u32;
         }
-        // a link that fails leaves the chain lost, never trimmed: its entry may be on the card already
-        shot.finish(&mut fat, &mut emmc::Volume(&mut self.emmc, b), name, t)
+        shot.finish(&mut fat, &mut emmc::Volume(&mut self.emmc, b), name, t).map(|()| true)
     }
 }

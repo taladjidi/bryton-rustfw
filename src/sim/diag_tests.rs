@@ -72,27 +72,29 @@ fn screenshot_saves_the_panel() {
 }
 
 /// A full card (FSInfo right): a notice, nothing written, no folder. FSInfo stale (a computer's write), so the room
-/// check passes and the card fills up mid-write: a notice, no file, at most the chain's first cluster lost. During a
-/// ride: refused, nothing written.
+/// check passes and the card fills up mid-write: a notice, no file, the chain freed (no cluster lost). The same stale
+/// count after a failed write (the FAT copies suspect): the FAT counted first, so nothing written. During a ride:
+/// refused, nothing written.
 #[test]
 fn screenshot_on_a_full_card_or_during_a_ride_writes_nothing() {
-    for tell in [true, false] {
+    for (tell, suspect) in [(true, false), (false, false), (false, true)] {
         let (mut sim, mut app) = started();
         let mut img = crate::fat::tests::image();
         fill(&mut img, 5, tell);
         sim.emmc.image = img;
         run(&mut sim, &mut app, 3000);
+        app.fats_suspect = suspect;
         app.shot_due = true;
         app.step(&mut sim);
-        assert!(newest_notice(&app).ends_with("CARD FULL: NO SCREENSHOT"), "tell {tell}: {}", newest_notice(&app));
+        let case = std::format!("tell {tell}, suspect {suspect}");
+        assert!(newest_notice(&app).ends_with("CARD FULL: NO SCREENSHOT"), "{case}: {}", newest_notice(&app));
         let shots = files(&sim.emmc.image, "Screenshot");
-        if tell {
-            assert_eq!(shots, None, "nothing written");
+        if tell || suspect {
+            assert_eq!(shots, None, "{case}: nothing written");
         } else {
-            assert_eq!(shots, Some(Vec::new()), "the folder, no file");
+            assert_eq!(shots, Some(Vec::new()), "{case}: the folder, no file");
         }
-        let lost = fsck(&sim.emmc.image).unwrap();
-        assert!(lost <= 1, "tell {tell}: {lost} clusters lost");
+        assert_eq!(fsck(&sim.emmc.image), Ok(0), "{case}: no cluster lost");
     }
 
     let (mut sim, mut app) = started();
@@ -256,27 +258,90 @@ fn fault_log_capped() {
     assert_eq!(fsck(&sim.emmc.image), Ok(0));
 }
 
-/// A power cut after every sector of an append that crosses a sector boundary (the log 500 bytes long): the log is
-/// the old one or the old one and the line, the volume as fsck takes it after a cut, the rides as they were.
+/// A power cut after every sector of an append that crosses a sector boundary (the log 500 bytes long), and of one that
+/// starts the log again (at the cap): the log is the old one, the old one and the line, or (started again) empty or the
+/// line alone, never a mix; the volume as fsck takes it after a cut, the rides as they were.
 #[test]
 fn fault_log_cut_at_every_sector() {
-    let base = || faulted(with_log(500), [0; 32], marker(0, Kind::Panic, 9));
-    let (mut sim, mut app) = base();
-    let old = log(&sim.emmc.image).unwrap();
-    let rides_before = rides(&sim.emmc.image);
-    run(&mut sim, &mut app, 5000);
-    let new = log(&sim.emmc.image).unwrap();
-    assert!(new.len() > old.len() && new.starts_with(&old));
-    let total = sim.emmc.sectors_written;
-    for cut in 0..=total {
+    for size in [500, CAP - 30] {
+        let base = || faulted(with_log(size), [0; 32], marker(0, Kind::Panic, 9));
         let (mut sim, mut app) = base();
-        sim.emmc.cut_after = Some(cut);
+        let old = log(&sim.emmc.image).unwrap();
+        let rides_before = rides(&sim.emmc.image);
         run(&mut sim, &mut app, 5000);
-        let img = &sim.emmc.image;
-        let got = log(img).unwrap_or_else(|| panic!("cut {cut}: the log gone"));
-        assert!(got == old || got == new, "cut {cut}: {got:?}");
-        let scan = fsck_cut(img).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
-        assert!(scan.lost <= 1 && scan.apart <= 1 && scan.past.len() <= 1, "cut {cut}");
-        assert!(rides(img) == rides_before, "cut {cut}: a ride changed");
+        let new = log(&sim.emmc.image).unwrap();
+        let again = size > 500;
+        assert!(if again { new.lines().count() == 1 } else { new.len() > old.len() && new.starts_with(&old) });
+        let total = sim.emmc.sectors_written;
+        for cut in 0..=total {
+            let (mut sim, mut app) = base();
+            sim.emmc.cut_after = Some(cut);
+            run(&mut sim, &mut app, 5000);
+            let img = &sim.emmc.image;
+            let got = log(img).unwrap_or_else(|| panic!("size {size}, cut {cut}: the log gone"));
+            assert!(
+                got == old || got == new || (again && got.is_empty()),
+                "size {size}, cut {cut}: {} bytes",
+                got.len()
+            );
+            let scan = fsck_cut(img).unwrap_or_else(|e| panic!("size {size}, cut {cut}: {e}"));
+            // a cut while the tail is freed leaves the rest of it lost (a chain no entry names), at most the log's
+            let most = if again { CAP / (16 << 10) + 1 } else { 1 };
+            assert!(
+                scan.lost <= most && scan.apart <= 1 && scan.past.len() <= 1,
+                "size {size}, cut {cut}: {} lost, {} apart, {:?} past",
+                scan.lost,
+                scan.apart,
+                scan.past
+            );
+            assert!(rides(img) == rides_before, "size {size}, cut {cut}: a ride changed");
+        }
     }
+}
+
+/// An append that fails (every write refused by the card) is said once and tried again a minute later: once the card
+/// writes again, the line is in the log, once.
+#[test]
+fn fault_log_retried_after_a_failure() {
+    let (mut sim, mut app) = faulted(crate::fat::tests::image(), [0; 32], marker(0, Kind::Panic, 3));
+    sim.emmc.bad = std::vec![0..u32::MAX];
+    run(&mut sim, &mut app, 5000);
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("FAULT LOG NOT SAVED")));
+    assert_eq!(log(&sim.emmc.image), None);
+    sim.emmc.bad.clear();
+    run(&mut sim, &mut app, 30_000);
+    assert_eq!(log(&sim.emmc.image), None, "not before its minute");
+    run(&mut sim, &mut app, 40_000);
+    let text = log(&sim.emmc.image).expect("written on the retry");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(text.contains(" panic at line 3, 1 in a row"));
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(log(&sim.emmc.image), Some(text), "once");
+    let notes = app.notes.list.iter().filter(|n| n.as_str().ends_with("FAULT LOG NOT SAVED")).count();
+    assert_eq!(notes, 1, "said once");
+}
+
+/// Two screenshots in one second: the second finds the name taken, says so, and writes nothing.
+#[test]
+fn second_screenshot_in_the_same_second() {
+    let (mut sim, mut app) = started();
+    sim.emmc.image = crate::fat::tests::image();
+    run(&mut sim, &mut app, 3000);
+    app.shot_due = true;
+    app.step(&mut sim);
+    assert!(newest_notice(&app).ends_with("SCREENSHOT SAVED"), "{}", newest_notice(&app));
+    let first = files(&sim.emmc.image, "Screenshot").unwrap();
+    let local = app.rec_time().0;
+    assert_eq!(
+        app.write_shot(&mut sim, screenshot::name(local).as_str(), crate::fat::write::dos_time(local)),
+        Ok(false)
+    );
+    app.shot_due = true;
+    let name = screenshot::name(app.rec_time().0);
+    app.step(&mut sim);
+    if first.iter().any(|(n, _)| n.as_str() == name.as_str()) {
+        assert!(newest_notice(&app).ends_with("SCREENSHOT: TRY AGAIN"), "{}", newest_notice(&app));
+        assert_eq!(files(&sim.emmc.image, "Screenshot").unwrap(), first, "nothing written");
+    }
+    assert_eq!(fsck(&sim.emmc.image), Ok(0));
 }

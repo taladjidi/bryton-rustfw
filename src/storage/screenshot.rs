@@ -20,7 +20,9 @@
 //! missing (the root's directory written once, as for `\Activities`), then the file's clusters and pixels as a chain
 //! no entry names yet, and only then its entry, whole, with its size ([`Fat::link`]). So a power cut leaves either
 //! no file (a lost chain, which a computer's fsck turns into a `.CHK` and nothing else minds: `fat::write`) or the
-//! whole picture, never a partial file; a write that fails frees the chain but its first cluster.
+//! whole picture, never a partial file. A write that fails frees the chain ([`Fat::free_chain`]); so does a link
+//! that fails when the entry is not found after it (else the chain stays lost: an entry on the card may name it).
+//! FSInfo's count is trusted only while the FAT copies are (the app counts them again after a failed write first).
 
 use crate::fat::write::Handle;
 use crate::fat::{DiskWrite, Error, Fat, File};
@@ -133,16 +135,17 @@ pub struct Shot {
 
 impl Shot {
     /// Room checked, the folder made if missing, `name` free in it: [`Error::Refused`] when the card has not the
-    /// file's room and [`FULL_RESERVE`] left (FSInfo's count; unknown counts as none) or the name is taken.
-    pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, name: &str, t: (u16, u16)) -> Result<Shot, Error> {
+    /// file's room and [`FULL_RESERVE`] left (FSInfo's count; unknown counts as none); None when the name is taken
+    /// (a shot in the same second).
+    pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, name: &str, t: (u16, u16)) -> Result<Option<Shot>, Error> {
         let free = fat.free_clusters(d)?.map_or(0, u64::from) * u64::from(fat.cluster_bytes());
         if free < u64::from(SIZE) + FULL_RESERVE {
             return Err(Error::Refused);
         }
         let dir = fat.ensure_dir(d, fat.root(), DIR, t)?;
         match fat.find(d, dir, name) {
-            Err(Error::NotFound) => Ok(Shot { dir, h: Handle::default() }),
-            Ok(_) => Err(Error::Refused),
+            Err(Error::NotFound) => Ok(Some(Shot { dir, h: Handle::default() })),
+            Ok(_) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -152,17 +155,21 @@ impl Shot {
         fat.write_sectors(d, &mut self.h, sector, buf)
     }
 
-    /// The entry, whole, with the file's size: the picture shows.
+    /// The entry, whole, with the file's size: the picture shows. A link that fails frees the chain only when the
+    /// entry is then not found (the card read back fine): else it stays lost, never freed under an entry that may name
+    /// it.
     pub fn finish(mut self, fat: &mut Fat, d: &mut impl DiskWrite, name: &str, t: (u16, u16)) -> Result<(), Error> {
         self.h.size = SIZE;
-        fat.link(d, self.dir, name, &self.h, t).map(|_| ())
+        let r = fat.link(d, self.dir, name, &self.h, t).map(|_| ());
+        if r.is_err() && fat.find(d, self.dir, name) == Err(Error::NotFound) {
+            self.abandon(fat, d);
+        }
+        r
     }
 
-    /// A write failed: the chain freed but its first cluster (best effort: the card may be failing).
+    /// A write failed: the chain freed (best effort: the card may be failing).
     pub fn abandon(mut self, fat: &mut Fat, d: &mut impl DiskWrite) {
-        if self.h.clusters > 1 {
-            let _ = fat.trim(d, &mut self.h, 0);
-        }
+        let _ = fat.free_chain(d, &mut self.h);
     }
 }
 
