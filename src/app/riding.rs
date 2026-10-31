@@ -690,6 +690,7 @@ impl App {
         }
         self.segment_fix();
         self.ahead_second();
+        self.descent_second();
         self.pace_second(); // after the fix: the position is this second's
     }
 }

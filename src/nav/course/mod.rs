@@ -225,6 +225,70 @@ impl Odometer {
     }
 }
 
+/// Descents kept of a profile, at most.
+pub const DESCENTS: usize = 8;
+/// A descent is at least this long, m, and this steep on average, % x 10 (shorter than a climb: a steep drop is
+/// what the STEEP DESCENT alert is for).
+const DESC_MIN_LEN_M: u32 = 300;
+const DESC_MIN_GRADE_X10: u32 = 30;
+/// The window the steepest grade is taken over, m, and how far it slides each step.
+const DESC_WINDOW_M: u32 = 50;
+const DESC_STEP_M: u32 = 25;
+
+/// A descent of a profile: found as a climb of the upside-down profile, with its steepest 50 m.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Descent {
+    /// Where it starts, m from the profile's start.
+    pub start_m: u32,
+    /// Its length, m.
+    pub len_m: u32,
+    /// Its drop, m.
+    pub drop_m: u32,
+    /// Its steepest grade over 50 m, % x 10.
+    pub max_x10: u32,
+}
+
+impl Descent {
+    /// No descent (the empty slot).
+    pub const NONE: Descent = Descent { start_m: 0, len_m: 0, drop_m: 0, max_x10: 0 };
+
+    /// Where it ends, m.
+    pub fn end_m(&self) -> u32 {
+        self.start_m.saturating_add(self.len_m)
+    }
+
+    /// Its average grade, % x 10.
+    pub fn grade_x10(&self) -> u32 {
+        (self.drop_m * 1000).checked_div(self.len_m).unwrap_or(0)
+    }
+
+    /// The descents of any profile `total` m long whose altitude (dm) at a distance (m) is `alt_at`: the climbs of
+    /// the profile upside down ([`Course::runs_of`]), each with its steepest [`DESC_WINDOW_M`] m. A course's own and
+    /// the road ahead's (`climbs_ahead`).
+    pub(crate) fn of(total: u32, alt_at: impl Fn(u32) -> Option<i32>) -> ([Descent; DESCENTS], usize) {
+        let (runs, n) = Course::runs_of(total, |d| alt_at(d).map(|a| -a), DESC_MIN_LEN_M, DESC_MIN_GRADE_X10);
+        let (mut out, mut k) = ([Descent::NONE; DESCENTS], 0);
+        for r in runs.iter().take(n) {
+            let (mut max, mut d) = (0i32, r.start_m);
+            while d < r.end_m() {
+                let to = (d + DESC_WINDOW_M).min(r.end_m());
+                if let (Some(a), Some(b)) = (alt_at(d), alt_at(to))
+                    && to > d
+                {
+                    max = max.max((a - b) * 100 / (to - d) as i32);
+                }
+                d += DESC_STEP_M;
+            }
+            if let Some(slot) = out.get_mut(k) {
+                *slot =
+                    Descent { start_m: r.start_m, len_m: r.len_m, drop_m: r.gain_m, max_x10: max.clamp(0, 999) as u32 };
+                k += 1;
+            }
+        }
+        (out, k)
+    }
+}
+
 /// A climb on the course.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Climb {
@@ -435,6 +499,11 @@ pub struct Course {
     // while reading: the distance so far, the last point not kept yet
     odo: Odometer,
     pending: Option<((i32, i32), u32, u16)>,
+    descents: [Climb; DESCENTS],
+    /// Each descent's steepest grade (their `max_x10`): plain arrays, as an array of structs here grew the course
+    /// memory's start-up frame past its budget (tools/stack_check.py).
+    desc_max: [u16; DESCENTS],
+    n_descents: usize,
 }
 
 impl Default for Course {
@@ -465,12 +534,16 @@ impl Course {
             cues: Cues::new(),
             odo: Odometer::new(),
             pending: None,
+            descents: [Climb { start_m: 0, len_m: 0, gain_m: 0 }; DESCENTS],
+            desc_max: [0; DESCENTS],
+            n_descents: 0,
         }
     }
 
     /// Empties it for a new course (its id is kept, and changes at [`Course::finish`]).
     pub fn clear(&mut self) {
         (self.origin, self.len, self.step_m, self.n_boxes, self.n_climbs) = (None, 0, FIRST_STEP_M, 0, 0);
+        self.n_descents = 0;
         (self.has_alt, self.odo, self.pending, self.gaps) = (false, Odometer::new(), None, [0; POINTS / 32]);
         self.cues = Cues::new();
     }
@@ -617,6 +690,11 @@ impl Course {
             });
         }
         (self.climbs, self.n_climbs) = self.find_climbs();
+        let (all, n) = Descent::of(self.len_m(), |d| self.alt_at(d));
+        self.n_descents = n.min(DESCENTS);
+        for ((c, m), d) in self.descents.iter_mut().zip(self.desc_max.iter_mut()).zip(all.iter().take(n)) {
+            (*c, *m) = (Climb { start_m: d.start_m, len_m: d.len_m, gain_m: d.drop_m }, d.max_x10 as u16);
+        }
     }
 
     /// The course followed the other way: points, distances, altitudes, gaps, ascent, boxes and climbs of the
@@ -729,6 +807,17 @@ impl Course {
     /// Its climbs, in order.
     pub fn climbs(&self) -> &[Climb] {
         self.climbs.get(..self.n_climbs).unwrap_or(&[])
+    }
+
+    /// Its descents, in order.
+    pub fn descents(&self) -> impl Iterator<Item = Descent> + '_ {
+        let (c, m) = (self.descents.get(..self.n_descents), self.desc_max.get(..self.n_descents));
+        c.unwrap_or(&[]).iter().zip(m.unwrap_or(&[])).map(|(c, &m)| Descent {
+            start_m: c.start_m,
+            len_m: c.len_m,
+            drop_m: c.gain_m,
+            max_x10: u32::from(m),
+        })
     }
 
     /// It has altitudes.
@@ -906,12 +995,23 @@ impl Course {
     /// The climbs of any profile `total` m long whose altitude (dm) at a distance (m) is `alt_at`, by the same
     /// definition: a course's own, and the road ahead's (`climbs_ahead`).
     pub(crate) fn climbs_of(total: u32, alt_at: impl Fn(u32) -> Option<i32>) -> ([Climb; CLIMBS], usize) {
+        Self::runs_of(total, alt_at, MIN_LEN_M, MIN_GRADE_X10)
+    }
+
+    /// [`Course::climbs_of`] with its own minimum length (m) and grade (% x 10): a descent is a climb of the profile
+    /// turned upside down (`gain_m` is then its drop).
+    pub(crate) fn runs_of(
+        total: u32,
+        alt_at: impl Fn(u32) -> Option<i32>,
+        min_len: u32,
+        min_grade: u32,
+    ) -> ([Climb; CLIMBS], usize) {
         let (mut out, mut n) = ([Climb::default(); CLIMBS], 0);
         let mut accept = |from: u32, top: u32| {
             let len = top.saturating_sub(from);
             let gain = alt_at(top).zip(alt_at(from)).map_or(0, |(t, f)| (t - f).max(0) as u32);
-            if len >= MIN_LEN_M
-                && gain * 100 / len >= MIN_GRADE_X10
+            if len >= min_len
+                && gain * 100 / len >= min_grade
                 && let Some(slot) = out.get_mut(n)
             {
                 *slot = Climb { start_m: from, len_m: len, gain_m: gain / 10 };
@@ -980,6 +1080,42 @@ pub(crate) mod tests {
 
     fn fix(x: f64, y: f64) -> (i32, i32) {
         ((y * NORTH) as i32, (x * NORTH) as i32)
+    }
+
+    /// Descents: a long gentle one (4 km at 4 %) and a short steep one (300 m at 12 %) are both found, with their
+    /// length, drop and steepest 50 m; a climb is not a descent, and the climbs are the ones they were.
+    #[test]
+    fn descents_gentle_and_steep() {
+        let c = course(&lines(
+            &[
+                (0.0, 0.0, 300.0),
+                (4000.0, 0.0, 140.0),
+                (5000.0, 0.0, 140.0),
+                (5300.0, 0.0, 104.0),
+                (6300.0, 0.0, 104.0),
+                (7300.0, 0.0, 164.0),
+            ],
+            10.0,
+        ));
+        let d: std::vec::Vec<_> = c.descents().collect();
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert!(d[0].start_m <= 50 && d[0].len_m.abs_diff(4000) <= 100 && d[0].drop_m.abs_diff(160) <= 5, "{:?}", d[0]);
+        assert!((38..=45).contains(&d[0].max_x10) && (38..=42).contains(&d[0].grade_x10()), "gentle: {:?}", d[0]);
+        assert!(d[1].start_m.abs_diff(5000) <= 50 && d[1].len_m.abs_diff(300) <= 50, "{:?}", d[1]);
+        assert!((115..=125).contains(&d[1].max_x10), "steep: {:?}", d[1]);
+        assert_eq!(c.climbs().len(), 1, "the 60 m rise is the only climb");
+        assert!(c.climbs()[0].start_m.abs_diff(6300) <= 50);
+        assert!(course(&lines(&[(0.0, 0.0, 100.0), (2000.0, 0.0, 160.0)], 10.0)).descents().next().is_none());
+    }
+
+    /// The steepest 50 m of a descent that is gentle on average: a 1 km drop at 3 % with a 100 m wall at 15 %.
+    #[test]
+    fn descent_max_grade_is_the_steepest_window() {
+        let c =
+            course(&lines(&[(0.0, 0.0, 200.0), (450.0, 0.0, 190.0), (550.0, 0.0, 175.0), (1000.0, 0.0, 165.0)], 5.0));
+        let d: std::vec::Vec<_> = c.descents().collect();
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!((140..=160).contains(&d[0].max_x10) && d[0].grade_x10() < 40, "{:?}", d[0]);
     }
 
     /// Reversed: the same length, the ends swapped, the ascent and climbs of the profile read downhill, and the

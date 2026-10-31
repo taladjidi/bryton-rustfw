@@ -1424,3 +1424,69 @@ fn climbs_done_row_comes_in_under_an_open_menu_and_a_new_ride_clears() {
     assert_eq!(app.ride.state(), ride::State::Running, "a new ride");
     assert_eq!(app.climbs_done.len(), 0);
 }
+
+/// East along y = 0 at 8 m/s from x = 0.
+fn east_route(ms: u64) -> (i32, i32, i32) {
+    (0, (ms as f64 * 0.008 / 0.011_132) as i32, (90.0 * 1e5) as i32)
+}
+
+/// A course made in the test and followed from its start: flat, a 300 m drop of 12 % at 1000 m, flat, then a long
+/// gentle one (4 km at 4 %).
+fn descent_scene(steep: usize) -> (Sim, App) {
+    use crate::course::tests::{course, lines};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(east_route);
+    sim.gnss.fix = Some(8000);
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    let c = app.courses.as_deref_mut().unwrap();
+    let pts = [(0.0, 0.0, 200.0), (1000.0, 0.0, 200.0), (1300.0, 0.0, 164.0), (2500.0, 0.0, 164.0), (6500.0, 0.0, 4.0)];
+    c.course = course(&lines(&pts, 10.0));
+    (c.on, c.at) = (Some(crate::fat::File { cluster: 0, size: 0, dir: false }), crate::course::Tracker::new());
+    app.settings.steep_descent = steep;
+    app.pages[0] = PageCfg {
+        layout: 6,
+        fields: [Field::DescentAhead, Field::ToGo, Field::Speed, Field::Time, Field::Time, Field::Time],
+    }
+    .into();
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    (sim, app)
+}
+
+/// STEEP DESCENT 10 %: the banner "STEEP 12% IN 300 M" once, about 300 m before the 12 % drop (not for the gentle
+/// 4 % one), with a beep; OFF never; the DESCENT field counts down to it, then what is left of it.
+#[test]
+fn steep_descent_alert_once() {
+    let (mut sim, mut app) = descent_scene(2);
+    let tones = sim.tones.len();
+    let (mut said, mut on, mut at_ms) = (0, false, 0);
+    while sim.ms < 600_000 {
+        run(&mut sim, &mut app, 500);
+        let now = app.notes.text.as_str().starts_with("STEEP");
+        if now && !on {
+            (said, at_ms) = (said + 1, sim.ms);
+            assert_eq!(app.notes.text.as_str(), "STEEP 12% IN 300 M");
+            sim.save("steep_descent");
+        }
+        on = now;
+    }
+    assert_eq!(said, 1, "once, and not for the 4 % descent");
+    let x = at_ms as f64 * 0.008;
+    assert!((650.0..=720.0).contains(&x), "about 300 m before the drop at 1000 m: {x}");
+    assert!(sim.tones.len() > tones, "a beep");
+    // the field: the distance and the steepest grade, before it and on it
+    let (mut sim, mut app) = descent_scene(0);
+    run(&mut sim, &mut app, 20_000);
+    let text = |app: &App| std::string::String::from(app.field_text(Field::DescentAhead).as_str());
+    assert!(text(&app).ends_with("|12%") && text(&app).starts_with("8"), "{}", text(&app));
+    run(&mut sim, &mut app, 110_000);
+    assert!(text(&app).ends_with("|12%") && text(&app).starts_with("2"), "on the drop: {}", text(&app));
+    let (mut sim, mut app) = descent_scene(0);
+    for _ in 0..1200 {
+        run(&mut sim, &mut app, 500);
+        assert!(!app.notes.text.as_str().starts_with("STEEP"), "OFF: never");
+    }
+}

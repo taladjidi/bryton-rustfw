@@ -39,7 +39,7 @@
 //! Nothing here panics or loops on any input: every index is checked, the trace ends at [`PATH`] points, the
 //! snap is a pass over the graph's edges (sim/fuzz.rs feeds it random graphs and damaged files).
 
-use crate::course::{CLIMBS, Climb, Course, step_mm};
+use crate::course::{CLIMBS, Climb, Course, Descent, step_mm};
 use crate::fat::{Disk, Fat};
 use crate::inflate::Scratch;
 use crate::map::cos_q16;
@@ -167,6 +167,8 @@ pub struct Ahead {
     end: End,
     climbs: [Climb; KEPT],
     n_climbs: usize,
+    descents: [Descent; 4],
+    n_descents: usize,
     /// CLIMBS MEDIUM+: only the climbs of [`Climb::medium_plus`] are kept (set by the app, see [`Ahead::set_medium`]).
     medium: bool,
     along_m: u32,
@@ -266,6 +268,8 @@ impl Ahead {
             end: End::Length,
             climbs: [Climb { start_m: 0, len_m: 0, gain_m: 0 }; KEPT],
             n_climbs: 0,
+            descents: [Descent::NONE; 4],
+            n_descents: 0,
             medium: false,
             along_m: 0,
             seg: 0,
@@ -283,6 +287,7 @@ impl Ahead {
     pub fn reset(&mut self) {
         self.maps.abort(&mut self.graph);
         (self.phase, self.n, self.have, self.n_climbs, self.said) = (Phase::Idle, 0, false, 0, false);
+        self.n_descents = 0;
         self.in_said = false;
         (self.off_s, self.seg, self.along_m, self.retry_s) = (0, 0, 0, 0);
     }
@@ -310,6 +315,7 @@ impl Ahead {
             self.medium = on;
             self.maps.abort(&mut self.graph);
             (self.phase, self.n, self.have, self.n_climbs, self.retry_s) = (Phase::Idle, 0, false, 0, 0);
+            self.n_descents = 0;
         }
     }
 
@@ -319,6 +325,7 @@ impl Ahead {
             self.trails = on;
             self.maps.abort(&mut self.graph);
             (self.phase, self.n, self.have, self.n_climbs, self.retry_s) = (Phase::Idle, 0, false, 0, 0);
+            self.n_descents = 0;
         }
     }
 
@@ -365,6 +372,11 @@ impl Ahead {
     /// The climbs of the trace (at most four), from its start.
     pub fn climbs(&self) -> &[Climb] {
         self.climbs.get(..self.n_climbs).unwrap_or(&[])
+    }
+
+    /// The descents of the trace (at most four), from its start.
+    pub fn descents(&self) -> impl Iterator<Item = Descent> + '_ {
+        self.descents.get(..self.n_descents).unwrap_or(&[]).iter().copied()
     }
 
     /// The next climb at `d` m on the trace (the one running, else the one ahead), and whether `d` is on it.
@@ -568,6 +580,7 @@ impl Ahead {
     fn fail(&mut self) {
         self.maps.abort(&mut self.graph);
         (self.phase, self.have, self.n, self.n_climbs) = (Phase::Idle, false, 0, 0);
+        self.n_descents = 0;
         self.retry_s = self.now_s.saturating_add(RETRY_S);
     }
 
@@ -731,6 +744,12 @@ impl Ahead {
         let (all, n) = Course::climbs_of(total, |d| self.alt_at(d));
         let kept = keep_climbs(all.get(..n.min(CLIMBS)).unwrap_or(&[]), self.medium, &mut self.climbs);
         (self.n_climbs, self.end, self.have) = (kept, end, true);
+        let (all, n) = Descent::of(total, |d| self.alt_at(d));
+        self.descents = [Descent::NONE; 4];
+        for (o, d) in self.descents.iter_mut().zip(all.iter().take(n)) {
+            *o = *d;
+        }
+        self.n_descents = n.min(4);
         (self.seg, self.along_m, self.off_s) = (0, 0, 0);
     }
 

@@ -153,6 +153,8 @@ pub enum Setting {
     PowerMatch,
     /// LEVEL STEP (BIKE): how many levels a press moves in the trainer's LEVEL mode ([`crate::LEVEL_STEPS`]).
     LevelStep,
+    /// STEEP DESCENT (ALERTS): OFF, or the grade a descent ahead must pass to be said ([`crate::STEEP_DESCENT_PCT`]).
+    SteepDescent,
     /// SLOPE SCALE (BIKE): how much of the course's grade the trainer is given ([`crate::SLOPE_SCALES`]).
     SlopeScale,
     /// The window of the big power value: the live reading, 3, 5 or 10 s (app/settings.rs, POWER_SMOOTH_S).
@@ -309,6 +311,7 @@ impl Setting {
             Setting::PowerMatch => "POWER MATCH",
             Setting::LevelStep => "LEVEL STEP",
             Setting::SlopeScale => "SLOPE SCALE",
+            Setting::SteepDescent => "STEEP DESCENT",
             Setting::Lthr => "LTHR",
             Setting::ZonesBy => "ZONES BY",
             Setting::Zone(0) => "HR Z1",
@@ -890,7 +893,7 @@ pub const ZONES: [Row; 11] = [
 ];
 
 /// ALERTS: the reminders and the limits (the list scrolls).
-pub const ALERTS: [Row; 15] = [
+pub const ALERTS: [Row; 16] = [
     Row::Set(Setting::Eat),
     Row::Set(Setting::Drink),
     Row::Set(Setting::Limit(7)),
@@ -906,6 +909,7 @@ pub const ALERTS: [Row; 15] = [
     Row::Set(Setting::Limit(5)),
     Row::Set(Setting::Limit(10)),
     Row::Set(Setting::SunsetAlert),
+    Row::Set(Setting::SteepDescent),
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
