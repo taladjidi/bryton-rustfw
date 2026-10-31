@@ -722,7 +722,9 @@ impl App {
         t = self.timed(b, Sec::Gnss, t);
         // the app's own run time, not the receiver's (switched off on an indoor ride, its clock starts again)
         if up_before < FAULT_CLEAR_MS && self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
-            b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
+            // a minute of running: the next fault is the first in a row again; the line not logged yet keeps its marker
+            let w = b.backup_read(FAULT_BKP);
+            b.backup_write(FAULT_BKP, if self.fault_due.is_some() { w & !0xff } else { 0 });
         }
         self.gps.note_fix();
         self.strip.rec = self.rec.mark(&self.ride, self.card_writable);

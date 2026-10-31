@@ -399,3 +399,88 @@ fn screenshot_link_failure_keeps_the_chain() {
     assert_eq!(files(&sim.emmc.image, "Screenshot").unwrap().len(), 7);
     fsck(&sim.emmc.image).expect("no cluster in two chains");
 }
+
+/// A fault mid-ride, the unit reset again after its minute and before the save: the marker survives (count cleared, so
+/// the unit is not parked), and the line is written after the save, which then clears the marker.
+#[test]
+fn fault_marker_survives_the_minute_until_logged() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    let word = marker(0, Kind::Stack, 0);
+    let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, word);
+    run(&mut sim, &mut app, 120_000);
+    assert_eq!(log(&sim.emmc.image), None);
+    assert_eq!(sim.backup[FAULT_BKP] & 0xff, 0, "count cleared");
+    assert_eq!(sim.backup[FAULT_BKP] >> 24, 0xfa, "marker kept");
+    let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, sim.backup[FAULT_BKP]);
+    run(&mut sim, &mut app, 5000);
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    assert!(log(&sim.emmc.image).unwrap().contains(" stack overflow (canary)"));
+}
+
+/// The save after the end card is left still counts as busy (main.rs resets on a cable pull otherwise, with the trip
+/// totals and a pending fault line in RAM only); once settled it does not.
+#[test]
+fn busy_until_the_save_is_settled() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    assert!(!app.busy());
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // stop
+    app.press(&mut sim, Press::Long(Key::Start)); // end
+    app.press(&mut sim, Press::Short(Key::Start)); // SAVE
+    let mut p = crate::LoopPolicy::new(1000, 1000);
+    let mut saving = false;
+    for _ in 0..600 {
+        if !app.ride_settled() {
+            saving = true;
+            assert!(app.busy());
+            assert_ne!(p.cable(false, app.busy()), crate::Cable::Reset);
+        }
+        run(&mut sim, &mut app, 50);
+    }
+    assert!(saving);
+    run(&mut sim, &mut app, 30_000);
+    assert!(app.ride_settled());
+    assert_eq!(app.screen() == Screen::Summary, app.busy());
+}
+
+/// As `fault_marker_survives_the_minute_until_logged`, the second boot running past its minute before the save: one
+/// line, the marker cleared once logged.
+#[test]
+fn fault_marker_cleared_when_logged_after_the_minute() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    let word = marker(0, Kind::Stack, 0);
+    let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, word);
+    run(&mut sim, &mut app, 120_000);
+    let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, sim.backup[FAULT_BKP]);
+    run(&mut sim, &mut app, 70_000);
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(sim.backup[FAULT_BKP], 0);
+    assert_eq!(log(&sim.emmc.image).unwrap().lines().count(), 1);
+}
+
+/// A card that keeps failing with no ride: not busy once the resume back-off is over.
+#[test]
+fn not_busy_with_a_failing_card_and_no_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.writable = false;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 120_000);
+    assert!(!app.busy());
+}
