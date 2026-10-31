@@ -39,7 +39,7 @@ impl App {
             if self.radio.ask & 1 << kind.channel() != 0
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
             {
-                self.radio.sensors[kind as usize] = Sensor::Paired(id);
+                *self.radio.sensors.at_mut(kind) = Sensor::Paired(id);
                 self.decoders.forget_ids(kind); // another sensor's percent and maker, if it had sent them
                 self.keep_pairing(b, kind, id);
                 let mut l = Line::<20>::new();

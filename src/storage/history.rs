@@ -433,16 +433,24 @@ impl Samples {
     }
 
     fn push(&mut self, a: u16) {
+        /// Every other entry kept, packed to the front.
+        fn halve<T: Copy>(a: &mut [T]) {
+            for i in 0..a.len() / 2 {
+                if let Some(x) = a.get(2 * i).copied()
+                    && let Some(s) = a.get_mut(i)
+                {
+                    *s = x;
+                }
+            }
+        }
         let k = self.k;
         self.k = k.wrapping_add(1);
         if !k.is_multiple_of(self.every) {
             return;
         }
         if self.len == SAMPLES {
-            for i in 0..SAMPLES / 2 {
-                self.v[i] = self.v[2 * i];
-                self.d[i] = self.d[2 * i];
-            }
+            halve(&mut self.v);
+            halve(&mut self.d);
             self.len = SAMPLES / 2;
             self.every = self.every.saturating_mul(2);
         }

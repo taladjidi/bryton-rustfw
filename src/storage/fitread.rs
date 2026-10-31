@@ -310,7 +310,7 @@ impl Reader {
             return None;
         }
         self.pos = self.pos.saturating_add(1);
-        self.crc = (self.crc >> 8) ^ self.table[usize::from((self.crc as u8) ^ b)];
+        self.crc = (self.crc >> 8) ^ self.table.get(usize::from((self.crc as u8) ^ b)).copied().unwrap_or(0);
         match self.state {
             State::Header => return self.header(b),
             State::Crc(n) => {
@@ -591,7 +591,7 @@ impl Reader {
                     self.take(self.local, self.at, run, usize::from(n));
                     let mut crc = self.crc;
                     for &b in run {
-                        crc = (crc >> 8) ^ table[usize::from((crc as u8) ^ b)];
+                        crc = (crc >> 8) ^ table.get(usize::from((crc as u8) ^ b)).copied().unwrap_or(0);
                     }
                     self.crc = crc;
                     let len = run.len() as u32;

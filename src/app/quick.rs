@@ -290,8 +290,12 @@ impl App {
         for k in 1..q::ROWS {
             for part in 0..2 {
                 let (cur, up) = (B_ROWS + 3 * k + part, B_ROWS + 3 * (k - 1) + part);
-                if p[cur] != 0 && p[up] != 0 {
-                    p[cur] = fnv(p[cur], &p[up].to_le_bytes()) | 1;
+                if let (Some(&c), Some(&u)) = (p.get(cur), p.get(up))
+                    && c != 0
+                    && u != 0
+                    && let Some(slot) = p.get_mut(cur)
+                {
+                    *slot = fnv(c, &u.to_le_bytes()) | 1;
                 }
             }
         }
@@ -315,7 +319,7 @@ impl App {
                 let (k, part) = ((i - B_ROWS) / 3, (i - B_ROWS) % 3);
                 let y = sens_y + k as u32 * q::ROW;
                 let Some(kind) = self.quick_kinds().nth(k) else { return };
-                let (x, w) = q::SENSOR_BOXES[part];
+                let Some(&(x, w)) = q::SENSOR_BOXES.get(part) else { return };
                 match part {
                     2 => q::draw_battery(c, x, y, self.quick_battery(kind)),
                     // the button fills its own 16 px row only: the next line's ink is not touched

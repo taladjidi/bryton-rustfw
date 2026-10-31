@@ -106,7 +106,7 @@ impl App {
 
     /// The theme AUTO draws now: the day one or the night one, from RAM.
     fn auto_now(&self) -> Theme {
-        self.auto_themes[usize::from(self.light.day_night.night)]
+        self.auto_themes.get(usize::from(self.light.day_night.night)).copied().unwrap_or(self.auto_themes[0])
     }
 
     /// AUTO's theme drawn when it is not the one on the screen (a whole redraw); nothing otherwise.

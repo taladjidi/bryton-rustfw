@@ -62,7 +62,12 @@ impl PageCfg {
         if w[0] >> 28 != tags[0] || w[1] >> 28 != tags[1] || ui::layout(layout).is_none() {
             return None;
         }
-        Some(PageCfg { layout, fields: core::array::from_fn(|i| Field::from_index(w[i / 3] >> (8 * (i % 3)) & 0xff)) })
+        Some(PageCfg {
+            layout,
+            fields: core::array::from_fn(|i| {
+                Field::from_index(w.get(i / 3).copied().unwrap_or(0) >> (8 * (i % 3)) & 0xff)
+            }),
+        })
     }
 
     /// A page as earlier builds kept it in one register: tag 0xa, the layout, 4 bits per field.
@@ -1429,8 +1434,10 @@ pub(crate) fn pages_from_registers(b: &mut impl Board) -> ([Page; PAGES + 1], us
     let mut pages = [first; PAGES + 1];
     let mut n = 0;
     for i in 0..REG_PAGES {
-        if let Some(p) = Page::from_cfg(register_page(b, i)) {
-            pages[n] = p;
+        if let Some(p) = Page::from_cfg(register_page(b, i))
+            && let Some(slot) = pages.get_mut(n)
+        {
+            *slot = p;
             n += 1;
         }
     }
@@ -1440,13 +1447,15 @@ pub(crate) fn pages_from_registers(b: &mut impl Board) -> ([Page; PAGES + 1], us
 
 /// Page `i` of the backup registers (`REG_PAGES`: the overview) in any format earlier builds kept, else its default.
 fn register_page(b: &mut impl Board, i: usize) -> PageCfg {
-    let now = PAGE_BKP[i].map(|r| b.backup_read(r));
-    let then = PAGE_BKP_B[i].map(|r| b.backup_read(r));
+    let fallback = DEFAULT_PAGES.get(i).copied().unwrap_or(DEFAULT_PAGES[0]);
+    let (Some(regs), Some(regs_b)) = (PAGE_BKP.get(i), PAGE_BKP_B.get(i)) else { return fallback };
+    let now = regs.map(|r| b.backup_read(r));
+    let then = regs_b.map(|r| b.backup_read(r));
     let first = OLD_PAGE_BKP.get(i).map(|&r| b.backup_read(r));
     PageCfg::from_words(now)
         .or_else(|| PageCfg::from_words_b(then))
         .or_else(|| first.and_then(PageCfg::from_word))
-        .unwrap_or(DEFAULT_PAGES[i])
+        .unwrap_or(fallback)
 }
 
 /// The backup registers' words of the first ride pages, as [`save_page`] writes them (a page not there: off).

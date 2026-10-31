@@ -47,7 +47,7 @@ pub fn name(z: u8, x: u32, y: u32) -> Line<32> {
 
 /// The header is a version 1 pack of tile (`z`, `x`, `y`)'s block.
 pub fn header_ok(h: &[u8; HEAD as usize], z: u8, x: u32, y: u32) -> bool {
-    let u32_at = |i: usize| u32::from_le_bytes([h[i], h[i + 1], h[i + 2], h[i + 3]]);
+    let u32_at = |i: usize| u32::from_le_bytes(super::take(h, i));
     h[..4] == *b"OSMP"
         && h[4..6] == [1, 0]
         && h[6] == z
@@ -77,7 +77,7 @@ pub struct Entry {
 /// The tile's blobs from its index entry in a pack of `size` bytes; None: no tile there, or an entry that cannot
 /// be right (a blob outside the data, H too short for its count, a count over the tile's cap).
 pub fn entry(e: [u8; 16], size: u32) -> Option<Entry> {
-    let w = |i: usize| u32::from_le_bytes([e[i], e[i + 1], e[i + 2], e[i + 3]]);
+    let w = |i: usize| u32::from_le_bytes(super::take(&e, i));
     let (h, hlen, p, plen) = (w(0), w(4), w(8), w(12));
     let inside = |off: u32, len: u32| off >= DATA && off.checked_add(len).is_some_and(|end| end <= size);
     ((4..=4 + 10 * 65_535).contains(&hlen) && inside(h, hlen) && inside(p, plen)).then_some(Entry { h, hlen, p, plen })

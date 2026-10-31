@@ -106,7 +106,7 @@ pub fn parse_point(b: &[u8]) -> Option<((i16, i16), &[u8], u64)> {
     let name = b.get(5..5 + len)?;
     (*b.get(5 + len)? == 0).then_some(())?;
     let e = b.get(6 + len..14 + len)?;
-    let ele = u64::from_le_bytes([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]]);
+    let ele = u64::from_le_bytes(e.try_into().ok()?);
     Some(((x, y), name, ele))
 }
 
@@ -265,7 +265,9 @@ impl Pois {
                         && let Some(slot) = row.get_mut(n)
                     {
                         *slot = t;
-                        self.scan.nt[zi] += 1;
+                        if let Some(c) = self.scan.nt.get_mut(zi) {
+                            *c += 1;
+                        }
                     }
                 }
             }
@@ -349,6 +351,7 @@ impl Pois {
                 break; // the rest at the next pass
             }
             upto += 1;
+            let Ok(r) = <&[u8; 10]>::try_from(r) else { continue };
             let (layer, npts, class) = (r[0], u16::from_le_bytes([r[1], r[2]]), r[7]);
             let off = u32::from_le_bytes([r[3], r[4], r[5], r[6]]);
             if layer != PEAK_LAYER || npts != 1 || !(1..=3).contains(&class) || off.saturating_add(14) > p.size {

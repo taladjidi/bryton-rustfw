@@ -14,7 +14,10 @@
 #![no_std]
 #![no_main]
 #![deny(unsafe_code)] // only hw.rs may use unsafe
-#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable)
+)]
 
 mod board;
 

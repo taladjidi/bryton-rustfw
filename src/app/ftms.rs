@@ -201,7 +201,7 @@ impl Default for Ftms {
 impl Ftms {
     /// The value handle of characteristic `uuid` (0: not found).
     fn handle(&self, uuid: u16) -> u16 {
-        self.chars[..self.n_chars].iter().find(|c| c.0 == uuid).map_or(0, |c| c.2)
+        self.chars.get(..self.n_chars).unwrap_or(&[]).iter().find(|c| c.0 == uuid).map_or(0, |c| c.2)
     }
 
     /// The link is gone (or given up): what belonged to it, and the wait before the next.
@@ -234,7 +234,7 @@ impl Ftms {
         }
         let mut peer = [r.addr_type; 7];
         peer[1..].copy_from_slice(&r.addr);
-        let known = self.found[..self.n_found].iter().position(|d| d.peer == peer);
+        let known = self.found.get(..self.n_found).unwrap_or(&[]).iter().position(|d| d.peer == peer);
         let proto = fecble::advertised(r.data);
         let i = match known {
             Some(i) => i,
@@ -256,7 +256,7 @@ impl Ftms {
         }
         if let Some(name) = nrf::ad_name(r.data) {
             let n = name.len().min(d.name.len());
-            for (slot, &c) in d.name.iter_mut().zip(&name[..n]) {
+            for (slot, &c) in d.name.iter_mut().zip(name) {
                 *slot = if c.is_ascii_graphic() || c == b' ' { c } else { b'?' };
             }
             d.name_len = n as u8;
@@ -293,7 +293,7 @@ impl App {
         let fails = self.ftms.fails;
         self.ftms.unlink();
         (self.ftms.wait_ms, self.ftms.fails, self.ftms.vs) = (0, fails, 0); // the chip forgets the UUID base too
-        self.radio.heard_ms[Kind::Trainer as usize] = u32::MAX;
+        *self.radio.heard_ms.at_mut(Kind::Trainer) = u32::MAX;
     }
 
     /// After a resync of the Nordic link, whose dropped bytes may have held the trainer's DISCONNECTED: a link the
@@ -340,7 +340,7 @@ impl App {
     pub(crate) fn ftms_pair(&mut self, b: &mut impl Board, i: usize) {
         let Some(peer) = self.ftms.found.get(i).filter(|_| i < self.ftms.n_found).map(|d| d.peer) else { return };
         let fec = self.ftms.found.get(i).is_some_and(|d| d.proto == Proto::Fec);
-        if self.radio.sensors[Kind::Trainer as usize] != Sensor::Off {
+        if self.radio.sensors.at(Kind::Trainer) != Sensor::Off {
             self.set_sensor(b, Kind::Trainer, Sensor::Off);
         }
         let changed = self.sensors_store.bt != Some(peer) || self.sensors_store.bt_fec != fec;
@@ -365,7 +365,7 @@ impl App {
         self.sensors_store.dirty |= self.sensors_store.bt.is_some();
         self.sensors_store.bt = None;
         self.ftms_drop(b);
-        self.radio.heard_ms[Kind::Trainer as usize] = u32::MAX;
+        *self.radio.heard_ms.at_mut(Kind::Trainer) = u32::MAX;
     }
 
     /// Ends the link (or the connection being made) from this side: forgotten at once, its last events going to
@@ -386,7 +386,7 @@ impl App {
         self.ftms.fails = self.ftms.fails.saturating_add(u8::from(!had)); // a connection not made
         self.ftms.unlink();
         if had && self.ftms_on() {
-            self.radio.heard_ms[Kind::Trainer as usize] = u32::MAX; // its readings stop now, not 5 s later
+            *self.radio.heard_ms.at_mut(Kind::Trainer) = u32::MAX; // its readings stop now, not 5 s later
         }
     }
 
@@ -650,7 +650,8 @@ impl App {
                     Some(&(uuid, _)) => {
                         // the descriptors lie between the value and the next declaration (or the service's end)
                         let value = f.handle(uuid);
-                        let next = f.chars[..f.n_chars].iter().map(|c| c.1).filter(|&d| d > value).min();
+                        let next =
+                            f.chars.get(..f.n_chars).unwrap_or(&[]).iter().map(|c| c.1).filter(|&d| d > value).min();
                         let end = next.map_or(f.end, |d| d - 1);
                         value != 0 && value < end && ble::discover_descs(b, rx, conn, value + 1, end).is_ok()
                     }
@@ -731,12 +732,12 @@ impl App {
             }
         } else if handle == 0 {
         } else if handle == f.handle(BIKE_DATA) {
-            if self.radio.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
+            if self.radio.heard_ms.at(Kind::Trainer) >= sensors::STALE_MS {
                 self.trainer.lost(); // back after a drop-out: what was sent is not known to stand
             }
             ftms::bike_data(data, &mut self.trainer.reading);
             self.trainer.reading.modes = self.ftms.modes;
-            self.radio.heard_ms[Kind::Trainer as usize] = 0;
+            *self.radio.heard_ms.at_mut(Kind::Trainer) = 0;
             self.ftms.quiet_ms = 0;
             self.fold_trainer();
         } else if handle == f.handle(STATUS) {
@@ -781,12 +782,12 @@ impl App {
     /// another shape or with a wrong checksum is dropped).
     fn fec_message(&mut self, data: &[u8]) {
         let Some((page, sum)) = fecble::parse(data) else { return };
-        if self.radio.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
+        if self.radio.heard_ms.at(Kind::Trainer) >= sensors::STALE_MS {
             self.trainer.lost(); // back after a drop-out: what was sent is not known to stand
         }
         (self.ftms.fec_sum, self.ftms.quiet_ms) = (sum, 0);
         fec::decode(page, &mut self.trainer.reading);
-        self.radio.heard_ms[Kind::Trainer as usize] = 0;
+        *self.radio.heard_ms.at_mut(Kind::Trainer) = 0;
         self.fold_trainer();
     }
 }

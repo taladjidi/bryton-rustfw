@@ -562,7 +562,10 @@ impl App {
                     self.graph_whole = !self.graph_whole;
                 } else if let Some(plot) = graph_plot(f) {
                     let all = ride::Plot::ALL;
-                    let next = all[(all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len()];
+                    let Some(&next) = all.get((all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len())
+                    else {
+                        return;
+                    };
                     let n = match self.screen {
                         Screen::Ride(_) if self.more_shown().is_some() => return, // no slot, nothing to redraw
                         Screen::Ride(n) => n,
