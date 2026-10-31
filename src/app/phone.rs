@@ -79,6 +79,8 @@ const NOTIFYING: [&[(usize, usize)]; 3] =
 enum Disc {
     /// Nothing yet (not encrypted).
     Idle,
+    /// The Exchange MTU Request sent, its response awaited.
+    Mtu,
     /// Looking for service `n`.
     Service(u8),
     /// Its characteristics, from a handle on.
@@ -100,6 +102,7 @@ impl Disc {
     /// tried, its bit being set).
     fn skipped(self) -> Disc {
         match self {
+            Disc::Mtu => Disc::Service(0),
             Disc::Service(n) => Disc::Service(n + 1),
             Disc::Chars(n, _) => Disc::Descs(n),
             Disc::Subscribe(i) => Disc::Subscribe(i + 1),
@@ -119,6 +122,8 @@ enum Op {
     Act(u32, bool),
     /// An AMS remote command.
     Ams(u8),
+    /// Get App Attributes for a bundle id.
+    App(Line<24>),
 }
 
 /// The phone link's state.
@@ -164,6 +169,14 @@ pub struct Phone {
     busy_ms: u32,
     fetching: bool,
     ds: ph::DataSource,
+    /// The names of the last apps seen, and a notification held until its app's name came (or did not).
+    pub(crate) apps: ph::AppCache,
+    pub(crate) held: Option<ph::Attributes>,
+    /// The app being asked about (queued or out), and whether its request is the write awaiting an answer.
+    asking: Option<Line<24>>,
+    app_out: bool,
+    /// The ATT MTU of the link: 23 until the exchange.
+    pub(crate) mtu: u16,
     /// An incoming call: its id and who calls.
     pub(crate) call: Option<(u32, Line<24>)>,
     /// The call's overlay is up (its caller known): buttons and banner over the bottom of the screen.
@@ -213,6 +226,11 @@ impl Default for Phone {
             busy: false,
             busy_ms: 0,
             fetching: false,
+            apps: ph::AppCache::default(),
+            held: None,
+            asking: None,
+            app_out: false,
+            mtu: 23,
             ds: ph::DataSource::default(),
             call: None,
             ringing: false,
@@ -297,24 +315,26 @@ impl Phone {
 
     /// Queues `op`. A message's fetch takes the first slots only: the last two stay for a call's name, its answer and
     /// the media keys, so a burst of messages cannot crowd them out.
-    fn queue(&mut self, op: Op) {
+    fn queue(&mut self, op: Op) -> bool {
         let urgent = match op {
             Op::Fetch(uid) => self.call.is_some_and(|(c, _)| c == uid),
             _ => true,
         };
         if !urgent && self.n_ops + 2 >= self.ops.len() {
-            return;
+            return false;
         }
-        if let Some(slot) = self.ops.get_mut(self.n_ops) {
-            *slot = op;
-            self.n_ops += 1;
-        }
+        let Some(slot) = self.ops.get_mut(self.n_ops) else { return false };
+        *slot = op;
+        self.n_ops += 1;
+        true
     }
 
     /// The link is gone: what belonged to it.
     fn unlink(&mut self) {
         (self.conn, self.secure, self.disc, self.busy, self.n_ops) = (None, false, Disc::Idle, false, 0);
         (self.h, self.tried, self.call, self.release) = ([0; 12], 0, None, false);
+        (self.held, self.mtu) = (None, 23);
+        (self.asking, self.app_out) = (None, false);
         self.battery_sent = None;
         (self.link_ms, self.now) = (0, ph::NowPlaying::default()); // what played is not known without the phone
         self.commands = 0; // the next link's app sends its own list (review: a podcast app's kept blocked Next)
@@ -543,10 +563,23 @@ impl App {
         }
         if self.phone.busy && self.phone.busy_ms >= 3000 {
             self.phone.busy = false; // an answer that never came: the queue goes on
+            if core::mem::take(&mut self.phone.app_out) {
+                self.app_unknown(b);
+            }
+        }
+        if !self.phone.busy && self.phone.n_ops == 0 && self.phone.held.is_some() {
+            self.show_held(b); // its app's name never came
         }
         if !matches!(self.phone.disc, Disc::Idle | Disc::Done) {
             self.phone.disc_ms = self.phone.disc_ms.saturating_add(self.dt_ms);
             if self.phone.disc_ms >= DISC_MS {
+                if self.phone.disc == Disc::Mtu {
+                    // no answer: the stack's MTU procedure stays pending and refuses later GATTC calls (BUSY), so the
+                    // link is dropped; the phone connects again, as after any lost link
+                    self.phone.disc = Disc::Idle;
+                    let _ = ble::disconnect(b, &mut self.rx, conn);
+                    return;
+                }
                 // the discovery's answer never came: on with the next step (a late one is taken for its answer, or
                 // not the one awaited, and the deadline moves it on again)
                 (self.phone.disc, self.phone.disc_ms) = (self.phone.disc.skipped(), 0);
@@ -632,7 +665,12 @@ impl App {
         let op = p.ops[0];
         p.ops.rotate_left(1);
         p.n_ops -= 1;
+        let mut app = [0; 28];
         let (handle, data): (u16, &[u8]) = match op {
+            Op::App(id) => {
+                let n = ph::get_app(id.as_str(), &mut app);
+                (p.h[CP], &app[..n])
+            }
             Op::Fetch(uid) => {
                 p.ds = Default::default();
                 (p.h[CP], &ph::get_attributes(uid))
@@ -641,7 +679,8 @@ impl App {
             Op::Ams(cmd) => (p.h[RC], &[cmd]),
         };
         p.busy = handle != 0 && ble::write(b, &mut self.rx, conn, handle, data).is_ok();
-        (p.busy_ms, p.fetching) = (0, p.busy && matches!(op, Op::Fetch(_)));
+        (p.busy_ms, p.fetching) = (0, p.busy && matches!(op, Op::Fetch(_) | Op::App(_)));
+        p.app_out = p.busy && matches!(op, Op::App(_));
     }
 
     /// The connection configuration tag links use: [`ble::TAG`] when the chip took the two links' configuration, else
@@ -704,7 +743,7 @@ impl App {
                     let _ = ble::sys_attr_set(b, rx, conn, Some(&d.attrs[..usize::from(d.attrs_len)]));
                 }
                 if self.phone.disc == Disc::Idle {
-                    self.phone.disc = Disc::Service(0);
+                    self.phone.disc = Disc::Mtu;
                     self.discover(b, conn);
                 }
             }
@@ -727,7 +766,7 @@ impl App {
                 }
             }
             Event::MtuRequest { conn } => {
-                let _ = ble::exchange_mtu_reply(b, rx, conn);
+                let _ = ble::exchange_mtu_reply(b, rx, conn, self.ble.map_or(23, |v| v.mtu));
             }
             Event::ParamRequest { conn, id } => {
                 let _ = match id {
@@ -756,7 +795,8 @@ impl App {
             Event::Hvx { conn, handle, kind, data } if Some(conn) == self.phone.conn => {
                 self.phone_hvx(b, handle, kind, data)
             }
-            Event::Services { conn, .. }
+            Event::MtuRsp { conn, .. }
+            | Event::Services { conn, .. }
             | Event::Chars { conn, .. }
             | Event::Descs { conn, .. }
             | Event::Read { conn, .. }
@@ -773,6 +813,11 @@ impl App {
     fn client_answer(&mut self, b: &mut impl Board, conn: u16, e: Event) {
         let p = &mut self.phone;
         match (p.disc, e) {
+            (Disc::Mtu, Event::MtuRsp { status, mtu, .. }) => {
+                // the link uses the smaller of the two Rx MTUs (Core spec Vol 3 Part F 3.4.2.2); a refusal stays 23
+                p.mtu = if status == 0 { mtu.clamp(23, self.ble.map_or(23, |v| v.mtu)) } else { 23 };
+                p.disc = Disc::Service(0);
+            }
             (Disc::Service(n), Event::Services { status: 0, list, .. }) => {
                 match ble::services(list).find(|(u, ..)| *u == p.service(n)) {
                     Some((_, start, end)) => {
@@ -820,6 +865,9 @@ impl App {
             (Disc::Done, Event::Written { status, .. }) => {
                 // a fetch waits for its answer on the Data Source as well, which a new one would cut
                 p.busy = p.fetching && status == 0;
+                if status != 0 && core::mem::take(&mut p.app_out) {
+                    self.app_unknown(b); // refused: no name to wait for
+                }
                 return self.next_op(b, conn);
             }
             _ => return,
@@ -829,10 +877,12 @@ impl App {
 
     /// Sends the discovery's next request (skipping what is not there), or ends it.
     fn discover(&mut self, b: &mut impl Board, conn: u16) {
+        let mtu = self.ble.map_or(23, |v| v.mtu);
         for _ in 0..32 {
             let rx = &mut self.rx;
             let p = &mut self.phone;
             let sent = match p.disc {
+                Disc::Mtu => mtu > 23 && ble::exchange_mtu_request(b, rx, conn, mtu).is_ok(),
                 Disc::Service(n) if n < 3 => {
                     let uuid = p.service(n);
                     uuid.1 != 0 && ble::discover_service(b, rx, conn, uuid).is_ok()
@@ -895,6 +945,87 @@ impl App {
         }
     }
 
+    /// A notification's attributes arrived. A call is shown at once; another waits for its app's name when that is
+    /// not known (Get App Attributes, once per app: [`ph::AppCache`]), shown without it when that cannot be asked.
+    fn notif_fetched(&mut self, b: &mut impl Board, a: ph::Attributes) {
+        self.phone.busy = false;
+        let call = self.phone.call.is_some_and(|(uid, _)| uid == a.uid);
+        if !call {
+            self.show_held(b); // one still waiting for a name goes first, without it
+            let id = a.app.as_str();
+            // known, or not to be asked: no id, a cut one (24), a request that does not fit one ATT write at this MTU, or
+            // one already out
+            let known = id.is_empty()
+                || id.len() >= 24
+                || id.len() + 3 > usize::from(self.phone.mtu) - 3
+                || self.phone.apps.get(id).is_some()
+                || self.phone.asking == Some(a.app);
+            if !known && self.phone.queue(Op::App(a.app)) {
+                self.phone.asking = Some(a.app);
+                self.phone.held = Some(a);
+                if let Some(conn) = self.phone.conn {
+                    self.next_op(b, conn);
+                }
+                return;
+            }
+        }
+        if let Some(conn) = self.phone.conn {
+            self.next_op(b, conn);
+        }
+        match &mut self.phone.call {
+            Some((uid, who)) if *uid == a.uid => {
+                *who = a.title;
+                let who = *who;
+                // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
+                self.notes.drawn = false;
+                self.phone.ringing = true;
+                let mut p = Panel(b, (0, ui::H), self.look());
+                ui::draw_call(&mut p, who.as_str());
+                if self.screen == Screen::Main {
+                    p.fill(0, ui::BANNER_H, ui::W, ui::TODAY_BOX.1 - ui::BANNER_H, ui::BLACK); // the date row's lower half
+                }
+                self.tones.play(&BEEP_ALERT);
+            }
+            _ => self.show_notif(b, a),
+        }
+    }
+
+    /// The notification held for its app's name, shown now with what the cache has.
+    fn show_held(&mut self, b: &mut impl Board) {
+        if let Some(a) = self.phone.held.take() {
+            self.show_notif(b, a);
+        }
+    }
+
+    /// The app being asked about gets no name (refused, or no answer): cached empty so it is not asked again, and the
+    /// held notification shown with the bundle id's last part.
+    fn app_unknown(&mut self, b: &mut impl Board) {
+        if let Some(id) = self.phone.asking.take() {
+            self.phone.apps.put(ph::AppInfo { id, name: Line::new() });
+        }
+        self.show_held(b);
+    }
+
+    /// The banner ("APP: title: message") and the inbox.
+    fn show_notif(&mut self, b: &mut impl Board, mut a: ph::Attributes) {
+        a.name = self.phone.apps.get(a.app.as_str()).unwrap_or_default();
+        if a.name.as_str().is_empty() {
+            ph::app_name(&mut a.name, a.app.as_str());
+        }
+        let mut l = Line::<40>::new();
+        if !a.name.as_str().is_empty() {
+            l.push_str(a.name.as_str());
+            l.push_str(": ");
+        }
+        l.push_str(a.title.as_str());
+        if !a.message.as_str().is_empty() {
+            l.push_str(": ");
+            l.push_str(a.message.as_str());
+        }
+        self.notice(l.as_str());
+        self.keep_notif(b, &a);
+    }
+
     /// A notification or indication from the phone.
     fn phone_hvx(&mut self, b: &mut impl Board, handle: u16, kind: u8, data: &[u8]) {
         if let (2, Some(conn)) = (kind, self.phone.conn) {
@@ -921,35 +1052,21 @@ impl App {
                 self.next_op(b, conn);
             }
         } else if handle == h[DS] {
-            let Some(a) = self.phone.ds.push(data) else { return };
-            self.phone.busy = false;
-            if let Some(conn) = self.phone.conn {
-                self.next_op(b, conn);
-            }
-            match &mut self.phone.call {
-                Some((uid, who)) if *uid == a.uid => {
-                    *who = a.title;
-                    let who = *who;
-                    // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
-                    self.notes.drawn = false;
-                    self.phone.ringing = true;
-                    let mut p = Panel(b, (0, ui::H), self.look());
-                    ui::draw_call(&mut p, who.as_str());
-                    if self.screen == Screen::Main {
-                        p.fill(0, ui::BANNER_H, ui::W, ui::TODAY_BOX.1 - ui::BANNER_H, ui::BLACK); // the date row's lower half
+            match self.phone.ds.push_any(data) {
+                Some(ph::Answer::Notif(a)) => self.notif_fetched(b, a),
+                Some(ph::Answer::App(info)) => {
+                    self.phone.apps.put(info);
+                    if self.phone.asking == Some(info.id) {
+                        (self.phone.asking, self.phone.app_out, self.phone.busy) = (None, false, false);
+                        if self.phone.held.is_some_and(|h| h.app == info.id) {
+                            self.show_held(b);
+                        }
+                        if let Some(conn) = self.phone.conn {
+                            self.next_op(b, conn);
+                        }
                     }
-                    self.tones.play(&BEEP_ALERT);
                 }
-                _ => {
-                    let mut l = Line::<40>::new();
-                    l.push_str(a.title.as_str());
-                    if !a.message.as_str().is_empty() {
-                        l.push_str(": ");
-                        l.push_str(a.message.as_str());
-                    }
-                    self.notice(l.as_str());
-                    self.keep_notif(b, &a);
-                }
+                None => {}
             }
         } else if handle == h[EU] {
             self.phone.now.update(data);

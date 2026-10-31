@@ -31,6 +31,10 @@ fn unit(phone: PhoneSim) -> (Sim, App) {
     (sim, app)
 }
 
+fn ph_mtu(sim: &Sim) -> u16 {
+    sim.nordic.phone.as_ref().unwrap().mtu
+}
+
 /// Not paired: nothing advertised (the radio stays quiet) until PAIR; the phone then pairs (Just Works), the bond
 /// goes on the card with the HID report's CCCD, the phone's services are found and subscribed, and the clock is set
 /// from its time.
@@ -57,6 +61,8 @@ fn pairing_from_the_menu() {
     assert_eq!(sim.rtc_sets, 1, "the clock set from the phone");
     assert_eq!(rtc_date_from_dr(sim.rtc().1), (2026, 10, 25));
     assert_eq!(app.gps.aid.offset_15min, Some(4), "UTC + 1 h from Local Time Information");
+    assert_eq!(ph_mtu(&sim), crate::nrf::ATT_MTU, "the smaller of the two MTUs");
+    assert_eq!(app.phone.mtu, crate::nrf::ATT_MTU);
 
     let s = stored(&sim).expect("the bond on the card");
     let bond = s.bond.unwrap();
@@ -66,7 +72,7 @@ fn pairing_from_the_menu() {
 
     // a message: its title and text in the banner and the notices (as much as two banner lines hold), at the phone's time
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.notes.list[0].as_str(), "09:41 Bob: Lunch at 1?");
+    assert_eq!(app.notes.list[0].as_str(), "09:41 PHONE: Bob: Lunch at 1?", "the app named first");
 
     // the phone walks away: the unit advertises slowly again, for it to come back
     run(&mut sim, &mut app, 3000);
@@ -567,4 +573,104 @@ fn a_lost_discovery_answer_does_not_stop_it() {
     let ph = sim.nordic.phone.as_ref().unwrap();
     assert!(ph.subscribed.contains(&0x23) && ph.subscribed.contains(&0x33), "AMS and the time: {:?}", ph.subscribed);
     assert_eq!(sim.rtc_sets, 1, "the clock set from the phone");
+}
+
+/// The unit asks for the MTU it was configured for ([`nrf::ATT_MTU`]) and the phone's answer is the smaller of the
+/// two; a phone that refuses (23) or never answers leaves 23, the discovery going on after its deadline.
+#[test]
+fn the_mtu_is_exchanged_and_a_refusal_stays_at_23() {
+    for (max, want, secs) in [(185, crate::nrf::ATT_MTU, 4000), (23, 23, 4000), (0, 23, 12_000)] {
+        let mut phone = iphone(Vec::new());
+        phone.max_mtu = max;
+        let (mut sim, mut app) = unit(phone);
+        app.activate(&mut sim, Menu::Phone, 1);
+        run(&mut sim, &mut app, secs);
+        assert_eq!(app.phone.mtu, want, "phone max {max}");
+        let ph = sim.nordic.phone.as_ref().unwrap();
+        assert_eq!(ph.mtu, want.min(if max == 0 { 23 } else { max }));
+        if max == 0 {
+            // the stack's MTU procedure stays pending (BUSY for the rest): the link is dropped
+            assert!(sim.nordic.got.iter().any(|p| p[..2] == [0, 0x76]), "disconnected");
+            assert!(!ph.mtu_pending, "the pending procedure went with the link");
+        } else {
+            assert!(ph.subscribed.contains(&0x33), "the discovery went on: {:?}", ph.subscribed);
+        }
+    }
+}
+
+/// A chip that cannot hold the larger MTU keeps the two links at 23.
+#[test]
+fn a_chip_short_of_ram_for_the_mtu_keeps_the_links() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.nordic.no_mem_mtu = true;
+    sim.nordic.phone = Some(iphone(Vec::new()));
+    let mut app = App::start(&mut sim, None);
+    assert_eq!(sim.nordic.resets.len(), 2);
+    assert!(app.ble.is_some_and(|v| v.central && v.mtu == 23));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.phone.mtu, 23, "no exchange asked for");
+    assert!(sim.nordic.phone.as_ref().unwrap().subscribed.contains(&0x33));
+}
+
+/// The notification shows its app's display name; each app is asked about once, the cache keeps eight, an app the
+/// phone does not name falls back to its bundle id's last part.
+#[test]
+fn a_notification_shows_its_app_name_asked_once() {
+    let script = std::vec![(4000, Act::Notify(4, 7, "Bob", "one")), (5000, Act::Notify(4, 8, "Bob", "two")),];
+    let mut phone = iphone(script);
+    phone.apps = std::vec![("com.phone", "WhatsApp")];
+    let (mut sim, mut app) = unit(phone);
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 7000);
+    assert_eq!(app.phone.inbox.len(), 2);
+    assert_eq!(app.phone.inbox.get(1).unwrap().app.as_str(), "WHATSAPP");
+    assert_eq!(app.phone.inbox.get(0).unwrap().app.as_str(), "WHATSAPP");
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().app_asks, ["com.phone"], "asked once");
+    assert_eq!(app.notes.list[0].as_str(), "09:41 WHATSAPP: Bob: two");
+}
+
+/// An app the phone does not name (an empty DisplayName) falls back to the bundle id; a call is shown without waiting
+/// for its app.
+#[test]
+fn an_unnamed_app_and_a_call_do_not_wait() {
+    let script = std::vec![(4000, Act::Notify(4, 7, "Bob", "hi")), (5000, Act::Notify(1, 9, "Mum", ""))];
+    let mut phone = iphone(script);
+    phone.apps = Vec::new();
+    let (mut sim, mut app) = unit(phone);
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 7000);
+    assert_eq!(app.phone.inbox.get(0).unwrap().app.as_str(), "PHONE", "the bundle id's last part");
+    assert!(app.phone.ringing);
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().app_asks, ["com.phone"], "the call's app was not asked");
+}
+
+/// At MTU 23 a long bundle id does not fit one ATT write with its request (the write takes 20 bytes): the app is not
+/// asked about, and the notification is shown at once with the bundle id's last part.
+#[test]
+fn a_long_bundle_id_is_not_asked_at_mtu_23() {
+    let mut phone = iphone(std::vec![(4000, Act::Notify(4, 7, "Bob", "hi"))]);
+    (phone.max_mtu, phone.app_id) = (23, "net.whatsapp.WhatsApp");
+    let (mut sim, mut app) = unit(phone);
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 6000);
+    assert!(sim.nordic.phone.as_ref().unwrap().app_asks.is_empty(), "not asked");
+    assert_eq!(app.phone.inbox.get(0).unwrap().app.as_str(), "WHATSAPP");
+    assert_eq!(app.notes.list[0].as_str(), "09:41 WHATSAPP: Bob: hi");
+}
+
+/// An unanswered Get App Attributes leaves the notification shown (bundle id fallback) and the app cached empty, so it
+/// is not asked again.
+#[test]
+fn an_app_that_is_never_answered_is_asked_once() {
+    let script = std::vec![(4000, Act::Notify(4, 7, "Bob", "one")), (12_000, Act::Notify(4, 8, "Bob", "two"))];
+    let mut phone = iphone(script);
+    phone.mute_apps = true;
+    let (mut sim, mut app) = unit(phone);
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 16_000);
+    assert_eq!(app.phone.inbox.len(), 2);
+    assert_eq!(app.phone.inbox.get(1).unwrap().app.as_str(), "PHONE");
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().app_asks, ["com.phone"], "asked once");
 }

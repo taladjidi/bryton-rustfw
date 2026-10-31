@@ -183,8 +183,11 @@ fn starts_the_nordic_chip() {
     let mut sim = Sim::new(12, 0, 0);
     App::start(&mut sim, None);
     let cfg = crate::nrf::CFG.map(<[u8]>::to_vec);
-    assert_eq!(sim.nordic.got[..4], [cfg[0].clone(), cfg[1].clone(), vec![0, 0x60], vec![0, 0x65, 1]]);
-    assert_eq!(sim.nordic.got[4], [&[0, 0x7c, 1, 0, 4, 0, 1][..], b"S510"].concat(), "the name first");
+    assert_eq!(
+        sim.nordic.got[..5],
+        [cfg[0].clone(), cfg[1].clone(), crate::nrf::cfg_mtu().to_vec(), vec![0, 0x60], vec![0, 0x65, 1]]
+    );
+    assert_eq!(sim.nordic.got[5], [&[0, 0x7c, 1, 0, 4, 0, 1][..], b"S510"].concat(), "the name first");
     assert!(sim.nordic.got.iter().all(|p| p[..2] != [0, 0x73] && p[..2] != [0, 0x8a]));
 }
 
