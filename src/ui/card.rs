@@ -139,6 +139,38 @@ impl LapRow {
     }
 }
 
+/// A lap's time in its column: "4:05", "1:23:45", and from 10 h up "12:30" (h:mm, to 99 h), so a ride with no lap press
+/// (one lap) still fits.
+fn push_lap_time(l: &mut Line<10>, t: u32) {
+    let t = t.min(99 * 3600 + 3599);
+    let (h, m, sec) = (t / 3600, t / 60 % 60, t % 60);
+    if h >= 10 {
+        l.push_u32(h);
+        l.push_str(":");
+        l.push_2d(m);
+        return;
+    }
+    if h > 0 {
+        l.push_u32(h);
+        l.push_str(":");
+        l.push_2d(m);
+    } else {
+        l.push_u32(m);
+    }
+    l.push_str(":");
+    l.push_2d(sec);
+}
+
+/// A lap's distance in its column: "12.3", and from 100 km (or miles) up whole, "120" (to 999).
+fn push_lap_dist(l: &mut Line<10>, m: u32, imperial: bool) {
+    let m = m.min(999_000);
+    if crate::dist_x100(m, imperial) >= 10_000 {
+        l.push_u32(crate::dist_x100(m, imperial) / 100);
+    } else {
+        crate::push_trip(l, m, imperial);
+    }
+}
+
 /// The list of a past ride's laps from row `top`: time, distance, average power and heart rate, each at LABEL size (a
 /// missing one "--"), the header once on top; "NO LAPS" for a ride with none; the title says "FIRST 99 OF 120" when
 /// `total` laps are more than `laps`. Drawn whole (a screen opens or scrolls).
@@ -169,25 +201,12 @@ pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top
         let mut cells = [Line::<10>::new(); 4];
         let [time, dist, power, hr] = &mut cells;
         // time to 9:59:59, distance to 99.9 km, power to 9999 W: what a column holds
-        match l.timer_s().map(|t| t.min(9 * 3600 + 3599)) {
-            Some(t) => {
-                let (h, m, sec) = (t / 3600, t / 60 % 60, t % 60);
-                if h > 0 {
-                    time.push_u32(h);
-                    time.push_str(":");
-                    time.push_str(super::digit(m / 10));
-                    time.push_str(super::digit(m));
-                } else {
-                    time.push_u32(m);
-                }
-                time.push_str(":");
-                time.push_str(super::digit(sec / 10));
-                time.push_str(super::digit(sec));
-            }
+        match l.timer_s() {
+            Some(t) => push_lap_time(time, t),
             None => time.push_str("--"),
         }
         match l.dist_m() {
-            Some(m) => crate::push_trip(dist, m.min(99_900), imperial),
+            Some(m) => push_lap_dist(dist, m, imperial),
             None => dist.push_str("--"),
         }
         match l.power() {
@@ -316,6 +335,34 @@ mod tests {
                 assert_eq!(a.at(x, y), b.at(x, y), "{x},{y}");
             }
         }
+    }
+
+    /// A ride with no lap press is one lap: 120 km and over 10 h still fit their columns.
+    #[test]
+    fn long_laps_fit_their_columns() {
+        let (time, dist) = (
+            |t| {
+                let mut l = Line::<10>::new();
+                push_lap_time(&mut l, t);
+                l
+            },
+            |m, imp| {
+                let mut l = Line::<10>::new();
+                push_lap_dist(&mut l, m, imp);
+                l
+            },
+        );
+        assert_eq!(time(245).as_str(), "4:05");
+        assert_eq!(time(3600 + 23 * 60 + 45).as_str(), "1:23:45");
+        assert_eq!(time(12 * 3600 + 30 * 60 + 59).as_str(), "12:30");
+        assert_eq!(dist(12_300, false).as_str(), "12.3");
+        assert_eq!(dist(99_900, false).as_str(), "99.9");
+        assert_eq!(dist(120_400, false).as_str(), "120");
+        assert_eq!(dist(u32::MAX, false).as_str(), "999");
+        for s in [time(u32::MAX), dist(u32::MAX, false), dist(u32::MAX, true), time(36_000)] {
+            assert!(LABEL.width(s.as_str()) <= 50 || s.as_str().contains(':'), "{}", s.as_str());
+        }
+        assert!(LABEL.width(time(u32::MAX).as_str()) <= 84);
     }
 
     #[test]

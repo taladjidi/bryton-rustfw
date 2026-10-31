@@ -258,11 +258,14 @@ pub(crate) fn push_cut<const N: usize>(l: &mut Line<N>, name: &str, room: usize)
     if full.chars().count() <= room {
         return l.push_str(full);
     }
-    let keep = room.saturating_sub(2);
+    if room < 2 {
+        return;
+    }
+    let keep = room - 2;
     let end = |n: usize| full.char_indices().nth(n).map_or(full.len(), |(i, _)| i);
     let head = full.get(..end(keep + 1)).unwrap_or("");
     let cut = head.rfind(' ').filter(|&i| i > 0).unwrap_or(end(keep));
-    l.push_str(full.get(..cut).unwrap_or(""));
+    l.push_str(full.get(..cut).unwrap_or("").trim_end());
     l.push_str("..");
 }
 
@@ -946,6 +949,8 @@ mod date_format_tests {
         assert_eq!(cut("Col de la Croix", 10).as_str(), "COL DE..");
         assert_eq!(cut("D512: Climbing", 9).as_str(), "D512:..");
         assert_eq!(cut("Supercalifragilistic", 9).as_str(), "SUPERCA..");
+        assert_eq!(cut("A  Bcdefghijk", 6).as_str(), "A..", "a double space leaves no gap");
+        assert_eq!(cut("Abcdefgh", 1).as_str(), "", "no room: nothing");
         assert!(["a b c d e f g", "xxxxxxxxxxxxxxxxxxxxxxxx"].iter().all(|n| cut(n, 6).as_str().len() <= 6));
     }
 

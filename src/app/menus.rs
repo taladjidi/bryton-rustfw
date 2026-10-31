@@ -661,6 +661,16 @@ impl App {
         Some((label, value, color))
     }
 
+    /// A SENSORS row's tag: the paired sensor's battery, and its device number ("#64989") for when the battery is
+    /// not known.
+    fn sensor_tag(&self, k: usize, kind: Kind) -> (ui::quick::Battery, Line<8>) {
+        let mut id = Line::<8>::new();
+        let Some(Sensor::Paired(p)) = self.radio.sensors.get(k) else { return (ui::quick::Battery::Unknown, id) };
+        id.push_str("#");
+        id.push_u32(u32::from(p.device));
+        (self.quick_battery(kind), id)
+    }
+
     pub(crate) fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
         let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
         for i in 0..self.menu_rows() {
@@ -699,9 +709,9 @@ impl App {
                 if let Some(menu::Row::Sensor(k)) = row
                     && let Some(&kind) = Kind::ALL.get(k)
                 {
-                    let paired = matches!(self.radio.sensors.get(k), Some(Sensor::Paired(_)));
-                    let battery = if paired { self.quick_battery(kind) } else { ui::quick::Battery::Unknown };
-                    return ui::draw_sensor_row(c, slot, (label.as_str(), value.as_str(), color), battery, i == sel);
+                    let (battery, id) = self.sensor_tag(k, kind);
+                    let shown = (label.as_str(), value.as_str(), color);
+                    return ui::draw_sensor_row(c, slot, shown, (battery, id.as_str()), i == sel);
                 }
                 if matches!(row, Some(menu::Row::Past(_))) {
                     return ui::draw_workout_row(c, slot, (label.as_str(), value.as_str()), i == sel, &[], false);
@@ -742,6 +752,7 @@ impl App {
                 if let Some(menu::Row::Sensor(k)) = self.row(menu, i)
                     && let Some(&kind) = Kind::ALL.get(k)
                 {
+                    eat(self.sensor_tag(k, kind).1.as_str().as_bytes());
                     eat(&[match self.quick_battery(kind) {
                         ui::quick::Battery::Unknown => 0,
                         ui::quick::Battery::Low => 1,

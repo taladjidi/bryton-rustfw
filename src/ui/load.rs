@@ -151,7 +151,15 @@ pub fn draw_cursor(c: &mut impl Canvas, d: &[Day; SHOWN], cursor: usize, date: &
     draw_in(c, &sty(form), 8, READ_Y + 2 * READ_H, 112, Align::Left, num("TSB", i32::from(day.tsb)).as_str());
     // one word from the form, labelled so it is not taken for a maker's training status
     draw_in(c, &sty(GREY), 8, READ_Y + 3 * READ_H, 60, Align::Left, "FORM");
-    draw_in(c, &sty(form), 68, READ_Y + 3 * READ_H, W - 76, Align::Left, crate::load::form_word(day.tsb));
+    draw_in(
+        c,
+        &sty(crate::load::form_color(day.tsb)),
+        68,
+        READ_Y + 3 * READ_H,
+        W - 76,
+        Align::Left,
+        crate::load::form_word(day.tsb),
+    );
 }
 
 #[cfg(test)]
@@ -203,6 +211,8 @@ mod tests {
         let w = crate::load::form_word;
         let got = [w(6), w(5), w(-10), w(-11), w(-30), w(-31)];
         assert_eq!(got, ["FRESH", "NEUTRAL", "NEUTRAL", "TIRED", "TIRED", "OVERLOAD"]);
+        let c = crate::load::form_color;
+        assert_eq!([c(6), c(0), c(-11), c(-31)], [GREEN, GREY, YELLOW, RED]);
         const { assert!(READ_Y + 4 * READ_H <= H) };
         assert!(LABEL.width("FORM OVERLOAD") <= W - 8);
     }

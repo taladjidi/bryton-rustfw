@@ -149,12 +149,13 @@ pub fn draw_workout_row(
 }
 
 /// A SENSORS list row in slot `slot`: the sensor's name over its state in the state's colour, and its battery tag
-/// ([`super::quick::draw_battery`]) at the right end of the state's line.
+/// ([`super::quick::draw_battery`]) at the right end of the state's line; `id` ("#64989", the paired device) takes the
+/// tag's place while the battery is not known.
 pub fn draw_sensor_row(
     c: &mut impl Canvas,
     slot: usize,
     (name, state, color): (&str, &str, u16),
-    battery: super::quick::Battery,
+    (battery, id): (super::quick::Battery, &str),
     selected: bool,
 ) {
     let row = c.theme().menu_row;
@@ -167,7 +168,8 @@ pub fn draw_sensor_row(
     c.fill(0, ty[0] + h, W, gap, bg);
     c.fill(0, end, W, y + row - 1 - end, bg);
     c.fill(0, y + row - 1, W, 1, DARK);
-    let tag = 38;
+    let unknown = battery == super::quick::Battery::Unknown;
+    let tag = if unknown && !id.is_empty() { 72 } else { 38 };
     for ty in ty {
         c.fill(0, ty, NEARBY.0, h, bg);
         c.fill(W - NEARBY.0, ty, NEARBY.0, h, bg);
@@ -175,8 +177,9 @@ pub fn draw_sensor_row(
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty[0], W - 2 * NEARBY.0, Align::Left, name);
     let fg = if selected { ON_ACCENT } else { color };
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty[1], W - 2 * NEARBY.0 - tag, Align::Left, state);
-    if battery == super::quick::Battery::Unknown {
-        c.fill(W - NEARBY.0 - tag, ty[1], tag, h, bg);
+    if unknown {
+        let fg = if selected { ON_ACCENT } else { GREY };
+        text::draw_in(c, &Style { fg, bg, ..LABEL }, W - NEARBY.0 - tag, ty[1], tag, Align::Right, id);
     } else {
         super::quick::draw_battery(c, W - NEARBY.0 - tag, ty[1], battery);
     }

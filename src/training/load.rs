@@ -34,6 +34,17 @@ pub const FORM_TIRED: i16 = -10;
 /// Form below this is OVERLOAD: "beyond -30 they are headed for extreme strain" (same coach's guide).
 pub const FORM_OVERLOAD: i16 = -30;
 
+/// The colour of [`form_word`]: FRESH green, NEUTRAL grey, TIRED yellow, OVERLOAD red.
+pub fn form_color(tsb: i16) -> u16 {
+    use crate::ui::{GREEN, GREY, RED, YELLOW};
+    match tsb {
+        t if t > FORM_FRESH => GREEN,
+        t if t >= FORM_TIRED => GREY,
+        t if t >= FORM_OVERLOAD => YELLOW,
+        _ => RED,
+    }
+}
+
 /// The one word for a form (TSB): FRESH, NEUTRAL, TIRED or OVERLOAD.
 pub fn form_word(tsb: i16) -> &'static str {
     match tsb {

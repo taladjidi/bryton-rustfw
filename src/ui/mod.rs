@@ -847,7 +847,20 @@ pub(crate) mod tests {
                     draw_menu_row(&mut f, slot, "HEART RATE", "PAIRED", WHITE, selected);
                     draw_menu_value(&mut f, slot, "HEART RATE", "PAIRED", WHITE, selected);
                     draw_workout_row(&mut f, slot, ("SAT 24", "1:00"), selected, &[3; 20], true);
-                    draw_sensor_row(&mut f, slot, ("HEART RATE", "CONNECTED", GREEN), quick::Battery::Low, selected);
+                    draw_sensor_row(
+                        &mut f,
+                        slot,
+                        ("HEART RATE", "CONNECTED", GREEN),
+                        (quick::Battery::Low, ""),
+                        selected,
+                    );
+                    draw_sensor_row(
+                        &mut f,
+                        slot,
+                        ("HEART RATE", "CONNECTED", GREEN),
+                        (quick::Battery::Unknown, "#65535"),
+                        selected,
+                    );
                     draw_split_icon(&mut f, slot, true, selected);
                     let (y0, y1) = (LIST_Y + slot as u32 * row, LIST_Y + (slot as u32 + 1) * row);
                     // an unselected row is black on black: only a selected one shows its band
