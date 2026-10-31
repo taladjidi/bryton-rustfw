@@ -101,13 +101,9 @@ impl Plan {
     pub const EMPTY: Plan = Plan { watts: [0; MAX], n: 0, total_s: 0 };
 }
 
-/// The square root (Newton from 32, above every root asked; `core` has none).
+/// The square root (`core` has none).
 fn sqrt(s: f32) -> f32 {
-    let mut x = 32.0;
-    for _ in 0..12 {
-        x = (x + s / x) * 0.5;
-    }
-    x
+    crate::math::sqrt(f64::from(s)) as f32
 }
 
 /// The power equation's two terms for a section: `k` (gravity and rolling, N) and `a` (drag, N s^2/m^2).
@@ -242,6 +238,12 @@ mod tests {
 
     fn rider(budget: f32) -> Rider {
         Rider { cp: 250.0, w_full: 20_000.0, budget, mass: 84.0 }
+    }
+
+    #[test]
+    fn sqrt_is_exact_at_zero_and_close_at_100() {
+        assert_eq!(sqrt(0.0), 0.0);
+        assert!((sqrt(100.0) - 10.0).abs() < 1e-4);
     }
 
     #[test]

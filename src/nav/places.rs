@@ -227,7 +227,7 @@ impl Places {
 /// assert_eq!(dist_bearing((0, 0), (-8983, -8983)).1, 225);
 /// ```
 pub fn dist_bearing(a: (i32, i32), b: (i32, i32)) -> (u32, u16) {
-    let cos = crate::map::cos_q16(a.0);
+    let cos = crate::math::cos_q16(a.0);
     let clamp = |v: i64| v.clamp(-(1 << 31), 1 << 31);
     // mm east and north, as course.rs step_mm
     let dy = clamp((i64::from(b.0) - i64::from(a.0)) * 11_132 / 1000);

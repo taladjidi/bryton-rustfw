@@ -42,7 +42,7 @@
 use crate::course::{CLIMBS, Climb, Course, Descent, step_mm};
 use crate::fat::{Disk, Fat};
 use crate::inflate::Scratch;
-use crate::map::cos_q16;
+use crate::math::cos_q16;
 use crate::route::{Graph, Loaded, Maps, NO_ELEV, NODES, Slice, TileState, tile_of};
 
 /// The nearest road within this of the fix is the rider's, m.
@@ -234,7 +234,7 @@ fn sin_deg(d: f64) -> f64 {
         d
     };
     let a = d.abs();
-    let s = crate::tiles::sin((if a > 90.0 { 180.0 - a } else { a }) * core::f64::consts::PI / 180.0);
+    let s = crate::math::sin((if a > 90.0 { 180.0 - a } else { a }) * core::f64::consts::PI / 180.0);
     if d < 0.0 { -s } else { s }
 }
 

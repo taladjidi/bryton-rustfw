@@ -28,7 +28,7 @@
 #![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
 use crate::course::{AHEAD, BEHIND, nearest_by, seg_hit, step_mm};
-use crate::map::{cos_q16, project};
+use crate::math::{cos_q16, project};
 use crate::segment::{Header, KEPT, Segment};
 
 /// A banner is due within this of a start, m.

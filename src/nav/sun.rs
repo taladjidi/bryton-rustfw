@@ -4,32 +4,13 @@
 //! longitude and anomaly, the equation of the centre, the apparent longitude, the obliquity corrected for nutation,
 //! the declination, the equation of time, then the hour angle at the zenith 90.833 degrees (the disc's upper limb and
 //! 0.833 degrees of refraction). The calculator states an accuracy of about a minute between 72 degrees north and
-//! south. Floating point without libm: a 12-term Taylor series for sin and cos, and bisection for asin and acos (50
+//! south. Floating point without libm ([`crate::math`]): bisection for asin and acos (50
 //! halvings, error under 1e-12). Pure logic: the app works it out once a minute.
 
-use core::f64::consts::{PI, TAU};
+use crate::math::{cos, sin};
+use core::f64::consts::PI;
 
 const DEG: f64 = PI / 180.0;
-
-/// Radians reduced to [-pi, pi] (the arguments here are a few turns at most).
-fn reduce(x: f64) -> f64 {
-    let x = x - TAU * f64::from(((x / TAU) + 1024.0) as i32 - 1024);
-    if x > PI { x - TAU } else { x }
-}
-
-fn sin(x: f64) -> f64 {
-    let x = reduce(x);
-    let (mut term, mut sum) = (x, x);
-    for k in 1..12 {
-        term *= -x * x / f64::from((2 * k) * (2 * k + 1));
-        sum += term;
-    }
-    sum
-}
-
-fn cos(x: f64) -> f64 {
-    sin(x + PI / 2.0)
-}
 
 /// asin of `s` (in [-1, 1]): bisection on sin, which rises on [-pi/2, pi/2].
 fn asin(s: f64) -> f64 {
@@ -165,12 +146,8 @@ mod tests {
     }
 
     #[test]
-    fn trig_without_libm() {
+    fn inverse_trig_without_libm() {
         use std::primitive::f64 as F;
-        for x in [-7.0, -3.2, -1.0, 0.0, 0.5, 2.9, 3.1, 6.5, 40.0] {
-            assert!((sin(x) - F::sin(x)).abs() < 1e-9, "sin {x}");
-            assert!((cos(x) - F::cos(x)).abs() < 1e-9, "cos {x}");
-        }
         assert!((asin(0.3) - F::asin(0.3)).abs() < 1e-9);
         assert!((acos(-0.6) - F::acos(-0.6)).abs() < 1e-9);
     }

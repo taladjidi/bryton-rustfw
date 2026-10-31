@@ -9,7 +9,7 @@
 //!   the start (summed over every point of the file, not only the kept ones), its altitude, and the ascent so far.
 //! - **Gaps and length ([`Odometer`]):** a jump of over [`JUMP_M`] where a GPX track segment starts is not ridden,
 //!   counted, drawn or followed; a FIT course's own distance is its length when it agrees with the points'.
-//! - **Plane:** metres east and north of the first point, as the map's ([`crate::map::project`]); a point farther
+//! - **Plane:** metres east and north of the first point, as the map's ([`crate::math::project`]); a point farther
 //!   than [`FAR_M`] is left out (it keeps the search's arithmetic in i64).
 //! - **Where the rider is ([`Course::follow`], once a second):** the nearest segment in a window around the last one
 //!   ([`BEHIND`] back, [`AHEAD`] ahead): a few dozen segments a second, never the whole course. Lost (farther than
@@ -33,7 +33,8 @@
 //! Nothing here panics or loops on any input: every index is checked, every loop is bounded by [`POINTS`],
 //! [`CLIMBS`] or a window (the file readers are fuzzed in src/sim/fuzz.rs).
 
-use crate::map::{Route, cos_q16, project};
+use crate::map::Route;
+use crate::math::{cos_q16, project};
 
 pub mod cues;
 pub use cues::*;

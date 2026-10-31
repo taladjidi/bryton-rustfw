@@ -47,6 +47,7 @@
 //! **Over rides** ([`Recent`]): the median of the rides of the last [`DAYS`] days that gave one (the [`RIDES`] most
 //! recent), trusted from [`MIN_RIDES`] rides.
 
+use crate::math::sqrt;
 use crate::power_curve::FILL_S;
 
 /// The window of alpha1 and of the power paired with it, s.
@@ -370,18 +371,6 @@ impl Recent {
         };
         (m.map(|v| v as u16), k as u8)
     }
-}
-
-/// The square root (`core` has none): a first guess from the exponent halved, then Newton's steps.
-fn sqrt(s: f64) -> f64 {
-    if !(s > 0.0 && s.is_finite()) {
-        return 0.0;
-    }
-    let mut x = f64::from_bits((s.to_bits() >> 1) + (1023u64 << 51));
-    for _ in 0..6 {
-        x = 0.5 * (x + s / x);
-    }
-    x
 }
 
 #[cfg(test)]
