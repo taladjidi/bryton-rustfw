@@ -4,13 +4,19 @@
 //!
 //! **Each ride counted once.** A ride's distance goes to the active bike from the ride scan's list
 //! ([`crate::stock::Scan`], the rides whole in `\Activities`, newest first), never from the ride in memory: every
-//! ride whose start (its name) is after [`Bikes::counted`] is added, and `counted` moves to the newest, in the same
-//! copy of the file as the sums it gave. A copy holds the sums and the mark together, so a power cut before the write,
-//! or during it (the older copy is read), leaves both as they were and the next scan adds the same rides again,
-//! once; a ride is in the list only once its file is finished in `\Activities` (read back whole and renamed by the
-//! recorder), so nothing is added before that. Rides of either firmware count (a ride on stock goes to the bike
-//! active here). The migration sets the mark a minute before it (the rides before are in BIKE 1's odometer already,
-//! the settings' ODOMETER, or not this firmware's); with no clock set, the first count only sets it.
+//! ride whose start (its name, to the minute: the list has no seconds) is after [`Bikes::counted`] is added, and
+//! `counted` moves to the newest, in the same copy of the file as the sums it gave; the files (first clusters) of the
+//! rides counted in that minute are kept with it ([`Bikes::at_mark`]), so a second ride started in the same minute
+//! and scanned later counts too. A copy holds the sums and the mark together, so a power cut before the write, or
+//! during it (the older copy is read), leaves both as they were and the next scan adds the same rides again, once; a
+//! ride is in the list only once its file is finished in `\Activities` (read back whole and renamed by the recorder),
+//! so nothing is added before that. Rides of either firmware count (a ride on stock goes to the bike active here).
+//! The migration sets the mark a minute before it, or before the ride open then (the rides before are in BIKE 1's
+//! odometer already, the settings' ODOMETER, or not this firmware's); with no clock set, the first count only sets it.
+//!
+//! **The clock.** A ride named more than a day after now (a clock set wrong when it was recorded) is left out, and
+//! does not move the mark. Limit: if the clock goes back (set wrong, then right), the rides named before the mark are
+//! not counted until the clock passes it again.
 //!
 //! **The file**, two 512-byte copies as `places.bin` (nav/places.rs): the newest whole copy (a good magic, version,
 //! length and CRC-32; the higher sequence number) wins, and a write goes over the other one, so a write cut at any
@@ -19,11 +25,12 @@
 //! ```text
 //! 0    "RBIK"          magic
 //! 4    version (u16)   1
-//! 6    length (u16)    bytes of data at 12: 128 now; a later build appends and raises it (a reader takes what it knows)
+//! 6    length (u16)    bytes of data at 12: 140 now; a later build appends and raises it (a reader takes what it knows)
 //! 8    seq (u32)       higher is newer
 //! 12   active (u8)     0 to 2; then a zero byte
 //! 14   counted         the start of the newest ride counted: year (u16; 0 none yet), month, day, hour, minute
-//! 20   3 bikes         40 bytes each: wheel (u16, mm), weight (u16, 100 g), CHAINRINGS, CASSETTE (u8, presets),
+//! 20   at mark         the first clusters (u32 each, 0 none) of up to 3 rides counted in that minute
+//! 32   3 bikes         40 bytes each: wheel (u16, mm), weight (u16, 100 g), CHAINRINGS, CASSETTE (u8, presets),
 //!                      odometer (u32, m), then 5 parts: distance since RESET (u32, m), SERVICE EVERY (u16, km; 0 off)
 //! 508  CRC-32 of 0..508
 //! ```
@@ -49,7 +56,10 @@ pub const EVERY_KM: [u16; 11] = [0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 600
 const MAGIC: &[u8; 4] = b"RBIK";
 const VERSION: u16 = 1;
 const DATA_AT: usize = 12;
-const BIKES_AT: usize = 20;
+const AT_MARK_AT: usize = 20;
+/// Rides of the mark's minute kept by their file.
+pub const AT_MARK: usize = 3;
+const BIKES_AT: usize = AT_MARK_AT + 4 * AT_MARK;
 const BIKE_BYTES: usize = 10 + PARTS * 6;
 /// Bytes of data this build writes (length).
 pub const DATA_LEN: usize = BIKES_AT - DATA_AT + BIKES * BIKE_BYTES;
@@ -138,7 +148,12 @@ pub struct Bikes {
     pub active: u8,
     /// The start of the newest ride counted; year 0: none yet (the next count only sets it).
     pub counted: Start,
+    /// The first clusters of the rides counted that started in `counted`'s minute (0: none).
+    pub at_mark: [u32; AT_MARK],
 }
+
+/// A ride of the scan's list as [`Bikes::count`] takes it: its start, its file's first cluster, its distance (m).
+pub type Seen = (Start, u32, u32);
 
 impl Default for Bikes {
     fn default() -> Self {
@@ -149,7 +164,7 @@ impl Default for Bikes {
 impl Bikes {
     /// Three bikes nothing was set for, BIKE 1 active, no ride counted.
     pub const fn new() -> Self {
-        Bikes { list: [Bike::NEW; BIKES], active: 0, counted: (0, 0, 0, 0, 0) }
+        Bikes { list: [Bike::NEW; BIKES], active: 0, counted: (0, 0, 0, 0, 0), at_mark: [0; AT_MARK] }
     }
 
     /// The first file, from the single bike of the settings (`gear`) and its ODOMETER: BIKE 1, active; the rides
@@ -178,38 +193,58 @@ impl Bikes {
         &mut self.list[k]
     }
 
-    /// The rides of the scan (start, distance m; any order) newer than the last counted go to the active bike's
-    /// odometer and parts, and the mark moves to the newest of them (module doc). With no mark yet, only the mark is
-    /// set (to the newest ride, or before any). True if anything changed.
+    /// The rides of the scan (any order) newer than the last counted go to the active bike's odometer and parts, and
+    /// the mark moves to the newest of them (module doc); a ride started after `limit` (a day after now) is left out.
+    /// With no mark yet, only the mark is set (to the newest ride, or before any). True if anything changed.
     ///
     /// ```
     /// use bryton_rustfw::bikes::Bikes;
     /// let mut b = Bikes::new();
-    /// assert!(b.count([((2026, 10, 1, 9, 0), 40_000)].into_iter())); // the mark only
+    /// let limit = (2026, 10, 3, 0, 0);
+    /// assert!(b.count([((2026, 10, 1, 9, 0), 7, 40_000)].into_iter(), limit)); // the mark only
     /// assert_eq!(b.list[0].odo_m, 0);
-    /// let rides = [((2026, 10, 2, 9, 0), 30_000), ((2026, 10, 1, 9, 0), 40_000)];
-    /// assert!(b.count(rides.into_iter()));
-    /// assert!(!b.count(rides.into_iter()), "counted once");
+    /// let rides = [((2026, 10, 2, 9, 0), 9, 30_000), ((2026, 10, 1, 9, 0), 7, 40_000)];
+    /// assert!(b.count(rides.into_iter(), limit));
+    /// assert!(!b.count(rides.into_iter(), limit), "counted once");
     /// assert_eq!((b.list[0].odo_m, b.list[0].parts[0].m, b.counted), (30_000, 30_000, (2026, 10, 2, 9, 0)));
     /// ```
-    pub fn count(&mut self, rides: impl Iterator<Item = (Start, u32)>) -> bool {
-        let first = self.counted.0 == 0;
-        let (mut newest, mark) = (None, self.counted);
-        for (start, m) in rides.filter(|r| r.0 > mark) {
-            newest = newest.max(Some(start));
-            if !first {
-                let bike = self.active_mut();
-                bike.odo_m = bike.odo_m.saturating_add(m);
-                for p in &mut bike.parts {
-                    p.m = p.m.saturating_add(m);
-                }
+    pub fn count(&mut self, rides: impl Iterator<Item = Seen> + Clone, limit: Start) -> bool {
+        let rides = rides.filter(move |r| r.0 <= limit);
+        if self.counted.0 == 0 {
+            let newest = rides.clone().map(|r| r.0).max();
+            // before any ride (named from 2000) when there is none
+            (self.counted, self.at_mark) = (newest.unwrap_or((1, 1, 1, 0, 0)), [0; AT_MARK]);
+            for (_, file, _) in rides.filter(|r| Some(r.0) == newest) {
+                self.mark_file(file);
+            }
+            return true;
+        }
+        let (mark, at) = (self.counted, self.at_mark);
+        let new = rides.filter(move |r| r.0 > mark || (r.0 == mark && !at.contains(&r.1)));
+        let Some(newest) = new.clone().map(|r| r.0).max() else { return false };
+        let mut changed = newest > mark;
+        if changed {
+            (self.counted, self.at_mark) = (newest, [0; AT_MARK]);
+        }
+        for (start, file, m) in new {
+            // shortcut: past AT_MARK rides started in one minute, the others are not counted (never twice)
+            if start == newest && !self.mark_file(file) {
+                continue;
+            }
+            changed = true;
+            let bike = self.active_mut();
+            bike.odo_m = bike.odo_m.saturating_add(m);
+            for p in &mut bike.parts {
+                p.m = p.m.saturating_add(m);
             }
         }
-        match newest {
-            Some(s) => self.counted = s,
-            None if first => self.counted = (1, 1, 1, 0, 0), // set, before any ride (named from 2000)
-            None => return false,
-        }
+        changed
+    }
+
+    /// Keeps `file` as counted in the mark's minute; false when there is no room.
+    fn mark_file(&mut self, file: u32) -> bool {
+        let Some(slot) = self.at_mark.iter_mut().find(|s| **s == 0) else { return false };
+        *slot = file;
         true
     }
 
@@ -229,6 +264,9 @@ impl Bikes {
         let (y, mo, d, h, mi) = self.counted;
         s[14..16].copy_from_slice(&y.to_le_bytes());
         s[16..20].copy_from_slice(&[mo, d, h, mi]);
+        for (c, e) in self.at_mark.iter().zip(s[AT_MARK_AT..BIKES_AT].chunks_exact_mut(4)) {
+            e.copy_from_slice(&c.to_le_bytes());
+        }
         for (b, e) in self.list.iter().zip(s[BIKES_AT..].chunks_exact_mut(BIKE_BYTES)) {
             e[0..2].copy_from_slice(&b.gear.wheel_mm.to_le_bytes());
             e[2..4].copy_from_slice(&b.gear.bike_hg.to_le_bytes());
@@ -271,6 +309,9 @@ impl Bikes {
         let mut out = Bikes::new();
         out.active = *s.get(12)?;
         out.counted = (le16(14)?, *s.get(16)?, *s.get(17)?, *s.get(18)?, *s.get(19)?);
+        for (k, c) in out.at_mark.iter_mut().enumerate() {
+            *c = le32(AT_MARK_AT + 4 * k)?;
+        }
         for (k, b) in out.list.iter_mut().enumerate() {
             let at = BIKES_AT + k * BIKE_BYTES;
             b.gear = Gear {
@@ -351,18 +392,51 @@ mod tests {
         assert_eq!(Bikes::from_sector(&resealed(s)), None, "short");
     }
 
+    const LIMIT: Start = (2026, 11, 2, 0, 0);
+
+    /// Two rides started in one minute, scanned one at a time (the second saved later): both count, once each; a
+    /// fourth in that minute (past [`AT_MARK`]) is never counted, nor any twice.
+    #[test]
+    fn two_rides_in_one_minute_count_once_each() {
+        let mut b = two();
+        let t = (2026, 10, 31, 9, 0);
+        assert!(b.count([(t, 11, 1000)].into_iter(), LIMIT));
+        let both = [(t, 12, 200), (t, 11, 1000)];
+        assert!(b.count(both.into_iter(), LIMIT));
+        assert!(!b.count(both.into_iter(), LIMIT));
+        assert_eq!((b.list[1].odo_m, b.at_mark), (1200, [11, 12, 0]));
+        let five = [(t, 15, 1), (t, 14, 1), (t, 13, 30), (t, 12, 200), (t, 11, 1000)];
+        assert!(b.count(five.into_iter(), LIMIT));
+        assert!(!b.count(five.into_iter(), LIMIT));
+        assert_eq!((b.list[1].odo_m, b.at_mark), (1201, [11, 12, 15]), "a third kept (the first listed), past it none");
+        assert_eq!(Bikes::from_sector(&b.to_sector(1)), Some((1, b)), "the files kept in the copy");
+    }
+
+    /// A ride named a day or more ahead (a clock set wrong) is left out and does not move the mark: a normal one
+    /// after it counts.
+    #[test]
+    fn a_future_ride_does_not_move_the_mark() {
+        let mut b = two();
+        assert!(!b.count([((2027, 1, 1, 9, 0), 3, 5000)].into_iter(), LIMIT));
+        let rides = [((2027, 1, 1, 9, 0), 3, 5000), ((2026, 10, 31, 9, 0), 4, 700)];
+        assert!(b.count(rides.into_iter(), LIMIT));
+        assert_eq!((b.list[1].odo_m, b.counted), (700, (2026, 10, 31, 9, 0)));
+    }
+
     /// The rides go to the active bike only, once each, the parts with them; a part past its interval is due.
     #[test]
     fn count_goes_to_the_active_bike_once() {
         let mut b = two();
-        let rides = [((2026, 10, 31, 8, 0), 1_000), ((2026, 10, 30, 7, 45), 50_000), ((2026, 10, 29, 9, 0), 9)];
+        let rides =
+            [((2026, 10, 31, 8, 0), 3, 1_000), ((2026, 10, 30, 7, 45), 4, 50_000), ((2026, 10, 29, 9, 0), 5, 9)];
         assert_eq!(b.due(), None);
-        assert!(b.count(rides.into_iter()));
+        b.at_mark = [4, 0, 0];
+        assert!(b.count(rides.into_iter(), LIMIT));
         assert_eq!((b.list[1].odo_m, b.list[1].parts[0].m, b.list[0].odo_m), (1_000, 3_000_999, 1234));
         assert_eq!(b.due(), Some(0), "CHAIN past 3000 km");
-        assert!(!b.count(rides.into_iter()));
+        assert!(!b.count(rides.into_iter(), LIMIT));
         b.active = 2;
-        assert!(b.count([((2026, 11, 1, 8, 0), 5)].into_iter()));
+        assert!(b.count([((2026, 11, 1, 8, 0), 6, 5)].into_iter(), LIMIT));
         assert_eq!(b.list[2].parts[4].m, u32::MAX, "saturates");
         assert_eq!(b.due(), Some(4));
     }

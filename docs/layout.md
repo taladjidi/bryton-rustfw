@@ -304,7 +304,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
   `places_tests.rs` (`places.bin`: a place listed after a restart, a ride's start calibrated at a place, cut at every
   sector, damaged copies), `bikes_tests.rs` (`bikes.bin`: the migration, a saved ride counted once with a cut between the
-  save and the write and at every sector of it, ACTIVE BIKE's wheel and weight, a part's notice and RESET),
+  save and the write and at every sector of it, a rescan ended within a pass, a migration during a ride, WHEEL
+  changed mid-ride over a reset, ACTIVE BIKE's wheel and weight, a part's notice and RESET),
   `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
   `diag_tests.rs` (SCREENSHOT and the fault log: the file equals the panel, a full card, cut at every sector),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's

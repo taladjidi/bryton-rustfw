@@ -5747,15 +5747,17 @@ fn places_files() {
 }
 
 /// `\Rustfw\bikes.bin` (bikes.rs): copies built from their structure (the magic, version, a length of this build's
-/// or longer or short, a sequence number, the active bike, the mark, each bike's wheel, weight, presets, odometer and
-/// parts with intervals, in range and out of it), most with a good CRC, some with a bit flipped after it, paired into
-/// files; then rides counted on what was read. No panic; a copy read is one a write gives back the same; the newest of
-/// two is the higher sequence; a count never adds a ride twice. Reach counts: copies read, refused by a field, by the
-/// CRC, files whose second copy won, counts that added.
+/// or longer or short, a sequence number, the active bike, the mark and its files, each bike's wheel, weight, presets,
+/// odometer and parts with intervals, in range and out of it), most with a good CRC, some with a bit flipped after it,
+/// paired into files; then rides counted on what was read (some in the mark's minute, some past the limit, one more in
+/// the mark's minute scanned later). No panic; a copy read is one a write gives back the same; the newest of two is
+/// the higher sequence; a count never adds a ride twice nor moves the mark past the limit. Reach counts: copies read,
+/// refused by a field, by the CRC, files whose second copy won, counts that added, lists with a ride past the limit,
+/// a late ride in the mark's minute added.
 #[test]
 fn bikes_files() {
-    use crate::bikes::{BIKES, Bikes, DATA_LEN, EVERY_KM, PARTS};
-    let mut reach = [0usize; 5];
+    use crate::bikes::{AT_MARK, BIKES, Bikes, DATA_LEN, EVERY_KM, PARTS};
+    let mut reach = [0usize; 7];
     for seed in 1..=4000u32 {
         let mut r = xorshift(seed);
         let mut copy = || {
@@ -5779,8 +5781,11 @@ fn bikes_files() {
                 (r() % 24) as u8,
                 (r() % 60) as u8,
             ]);
+            for k in 0..AT_MARK {
+                s[20 + 4 * k..24 + 4 * k].copy_from_slice(&(r() % 6).to_le_bytes()); // the rides' clusters below
+            }
             for k in 0..BIKES {
-                let e = &mut s[20 + k * 40..20 + (k + 1) * 40];
+                let e = &mut s[32 + k * 40..32 + (k + 1) * 40];
                 let rare = |r: &mut dyn FnMut() -> u32| r().is_multiple_of(50);
                 let wheel = if rare(&mut r) { r() as u16 } else { crate::WHEELS[(r() % 7) as usize] };
                 let hg = if rare(&mut r) { r() as u16 } else { 50 + (r() % 201) as u16 };
@@ -5830,20 +5835,35 @@ fn bikes_files() {
         } else {
             assert_eq!(newest, pa.or(pb));
         }
-        // rides around the mark, counted twice: the second count adds nothing
+        // rides around the mark (some in its minute, by file; some a year ahead, past the limit), counted, then the
+        // same list with one more ride in the mark's minute: never a ride twice, the new one at most once
         if let Some((_, mut k)) = newest {
             let (y, mo, d, h, mi) = k.counted;
-            let near = |r: &mut dyn FnMut() -> u32| {
-                (y.max(2020) + (r() % 2) as u16, mo, d, h, mi.wrapping_add((r() % 3) as u8))
+            let y = y.max(2020);
+            let limit = (y, 12, 31, 23, 59);
+            let near = |r: &mut dyn FnMut() -> u32| match r() % 4 {
+                0 => (y, mo, d, h, mi),     // the mark's minute
+                1 => (y + 1, mo, d, h, mi), // past the limit
+                _ => (y, mo, d, h, mi.wrapping_add((r() % 3) as u8)),
             };
-            let rides: std::vec::Vec<_> = (0..r() % 6).map(|_| (near(&mut r), r() % 200_000)).collect();
+            let mut rides: std::vec::Vec<_> = (0..r() % 6).map(|k| (near(&mut r), 10 + k, r() % 200_000)).collect();
+            reach[5] += usize::from(rides.iter().any(|r| r.0 > limit));
             let before = *k.active();
-            if k.count(rides.iter().copied()) && k.active().odo_m != before.odo_m {
+            if k.count(rides.iter().copied(), limit) && k.active().odo_m != before.odo_m {
                 reach[4] += 1;
             }
             let once = k;
-            assert!(!k.count(rides.iter().copied()), "seed {seed}: counted twice");
+            assert!(!k.count(rides.iter().copied(), limit), "seed {seed}: counted twice");
             assert_eq!(k, once, "seed {seed}");
+            assert!(k.counted <= limit, "seed {seed}: the mark moved past the limit");
+            // one more in the mark's minute, scanned later: added once at most
+            rides.push((k.counted, 99, 777));
+            let odo = k.active().odo_m;
+            if k.count(rides.iter().copied(), limit) {
+                assert!(k.active().odo_m - odo <= 777, "seed {seed}");
+                reach[6] += usize::from(k.active().odo_m - odo == 777);
+            }
+            assert!(!k.count(rides.iter().copied(), limit), "seed {seed}: the late one twice");
             assert!(k.due().is_none_or(|p| p < PARTS));
         }
     }

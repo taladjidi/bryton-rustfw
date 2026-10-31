@@ -18,13 +18,17 @@
 //! **The active bike's gear is the settings'.** WHEEL, BIKE WEIGHT, CHAINRINGS and CASSETTE edit the settings as
 //! before; the active bike takes them at the next pass. ACTIVE BIKE puts the chosen bike's gear into the settings.
 //! At the read the file's gear wins over the settings' (written first, below, it is the newer of the two after a
-//! cut between the writes; a change only the registers kept is undone with the switch it went with).
+//! cut between the writes; a change only the registers kept is undone with the switch it went with), except while a
+//! ride is open: then the settings' (a WHEEL changed during the ride, kept by the registers over a reset) stay and go
+//! to the active bike. Nothing is read while a ride waits to be resumed.
 //! `bikes.bin` is written before `settings.bin` (the settings wait while it is due), so a power cut between the two
 //! writes leaves the newer in the bikes' file, which wins.
 //!
-//! **The rides** are counted from the ride scan's list when a scan ends ([`bikes::Bikes::count`], idempotent: the
-//! mark and the sums in one copy). The scan runs again after each save (app/riding.rs), so a ride is counted a few
-//! seconds after its save, and after a power cut, at the next start's scan.
+//! **The rides** are counted from the ride scan's list when a scan has ended with a list not counted yet (its
+//! revision, so a scan that ends within a pass is not missed; [`bikes::Bikes::count`], idempotent: the mark and the
+//! sums in one copy), with the clock set (a ride named over a day ahead is left out). The scan runs again after each
+//! save (app/riding.rs), so a ride is counted a few seconds after its save, and after a power cut, at the next
+//! start's scan.
 
 use crate::*;
 
@@ -49,8 +53,8 @@ pub struct BikeStore {
     pub(crate) sync: u32,
     /// The newest copy's sequence number.
     seq: u32,
-    /// The scan's end was counted (cleared while a scan runs).
-    pub(crate) scan_counted: bool,
+    /// The revision of the scan's list last counted (`history::Index::rev`).
+    pub(crate) seen_rev: u32,
 }
 
 impl Default for BikeStore {
@@ -70,7 +74,7 @@ impl BikeStore {
             sound: false,
             sync: 0,
             seq: 0,
-            scan_counted: false,
+            seen_rev: 0,
         }
     }
 }
@@ -104,10 +108,12 @@ impl App {
         if self.emmc.lent() {
             return;
         }
-        if !st.loaded && st.tries < LOAD_TRIES && self.settings_store.loaded {
+        if !st.loaded && st.tries < LOAD_TRIES && self.settings_store.loaded && !self.rec.resume_pending {
             self.load_bikes(b);
         }
-        let done = self.stock.status() == stock::Status::Done;
+        // a ride named over a day ahead is left out (a clock set wrong then); nothing counted without a clock
+        let done = self.stock.status() == stock::Status::Done && self.date.0 >= 2020;
+        let (y, mo, d, h, mi, _) = from_epoch_s(epoch_s(self.rec_time().0) + 86_400);
         let (gear, writable) = (bikes::Gear::of(&self.settings), self.card_writable);
         let index = &self.stock.index;
         let Some(st) = self.bikes.as_deref_mut().filter(|s| s.loaded) else { return };
@@ -116,14 +122,14 @@ impl App {
             st.dirty |= writable;
         }
         let mut due = None;
-        if done && !st.scan_counted {
-            let rides = (0..history::RIDES).map_while(|i| index.get(i)).map(|r| (r.start, r.dist_m));
-            if st.list.count(rides) {
+        if done && st.seen_rev != index.rev {
+            st.seen_rev = index.rev;
+            let rides = (0..history::RIDES).map_while(|i| index.get(i)).map(|r| (r.start, r.file.cluster, r.dist_m));
+            if st.list.count(rides, (y, mo, d, h, mi)) {
                 st.dirty |= writable;
                 due = st.list.due();
             }
         }
-        st.scan_counted = done;
         let st = *st;
         if let Some(p) = due {
             self.part_notice(&st.list, p);
@@ -161,10 +167,19 @@ impl App {
         let sound = read == Ok(1024) && !self.fats_suspect;
         let gear = bikes::Gear::of(&self.settings);
         let (odo, writable) = (self.settings.odo_m, self.card_writable);
-        // the rides from a minute before now on are the bikes' (one started as the file was read counts); none
-        // without a clock (the first scan's end sets the mark: the rides then on the card are not counted)
-        let (y, mo, d, h, mi, _) = from_epoch_s(epoch_s(self.rec_time().0) - 60);
+        // the rides from a minute before now on are the bikes' (one started as the file was read counts), or from a
+        // minute before the ride open now (its save counts it); none without a clock (the first scan's end sets the
+        // mark: the rides then on the card are not counted)
+        let open = !self.ride_settled();
+        let mut name = *b".fit.fit.fit.fit";
+        name[..12].copy_from_slice(&self.rec.clean.name());
+        let from = match stock::ride_start(&name) {
+            Some((y, mo, d, h, mi)) if open => (y, mo, d, h, mi, 0),
+            _ => self.rec_time().0,
+        };
+        let (y, mo, d, h, mi, _) = from_epoch_s(epoch_s(from) - 60);
         let mark = if self.date.0 >= 2020 { (y, mo, d, h, mi) } else { (0, 0, 0, 0, 0) };
+        let idle = self.ride.state() == ride::State::Idle;
         let Some(st) = self.bikes.as_deref_mut() else { return };
         if read.is_err() && read != Err(fat::Error::NotFound) {
             st.tries = st.tries.saturating_add(1);
@@ -176,7 +191,8 @@ impl App {
             None => (st.list, st.dirty) = (bikes::Bikes::migrate(gear, odo, mark), writable),
         }
         let list = st.list;
-        if list.active().gear != gear {
+        // a ride open: the settings' gear stays (a change made during it), step_bikes gives it to the active bike
+        if list.active().gear != gear && idle {
             list.active().gear.apply(&mut self.settings);
             self.save_misc(b);
         }

@@ -53,7 +53,9 @@ fn settle(sim: &mut Sim, app: &mut App) {
 fn scanned(sim: &mut Sim, app: &mut App) {
     for _ in 0..600 {
         run(sim, app, 200);
-        if app.stock.status() == stock::Status::Done && app.bikes.as_deref().is_some_and(|s| s.scan_counted) {
+        if app.stock.status() == stock::Status::Done
+            && app.bikes.as_deref().is_some_and(|s| s.seen_rev == app.stock.index.rev)
+        {
             return;
         }
     }
@@ -116,6 +118,71 @@ fn migration_then_a_saved_ride_counts_once() {
     let (mut sim, mut app) = boot(core::mem::take(&mut sim.emmc.image));
     scanned(&mut sim, &mut app);
     assert_eq!(bikes(&app).list[0].odo_m, m, "not counted again");
+}
+
+/// The scan after a short ride's save ends in the pass after it (a small card): the ride is counted at once, not at
+/// the next scan (the list's revision, not the scan's end, says a count is due).
+#[test]
+fn a_rescan_ended_within_a_pass_is_counted() {
+    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    settle(&mut sim, &mut app);
+    ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let m = last_ride_m(&app);
+    assert!(m > 300);
+    assert_eq!(bikes(&app).list[0].odo_m, m, "counted at once");
+}
+
+/// WHEEL changed during a ride, then a reset: the registers kept the change, `bikes.bin` (not written during the
+/// ride) has the old wheel; the resumed ride keeps the new one, and the active bike takes it.
+#[test]
+fn a_wheel_changed_mid_ride_survives_a_reset() {
+    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    settle(&mut sim, &mut app);
+    let old = app.settings.wheel_mm;
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000);
+    let new = crate::WHEELS.iter().copied().find(|&w| w != old).unwrap();
+    app.settings.wheel_mm = new; // BIKE > WHEEL during the ride
+    app.save_misc(&mut sim);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(file(&sim).map(|f| f.1.list[0].gear.wheel_mm), Some(old), "not written during the ride");
+
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    sim2.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim2, None);
+    app.set_bike_memory(memory());
+    run(&mut sim2, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
+    assert_ne!(app.ride.state(), ride::State::Idle, "resumed");
+    assert_eq!(app.settings.wheel_mm, new, "the new wheel kept");
+    assert_eq!(bikes(&app).active().gear.wheel_mm, new, "and given to the active bike");
+}
+
+/// The first start of this build with a ride open (here: the bikes' memory given mid-ride): the mark is set before
+/// that ride's start, so its save counts it on BIKE 1 (the settings' ODOMETER, read before it was paid, lacks it).
+#[test]
+fn a_migration_during_a_ride_counts_that_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 35_000); // the settings read, the scan done
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 180_000); // three minutes: "a minute before now" would be past the ride's start
+    app.set_bike_memory(memory());
+    run(&mut sim, &mut app, 1000);
+    let b = bikes(&app);
+    assert_eq!((b.counted, b.list[0].odo_m), ((2026, 10, 23, 8, 59), 0), "the mark a minute before the ride");
+    app.press(&mut sim, Press::Short(Key::Start));
+    super::save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 10_000);
+    scanned(&mut sim, &mut app);
+    let m = last_ride_m(&app);
+    assert!(m > 300);
+    assert_eq!(bikes(&app).list[0].odo_m, m, "the open ride counted");
 }
 
 /// A power cut once the ride is saved, before `bikes.bin` is written: the next start's scan counts it, once; a cut at

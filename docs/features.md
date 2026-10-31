@@ -885,8 +885,12 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
   ride goes to the active bike once, a few seconds after its save, when the ride scan has read it in `\Activities`; a
   ride of stock's goes to the bike active here. The file's mark (the newest ride counted) is written with the sums in one
   copy, so a power cut between the save and the write, or during the write, counts the ride at the next start, once.
-  The first start of this build makes BIKE 1 from the single bike of the settings and their ODOMETER, and counts the
-  rides from then; `settings.bin` and the backup registers keep the active bike's gear, so an older build and stock see
+  The mark is to the minute, with the files of the rides counted in that minute, so a second ride started in the same
+  minute counts too. A ride named over a day ahead (a clock set wrong) is left out; if the clock goes back, the rides
+  named before the mark wait until it passes it again. WHEEL changed during a ride is kept over a reset (the file's
+  gear wins at the start only with no ride open). The first start of this build makes BIKE 1 from the single bike of
+  the settings and their ODOMETER, and counts the rides from a minute before then (before the ride open then, if
+  any); `settings.bin` and the backup registers keep the active bike's gear, so an older build and stock see
   it. Part distances and intervals are in km whatever UNITS says. Not done: a name per bike, a profile's own bike.
   ![BIKES](img/bikes-menu.png)
 - **Not done:** the CLIMB filter (no climb has a category today, so "medium and above" needs thresholds chosen) and the time zone,
