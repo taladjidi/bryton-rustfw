@@ -4153,10 +4153,11 @@ fn settings_file() {
 /// STATUS and its fields, TIME ZONE, MAP, LEVEL STEP, SLOPE SCALE, GNSS SYSTEMS, STEEP DESCENT, BATTERY SAVER), one at a
 /// time set to any value in a copy cut anywhere around them, over the defaults' copy and one with each of them set: no
 /// panic; a byte past the length is not read; a choice byte within it reads as itself where its menu offers it, else
-/// as its default; the zones every consumer reads rise, custom ones only from whole bounds in range; a year and a
-/// height read in range or unset; the clock of any zone and rule is whole quarter hours from UTC. The fuzz reaches,
-/// for every byte, a copy cut before it and the byte taken or refused, for every choice byte both, and custom zones
-/// kept, refused (a bound out of form) and cut.
+/// as its default; the zones every consumer reads rise, custom ones only from whole bounds in range, and the set copy's
+/// kept whole when no zone byte changed; the year read as written when whole and in range, else unset; the clock of
+/// any zone and rule is whole quarter hours from UTC. The fuzz reaches, for every byte, a copy cut before it and the
+/// byte taken or refused, for every choice byte and the year both, each BATTERY SAVER mode, and custom zones kept,
+/// refused (a bound out of form) and cut.
 #[test]
 fn settings_file_bytes() {
     use crate::{DateFormat, Dst, SETTINGS_LEN, SaverMode, Settings, SettingsCopy, ui::Field};
@@ -4221,6 +4222,7 @@ fn settings_file_bytes() {
     let mut next = xorshift(0x5e7b);
     let (mut cut, mut taken, mut refused) = ([0u32; SETTINGS_LEN], [0u32; SETTINGS_LEN], [0u32; SETTINGS_LEN]);
     let (mut custom, mut custom_refused, mut custom_cut) = (0u32, 0u32, 0u32);
+    let mut saver = [0u32; 3]; // each BATTERY SAVER mode read as itself
     for (k, base) in [d, set].into_iter().enumerate() {
         let full = sector(base);
         for _ in 0..40_000 {
@@ -4235,7 +4237,12 @@ fn settings_file_bytes() {
             let z = st.zones().upper();
             assert!(z[..4].windows(2).all(|w| w[0] < w[1]) && z[4..].windows(2).all(|w| w[0] < w[1]), "{z:?} rises");
             assert!(!st.zone_custom || (len >= 145 && Settings::zone_bounds_ok(&st.zone_up) && z == st.zone_up));
-            assert!(st.birth_year == 0 || (1920..=2020).contains(&st.birth_year), "{}", st.birth_year);
+            let year = u16::from_le_bytes([sec[AT + 146], sec[AT + 147]]);
+            let want_year = if len >= 148 && (1920..=2020).contains(&year) { year } else { 0 };
+            assert_eq!(st.birth_year, want_year, "len {len}, year {year}");
+            if k == 1 && len >= 145 && !(124..145).contains(&p) {
+                assert!(st.zone_custom && st.zone_up == set.zone_up, "byte {p}: the set copy's custom zones kept");
+            }
             assert!(st.height_cm == 0 || (100..=230).contains(&st.height_cm), "{}", st.height_cm);
             if let Some(zone) = st.zone_min() {
                 let utc = 1_700_000_000 + i64::from(next() % 400_000_000);
@@ -4250,6 +4257,9 @@ fn settings_file_bytes() {
                     assert_eq!(back[AT + p], if ok { v } else { dflt[AT + p] }, "byte {p} = {v}");
                 }
                 taken[p] += u32::from(back[AT + p] == v && v != full[AT + p]);
+                if let Some(n) = saver.get_mut(usize::from(v)).filter(|_| p == 172 && st.saver as u8 == v) {
+                    *n += 1;
+                }
                 refused[p] += u32::from(back[AT + p] != v);
             }
             custom += u32::from(st.zone_custom);
@@ -4262,6 +4272,8 @@ fn settings_file_bytes() {
         assert!(c > 50 && t + r > 50, "byte {p}: cut {c}, taken {t}, refused {r}");
         assert!(choice(p, 0).is_none() || (t > 20 && r > 20), "byte {p}: taken {t}, refused {r}");
     }
+    assert!(taken[146] > 20 && refused[146] > 20, "BIRTH YEAR: taken {}, refused {}", taken[146], refused[146]);
+    assert!(saver.iter().all(|&n| n > 20), "BATTERY SAVER modes read: {saver:?}");
     assert!(custom > 1000 && custom_refused > 100 && custom_cut > 1000, "{custom} {custom_refused} {custom_cut}");
 }
 
