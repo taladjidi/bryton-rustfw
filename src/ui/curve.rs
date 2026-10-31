@@ -111,11 +111,11 @@ pub fn draw_plot(c: &mut impl Canvas, best: &[u16; N], ride: &[u16; N]) {
         }
     });
     let grey = Style { fg: GREY, ..LABEL };
-    // 2x: four digits ("2500") take 48 px, the margin left of the plot
+    // 2x: four digits ("2500") take 48 px, the margin left of the plot; a larger top is shown as 9999 (the scale is not)
     let small = grey;
     for (v, y) in [(ymax, PLOT.1), (ymax / 2, PLOT.1 + PLOT.3 / 2 - 7)] {
         let mut l = Line::<12>::new();
-        l.push_u32(u32::from(v));
+        l.push_u32(u32::from(v).min(9999));
         draw_in(c, &small, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
     }
 }
@@ -214,6 +214,17 @@ mod tests {
         assert!(w <= PLOT.0 - 2);
         // the widest realistic label, 9999 W, fits too
         assert!(LABEL.width("9999") <= PLOT.0 - 2);
+        // a top above 9999 (ymax is a u16) is drawn as "9999", whole in its box
+        let mut h = Frame::new();
+        draw_screen(&mut h, "", &curve(|_| 65535), &curve(|_| 65535), 0);
+        let mut k = Frame::new();
+        draw_in(&mut k, &Style { fg: GREY, ..LABEL }, 0, PLOT.1, PLOT.0 - 2, Align::Right, "9999");
+        let w9 = LABEL.width("9999");
+        for y in PLOT.1..PLOT.1 + 14 {
+            for x in PLOT.0 - 2 - w9..PLOT.0 - 2 {
+                assert_eq!(h.at(x, y), k.at(x, y));
+            }
+        }
     }
 
     /// Both curves and the cursor draw at both ends of the theme metrics without leaving the screen, and the cursor

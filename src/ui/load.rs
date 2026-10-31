@@ -171,6 +171,30 @@ mod tests {
         draw_plot(&mut f, &days(|_| (0, 0, -999)));
     }
 
+    /// Whether the plot draws a 0 label: the axis margin differs from one with only the top and bottom labels.
+    fn zero_label_drawn(d: &[Day; SHOWN], top: &str, bottom: &str) -> bool {
+        let mut f = Frame::new();
+        draw_plot(&mut f, d);
+        let mut g = Frame::new();
+        let s = Style { fg: GREY, ..LABEL };
+        draw_in(&mut g, &s, 0, PLOT.1, PLOT.0 - 2, Align::Right, top);
+        draw_in(&mut g, &s, 0, PLOT.1 + PLOT.3 - 14, PLOT.0 - 2, Align::Right, bottom);
+        (0..PLOT.1 + PLOT.3).any(|y| (0..PLOT.0 - 2).any(|x| f.at(x, y) != g.at(x, y)))
+    }
+
+    /// The 0 label is left out where it would touch the top or bottom label (zero row near either end).
+    #[test]
+    fn zero_label_hidden_next_to_an_end_label() {
+        assert!(!zero_label_drawn(&days(|_| (0, 0, -999)), "20", "-1000"));
+        assert!(!zero_label_drawn(&days(|_| (50, 50, -10)), "50", "-10"));
+    }
+
+    /// With room on both sides (zero row mid-plot) the 0 label is drawn.
+    #[test]
+    fn zero_label_shown_mid_plot() {
+        assert!(zero_label_drawn(&days(|_| (50, 50, -50)), "50", "-50"));
+    }
+
     #[test]
     fn the_axis_holds_every_value() {
         let d = days(|i| (40 + i as i16 / 3, 60 + i as i16 / 2, -25 + i as i16 / 2));
