@@ -335,6 +335,11 @@ A feature not listed here was seen on the unit.
   ascent hysteresis is inferred, BARO_HYSTERESIS_MM), ALTITUDE and FROM GPS in SETTINGS > BIKE against a known
   height, the ride start's own calibration, `\Rustfw\altcal.bin` kept over a restart, the chip's current at a reading
   a second (datasheet, not measured), `Alt_P0` of a real DeviceData.ini.
+- **Favourite places (src/nav/places.rs, src/app/places.rs)**: sim only. Still to see: SAVE PLACE at home with a real
+  fix, PLACES' distance and bearing against a known place a kilometre away, its altitude typed in its menu, then at the
+  next ride's start there "ALTITUDE SET AT PLACE 1" and the ride's altitude at that height (no ascent counted for the
+  correction); `\Rustfw\places.bin` kept over a restart; a place saved during a ride written
+  only after the save.
 
 - **UI review 2, step A (sim only so far):** the touch lock (Back and Lap held together 1 s: the padlock in the strip,
   a tap on the gear ignored, again to unlock; try it with a glove: the two keys are on opposite sides), Back on the

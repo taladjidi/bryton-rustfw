@@ -126,6 +126,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   start; `\Rustfw\altcal.bin`'s sector), and which source the ride takes (barometer or GPS, with a reference number);
   a new reference never steps the ride's altitude: shifted, then let go at 0.5 m/s, that part (`corr`) taken out of
   the ascent (ride.rs, 3 m hysteresis on the barometer). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
+- `src/nav/places.rs`: favourite places: the list (up to 16, PLACE n, an altitude or none), `\Rustfw\places.bin`'s two copies
+  (magic, version, length, sequence, CRC-32), the distance and bearing, the nearest with an altitude. Pure logic.
+  `src/app/places.rs`: SAVE PLACE, the PLACES menu rows, the barometer calibrated at a place, the file read and written
+  between rides.
 - `src/training/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
   rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
   rides at one speed, so a plan is one bisection on it). Pure logic;
@@ -287,6 +291,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
   `status_tests.rs` (QUICK STATUS), `switch_tests.rs` (page switches, names, moves, the auto scroll, swipe up),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
+  `places_tests.rs` (`places.bin`: a place listed after a restart, a ride's start calibrated at a place, cut at every
+  sector, damaged copies),
   `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
   `diag_tests.rs` (SCREENSHOT and the fault log: the file equals the panel, a full card, cut at every sector),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's

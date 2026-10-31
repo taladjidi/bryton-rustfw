@@ -25,7 +25,7 @@ pub mod ui;
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
 pub use link::{dev, msc, phone, prof};
-pub use nav::{altitude, climbs_ahead, course, segment, segment_match, sun};
+pub use nav::{altitude, climbs_ahead, course, places, segment, segment_match, sun};
 pub use storage::{
     fat, fit, fitread, history, ign, inflate, ini, named, recorder, route, stock, thresholds, trash, volume,
 };
@@ -159,6 +159,8 @@ pub struct App {
     alt: altitude::Altimeter,
     baro_ms: u32,
     alt_store: AltStore,
+    /// The favourite places and their file (app/places.rs).
+    places: PlaceStore,
     /// The RTC's seconds (the main screen shows them).
     seconds: u8,
     /// What the status strip shows, and what it showed when last drawn.
@@ -281,7 +283,7 @@ pub struct App {
     sw: Switches,
     /// `\Rustfw\settings.bin` (app/settings_file.rs): read yet, to be written, its copies.
     settings_store: SettingsStore,
-    /// A write of pages.bin or settings.bin failed since the FAT copies were last compared (app/editor.rs).
+    /// A write of pages.bin, settings.bin or places.bin failed since the FAT copies were last compared (app/editor.rs).
     fats_suspect: bool,
     /// SYSTEM > SCREENSHOT asked for a screenshot at the next pass (app/screenshot.rs).
     shot_due: bool,
@@ -459,6 +461,7 @@ impl App {
             alt: altitude::Altimeter::new(),
             baro_ms: BATTERY_MS - BARO_RIDE_MS, // the first reading a second after the start (the conversion's)
             alt_store: AltStore::default(),
+            places: PlaceStore::new(),
             seconds: rtc_time_from_tr(b.rtc().0).2,
             strip: Strip { time: rtc_hm(b), radio: ble.is_some(), blink: true, ..Strip::default() },
             strip_shown: Strip { blink: true, ..Strip::default() },
@@ -713,6 +716,7 @@ impl App {
             self.step_survey(b);
             self.step_thresholds(b);
             self.step_settings(b);
+            self.step_places(b);
             self.step_pages(b);
             self.step_fault_log(b);
             t = self.timed(b, Sec::Files, t);
