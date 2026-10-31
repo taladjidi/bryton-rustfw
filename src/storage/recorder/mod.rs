@@ -91,11 +91,13 @@
 //! last record, as any ride whose entry a cut tore; in one place still, never lost.
 //!
 //! **The app's files in `\Rustfw`** ([`KEPT`]: the pages, the settings, the phone's bond, the altitude, the
-//! trainer, the trash's record, and `\Rustfw\Deleted\Full`) are made zeroed at a ride's start too, the last ride
-//! done (`make_kept`): later writes then go inside their own sectors, never to `\Rustfw`'s directory sector, which
-//! holds `ride.rec`'s and the ride folders' entries (a torn write there would lose every kept ride: the review of
-//! 2026-10-29, S7). Each reader takes zeros as "none"; each writer still makes its file if missing. Tried once a
-//! boot: one that fails (a name taken by a folder, a full card) is left to the writers until the next boot.
+//! trainer, the trash's record, the bikes, the places, `\Rustfw\Deleted\Full` and the fault log's folder
+//! `\Rustfw\Log`) are made zeroed at a ride's start too, the last ride done (`make_kept`): later writes then go inside
+//! their own sectors, never to `\Rustfw`'s directory sector, which holds `ride.rec`'s and the ride folders' entries
+//! (a torn write there would lose every kept ride: the review of 2026-10-29, S7, and of 2026-10-31, finding 1). Each
+//! reader takes zeros as "none". The pages' and the settings' writers still make their file if missing; the bikes',
+//! the places' and the fault log's never do: they wait for a ride's start to make it. Tried once a boot: one that
+//! fails (a name taken by a folder, a full card) is left to the writers (or to the next boot) until the next boot.
 //!
 //! **One writer, one ride.** What the last run left unfinished is finished before a new ride: by the boot
 //! ([`Recorder::recover`]), or, if the boot did not (its marker lost, or the card failed then), at the new ride's
@@ -254,23 +256,28 @@ pub enum GaveUp {
 }
 
 /// The app's files in [`DIR`] and their sizes, made zeroed by `make_kept` (module doc): pages.bin and settings.bin
-/// (two copies: app/editor.rs `write_copy`), ble.bin, altcal.bin, sensors.bin, delete.rec (one sector each).
-pub const KEPT: [(&str, u32); 6] = [
+/// (two copies: app/editor.rs `write_copy`), ble.bin, altcal.bin, sensors.bin, delete.rec (one sector each), bikes.bin
+/// and places.bin (two copies, never made by their writers: `write_copy`'s `make`).
+pub const KEPT: [(&str, u32); 8] = [
     (crate::page::FILE, 2 * SECTOR_U32),
     (crate::SETTINGS_FILE, 2 * SECTOR_U32),
+    (crate::BIKES_FILE, 2 * SECTOR_U32),
+    (crate::PLACES_FILE, 2 * SECTOR_U32),
     (crate::BOND_FILE, SECTOR_U32),
     (crate::ALT_FILE, SECTOR_U32),
     (crate::sensors::SENSORS_FILE, SECTOR_U32),
     (crate::trash::REC, SECTOR_U32),
 ];
 
-/// [`KEPT`] made where missing or not their size (zeros where they were shorter), then `\Rustfw\Deleted\Full`; the
-/// FATs synced first when anything is to be made, as in [`Recorder::setup`] (a cut while making them leaves no record
-/// to say so). Reads only when all are there.
+/// [`KEPT`] made where missing or not their size (zeros where they were shorter), then `\Rustfw\Deleted\Full` and
+/// `\Rustfw\Log` (the fault log's folder: storage/faultlog.rs never makes it); the FATs synced first when anything is
+/// to be made, as in [`Recorder::setup`] (a cut while making them leaves no record to say so). Reads only when all
+/// are there.
 fn make_kept(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(), Error> {
     let dir = fat.find(d, fat.root(), DIR)?;
     let mut whole =
         fat.find(d, dir, crate::trash::DELETED).and_then(|del| fat.find(d, del, "Full")).is_ok_and(|f| f.dir);
+    whole &= fat.find(d, dir, crate::storage::faultlog::LOG_DIR).is_ok_and(|f| f.dir);
     for (name, size) in KEPT {
         whole &= fat.locate(d, dir, name).is_ok_and(|h| h.size == size);
     }
@@ -294,6 +301,7 @@ fn make_kept(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(),
     }
     let deleted = fat.ensure_dir(d, dir, crate::trash::DELETED, t)?;
     fat.ensure_dir(d, deleted, "Full", t)?;
+    fat.ensure_dir(d, dir, crate::storage::faultlog::LOG_DIR, t)?;
     Ok(())
 }
 
@@ -1842,4 +1850,4 @@ impl Recorder {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

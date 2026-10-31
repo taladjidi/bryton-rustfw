@@ -5,7 +5,8 @@
 //! Then the marker is marked logged, so a reset before its minute is up (when the app clears it) does not log it
 //! twice. An append that fails is said once and tried again a minute later, [`RETRIES`] times a boot at most, the FAT
 //! copies compared first (and at the next start, the marker not being marked logged). A build that may not write the
-//! card never writes it.
+//! card never writes it. Without the folder `\Rustfw\Log` (made at a ride's start: storage/recorder/mod.rs
+//! `make_kept`) nothing is written: looked for again a minute later, said never, no try counted.
 
 use crate::storage::faultlog;
 use crate::*;
@@ -43,7 +44,7 @@ impl App {
             if suspect {
                 fat.sync_fats(&mut d)?;
             }
-            let top = fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)?;
+            let top = fat.open(&mut d, recorder::DIR)?;
             faultlog::append(&mut fat, &mut d, top, line.as_str().as_bytes(), t)
         });
         match r {
@@ -56,6 +57,8 @@ impl App {
                 }
             }
             Err(fat::Error::NotFat32) => {} // no volume (a card stock never formatted): nothing to say
+            // no folder yet: never made here (module doc), looked for again later
+            Err(fat::Error::NotFound) => self.fault_due = Some((word, at, self.up_ms.saturating_add(RETRY_MS), tries)),
             Err(_) => {
                 self.fats_unsure(); // the next writes compare the FAT copies first
                 if tries == 0 {

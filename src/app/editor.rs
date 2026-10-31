@@ -262,21 +262,28 @@ impl App {
     }
 
     /// Copy `slot` (0 or 1) of `\Rustfw\<name>` written with `sector`, the other untouched; the file created (or
-    /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]). None: no volume.
+    /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]), only if `make`: else nothing
+    /// written and `NotFound` unless it is whole (bikes.bin, places.bin: made at a ride's start, recorder/mod.rs
+    /// `make_kept`, so no later write touches `\Rustfw`'s directory sector). None: no volume.
     pub(crate) fn write_copy(
         &mut self,
         b: &mut impl Board,
         name: &str,
         slot: u32,
         sector: &[u8; 512],
+        make: bool,
     ) -> Option<Result<(), fat::Error>> {
         let t = fat::write::dos_time(self.rec_time().0);
         let mut d = emmc::Volume(&mut self.emmc, b);
         let mut fat = fat::Fat::mount(&mut d).ok()?;
-        Some(
-            fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)
-                .and_then(|dir| write_copy_in(&mut fat, &mut d, dir, name, slot, sector, t)),
-        )
+        let dir =
+            if make { fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t) } else { fat.open(&mut d, recorder::DIR) };
+        Some(dir.and_then(|dir| {
+            if !make && fat.locate(&mut d, dir, name)?.size != 1024 {
+                return Err(fat::Error::NotFound);
+            }
+            write_copy_in(&mut fat, &mut d, dir, name, slot, sector, t)
+        }))
     }
 
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
@@ -398,7 +405,7 @@ impl App {
             meta: self.sw.meta,
         };
         // no volume (a card stock never formatted, the tests' blank one): the registers only, nothing to say
-        let Some(r) = self.write_copy(b, page::FILE, s.seq % 2, &s.to_sector()) else {
+        let Some(r) = self.write_copy(b, page::FILE, s.seq % 2, &s.to_sector(), true) else {
             return self.save_page_registers(b);
         };
         match r {

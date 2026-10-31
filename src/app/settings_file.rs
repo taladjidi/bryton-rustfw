@@ -645,7 +645,7 @@ impl App {
             settings: self.settings,
         };
         // no volume (a card stock never formatted, the tests' blank one): the registers only, nothing to say
-        match self.write_copy(b, SETTINGS_FILE, c.seq % 2, &c.to_sector()) {
+        match self.write_copy(b, SETTINGS_FILE, c.seq % 2, &c.to_sector(), true) {
             None => {}
             Some(Ok(())) => (self.settings_store.seq, self.settings_store.sound) = (c.seq, true),
             Some(Err(_)) => {

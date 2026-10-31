@@ -10,6 +10,9 @@
 //! ([`App::ride_settled`]), by a build that may write the card, its two copies in this firmware's own folder, the
 //! FAT copies compared first after a write that failed. A read that fails for any reason but "no file" is tried
 //! again, and nothing is changed or counted until it succeeds: a first copy is never written beside a newer one.
+//! The file is never made here (nor made whole): a ride's start makes it, zeroed (storage/recorder/mod.rs `make_kept`,
+//! so no write between rides touches `\Rustfw`'s directory sector). Without it a change waits for the next ride
+//! (`no_file`), and the settings do not wait for it.
 //!
 //! **The migration** (no file, or no whole copy): BIKE 1 gets the settings' wheel, weight, chainrings and cassette and
 //! its ODOMETER; BIKE 2 and 3 the defaults. `settings.bin` and the backup registers are left as they are (they keep
@@ -55,6 +58,8 @@ pub struct BikeStore {
     seq: u32,
     /// The revision of the scan's list last counted (`history::Index::rev`).
     pub(crate) seen_rev: u32,
+    /// The file is not on the card whole: nothing written until a ride has started (module doc).
+    no_file: bool,
 }
 
 impl Default for BikeStore {
@@ -75,6 +80,7 @@ impl BikeStore {
             sync: 0,
             seq: 0,
             seen_rev: 0,
+            no_file: false,
         }
     }
 }
@@ -95,9 +101,9 @@ impl App {
         self.bikes.as_deref().filter(|s| s.loaded).map(|s| &s.list)
     }
 
-    /// A change to the bikes waits to be written (the settings wait for it: module doc).
+    /// A change to the bikes waits to be written (the settings wait for it: module doc), the file there.
     pub(crate) fn bikes_due(&self) -> bool {
-        self.bikes.as_deref().is_some_and(|s| s.loaded && s.dirty)
+        self.bikes.as_deref().is_some_and(|s| s.loaded && s.dirty && !s.no_file)
     }
 
     /// The file read when the settings' is, the active bike kept as the settings, the rides counted at a scan's end,
@@ -116,7 +122,9 @@ impl App {
         let (y, mo, d, h, mi, _) = from_epoch_s(epoch_s(self.rec_time().0) + 86_400);
         let (gear, writable) = (bikes::Gear::of(&self.settings), self.card_writable);
         let index = &self.stock.index;
+        let settled = self.ride_settled();
         let Some(st) = self.bikes.as_deref_mut().filter(|s| s.loaded) else { return };
+        st.no_file &= settled; // a ride's start makes the file: tried again once it is over
         if st.list.active().gear != gear {
             st.list.active_mut().gear = gear; // an edit in BIKE
             st.dirty |= writable;
@@ -134,7 +142,7 @@ impl App {
         if let Some(p) = due {
             self.part_notice(&st.list, p);
         }
-        if !(writable && st.dirty && self.ride_settled()) {
+        if !(writable && st.dirty && !st.no_file && settled) {
             return;
         }
         if !st.sound {
@@ -185,7 +193,7 @@ impl App {
             st.tries = st.tries.saturating_add(1);
             return;
         }
-        (st.loaded, st.sound) = (true, sound);
+        (st.loaded, st.sound, st.no_file) = (true, sound, read != Ok(1024));
         match read.ok().filter(|&n| n == 1024).and_then(|_| bikes::Bikes::newest(&file)) {
             Some((seq, list)) => (st.seq, st.list) = (seq, list),
             None => (st.list, st.dirty) = (bikes::Bikes::migrate(gear, odo, mark), writable),
@@ -201,17 +209,22 @@ impl App {
         }
     }
 
-    /// Writes the bikes over the file's older copy (the file created with both if needed).
+    /// Writes the bikes over the file's older copy (never made here: module doc).
     fn save_bikes(&mut self, b: &mut impl Board) {
         let Some(st) = self.bikes.as_deref_mut() else { return };
         st.dirty = false; // once: a failure is said, and tried again at the next change
         let seq = st.seq.wrapping_add(1);
         let sector = st.list.to_sector(seq);
-        match self.write_copy(b, BIKES_FILE, seq % 2, &sector) {
+        match self.write_copy(b, BIKES_FILE, seq % 2, &sector, false) {
             None => {}
             Some(Ok(())) => {
                 if let Some(st) = self.bikes.as_deref_mut() {
                     (st.seq, st.sound) = (seq, true);
+                }
+            }
+            Some(Err(fat::Error::NotFound)) => {
+                if let Some(st) = self.bikes.as_deref_mut() {
+                    (st.dirty, st.no_file) = (true, true); // nothing written: after the next ride's start
                 }
             }
             Some(Err(_)) => {

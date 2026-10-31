@@ -177,8 +177,9 @@ pub fn start(size: u32, len: u32) -> u32 {
     if size.checked_add(len).is_some_and(|end| end <= CAP) { size } else { 0 }
 }
 
-/// Appends `line` (at most 512 bytes) to the log in folder `top` (made if missing), the log and its folder made if
-/// missing.
+/// Appends `line` (at most 512 bytes) to the log in folder `top`'s [`LOG_DIR`], the log made if missing. The folder is
+/// never made here (it would be an entry in `top`'s directory sector, `ride.rec`'s): `NotFound` until a ride's start
+/// makes it (storage/recorder/mod.rs `make_kept`).
 pub fn append(
     fat: &mut Fat,
     d: &mut impl DiskWrite,
@@ -187,7 +188,7 @@ pub fn append(
     t: (u16, u16),
 ) -> Result<(), Error> {
     let len = u32::try_from(line.len()).ok().filter(|&n| (1..=512).contains(&n)).ok_or(Error::Refused)?;
-    let dir = fat.ensure_dir(d, top, LOG_DIR, t)?;
+    let dir = fat.find(d, top, LOG_DIR).and_then(|f| if f.dir { Ok(f) } else { Err(Error::Refused) })?;
     let mut h = match fat.locate(d, dir, FILE) {
         Err(Error::NotFound) => fat.create(d, dir, FILE, t)?,
         other => other?,

@@ -53,7 +53,7 @@ fn settle(sim: &mut Sim, app: &mut App) {
 /// SAVE PLACE from the main menu, then a restart 1.2 km away: PLACES lists it with its distance and which way.
 #[test]
 fn a_saved_place_is_listed_after_a_restart() {
-    let mut sim = unit(9, crate::fat::tests::image());
+    let mut sim = unit(9, crate::recorder::tests::kept_card());
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
     app.press(&mut sim, Press::Long(Key::Page));
@@ -95,7 +95,7 @@ fn a_saved_place_is_listed_after_a_restart() {
 /// is written once the ride is saved, never while it is open.
 #[test]
 fn a_ride_start_at_a_place_calibrates_to_its_altitude() {
-    let mut sim = unit(9, crate::fat::tests::image());
+    let mut sim = unit(9, crate::recorder::tests::kept_card());
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
     app.save_place(&mut sim);
@@ -152,7 +152,7 @@ fn a_ride_start_at_a_place_calibrates_to_its_altitude() {
 fn a_cut_at_every_sector_reads_old_or_new() {
     for (writes, reliable) in [(1, false), (2, false), (1, true), (2, true)] {
         let setup = || {
-            let mut sim = unit(9, crate::fat::tests::image());
+            let mut sim = unit(9, crate::recorder::tests::kept_card());
             if reliable {
                 sim.emmc.rel_param = crate::emmc::EN_REL_WR;
             }
@@ -209,7 +209,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
 /// save writes a first copy.
 #[test]
 fn damaged_copies() {
-    let mut sim = unit(9, crate::fat::tests::image());
+    let mut sim = unit(9, crate::recorder::tests::kept_card());
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
     app.save_place(&mut sim);

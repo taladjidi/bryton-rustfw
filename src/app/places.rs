@@ -8,7 +8,9 @@
 //! its two copies in this firmware's own folder, the newer over the older, the FAT copies compared first after a
 //! write that failed. A place saved during a ride is kept in memory and written once the ride is saved (a reset in
 //! between loses it, never the ride). A read that fails for any reason but "no file" is tried again, and no place can
-//! be saved until it succeeds: a first copy is never written beside a newer one.
+//! be saved until it succeeds: a first copy is never written beside a newer one. The file is never made here (nor made
+//! whole): a ride's start makes it, zeroed (storage/recorder/mod.rs `make_kept`, so no write between rides touches
+//! `\Rustfw`'s directory sector); without it a place saved waits in memory for the next ride's end (`no_file`).
 //!
 //! **The calibration.** Each second with a fix (horizontal accuracy 10 m or better) and the speed under 2 km/h within
 //! [`places::NEAR_M`] of a place with an altitude, the barometer is calibrated to it ([`altitude::By::Place`]), once
@@ -55,6 +57,8 @@ pub(crate) struct PlaceStore {
     seq: u32,
     /// The place the barometer was calibrated at, until the rider leaves it.
     at: Option<u8>,
+    /// The file is not on the card whole: nothing written until a ride has started (module doc).
+    no_file: bool,
 }
 
 impl PlaceStore {
@@ -70,6 +74,7 @@ impl PlaceStore {
             sync: 0,
             seq: 0,
             at: None,
+            no_file: false,
         }
     }
 }
@@ -85,7 +90,9 @@ impl App {
         if !st.loaded && st.tries < LOAD_TRIES && (self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS) {
             self.load_places(b);
         }
-        if !(self.card_writable && self.places.loaded && self.places.dirty && self.ride_settled()) {
+        let settled = self.ride_settled();
+        self.places.no_file &= settled; // a ride's start makes the file: tried again once it is over
+        if !(self.card_writable && self.places.loaded && self.places.dirty && !self.places.no_file && settled) {
             return;
         }
         if !self.places.sound {
@@ -109,20 +116,22 @@ impl App {
         }
         let sound = read == Ok(1024) && !self.fats_suspect;
         let st = &mut self.places;
-        (st.loaded, st.sound) = (true, sound);
+        (st.loaded, st.sound, st.no_file) = (true, sound, read != Ok(1024));
         if let Some((seq, list)) = read.ok().filter(|&n| n == 1024).and_then(|_| places::Places::newest(&file)) {
             (st.seq, st.list) = (seq, list);
         }
     }
 
-    /// Writes the places over the file's older copy (the file created with both if needed).
+    /// Writes the places over the file's older copy (never made here: module doc).
     fn save_places(&mut self, b: &mut impl Board) {
         self.places.dirty = false; // once: a failure is said, and tried again at the next change
         let seq = self.places.seq.wrapping_add(1);
         let sector = self.places.list.to_sector(seq);
-        match self.write_copy(b, PLACES_FILE, seq % 2, &sector) {
+        match self.write_copy(b, PLACES_FILE, seq % 2, &sector, false) {
             None => {}
             Some(Ok(())) => (self.places.seq, self.places.sound) = (seq, true),
+            // nothing written: after the next ride's start
+            Some(Err(fat::Error::NotFound)) => (self.places.dirty, self.places.no_file) = (true, true),
             Some(Err(_)) => {
                 self.fats_unsure(); // compared again first
                 self.notice("PLACES NOT SAVED");

@@ -1042,7 +1042,8 @@ STOCK):
   and bearing from here ("1.2 KM NE"); a place's menu types its altitude by hand (from a known elevation) or DELETEs
   it (asked first). Stopped within 30 m of a place with an altitude (a fix of 10 m or better), the barometer is
   calibrated to it, once a visit and again when a ride's start asks for a calibration (it replaces the receiver's 30 s
-  average there). Kept in `\Rustfw\places.bin`, two copies with a CRC, written between rides only.
+  average there). Kept in `\Rustfw\places.bin`, two copies with a CRC, written between rides only (made at a ride's
+  start: on a card without it, a place saved is written after the next ride).
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.

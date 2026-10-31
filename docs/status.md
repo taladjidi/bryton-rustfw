@@ -13,7 +13,8 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   answers, the marker kept (`tools/dev.py peek` of RTC backup register 30) until then.
 
 - **Three bikes and part wear (src/storage/bikes.rs, src/app/bikes.rs)**: sim only. Still to see: the first start making
-  BIKE 1 from the settings' wheel and ODO (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
+  BIKE 1 from the settings' wheel and ODO (`\Rustfw\bikes.bin` written once, after the next ride if the file was not
+  there: a ride's start makes it, review 2026-10-31 finding 1; settings.bin untouched); ACTIVE BIKE
   switching the wheel and weight (the speed from a wheel sensor follows); a ride saved, then within a minute its distance
   on the active bike and its parts; a power cut right after "RIDE SAVED" counting the ride once at the next start; a
   part's SERVICE passed and its notice at the start; the scan's time to count on the unit's card (70 rides).
@@ -169,7 +170,8 @@ A feature not listed here was seen on the unit.
 
 - **The app's state files made at a ride's start (storage/recorder/mod.rs `make_kept`; review S7)**: host tests only
   (a card without them, cut at every sector, plain and torn). On the owner's card the first ride start after this
-  build writes `\Rustfw`'s directory sector once (the six files and `Deleted\Full` created zeroed; the files already
+  build writes `\Rustfw`'s directory sector once (the eight files, bikes.bin and places.bin among them, `Deleted\Full`
+  and `Log` created zeroed: review 2026-10-31 finding 1; the files already
   there are left as they are). Still to see: that start, then `dev.py ls \Rustfw` showing all of them, and the pages,
   the bond and the sensors still read and saved afterwards.
 
