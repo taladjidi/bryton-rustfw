@@ -13,7 +13,7 @@
 
 use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
-use bryton_rustfw::dev::{self, Effect, Host, Session, Stats, UsbState, UsbWatch};
+use bryton_rustfw::dev::{self, Effect, Host, Session, Stats, UsbWatch};
 use bryton_rustfw::usbsnap::{self, Keeper, UsbSnap};
 use bryton_rustfw::{App, Board, msc};
 use static_cell::StaticCell;
@@ -256,14 +256,8 @@ pub struct Link {
     out: [u8; 512],
     len: usize,
     last_full: bool,
-    /// DSTS.FNSOF when last seen changing, and when (ms, the caller's clock).
-    sof: (u32, u32),
-    /// The bus state the watch saw last, and since when (ms).
-    bus: (UsbState, u32),
-    /// Configured since the last reconnect.
-    was_configured: bool,
-    /// The last state before a suspend was Configured (cleared by a reconnect).
-    before: bool,
+    /// The drop detector's state (lib dev.rs).
+    watcher: dev::Watcher,
     /// A drive command ran since [`Link::worked`]: its eMMC access may have slept, which takes over SysTick.
     worked: bool,
 }
@@ -346,19 +340,7 @@ pub fn start() -> Option<Link> {
         modify(DCTL, 1 << 1, 0);
     }
     wr(NVIC_ISER2, OTG_HS_IRQ);
-    Some(Link {
-        dev,
-        cdc,
-        msc,
-        out: [0; 512],
-        len: 0,
-        last_full: false,
-        sof: (u32::MAX, 0),
-        bus: (UsbState::Unconfigured, 0),
-        was_configured: false,
-        before: false,
-        worked: false,
-    })
+    Some(Link { dev, cdc, msc, out: [0; 512], len: 0, last_full: false, watcher: dev::Watcher::new(), worked: false })
 }
 
 impl Link {
@@ -414,28 +396,17 @@ impl Link {
     ///   disabled, docs/usb.md): a soft disconnect and connect, so the computer may enumerate it again.
     pub fn watch(&mut self, now_ms: u32, failed: bool) -> UsbWatch {
         let fnsof = rd(DSTS) >> 8 & 0x3fff;
-        let bus = match self.dev.state() {
-            UsbDeviceState::Configured => UsbState::Configured,
-            UsbDeviceState::Suspend => UsbState::Suspended { configured: self.before },
-            _ => UsbState::Unconfigured,
-        };
-        if bus == UsbState::Configured {
-            (self.before, self.was_configured) = (true, true);
-        } else if bus == UsbState::Unconfigured {
-            self.before = false;
-        }
-        if bus != self.bus.0 {
-            self.bus = (bus, now_ms);
-        }
-        if bus != UsbState::Configured || fnsof != self.sof.0 {
-            self.sof = (fnsof, now_ms);
-        }
-        let since = if bus == UsbState::Configured { self.sof.1 } else { self.bus.1 };
-        let w = dev::watch_usb(bus, self.was_configured, now_ms.wrapping_sub(since), failed);
+        let state = self.dev.state();
+        let (bus, w) = self.watcher.poll(
+            state == UsbDeviceState::Configured,
+            state == UsbDeviceState::Suspend,
+            fnsof,
+            now_ms,
+            failed,
+        );
         if w == UsbWatch::Drop {
-            // the watch's failures only: the frame number frozen while configured, or a suspend after a phase error
-            // (not the host going away or sleeping); before the reconnect changes the core
-            if bus == UsbState::Configured || failed {
+            // before the reconnect changes the core
+            if dev::Watcher::real_failure(bus, failed) {
                 self.msc.snap.note(|| snapshot(usbsnap::EVENT_DROP));
             }
             self.reconnect(now_ms);
@@ -453,8 +424,7 @@ impl Link {
         modify(DCTL, 0, 1 << 1); // SDIS: the D+ pull-up off
         wait(|| false, 100);
         modify(DCTL, 1 << 1, 0);
-        self.sof = (u32::MAX, now_ms);
-        (self.was_configured, self.before) = (false, false);
+        self.watcher.reconnected(now_ms);
     }
 
     /// Soft disconnect, so the computer sees the device leave before the next image enumerates again.
