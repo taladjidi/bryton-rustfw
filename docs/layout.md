@@ -359,6 +359,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   to the top; check.sh, after the build).
 - `tools/numbers.py`: the live numbers of the docs (image, AXI SRAM free, the cells' sizes, the tests, lines of Rust): `--write`
   rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after tools/pack.py), `--check` lists the stale ones, `selftest`.
+- `tools/lint.py`: the checks reviewers did by hand (pub items only tests use, dashes, licensed keys in tracked files, dead
+  tool functions, ruff F and E9; check.sh, before cargo), `selftest`.
 - `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo).
 - `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
   commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored

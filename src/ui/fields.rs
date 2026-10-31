@@ -753,6 +753,7 @@ pub const LAYOUTS: [Layout; 17] = [
 
 /// The layouts below this id are the rider's (the page menu, the editor, the readability rules: a picture 118 px
 /// high); the ones from it on are fixed pages (id 16, the CLIMB page: four boxes the rules would refuse).
+#[cfg(test)]
 pub const USER_LAYOUTS: u8 = 16;
 
 /// The order the page menu goes through the layouts: by field count (none is off: a page is deleted instead).
