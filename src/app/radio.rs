@@ -6,6 +6,24 @@
 use crate::*;
 use phone::Media;
 
+/// The Nordic UART's RX FIFO depth (USART2, RM0399 USART, FIFO mode): this many bytes found waiting in a row mean it
+/// was full and RTS was holding the chip.
+pub const NRF_FIFO: u32 = 16;
+
+/// How long the receive (main.rs `nrf_recv`) waits for a burst's next byte, in cycles at `cpu_hz`, after `run` bytes
+/// read with no empty poll between them: two byte times (20 us at 1 Mbaud) end a burst; after a full FIFO
+/// ([`NRF_FIFO`]: RTS held the chip) 200 us, for the chip to go on once reading frees the FIFO (within 4 us on the unit,
+/// BOARD.md 11). The rest of a burst split by a longer gap waits in the FIFO (RTS) for the next read.
+///
+/// ```
+/// use bryton_rustfw::nrf_wait_cycles;
+/// assert_eq!(nrf_wait_cycles(1, 200_000_000), 4_000); // 20 us
+/// assert_eq!(nrf_wait_cycles(16, 200_000_000), 40_000); // 200 us
+/// ```
+pub fn nrf_wait_cycles(run: u32, cpu_hz: u32) -> u32 {
+    if run >= NRF_FIFO { cpu_hz / 5_000 } else { cpu_hz / 50_000 }
+}
+
 /// How long a sensor's channel rests, closed, after its search timed out ([`nrf::SEARCH_TIMEOUT`]) before it
 /// searches again: so a strap not worn costs the radio 30 s of listening in 90 instead of all the time.
 pub const SEARCH_REST_MS: u32 = 60_000;
@@ -153,6 +171,9 @@ impl App {
                         self.shifted(); // its presses wait in the decoders until the stream is read (below)
                     }
                     self.radio.heard_ms[kind as usize] = 0;
+                    if let Some(n) = self.radio.broadcasts.get_mut(kind as usize) {
+                        *n = n.saturating_add(1);
+                    }
                     self.radio.misses[kind as usize] = 0;
                     if self.radio.sensors[kind as usize] == Sensor::Search {
                         self.radio.ask |= 1 << ch;
@@ -292,4 +313,26 @@ pub(crate) fn start_chip(
         }
     }
     ChipStart { ble, ant, di2, refusal, sensors }
+}
+
+impl App {
+    /// The Nordic link's counts since the start, for the dev link's `info`: the watcher's resyncs and the ANT
+    /// broadcasts heard per sensor kind (in [`Kind::ALL`]'s order).
+    pub fn radio_counts(&self) -> (u16, [u32; Kind::ALL.len()]) {
+        (self.watch.resyncs, self.radio.broadcasts)
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    #[test]
+    fn a_full_fifo_waits_long_and_a_byte_off_the_wire_short() {
+        let hz = 200_000_000;
+        assert_eq!(nrf_wait_cycles(0, hz), hz / 50_000);
+        assert_eq!(nrf_wait_cycles(NRF_FIFO - 1, hz), hz / 50_000, "15 waiting: the FIFO was not full");
+        assert_eq!(nrf_wait_cycles(NRF_FIFO, hz), hz / 5_000);
+        assert_eq!(nrf_wait_cycles(NRF_FIFO + 30, hz), hz / 5_000, "the chip went on as the FIFO drained");
+    }
 }

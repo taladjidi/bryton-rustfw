@@ -911,15 +911,9 @@ fn nrf_send(data: &[u8]) {
     }
 }
 
-/// The USART2 RX FIFO's depth (RM0399 USART, FIFO mode): this many bytes found waiting in a row mean it was full and
-/// RTS was holding the chip.
-const NRF_FIFO: u32 = 16;
-
-/// Reads what has arrived, and while bytes keep coming waits for the next one: two byte times (20 us at 1 Mbaud) end a
-/// burst; after a full FIFO ([`NRF_FIFO`] bytes found waiting in a row: RTS held the chip) up to 200 us, for the chip
-/// to go on once reading frees the FIFO (it did within 4 us on the unit, BOARD.md 11), so a long burst comes in one
-/// call instead of 16 bytes per main loop pass. The rest of a burst split by a longer gap waits in the FIFO (RTS) for
-/// the next call. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
+/// Reads what has arrived, and while bytes keep coming waits for the next one as long as
+/// [`bryton_rustfw::nrf_wait_cycles`] says (20 us, or 200 us after a full FIFO), so a long burst comes in one call
+/// instead of 16 bytes per main loop pass. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
 fn nrf_recv(buf: &mut [u8]) -> usize {
     let mut n = 0;
     let mut run = 0; // bytes read with no empty poll between them: a byte off the wire comes alone (10 us each)
@@ -933,8 +927,7 @@ fn nrf_recv(buf: &mut [u8]) -> usize {
             gap = false;
             last = cycles();
         } else {
-            let wait = if run >= NRF_FIFO { CPU_HZ / 5000 } else { CPU_HZ / 50_000 };
-            if n == 0 || cycles().wrapping_sub(last) > wait {
+            if n == 0 || cycles().wrapping_sub(last) > bryton_rustfw::nrf_wait_cycles(run, CPU_HZ) {
                 break;
             }
             gap = true;

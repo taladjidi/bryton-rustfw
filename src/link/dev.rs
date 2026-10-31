@@ -363,6 +363,16 @@ impl Session {
                 h.send(decimal(u64::from(stats.cpu_permille), &mut [0; 20]));
                 h.send(b" permille, radio resets ");
                 h.send(decimal(u64::from(app.radio_resets()), &mut [0; 20]));
+                let (resyncs, broadcasts) = app.radio_counts();
+                h.send(b" resyncs ");
+                h.send(decimal(u64::from(resyncs), &mut [0; 20]));
+                h.send(b", ant");
+                for (k, n) in crate::sensors::Kind::ALL.iter().zip(broadcasts) {
+                    h.send(b" ");
+                    h.send(k.short().as_bytes());
+                    h.send(b" ");
+                    h.send(decimal(u64::from(n), &mut [0; 20]));
+                }
                 h.send(b", climb tile us last ");
                 h.send(decimal(u64::from(app.ahead_tile_us().0), &mut [0; 20]));
                 h.send(b" max ");

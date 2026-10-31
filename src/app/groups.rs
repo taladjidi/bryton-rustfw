@@ -220,6 +220,8 @@ pub(crate) struct Radio {
     pub(crate) lost: u8,
     /// The sensors heard in this ride (bit per kind): only those can be lost.
     pub(crate) heard: u8,
+    /// ANT broadcasts heard per kind since the start (the dev link's `info`: against about 4 Hz per sensor).
+    pub(crate) broadcasts: [u32; Kind::ALL.len()],
 }
 
 /// A paired sensor silent this long while a ride records is announced as lost.
@@ -240,6 +242,7 @@ impl Radio {
             shifts: 0,
             lost: 0,
             heard: 0,
+            broadcasts: [0; Kind::ALL.len()],
         }
     }
 
