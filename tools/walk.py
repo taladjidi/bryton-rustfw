@@ -57,7 +57,7 @@ READ_ONLY = ('WORKOUTS', 'HISTORY', 'PLACES', 'COURSES', 'MONTHS', 'NOTIFICATION
 CONFIRM = 0.3                  # s between the cursor reaching its row and the check that it is still there
 SETTLE = 0.5
 READY_CARD = 3.5               # s: the ready card stays 3 s (READY_BANNER_MS)
-BOUND_RE = r"walk's idle bound is ([0-9.]+) %"  # the sentence in docs/power.md
+BOUND_RE = r"walk's idle bound is ([0-9]+(?:\.[0-9]+)?) %"  # the sentence in docs/power.md
 BAND = (20, 24, 220, 50)       # the title band under the status strip (x0, y0, x1, y1), static text
 DRIFT = 0.25                   # fraction of the lit pixels that may differ (antialias, colours)
 FAULT = '0x580040c4'
@@ -358,14 +358,12 @@ def main():
                     if refused:
                         break
                 press(s, k)
+                if i == 0 and k == 'start' and e['name'].split('/')[0].endswith('RIDE MENU'):
+                    # the new ride's READY CHECK card (app/start_cues.rs) swallows keys for 3 s; no sensor answers at the desk
+                    time.sleep(READY_CARD)
                 if i in checks:
                     sim = sim_bmp(by_name[checks[i]]['n']) if checks[i] in by_name else None
                     ok = sim is not None and same_title(png_image(dev.shot(s)), sim)
-                    if not ok and sim is not None and READY_CARD:
-                        # a new ride's READY CHECK / START REMINDER card (app/start_cues.rs) covers the title for 3 s
-                        # and no sensor answers at the desk; Start on it would only skip it, so wait it out
-                        time.sleep(READY_CARD)
-                        ok = same_title(png_image(dev.shot(s)), sim)
                     if not ok:
                         aborted = f'after key {i} ({k}) the screen is not {checks[i]}'
                         break
@@ -419,11 +417,12 @@ def main():
     assert sum(outcomes.values()) == len(entries)
     write_summary(rows, out)
     bound = idle_bound((ROOT / 'docs' / 'power.md').read_text())
-    over = bound is not None and awake_pct > bound and not a.no_bound
-    if over:
+    if bound is None and not a.no_bound:
+        problem = problem or 'idle bound sentence not found in docs/power.md'
+    if bound is not None and awake_pct > bound and not a.no_bound:
         problem = problem or f'idle awake share {awake_pct:.2f} % is over the bound {bound} % (docs/power.md)'
     with open(out / 'summary.txt', 'a') as f:
-        f.write(f'idle awake {awake_pct:.2f} % (bound {bound} %)\n')
+        f.write(f'idle awake {awake_pct:.2f} % (' + ('bound skipped' if a.no_bound else f'bound {bound} %') + ')\n')
     for n, name, o, r in rows:
         print(f'  {n:03} {o} {name}' + (f': {r}' if r else ''))
     print(f'total {len(rows)} paths: ' + ', '.join(f'{k} {v}' for k, v in outcomes.items()))
@@ -468,6 +467,7 @@ def selftest():
     f = Fake(['A', 'B', 'C', 'D'])
     assert nav(f, st('C', 1)) is None  # counts and index may differ from the sim's: the label decides
     assert idle_bound("x. The walk's idle bound is 1.7 % of 20 s.") == 1.7 and idle_bound('none') is None
+    assert idle_bound("walk's idle bound is . %") is None and idle_bound("walk's idle bound is 1.7.2 %") is None
     f = Fake(['A', 'B', 'FORGET SENSOR'])
     assert nav(f, st('FORGET SENSOR', 2, 3)) == ('refused', 'row FORGET SENSOR has FORGET')
     f = Fake(['A'], title='MENU')
