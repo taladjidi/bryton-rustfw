@@ -36,6 +36,9 @@ pub(crate) struct ProfileShown {
     /// The climb's profile (the CLIMB page): `start` and `span` are the climb's (or the live segment's: `id` is
     /// 3 and its id), `id` is 1 (road ahead) or 2 (course).
     climb: bool,
+    /// Named points known on the course, and the number of the next one (1-based, 0: none): the markers and the
+    /// title change with them.
+    pois: (u8, u8),
 }
 
 /// What the workout graph shows: the workout (its file, None: none), the zones' FTP and max heart rate, the rider's
@@ -320,7 +323,7 @@ impl App {
     /// What a profile `cols` wide shows now: from the eighth of the course the rider is in to the end (so it is
     /// redrawn whole eight times over a course, and otherwise moves by a column now and then).
     pub(crate) fn profile_now(&self, cols: u32, climb: bool) -> ProfileShown {
-        let none = ProfileShown { id: 0, start: 0, span: 0, rider: None, ghost: None, climb };
+        let none = ProfileShown { id: 0, start: 0, span: 0, rider: None, ghost: None, climb, pois: (0, 0) };
         if climb {
             let Some(n) = self.climb_now() else { return none };
             let (start, span) = (n.climb.start_m, n.climb.len_m.max(1));
@@ -332,7 +335,7 @@ impl App {
             let col = |d: u32| (u64::from(d) * u64::from(cols) / u64::from(span)) as u32;
             let ghost = n.ghost.filter(|&g| g < span).map(|g| col(g).min(cols.max(1) - 1));
             let id = n.seg.map_or(1 + u32::from(n.course), |s| 3u32.saturating_add(s));
-            return ProfileShown { id, start, span, rider, ghost, climb };
+            return ProfileShown { id, start, span, rider, ghost, climb, pois: (0, 0) };
         }
         let Some(c) = self.courses.as_deref().filter(|c| c.on.is_some() && c.course.has_alt()) else { return none };
         let len = c.course.len_m();
@@ -342,7 +345,9 @@ impl App {
         let span = (len - start).max(1);
         let rider =
             at.map(|d| ((u64::from(d - start) * u64::from(cols) / u64::from(span)) as u32).min(cols.max(1) - 1));
-        ProfileShown { id: c.course.id(), start, span, rider, ghost: None, climb }
+        let next = self.pois.as_deref().and_then(|p| p.next(at.unwrap_or(0))).map_or(0, |(i, _)| i + 1);
+        let pois = (self.poi_list().len() as u8, next as u8);
+        ProfileShown { id: c.course.id(), start, span, rider, ghost: None, climb, pois }
     }
 
     /// Profile column `k` of `p` in a plot `a`: its bar's height and colour (the rider's column white, the ridden
@@ -354,6 +359,13 @@ impl App {
         let Some(c) = self.courses.as_deref().filter(|_| p.id != 0) else { return (0, ui::BLACK) };
         if p.rider == Some(k) {
             return (a.3, ui::WHITE);
+        }
+        // a named point (peak, col): a cyan mark two columns wide, full height
+        let col = |along: u32| (u64::from(along - p.start) * u64::from(a.2) / u64::from(p.span.max(1))) as u32;
+        let marked =
+            |q: &named::Poi| q.along_m >= p.start && q.along_m < p.start + p.span && k.wrapping_sub(col(q.along_m)) < 2;
+        if self.poi_list().iter().any(marked) {
+            return (a.3, ui::CYAN);
         }
         let Some((alt, grade, climb)) = c.course.column(p.start, p.span, a.2, k) else { return (0, ui::BLACK) };
         // the whole course's range, 30 m at least, so a flat course stays flat
@@ -436,7 +448,19 @@ impl App {
     pub(crate) fn draw_profile(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), p: ProfileShown) {
         let a = if p.climb { ui::climb_area(bx) } else { ui::plot_area(bx) };
         if !p.climb {
-            ui::draw_plot_title(c, bx, if p.id == 0 { "NO COURSE" } else { "PROFILE" });
+            let mut title = text::Line::<40>::new();
+            let next = self.poi_list().get(usize::from(p.pois.1).checked_sub(1).unwrap_or(usize::MAX));
+            match (p.id, next) {
+                (0, _) => title.push_str("NO COURSE"),
+                (_, Some(q)) => {
+                    title.push_str(q.name());
+                    title.push_str(" ");
+                    title.push_u32(u32::from(q.ele_m));
+                    title.push_str("M");
+                }
+                _ => title.push_str("PROFILE"),
+            }
+            ui::draw_plot_title(c, bx, title.as_str());
         }
         ui::draw_graph(c, a, &|k| self.profile_bar(p, a, k));
         if p.climb {

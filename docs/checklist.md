@@ -114,7 +114,7 @@ Others
 - [~] Gears, gear ratio, gear combo, Di2 battery (stock, Garmin, Wahoo, Karoo): sim; gear fields and shift counts, not seen on the unit
 - [ ] E-bike: battery, range, assist mode and level (stock, Garmin, Wahoo, Karoo)
 - [x] Workout fields: target power, cadence, heart rate, time left, interval count (stock, all): sim
-- [~] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all): sim; distance to go, off course, the climb, ascent left; no turns or POIs
+- [~] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all): sim; distance to go, off course, the climb, ascent left, the next peak or col (NEXT POI); no turns
 - [ ] Road surface type (Garmin)
 - [x] Battery of the unit and of each sensor as fields (Garmin, Wahoo): sim; the Di2 and the power meter and HR strap (ANT+ status), not seen on the unit
 - [ ] Component wear: the bike chosen per ride, kilometres added per part (Garmin)
@@ -201,7 +201,7 @@ Others
 - [ ] Round trip / Surprise Me routes (stock, Garmin)
 - [ ] Popularity routing (Garmin, Karoo)
 - [ ] Course creator on the unit (Garmin)
-- [ ] POIs and peaks along a course (stock, Garmin)
+- [~] POIs and peaks along a course (stock, Garmin): sim; peaks, volcanoes and cols with their elevation from stock's cached tiles (NEXT POI field, marks and the next name on the profile), where the cache has them; no water points or shops; not seen on the unit
 - [ ] Live segments (Strava) (stock, Garmin, Wahoo, Karoo) (ours: page, banners, result card, `sim`; the effort is not saved yet)
 - [ ] Segments from the rider's own rides (best sections ridden twice), no Strava (ours)
 - [ ] Road closures and hazards on the route (Garmin)

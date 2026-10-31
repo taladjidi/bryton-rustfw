@@ -235,6 +235,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
   restores from under the arrow and the track; IGN's raster tiles first where the owner's packs have them.
+- `src/storage/named.rs`: the named points along a followed course (peaks, volcanoes, saddles with elevation) from stock's cached
+  tiles' layer 13, a bounded scan a step a pass; the `Pois` list lives in `Courses`. `src/sim/poi_tests.rs`: the synthetic tiles, the
+  scan and its fuzz.
 - `src/storage/ign.rs`: the IGN map packs (`\Rustfw\Maps\IGN<z>_<bx>_<by>.PAK`, the format in its module doc),
   made on the computer by `tools/ign_pack.py` (fetch, pack, the synthetic `fixture` in `test-data/ign`); the LZ4
   block decoder. Real IGN tiles never enter the repository.

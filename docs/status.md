@@ -6,6 +6,16 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **Peaks and cols along a course (storage/named.rs, NEXT POI, PROFILE marks)**: sim only, on synthetic tiles. The tile
+  format is inferred: the name, then `ele` as a u64 of metres after the point, was read off a real cache on the
+  computer (the stock document says only "8 bytes"), not on the unit. Still to see: a followed course through a region stock's cache holds (zoom 12, 11 or 9 under `\Map\Data\Temp`),
+  its cols and summits found within 100 m, the marks on the profile, NEXT POI counting down, the scan's cost on the
+  main loop (not measured: one H read of 500 bytes and at most 8 P reads a pass by construction; `tools/dev.py info` on the unit). Missing for more: stock caches only the tiles its screens showed,
+  so a course through a region it never drew has no names; filling the cache, or reading the names from the map
+  files' vector tiles (`\Map\MapData`, gzip MVT, `route.rs` reads the same files), would be a new reader. Water points
+  and shops: stock's `poi` classes (4.5) have no drinking water, and `tools/map_pack.py` does not exist yet (our own
+  OpenStreetMap packs, phase 5): it would need to write `natural=peak|saddle`, `mountain_pass` and
+  `amenity=drinking_water` with names and elevation into a pack the unit reads.
 - **CLIMBS DONE (app/climbs_done.rs)**: sim only. Still to see: a real climb of a followed course or the road ahead
   listed at its top with a plausible time and VAM, the banner, the average power and heart rate, the list empty after
   a reset-resume.

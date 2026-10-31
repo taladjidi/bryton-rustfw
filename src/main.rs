@@ -1716,6 +1716,14 @@ fn make_courses() -> &'static mut bryton_rustfw::storage::course_file::Courses {
     COURSES.init_with(bryton_rustfw::storage::course_file::Courses::new)
 }
 
+/// The named points along a course (storage/named.rs: about 2 KB), a const cell of all zeros in AXI SRAM, never built
+/// on the stack (it would grow `make_courses`' frame, which has no room: tools/stack_check.py).
+fn make_pois() -> &'static mut bryton_rustfw::named::Pois {
+    static POIS: static_cell::ConstStaticCell<bryton_rustfw::named::Pois> =
+        static_cell::ConstStaticCell::new(bryton_rustfw::named::Pois::new());
+    POIS.take()
+}
+
 /// The road ahead (climbs_ahead.rs `Ahead`: the routing graph, the trace, about 110 KB), in AXI SRAM (link.x
 /// `.axibss`). A const cell of all zeros (no `Option`, no non-zero start: the compiler keeps it in `.bss`), never
 /// built on the stack.
@@ -1830,6 +1838,7 @@ fn main() -> ! {
         }
     }
     app.set_course_memory(make_courses());
+    app.set_poi_memory(make_pois());
     app.set_segment_memory(make_segments());
     app.set_scan_cache(make_scan_cache());
     app.set_threshold_memory(make_thresholds());

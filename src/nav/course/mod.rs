@@ -682,6 +682,40 @@ impl Course {
         Some(((-angle_deg((0, 1), (dx, dy))).rem_euclid(360) as u32, m))
     }
 
+    /// Where (`lat`, `lon`) (degrees x 1e-7) is on this course's plane, metres east and north of its first point.
+    pub fn plane_of(&self, lat: i32, lon: i32) -> Option<(i32, i32)> {
+        self.origin.map(|o| project(o, lat, lon))
+    }
+
+    /// The degrees x 1e-7 (latitude, longitude) of a point of this course's plane.
+    pub fn lat_lon(&self, p: (i32, i32)) -> Option<(i32, i32)> {
+        let (lat, lon, cos) = self.origin?;
+        let dlat = i64::from(p.1) * 1_000_000 / 11_132;
+        let dlon = i64::from(p.0) * 1_000_000 * 65_536 / (11_132 * cos.max(1));
+        Some((
+            (i64::from(lat) + dlat).clamp(-900_000_000, 900_000_000) as i32,
+            (i64::from(lon) + dlon).clamp(-1_800_000_000, 1_800_000_000) as i32,
+        ))
+    }
+
+    /// How near the course passes `p` (plane metres) if within `max_m`: its distance and the distance along the
+    /// course there (the first pass, on a lap course).
+    pub fn near(&self, p: (i32, i32), max_m: u32) -> Option<(u32, u32)> {
+        let segs = self.len.saturating_sub(1);
+        let mut best: Option<(u32, u32)> = None;
+        for (c, b) in self.boxes.iter().take(self.n_boxes).enumerate() {
+            if box_m(b, p) > u64::from(max_m) {
+                continue;
+            }
+            let r = (c * CHUNK).min(segs)..((c + 1) * CHUNK).min(segs);
+            let hit = self.nearest(p, &[r], 0, &mut 0).filter(|h| h.off_m <= max_m);
+            if let Some(h) = hit.filter(|h| best.is_none_or(|(o, _)| h.off_m < o)) {
+                best = Some((h.off_m, h.along_m));
+            }
+        }
+        best
+    }
+
     /// The points kept, metres east and north of the first.
     pub fn points(&self) -> &[(i32, i32)] {
         self.xy.get(..self.len).unwrap_or(&[])

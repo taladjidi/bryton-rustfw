@@ -457,7 +457,13 @@ impl App {
                 push_duration(&mut l, self.phone.now.elapsed(), false);
                 return l;
             }
-            Field::ToGo | Field::OffCourse | Field::Climb | Field::ClimbGain | Field::UpToGo | Field::NextTurn => {
+            Field::ToGo
+            | Field::OffCourse
+            | Field::Climb
+            | Field::ClimbGain
+            | Field::UpToGo
+            | Field::NextTurn
+            | Field::NextPoi => {
                 return self.course_text(f);
             }
             Field::Gear => {
@@ -803,7 +809,8 @@ mod tests {
         assert_eq!([Field::from_index(108), Field::from_index(109)], [Field::TorqueEff, Field::PedalSmooth]);
         assert_eq!([Field::from_index(109), Field::from_index(110)], [Field::PedalSmooth, Field::BattHrs]);
         assert_eq!([Field::from_index(111), Field::from_index(113)], [Field::Ctl, Field::Tsb]);
-        assert_eq!(Field::ALL.len(), 117);
+        assert_eq!(Field::from_index(117), Field::NextPoi);
+        assert_eq!(Field::ALL.len(), 118);
         assert_eq!([Field::from_index(114), Field::from_index(116)], [Field::PowerRing, Field::CadBar]);
     }
 
