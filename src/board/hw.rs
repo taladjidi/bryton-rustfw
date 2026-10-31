@@ -59,8 +59,8 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 /// A fault found by the firmware itself, marked and reset as a CPU fault is: the stack canary overwritten
-/// (main.rs `stack_check`, [`Kind::Stack`]), or a static cell built twice (main.rs `once`, [`Kind::Panic`] with its
-/// line), which marks as a panic would without linking `core::panicking`. No `unsafe`: [`mark`] is rd / wr.
+/// (main.rs `stack_check`, [`Kind::Stack`]), or a static cell built twice (main.rs `once`, [`Kind::Cell`] with its
+/// line), without linking `core::panicking`. No `unsafe`: [`mark`] is rd / wr.
 pub fn fault(kind: Kind, detail: u32) -> ! {
     mark(kind, detail)
 }

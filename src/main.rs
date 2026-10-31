@@ -1707,13 +1707,13 @@ fn checkpoint(n: u32) {
 }
 
 /// A static cell's value, or, for a second init or take (impossible by construction: each `make_*` runs once, from
-/// main), a fault marked as a panic at the caller's line and a reset (hw.rs `fault`), so no `core::panicking` call is
-/// linked as `init_with` / `take` would.
+/// main), a fault marked as a cell built twice at the caller's line ([`Kind::Cell`]) and a reset (hw.rs `fault`), so
+/// no `core::panicking` call is linked as `init_with` / `take` would.
 #[track_caller]
 fn once<T>(cell: Option<&'static mut T>) -> &'static mut T {
     match cell {
         Some(v) => v,
-        None => hw::fault(Kind::Panic, core::panic::Location::caller().line()), // not in a closure: the caller's line
+        None => hw::fault(Kind::Cell, core::panic::Location::caller().line()), // not in a closure: the caller's line
     }
 }
 

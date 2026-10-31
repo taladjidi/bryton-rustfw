@@ -33,8 +33,9 @@ KINDS = [('panic_bounds_check', 'bounds'), ('core::slice::index::slice_', 'bound
          ('unwrap_failed', 'unwrap'), ('expect_failed', 'unwrap'),
          ('div_by_zero', 'overflow'), ('rem_by_zero', 'overflow'), ('_overflow', 'overflow'),
          ('core::panicking::', 'explicit'), ('rust_begin_unwind', 'explicit'), ('board::hw::panic', 'explicit')]
-# enclosing functions whose sites are the panic handler itself (hw.rs: `panic`, `default_handler`, `fault`, `mark`)
-HANDLER = ('rust_begin_unwind', 'board::hw::panic', 'default_handler', 'board::hw::fault', 'board::hw::mark')
+# the panic handler itself (hw.rs: `panic`, `default_handler`, `fault`, `mark`): the enclosing function's last path
+# segment, its hash dropped, in hw.rs or the unwind symbol
+HANDLER = {'rust_begin_unwind', 'panic', 'default_handler', 'fault', 'mark'}
 BRANCH = re.compile(r'b(?:lx?)?(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)?(?:\.[wn])?')
 
 
@@ -109,10 +110,16 @@ def denied():
     return out
 
 
+def handler(fn):
+    """True when demangled function `fn` is one of HANDLER: `__rustc::rust_begin_unwind`, or hw.rs's own."""
+    path = re.sub(r'::h[0-9a-f]{16}$', '', fn).split('::')
+    return path[-1] in HANDLER and (path[-1] == 'rust_begin_unwind' or path[-3:-1] == ['board', 'hw'])
+
+
 def report(found, deny):
     """Text report: by file, every site, the summary; and the same as a dict. The panic handler's own sites
     (HANDLER) are only counted, on their own line."""
-    own = [s for s in found if any(h in s[1] for h in HANDLER)]
+    own = [s for s in found if handler(s[1])]
     found = [s for s in found if s not in own]
     rows = sorted((loc.rsplit(':', 1)[0], int(loc.rsplit(':', 1)[1]) if ':' in loc else 0, k, fn) for k, fn, loc in found)
     by = collections.defaultdict(collections.Counter)
@@ -155,6 +162,8 @@ def selftest():
     txt, js = report(got[:2] + [('explicit', '__rustc::rust_begin_unwind', 'src/board/hw.rs:74')], [])
     assert js['total'] == 2 and js['handler'] == 1 and 'hw.rs' not in txt, txt
     assert 'panic handler: 1 sites, excluded' in txt, txt
+    assert handler('bryton_rustfw::board::hw::fault::h818e159d6185cfe3') and not handler('core::panicking::panic::h0')
+    assert not handler('bryton_rustfw::app::faultlog::mark_fault') and not handler('x::board::hw::faultish::h1')
     print('panics.py selftest ok')
 
 
