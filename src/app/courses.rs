@@ -70,6 +70,35 @@ impl App {
         self.say("COURSE OFF");
     }
 
+    /// REVERSE COURSE: the course followed the other way (the rider is placed again by the next fix).
+    pub(crate) fn reverse_course(&mut self) {
+        let Some(c) = self.courses.as_deref_mut().filter(|c| c.on.is_some()) else { return };
+        c.course.reverse();
+        c.at = course::Tracker::new();
+        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
+        self.say("COURSE REVERSED");
+    }
+
+    /// BACK TO START: the ride's own track (the map's breadcrumb, already thinned) followed back as a course; it
+    /// replaces the course followed. The track is the ride's own (never stock's files).
+    #[inline(never)]
+    pub(crate) fn back_to_start(&mut self) {
+        let (Some(c), Some(o)) = (self.courses.as_deref_mut(), self.track.origin()) else { return };
+        if self.track.points().len() < 2 {
+            return self.say("NO TRACK YET");
+        }
+        c.cancel_load(); // a course still being read would be written over the way back
+        c.on = None;
+        c.course.from_plane(o, self.track.points().iter().rev().copied());
+        if c.course.points().len() < 2 {
+            return self.say("NO TRACK YET");
+        }
+        // no file behind it: a cluster no file has
+        (c.on, c.at) = (Some(fat::File { cluster: 0, size: 0, dir: false }), course::Tracker::new());
+        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
+        self.say("BACK TO START");
+    }
+
     /// Bytes of course files read per pass: as much as the scan of stock's rides while no ride runs (about 40 ms
     /// on the unit), ride or not, since someone waits for it.
     const COURSE_BYTES: u32 = Self::SCAN_IDLE;
@@ -153,25 +182,18 @@ impl App {
         let d = at.along_m;
         let climb = c.climb_at(d).and_then(|(k, on)| Some((*c.climbs().get(k)?, on)));
         match (f, climb) {
+            // not on the course yet: the way to its start, a compass point and the distance
+            (Field::NextTurn, _) if c.to_start(at).is_some() => {
+                let (deg, m) = c.to_start(at).unwrap_or((0, 0));
+                l.push_str(
+                    ["N", "NE", "E", "SE", "S", "SW", "W", "NW"].get((deg as usize + 22) / 45 % 8).unwrap_or(&"N"),
+                );
+                push_dist(&mut l, m);
+            }
             (Field::NextTurn, _) => match c.next_cue(at) {
                 Some((cue, m)) => {
                     l.push_str(cue.turn.glyph());
-                    match m {
-                        0..1000 => {
-                            l.push_u32(m / 10 * 10);
-                            l.push_str("M");
-                        }
-                        1000..100_000 => {
-                            l.push_u32(m / 1000);
-                            l.push_str(".");
-                            l.push_u32(m / 100 % 10);
-                            l.push_str("K");
-                        }
-                        _ => {
-                            l.push_u32((m / 1000).min(9999));
-                            l.push_str("K");
-                        }
-                    }
+                    push_dist(&mut l, m);
                 }
                 // no turn left before the end: said, not "--" as off course
                 None if c.cues_done(at) => l.push_str("END"),
@@ -236,5 +258,25 @@ impl App {
             None => value.push_str("--"),
         }
         Some(if c.on == Some(e.file) { ui::GREEN } else { ui::WHITE })
+    }
+}
+
+/// A distance as the next turn's field shows it: 10 m steps under a kilometre, then km.
+fn push_dist(l: &mut Line<8>, m: u32) {
+    match m {
+        0..1000 => {
+            l.push_u32(m / 10 * 10);
+            l.push_str("M");
+        }
+        1000..100_000 => {
+            l.push_u32(m / 1000);
+            l.push_str(".");
+            l.push_u32(m / 100 % 10);
+            l.push_str("K");
+        }
+        _ => {
+            l.push_u32((m / 1000).min(9999));
+            l.push_str("K");
+        }
     }
 }

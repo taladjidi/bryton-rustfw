@@ -685,7 +685,7 @@ fn course_files() {
     let files = paths.map(|p| crate::fat::tests::read_all(&mut fat, &mut d, p).unwrap());
     let mut c = std::boxed::Box::new(Course::new());
     // what was reached: cues read from files, cues kept, cues said
-    let (read_cues, mut kept, mut said) = (core::cell::Cell::new(0u32), 0u32, 0u32);
+    let (read_cues, mut kept, mut said, mut reversed) = (core::cell::Cell::new(0u32), 0u32, 0u32, 0u32);
     // the file's points as read (degrees x 1e-7), to ride along
     let mut way: Vec<(i32, i32)> = Vec::new();
     let mut read = |f: &[u8], gpx: bool, c: &mut Course, way: &mut Vec<(i32, i32)>| {
@@ -723,7 +723,18 @@ fn course_files() {
     };
     let mut noise = bytes(21, 1 << 24);
     let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
-    let mut exercise = |c: &Course, next: &mut dyn FnMut() -> u32, way: &[(i32, i32)]| {
+    let mut exercise = |c: &mut Course, next: &mut dyn FnMut() -> u32, way: &[(i32, i32)]| {
+        // reversed twice: the length kept, the ends swapped, cues in order, then the first way again
+        let n = c.points().len();
+        if n >= 2 {
+            let (len, first, last) = (c.len_m(), c.points()[0], c.points()[n - 1]);
+            c.reverse();
+            assert_eq!((c.points().len(), c.points()[0], c.points()[n - 1], c.len_m()), (n, last, first, len));
+            assert!(c.cues().windows(2).all(|w| w[0].at_m <= w[1].at_m));
+            c.reverse();
+            assert_eq!((c.points().len(), c.points()[0], c.points()[n - 1], c.len_m()), (n, first, last, len));
+            reversed += 1;
+        }
         let mut t = Tracker::new();
         for &(lat, lon) in way.iter().step_by(2) {
             if let Some(Event::Cue(..)) = c.follow(&mut t, lat, lon) {
@@ -764,7 +775,7 @@ fn course_files() {
                 bad[n..].copy_from_slice(&crc.to_le_bytes());
             }
             read(&bad, gpx, &mut c, &mut way);
-            exercise(&c, &mut next, &way);
+            exercise(&mut c, &mut next, &way);
             read(&bad[..bad.len() / 3], gpx, &mut c, &mut way);
         }
     }
@@ -792,11 +803,16 @@ fn course_files() {
             text.extend_from_slice(MARKS[next() as usize % MARKS.len()].as_bytes());
         }
         read(&text, true, &mut c, &mut way);
-        exercise(&c, &mut next, &way);
+        exercise(&mut c, &mut next, &way);
     }
     let gpx = read_cues.get() - from_files;
-    std::println!("course fuzz: {from_files} cues read from the files, {gpx} from GPX marks, {kept} kept, {said} said");
-    assert!(from_files > 1000 && gpx > 500 && kept > 1000 && said > 100, "{from_files}, {gpx}, {kept}, {said}");
+    std::println!(
+        "course fuzz: {from_files} cues read from the files, {gpx} from GPX marks, {kept} kept, {said} said, {reversed} reversed twice"
+    );
+    assert!(
+        from_files > 1000 && gpx > 500 && kept > 1000 && said > 100 && reversed > 100,
+        "{from_files}, {gpx}, {kept}, {said}, {reversed}"
+    );
 }
 
 /// Random shapes into the turn finder (course/cues.rs): random walks of random steps (1 to 300 m, and the same

@@ -47,7 +47,16 @@ pub(crate) struct WorkoutShown {
     pub(crate) rider: Option<u32>,
 }
 
-/// The columns to redraw when a rider's column moves from `old` to `new` (both, and those between: done or not).
+/// The columns to redraw when the rider's column moves from `old` to `new` (both, and those between: done or not;
+/// from or to none: from the first column, which the marker's edge may have touched).
+fn moved_rider(old: Option<u32>, new: Option<u32>) -> core::ops::Range<u32> {
+    match (old, new) {
+        (Some(x), None) | (None, Some(x)) => 0..x.saturating_add(1),
+        _ => moved(old, new),
+    }
+}
+
+/// The columns to redraw when a column moves from `old` to `new` (both, and those between: done or not).
 fn moved(old: Option<u32>, new: Option<u32>) -> core::ops::Range<u32> {
     match (old, new) {
         (Some(x), Some(y)) => x.min(y)..x.max(y).saturating_add(1),
@@ -446,7 +455,7 @@ impl App {
             self.draw_profile(&mut p, bx, now);
         } else if (now.rider, now.ghost) != (old.rider, old.ghost) {
             // the columns of the rider's move and of the target's (its mark is two wide), as one run
-            let (r, g) = (moved(old.rider, now.rider), moved(old.ghost, now.ghost));
+            let (r, g) = (moved_rider(old.rider, now.rider), moved(old.ghost, now.ghost));
             let g = g.start..g.end.saturating_add(u32::from(!g.is_empty()));
             for k in r.clone().chain(g.clone()).filter(|&k| k < a.2) {
                 ui::draw_graph_column(&mut p, a, k, self.profile_bar(old, a, k), self.profile_bar(now, a, k));
@@ -501,7 +510,7 @@ impl App {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), a.1 - bx.1, ui::BLACK);
             self.draw_workout_graph(&mut p, bx, now);
         } else if now.rider != old.rider {
-            for k in moved(old.rider, now.rider).filter(|&k| k < a.2) {
+            for k in moved_rider(old.rider, now.rider).filter(|&k| k < a.2) {
                 ui::draw_graph_column(&mut p, a, k, self.workout_bar(old, a, k), self.workout_bar(now, a, k));
             }
         }

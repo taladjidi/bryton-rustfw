@@ -479,6 +479,17 @@ impl Course {
         if !self.cues().iter().any(|c| c.turn.is_turn()) {
             self.find_turns();
         }
+        self.sort_cues();
+    }
+
+    /// The cues dropped and the shape's turns found again, in order ([`Course::reverse`]).
+    pub(super) fn recue(&mut self) {
+        self.cues = Cues::new();
+        self.find_turns();
+        self.sort_cues();
+    }
+
+    fn sort_cues(&mut self) {
         let n = self.cues.n.min(CUES);
         // in order: an insertion sort (the file's cues come nearly in order; the shape's turns are, after them)
         for i in 1..n {

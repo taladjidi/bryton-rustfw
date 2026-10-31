@@ -186,8 +186,9 @@ Others
 - [~] Contour lines, POIs, street names on the map (Garmin, Wahoo, Karoo): in IGN's tiles, France only
 - [x] Follow a course (FIT or GPX): line on the map, distance to go (stock, all): sim
 - [~] Off-course alert, back on track (stock, Wahoo, all): sim; the alert and the distance off, no way back drawn
-- [ ] Navigate to the start of a course first (stock)
-- [ ] Reverse a course (stock, Garmin)
+- [~] Navigate to the start of a course first (stock): sim; a straight line (compass point and distance), no routing
+- [x] Reverse a course (stock, Garmin): sim
+- [x] The way back: the ride's own track followed back as a course (Garmin Back to Start): sim
 - [x] Turn-by-turn cues (stock, all): sim
 - [ ] Voice turn-by-turn on a speaker (Garmin, Wahoo, Karoo)
 - [ ] Rerouting on the unit (stock, all)
