@@ -5449,8 +5449,11 @@ fn places_files() {
             for k in 0..n.min(MAX) {
                 let e = &mut s[12 + k * ENTRY..12 + (k + 1) * ENTRY];
                 let lat = if r().is_multiple_of(40) { r() as i32 } else { (r() % 1_800_000_001) as i32 - 900_000_000 };
-                let lon =
-                    if r().is_multiple_of(40) { r() as i32 } else { (i64::from(r() % 3_600_000_001) - 1_800_000_000) as i32 };
+                let lon = if r().is_multiple_of(40) {
+                    r() as i32
+                } else {
+                    (i64::from(r() % 3_600_000_001) - 1_800_000_000) as i32
+                };
                 let alt: i16 = match r() % 8 {
                     0 => i16::MIN,
                     1 => r() as i16,
