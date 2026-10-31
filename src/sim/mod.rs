@@ -1563,6 +1563,7 @@ mod menu_tests;
 mod perf_tests;
 #[cfg(test)]
 mod pmc_tests;
+mod poi_tests;
 #[cfg(test)]
 mod ride_tests;
 #[cfg(test)]

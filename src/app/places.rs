@@ -23,6 +23,10 @@ pub const PLACES_FILE: &str = "places.bin";
 /// Reads tried before giving up until a menu asks again.
 const LOAD_TRIES: u8 = 3;
 
+/// After [`LOAD_TRIES`] failed, one more read this often, s (a card that answers again: the places come back without a
+/// restart, and with them the calibration at a place).
+const RETRY_S: u8 = 60;
+
 /// Stopped: under 2 km/h (mm/s).
 const STOPPED_MM_S: u32 = 556;
 
@@ -40,6 +44,8 @@ pub(crate) struct PlaceStore {
     /// The file was read (or is not there).
     pub(crate) loaded: bool,
     tries: u8,
+    /// Seconds since the reads gave up: one more read a minute ([`RETRY_S`]).
+    idle_s: u8,
     /// A change waits to be written.
     pub(crate) dirty: bool,
     /// The FAT copies are known equal (else compared before the write, from `sync`).
@@ -58,6 +64,7 @@ impl PlaceStore {
             list: places::Places::new(),
             loaded: false,
             tries: 0,
+            idle_s: 0,
             dirty: false,
             sound: false,
             sync: 0,
@@ -147,7 +154,8 @@ impl App {
             return self.say("PLACES FULL");
         };
         self.places.dirty = self.card_writable;
-        self.places.at = u8::try_from(k).ok(); // its altitude is the barometer's now: nothing to calibrate
+        // its altitude the barometer's: nothing to calibrate; else (the receiver's, or none) the barometer takes it here
+        self.places.at = baro.and(u8::try_from(k).ok());
         let mut l = Line::<16>::new();
         if let Some(place) = self.places.list.get(k) {
             place.name(&mut l);
@@ -167,6 +175,13 @@ impl App {
 
     /// Once a second: stopped at a place with an altitude, the barometer reads it (module doc).
     pub(crate) fn places_second(&mut self) {
+        let st = &mut self.places;
+        if !st.loaded && st.tries >= LOAD_TRIES {
+            st.idle_s = st.idle_s.saturating_add(1);
+            if st.idle_s >= RETRY_S {
+                (st.tries, st.idle_s) = (LOAD_TRIES - 1, 0); // step_places reads once more
+            }
+        }
         let Some(p) = self.gps.pvt.filter(|p| p.good() && p.h_acc_mm <= H_ACC_MM) else { return };
         match self.places.list.nearest_with_alt(p.lat, p.lon) {
             Some((k, d)) if d <= places::NEAR_M => {

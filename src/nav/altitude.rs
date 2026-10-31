@@ -56,6 +56,8 @@
 //!
 //! **Kept** in `\Rustfw\altcal.bin` (one sector, a CRC; app/altitude.rs), written between rides only. A damaged or
 //! missing file means "not calibrated", which the next ride's start repairs by itself: nothing is lost with it.
+//! A calibration at a saved place is [`By::Place`] (5) in the file: an older build reads it as no calibration (its
+//! `from_sector` refuses an unknown kind), which its next ride's start makes again from the receiver.
 
 /// The standard sea-level pressure, 1013.25 hPa, in the chip's unit.
 pub const P_STD: u32 = 4_150_272;

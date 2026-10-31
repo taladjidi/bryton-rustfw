@@ -55,6 +55,8 @@ pub const GREY: u16 = 0x8410;
 pub const DARK: u16 = 0x39e7;
 /// RGB565 yellow.
 pub const YELLOW: u16 = 0xffe0;
+/// RGB565 cyan (the named points' marks on the course profile: the grades use yellow and green).
+pub const CYAN: u16 = 0x07ff;
 
 /// Text on the accent (a selected row, a banner, a button): black, one step off [`BLACK`] so the theme tells it from
 /// the background ([`Theme`]); DARK draws it as black.

@@ -769,6 +769,15 @@ copied over USB into `\Courses`, read only:
   said in the banner with its arrow 200 m before (or 20 s at the speed ridden, if farther) with a beep ("LEFT
   200 M"), and at the turn (32 m or 4 s) with two ("LEFT NOW"); nothing off course. Not read: the turns of
   Bryton's `voiceTrip.fit` (their values are not known), cue names (street names).
+- **Peaks and cols along the course (storage/named.rs; NEXT POI, the PROFILE's marks; sim, synthetic tiles):** once a
+  course is followed, a scan of a few passes reads the peaks, volcanoes and saddles (cols, passes) with their name and
+  elevation from stock's cached map tiles (`\Map\Data\Temp\Zoom12`, `11` and `9`, layer 13 `mountain_peak`: the zooms
+  the cache holds them at), keeps up to 32 within 100 m of the route (the tiles of the course's first 32 a zoom are looked at: about 100 km at zoom 12), in order along it, a name once. NEXT POI is the
+  distance to the next one ("390M", "1.2K"; "--" without one), and the PROFILE field marks each one with a cyan
+  two-pixel column and names the next one in its title ("COL DE TEST 1333M", upper case, accents dropped). Only
+  where stock's cache has the tiles (it caches what its map showed, so a region the owner browsed on stock or rode
+  with it); no names, no marks elsewhere. Not read: ordinary POIs (stock's `poi` layer has no water class and no
+  elevation) and `water_name` (lakes); IGN's tiles are pictures, with no names to read.
 - **Fields:** TO GO KM, NEXT TURN (the next cue's arrow and distance, "350M", "1.2K"; END past the last one;
   "--" off course), OFF CRS M
   (red while off course), CLIMB (on a climb what is left and the grade of the next

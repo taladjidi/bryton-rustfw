@@ -267,12 +267,15 @@ pub enum Field {
     HrRing,
     /// Cadence with a bar under it: full at 120 rpm.
     CadBar,
+    // named points along the course (storage/named.rs). Appended, as above.
+    /// The distance to the next peak or col on the course followed ("390M", "1.2K"); "--" without one.
+    NextPoi,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 117] = {
+    pub const ALL: [Field; 118] = {
         use Field::*;
         [
             Time,
@@ -392,6 +395,7 @@ impl Field {
             PowerRing,
             HrRing,
             CadBar,
+            NextPoi,
         ]
     };
 
@@ -520,6 +524,7 @@ impl Field {
             "WATTS",
             "HR",
             "RPM",
+            "NEXT POI",
         ];
         LABELS[self as usize]
     }
@@ -576,6 +581,7 @@ impl Field {
             "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
             "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT", "88888.8", "88888.8", "88888.8", "888.8",
             "888.8", "", "88:88", "88.8|KM", "888/888", "888/888", "8.8H", "888", "888", "-88", "8888", "888", "888",
+            "888M",
         ];
         WIDEST[self as usize]
     }
@@ -698,6 +704,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
                 SegHead,
                 ClimbTime,
                 ClimbLeft,
+                NextPoi,
             ],
         ),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm, Trip1, Trip2, Odo, Trip1Time, Trip2Time, Ctl, Atl, Tsb]),

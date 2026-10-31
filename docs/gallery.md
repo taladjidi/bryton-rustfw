@@ -60,8 +60,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|:-:|
 | ![Course](img/course.png) | ![Course profile](img/course-profile.png) | ![Course fields](img/course-fields.png) |
 | A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead, the climb pacer's TOP field (sim) |
-| ![Courses](img/courses.png) | ![CLIMB page](img/climb-page.png) |  |
-| Courses on the card: stock's routes, FIT, GPX (sim) | The CLIMB page, opened when the climb starts: the climb's title (length, grade) and the gain left in metres, its profile by grade with the part done dark and the rider white, the climb coach's gauge, the elapsed time and the distance left (sim, made-up road) |  |
+| ![Courses](img/courses.png) | ![CLIMB page](img/climb-page.png) | ![Peaks along the course](img/course-poi.png) |
+| Courses on the card: stock's routes, FIT, GPX (sim) | The CLIMB page, opened when the climb starts: the climb's title (length, grade) and the gain left in metres, its profile by grade with the part done dark and the rider white, the climb coach's gauge, the elapsed time and the distance left (sim, made-up road) | The profile names the next peak or col (title: name and elevation) and marks each one with a cyan column; NEXT POI is the distance to it (sim, made-up names on synthetic tiles) |
 
 ## Workouts and training
 

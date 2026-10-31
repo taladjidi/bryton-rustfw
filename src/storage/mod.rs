@@ -11,6 +11,7 @@ pub mod history;
 pub mod ign;
 pub mod inflate;
 pub mod ini;
+pub mod named;
 pub mod recorder;
 pub mod route;
 pub mod screenshot;
