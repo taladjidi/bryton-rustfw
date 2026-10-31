@@ -43,10 +43,10 @@ const CFSR: u32 = 0xe000_ed28;
 /// A fault or a panic: marked in the RTC backup domain, then a system reset (the firmware starts again, and a ride
 /// will resume from its checkpoint: AGENTS.md, the golden rule). Parked instead after 3 in a row without a minute of
 /// running between, so a fault at start-up does not loop for ever. Interrupts are masked (PRIMASK), so this runs
-/// only for a fault (every one escalates to HardFault), the panic handler or [`fault`] (main.rs's stack canary); it
-/// uses no stack beyond rd / wr. A fault whose own stacking faults (the stack already overflowed) cannot get here:
-/// the core locks up (seen on the unit 2026-10-29, BOARD.md 2), which is why the stack is watched by a canary, not
-/// an MPU guard.
+/// only for a fault (every one escalates to HardFault), the panic handler or [`fault`] (main.rs: the stack canary, a
+/// cell built twice); it uses no stack beyond rd / wr. A fault whose own stacking faults (the stack already
+/// overflowed) cannot get here: the core locks up (seen on the unit 2026-10-29, BOARD.md 2), which is why the stack is
+/// watched by a canary, not an MPU guard.
 // SAFETY: the vector table refers to this symbol by name; nothing else is called default_handler.
 #[unsafe(no_mangle)]
 extern "C" fn default_handler() -> ! {
@@ -58,9 +58,11 @@ fn panic(info: &PanicInfo) -> ! {
     mark(Kind::Panic, info.location().map_or(0, |l| l.line()))
 }
 
-/// A fault found by the firmware itself (main.rs: the stack canary overwritten): marked and reset as a CPU fault is.
-pub fn fault() -> ! {
-    mark(Kind::Stack, 0)
+/// A fault found by the firmware itself, marked and reset as a CPU fault is: the stack canary overwritten
+/// (main.rs `stack_check`, [`Kind::Stack`]), or a static cell built twice (main.rs `once`, [`Kind::Panic`] with its
+/// line), which marks as a panic would without linking `core::panicking`. No `unsafe`: [`mark`] is rd / wr.
+pub fn fault(kind: Kind, detail: u32) -> ! {
+    mark(kind, detail)
 }
 
 /// [`default_handler`]'s marker (storage/faultlog.rs `marker`: plain arithmetic on two words, no memory touched but
