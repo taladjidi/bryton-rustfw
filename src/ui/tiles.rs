@@ -334,7 +334,7 @@ impl Basemap {
         };
         let Some(v) = ign.filter(|v| v.tiles.iter().take(v.n).any(|t| t.3.is_some())) else { return Ok(stock) };
         let Some(mem) = self.mem.as_deref_mut() else { return Ok(stock) };
-        let (px, rest) = mem.split_at_mut(PIXELS);
+        let Some((px, rest)) = mem.split_at_mut_checked(PIXELS) else { return Ok(stock) };
         let rasters = rest.get(SLOTS * SLOT_WORDS..).unwrap_or(&[]);
         let px = px.get_mut(..(w * h) as usize).unwrap_or(&mut []);
         if !stock {
@@ -417,7 +417,7 @@ impl Basemap {
                 (0..SLOTS).filter(|s| !at.contains(s)).min_by_key(|&s| self.slots.get(s).map_or(0, |slot| slot.used));
             let Some(s) = free else { continue };
             let Some(words) = store.get_mut(s * SLOT_WORDS..(s + 1) * SLOT_WORDS) else { continue };
-            let (feats, pts) = words.split_at_mut(FEATS * 4);
+            let Some((feats, pts)) = words.split_at_mut_checked(FEATS * 4) else { continue };
             let (feats, _) = feats.as_chunks_mut::<4>();
             if let Some(slot) = self.slots.get_mut(s) {
                 *slot = Slot { key: (0, 0, 0), feats: 0, used: self.tick };

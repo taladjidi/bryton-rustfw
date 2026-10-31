@@ -396,7 +396,7 @@ impl Past {
         }
         let (low, high) = self.scale;
         let height = v.saturating_sub(low) * h / high.saturating_sub(low).max(1);
-        (height.clamp(1, h), crate::ui::GREY)
+        (height.max(1).min(h), crate::ui::GREY)
     }
 }
 

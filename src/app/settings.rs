@@ -846,7 +846,7 @@ impl Settings {
                 profile: if w >> 27 & 1 != 0 { Some(ride::Profile::Mtb) } else { self.profile },
                 bike_hg: match (w >> 16 & 0xff) as u16 {
                     0 => power::BIKE_HG,
-                    b => b.clamp(*bike.start(), *bike.end()),
+                    b => b.max(*bike.start()).min(*bike.end()),
                 },
                 remote: [s0, s1, s2, s3],
                 ..self
@@ -857,7 +857,7 @@ impl Settings {
                 wkt_avg: window(w >> 14),
                 bike_hg: match (w >> 16 & 0x1f) as u16 {
                     0 => power::BIKE_HG,
-                    b => (b * 10).clamp(*bike.start(), *bike.end()),
+                    b => (b * 10).max(*bike.start()).min(*bike.end()),
                 },
                 remote: [menu::Remote::from_bits(w >> 21), menu::Remote::from_bits(w >> 24), s2, s3],
                 ..self
@@ -1233,7 +1233,7 @@ impl Settings {
             return;
         }
         let (Some((range, step)), Some(v)) = (s.number(), self.number_mut(s)) else { return };
-        *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(*range.start(), *range.end());
+        *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.max(*range.start()).min(*range.end());
     }
 
     /// The maximum heart rate from the age (220 minus the years, Fox and Haskell's rule of thumb, clamped to

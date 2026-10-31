@@ -446,7 +446,7 @@ pub(crate) fn seg_hit(a: (i32, i32), b: (i32, i32), (da, db): (u32, u32), p: (i3
     let (apx, apy) = (i64::from(p.0) - i64::from(a.0), i64::from(p.1) - i64::from(a.1));
     let l2 = abx * abx + aby * aby;
     // where along the segment, 0 to 65536 (every value here is within 4e6 m: no overflow)
-    let t = if l2 == 0 { 0 } else { ((apx * abx + apy * aby).clamp(0, l2) << 16) / l2 };
+    let t = if l2 == 0 { 0 } else { ((apx * abx + apy * aby).max(0).min(l2) << 16) / l2 };
     let (cx, cy) = (apx - ((abx * t) >> 16), apy - ((aby * t) >> 16));
     let along = i64::from(da) + ((i64::from(db.saturating_sub(da)) * t) >> 16);
     (cx * cx + cy * cy, along.clamp(0, i64::from(u32::MAX)) as u32)

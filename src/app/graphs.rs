@@ -239,7 +239,7 @@ impl App {
         };
         let (low, high) = g.scale;
         let height = u32::from(v).saturating_sub(low) * h / high.saturating_sub(low).max(1);
-        (height.clamp(1, h), color)
+        (height.max(1).min(h), color)
     }
 
     /// A graph's scale, bottom and top, in its plot's units: power from 0 to twice the FTP, heart rate from half the

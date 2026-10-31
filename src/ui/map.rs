@@ -610,7 +610,7 @@ pub fn pan(
     // clamped, but never moved against the drag: after "+" the range is smaller and a centre at its old edge is
     // outside it, where a small drag would have jumped back across (review of 6de15ed)
     let go = |old: i32, new: i32, lo: i32, hi: i32| {
-        let c = new.clamp(lo, hi);
+        let c = new.max(lo).min(hi);
         if (c - old).signum() * (new - old).signum() < 0 { old } else { c }
     };
     let cx = go(v.cx, v.cx.saturating_sub(m(dx)), min.0.saturating_sub(rx), max.0.saturating_add(rx));

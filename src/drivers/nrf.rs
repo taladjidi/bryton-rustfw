@@ -128,10 +128,9 @@ impl Rx {
         if self.kept_n == self.kept.len()
             && id != Some(EVT_HVX)
             && let Some(i) = (0..self.kept_n).find(|&i| self.kept.get(i).is_some_and(|k| event_id(k) == Some(EVT_HVX)))
-            && let (Some(ks), Some(ls)) = (self.kept.get_mut(i..), self.kept_len.get_mut(i..))
         {
-            ks.rotate_left(1);
-            ls.rotate_left(1);
+            crate::storage::move_within(&mut self.kept, i + 1..self.kept_n, i);
+            crate::storage::move_within(&mut self.kept_len, i + 1..self.kept_n, i);
             self.kept_n -= 1;
         }
         if let (Some(slot), Some(len)) = (self.kept.get_mut(self.kept_n), self.kept_len.get_mut(self.kept_n))

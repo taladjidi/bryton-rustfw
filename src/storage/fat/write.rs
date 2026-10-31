@@ -377,8 +377,8 @@ impl Fat {
         buf: &[u8],
     ) -> Result<(), Error> {
         let n = u32::try_from(buf.len() / SECTOR).map_err(|_| Error::Corrupt)?;
-        if n == 0 || !buf.len().is_multiple_of(SECTOR) {
-            return Err(Error::Corrupt);
+        if n == 0 || self.spc == 0 || !buf.len().is_multiple_of(SECTOR) {
+            return Err(Error::Corrupt); // spc 0 would never advance
         }
         let end = sector.checked_add(n).ok_or(Error::Corrupt)?;
         self.grow(d, h, end.div_ceil(self.spc))?;
@@ -419,7 +419,7 @@ impl Fat {
         size: u32,
         time: (u16, u16),
     ) -> Result<(), Error> {
-        let need = size.div_ceil(self.spc * SECTOR_U32).max(1);
+        let need = size.div_ceil((self.spc * SECTOR_U32).max(1)).max(1);
         if need > h.clusters {
             return Err(Error::Corrupt);
         }
@@ -455,7 +455,7 @@ impl Fat {
     /// Cuts `h`'s chain after the clusters `size` bytes need (at least one) and frees the rest: its size already
     /// that, or no entry at all ([`Fat::chain`]).
     pub fn trim(&mut self, d: &mut impl DiskWrite, h: &mut Handle, size: u32) -> Result<(), Error> {
-        let need = size.div_ceil(self.spc * SECTOR_U32).max(1);
+        let need = size.div_ceil((self.spc * SECTOR_U32).max(1)).max(1);
         if need < h.clusters {
             let keep = self.nth(d, h.first, need - 1)?;
             let mut rest = self.next(d, keep)?;

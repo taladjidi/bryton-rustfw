@@ -57,7 +57,7 @@ pub fn draw_profile_bars(c: &mut impl Canvas, (x, y, h): (u32, u32, u32), colw: 
         }
         let (level, color) = unpack_bar(bar);
         if level > 0 {
-            let bh = (u32::from(level) * h / PROF_H).clamp(1, h);
+            let bh = (u32::from(level) * h / PROF_H).max(1).min(h);
             c.fill(x + i as u32 * colw, y + h - bh, (j - i) as u32 * colw, bh, color);
         }
         i = j;

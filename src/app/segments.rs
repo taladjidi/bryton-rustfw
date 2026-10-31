@@ -617,7 +617,7 @@ fn whole(fat: &mut Fat, d: &mut impl Disk, f: &fat::File, pr: bool) -> Result<bo
     if !size_ok || f.cluster < 2 {
         return Ok(false);
     }
-    let need = f.size.div_ceil(fat.cluster_bytes()).max(1);
+    let need = f.size.div_ceil(fat.cluster_bytes().max(1)).max(1);
     Ok(fat.chain(d, f.cluster)?.clusters == need)
 }
 
@@ -656,9 +656,11 @@ pub(crate) fn append_line(
     }
     let head = if h.size == 0 { CSV_HEADER.as_bytes() } else { &[] };
     let end = at + head.len() + line.len();
-    let (a, b) = buf.get_mut(at..end).ok_or(fat::Error::Corrupt)?.split_at_mut(head.len());
-    a.copy_from_slice(head);
-    b.copy_from_slice(line);
+    let (a, b) =
+        buf.get_mut(at..end).ok_or(fat::Error::Corrupt)?.split_at_mut_checked(head.len()).ok_or(fat::Error::Corrupt)?;
+    // the two halves were cut to these lengths above: a zip copies exactly them
+    a.iter_mut().zip(head).for_each(|(d, s)| *d = *s);
+    b.iter_mut().zip(line).for_each(|(d, s)| *d = *s);
     fat.write_sectors(d, &mut h, sector, buf.get(..end.div_ceil(512) * 512).ok_or(fat::Error::Corrupt)?)?;
     let grown = u32::try_from(end - at).map_err(|_| fat::Error::Corrupt)?;
     let size = h.size.checked_add(grown).ok_or(fat::Error::Corrupt)?;
