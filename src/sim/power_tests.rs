@@ -111,10 +111,10 @@ fn off_a_ride_or_a_pending_write_never() {
     run(&mut sim, &mut app, 400_000);
     assert!(!sim.standby, "setting OFF");
     app.settings.auto_off = 1;
-    (app.store.dirty, app.card_writable) = (true, false);
+    (app.store.file.dirty, app.card_writable) = (true, false);
     run(&mut sim, &mut app, 400_000);
     assert!(!sim.standby, "pages.bin waits to be written");
-    app.store.dirty = false;
+    app.store.file.dirty = false;
     app.press(&mut sim, Press::Short(Key::Start));
     assert_ne!(app.ride.state(), ride::State::Idle);
     run(&mut sim, &mut app, 400_000);

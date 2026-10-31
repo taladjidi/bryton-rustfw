@@ -370,10 +370,10 @@ impl App {
             self.emmc.lent(),
             self.phone.ringing,
             self.touching(),
-            self.store.dirty || self.settings_store.dirty, // pages.bin or settings.bin waits to be written
-            self.stock.status() == stock::Status::Running, // the scan and its cache
-            self.sensors_store.dirty,                      // sensors.bin waits
-            self.alt.is_dirty(),                           // so does the altitude calibration
+            self.store.file.dirty || self.settings_store.file.dirty, // pages.bin or settings.bin waits to be written
+            self.stock.status() == stock::Status::Running,           // the scan and its cache
+            self.sensors_store.dirty,                                // sensors.bin waits
+            self.alt.is_dirty(),                                     // so does the altitude calibration
             // the golden rule: never off while the recorder holds anything (a resume that keeps failing, a save
             // retried after the card closed, the full copy still saving)
             self.rec.resume_pending,

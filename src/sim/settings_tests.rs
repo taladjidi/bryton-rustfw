@@ -51,7 +51,7 @@ fn started(regs: Settings, reliable: bool) -> (Sim, App) {
 fn settle(sim: &mut Sim, app: &mut App) {
     for _ in 0..200 {
         run(sim, app, 200);
-        if !app.settings_store.dirty {
+        if !app.settings_store.file.dirty {
             return;
         }
     }
@@ -125,7 +125,7 @@ fn migration_from_the_registers_happens_once() {
     let (sim2, app2) = reboot(&mut sim, false);
     assert_eq!(kept(&app2), some());
     assert!(sim2.emmc.image == image, "nothing written");
-    assert!(!app2.settings_store.dirty);
+    assert!(!app2.settings_store.file.dirty);
     std::println!("migration: {written} sectors");
 }
 
@@ -145,7 +145,7 @@ fn registers_newer_than_the_file_win() {
     assert_eq!(app2.settings.ftp, 300);
     // the ride resumed: still not written
     assert_eq!(file(&sim2).unwrap().settings.ftp, 265);
-    assert!(app2.settings_store.dirty);
+    assert!(app2.settings_store.file.dirty);
 }
 
 /// The test volume with `\Rustfw\` and a `pages.bin` in it (no settings file).
@@ -220,7 +220,7 @@ fn a_change_undone_before_the_read_leaves_the_files() {
         app2.save_misc(&mut s2);
     }
     run(&mut s2, &mut app2, u64::from(PAGES_LOAD_MS) + 200);
-    assert!(!app2.settings_store.loaded, "the drive lent: not read");
+    assert!(!app2.settings_store.file.loaded, "the drive lent: not read");
     let (_, app3) = reboot(&mut s2, false);
     assert_eq!(app3.settings.face, Face::Pixel, "the file's");
 }

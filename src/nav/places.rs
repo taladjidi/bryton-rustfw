@@ -25,6 +25,7 @@
 //! Distances and bearings on the local plane at the rider, as the course's (course.rs `step_mm`): within a few
 //! metres in a kilometre, enough for "1.2 KM NE".
 
+use crate::copies::{self, CRC_AT};
 use crate::text::Line;
 
 /// Places kept.
@@ -39,7 +40,6 @@ pub const ENTRY: usize = 12;
 const MAGIC: &[u8; 4] = b"RPLC";
 const VERSION: u16 = 1;
 const DATA_AT: usize = 12;
-const CRC_AT: usize = 508;
 const NO_ALT: i16 = i16::MIN;
 const _: () = assert!(DATA_AT + MAX * ENTRY <= CRC_AT);
 
@@ -155,18 +155,13 @@ impl Places {
     pub fn to_sector(&self, seq: u32) -> [u8; 512] {
         let mut s = [0u8; 512];
         let n = self.len();
-        s[..4].copy_from_slice(MAGIC);
-        s[4..6].copy_from_slice(&VERSION.to_le_bytes());
-        s[6..8].copy_from_slice(&((n * ENTRY) as u16).to_le_bytes());
-        s[8..12].copy_from_slice(&seq.to_le_bytes());
         for (p, e) in self.list[..n].iter().zip(s[DATA_AT..CRC_AT].chunks_exact_mut(ENTRY)) {
             e[..4].copy_from_slice(&p.lat.to_le_bytes());
             e[4..8].copy_from_slice(&p.lon.to_le_bytes());
             e[8..10].copy_from_slice(&p.alt_m.to_le_bytes());
             e[10] = p.num;
         }
-        let crc = crate::inflate::crc32(s[..CRC_AT].iter().copied());
-        s[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
+        copies::seal(&mut s, MAGIC, VERSION, (n * ENTRY) as u16, seq);
         s
     }
 
@@ -182,15 +177,7 @@ impl Places {
     /// assert_eq!(Places::from_sector(&s), None);
     /// ```
     pub fn from_sector(s: &[u8; 512]) -> Option<(u32, Places)> {
-        let le16 = |a: usize| crate::storage::bytes::le16(s, a);
-        let le32 = |a: usize| crate::storage::bytes::le32(s, a);
-        if s.get(..4)? != MAGIC
-            || le16(4)? != VERSION
-            || le32(CRC_AT)? != crate::inflate::crc32(s.get(..CRC_AT)?.iter().copied())
-        {
-            return None;
-        }
-        let len = usize::from(le16(6)?);
+        let (len, seq) = copies::open(s, MAGIC, VERSION)?;
         if !len.is_multiple_of(ENTRY) || len > MAX * ENTRY {
             return None;
         }
@@ -218,16 +205,12 @@ impl Places {
             *out.list.get_mut(k)? = p;
             out.n += 1;
         }
-        Some((le32(8)?, out))
+        Some((seq, out))
     }
 
     /// The newer of the file's two copies that check out (its 1024 bytes), if any.
     pub fn newest(file: &[u8; 1024]) -> Option<(u32, Places)> {
-        let copy = |k: usize| Places::from_sector(file.get(512 * k..512 * (k + 1))?.try_into().ok()?);
-        match (copy(0), copy(1)) {
-            (Some(a), Some(b)) => Some(if b.0 > a.0 { b } else { a }),
-            (a, b) => a.or(b),
-        }
+        copies::newest(file, Places::from_sector, |c| c.0)
     }
 }
 

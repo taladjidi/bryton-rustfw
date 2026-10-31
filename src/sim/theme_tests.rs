@@ -167,7 +167,7 @@ fn theme_from_the_card_is_picked_and_kept() {
     assert_eq!(app.settings.theme_name(), "SUNNY");
     for _ in 0..200 {
         run(&mut sim, &mut app, 200);
-        if !app.settings_store.dirty {
+        if !app.settings_store.file.dirty {
             break;
         }
     }
@@ -287,7 +287,7 @@ fn a_theme_picked_before_the_file_is_read_is_kept() {
         app.save_misc(&mut sim);
         for _ in 0..200 {
             run(&mut sim, &mut app, 200);
-            if !app.settings_store.dirty {
+            if !app.settings_store.file.dirty {
                 break;
             }
         }
@@ -303,7 +303,7 @@ fn a_theme_picked_before_the_file_is_read_is_kept() {
         assert_ne!(picked, first);
         for _ in 0..200 {
             run(&mut sim2, &mut app2, 200);
-            if app2.settings_store.loaded && !app2.settings_store.dirty {
+            if app2.settings_store.file.loaded && !app2.settings_store.file.dirty {
                 break;
             }
         }
@@ -784,7 +784,7 @@ fn theme_font_key_sets_face_on_pick_only() {
     assert_ne!(sim.backup[crate::POWER_BKP] & 1 << 24, 0, "register 16 bit 24");
     for _ in 0..200 {
         run(&mut sim, &mut app, 200);
-        if !app.settings_store.dirty {
+        if !app.settings_store.file.dirty {
             break;
         }
     }

@@ -491,7 +491,7 @@ impl App {
                 // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it
                 self.ride = ride::Ride::resumed(&words);
                 // the record keeps GRAVEL, CX and COMMUTE as ROAD: BIKE (settings.bin) says which, read now
-                if !self.settings_store.loaded {
+                if !self.settings_store.file.loaded {
                     self.load_settings(b);
                 }
                 // its profile from the record (an older one: ROAD, automatic), by hand if the rider set it so;

@@ -27,7 +27,8 @@ pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, mga, nrf
 pub use link::{dev, msc, phone, prof, usbsnap};
 pub use nav::{altitude, climbs_ahead, course, places, segment, segment_match, sun};
 pub use storage::{
-    bikes, fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds, trash, volume,
+    bikes, copies, fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds,
+    trash, volume,
 };
 pub use training::{
     alerts, hrtss, hrv, hrvt, load, pacing, power, power_curve, power_match, ramp, ride, trainer, workout,

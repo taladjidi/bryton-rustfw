@@ -1048,7 +1048,7 @@ fn a_ride_across_the_dst_change_keeps_its_name_and_times() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 1000);
     (app.settings.tz, app.settings.dst) = (crate::TZ_UTC + 4, crate::Dst::Eu);
-    app.settings_store.dirty = true; // as the menu does: into the file before the ride
+    app.settings_store.file.dirty = true; // as the menu does: into the file before the ride
     run(&mut sim, &mut app, 2000);
     assert_eq!(app.gps.aid.offset_15min, Some(8), "UTC + 2 h learnt at the fix");
     assert_eq!(app.strip.time, (2, 57), "summer: UTC + 2 h");
@@ -1101,7 +1101,7 @@ fn a_resumed_gravel_cx_or_commute_ride_keeps_its_profile() {
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 2000);
         app.settings.profile = Some(p);
-        app.settings_store.dirty = true; // as the menu does: into the file before the ride
+        app.settings_store.file.dirty = true; // as the menu does: into the file before the ride
         sim.backup[crate::WHEEL_BKP] = app.settings.to_word(); // and into register 11: ROAD for these
         run(&mut sim, &mut app, 5000);
         app.press(&mut sim, Press::Short(Key::Start));

@@ -39,6 +39,7 @@
 //! [`crate::menu::BIKE_RANGE`], a preset past its table, an interval not in [`EVERY_KM`]) is not read: no build of
 //! this firmware writes one.
 
+use crate::copies::{self, CRC_AT};
 use crate::history::Start;
 
 /// Bikes kept.
@@ -63,7 +64,6 @@ const BIKES_AT: usize = AT_MARK_AT + 4 * AT_MARK;
 const BIKE_BYTES: usize = 10 + PARTS * 6;
 /// Bytes of data this build writes (length).
 pub const DATA_LEN: usize = BIKES_AT - DATA_AT + BIKES * BIKE_BYTES;
-const CRC_AT: usize = 508;
 const _: () = assert!(DATA_AT + DATA_LEN <= CRC_AT);
 
 /// A part's wear.
@@ -256,10 +256,6 @@ impl Bikes {
     /// A copy of the file with sequence number `seq`.
     pub fn to_sector(&self, seq: u32) -> [u8; 512] {
         let mut s = [0u8; 512];
-        s[..4].copy_from_slice(MAGIC);
-        s[4..6].copy_from_slice(&VERSION.to_le_bytes());
-        s[6..8].copy_from_slice(&(DATA_LEN as u16).to_le_bytes());
-        s[8..12].copy_from_slice(&seq.to_le_bytes());
         s[12] = self.active;
         let (y, mo, d, h, mi) = self.counted;
         s[14..16].copy_from_slice(&y.to_le_bytes());
@@ -277,8 +273,7 @@ impl Bikes {
                 f[4..6].copy_from_slice(&p.every_km.to_le_bytes());
             }
         }
-        let crc = crate::inflate::crc32(s[..CRC_AT].iter().copied());
-        s[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
+        copies::seal(&mut s, MAGIC, VERSION, DATA_LEN as u16, seq);
         s
     }
 
@@ -296,13 +291,7 @@ impl Bikes {
     pub fn from_sector(s: &[u8; 512]) -> Option<(u32, Bikes)> {
         let le16 = |a: usize| crate::storage::bytes::le16(s, a);
         let le32 = |a: usize| crate::storage::bytes::le32(s, a);
-        if s.get(..4)? != MAGIC
-            || le16(4)? != VERSION
-            || le32(CRC_AT)? != crate::inflate::crc32(s.get(..CRC_AT)?.iter().copied())
-        {
-            return None;
-        }
-        let len = usize::from(le16(6)?);
+        let (len, seq) = copies::open(s, MAGIC, VERSION)?;
         if !(DATA_LEN..=CRC_AT - DATA_AT).contains(&len) || usize::from(*s.get(12)?) >= BIKES || *s.get(13)? != 0 {
             return None;
         }
@@ -332,16 +321,12 @@ impl Bikes {
                 return None;
             }
         }
-        Some((le32(8)?, out))
+        Some((seq, out))
     }
 
     /// The newer of the file's two copies that check out (its 1024 bytes), if any.
     pub fn newest(file: &[u8; 1024]) -> Option<(u32, Bikes)> {
-        let copy = |k: usize| Bikes::from_sector(file.get(512 * k..512 * (k + 1))?.try_into().ok()?);
-        match (copy(0), copy(1)) {
-            (Some(a), Some(b)) => Some(if b.0 > a.0 { b } else { a }),
-            (a, b) => a.or(b),
-        }
+        copies::newest(file, Bikes::from_sector, |c| c.0)
     }
 }
 
