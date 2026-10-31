@@ -640,6 +640,22 @@ pub(crate) mod tests {
     extern crate std;
     use super::*;
 
+    /// A timer over an hour keeps its seconds in every box of every layout: the gap before the small tail never
+    /// pushes it out.
+    #[test]
+    fn a_tail_keeps_its_room_in_every_layout_box() {
+        let mut n = 0;
+        for id in 0..LAYOUTS.len() as u8 {
+            for i in 0.. {
+                let Some(bx) = field_box(id, RIDE_H, i) else { break };
+                let (_, _, _, big, tail, _) = fields::value_at(bx, "1:23|45", WHITE);
+                assert_eq!((big, tail), ("1:23", "45"), "layout {id} box {i} {bx:?}");
+                n += 1;
+            }
+        }
+        assert!(n > 20, "{n} boxes");
+    }
+
     /// A menu value changed in its own box paints what a whole row would, in fewer pixels (P4).
     #[test]
     fn a_menu_value_repaints_in_its_own_box() {
@@ -1016,6 +1032,7 @@ pub(crate) mod tests {
             battery: Some(80),
             charging: false,
             rec: Rec::Idle,
+            lost: false,
             locked: false,
             more: false,
             saver: false,
@@ -1039,6 +1056,7 @@ pub(crate) mod tests {
             battery: Some(87),
             charging: true,
             rec: Rec::Paused,
+            lost: false,
             locked: false,
             more: false,
             saver: false,

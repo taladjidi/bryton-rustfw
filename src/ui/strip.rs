@@ -40,6 +40,8 @@ pub struct Strip {
     pub charging: bool,
     /// The ride: the time is white with no ride, green while it records, orange while paused or auto-paused.
     pub rec: Rec,
+    /// A paired sensor was lost in this ride: "BLE" in red.
+    pub lost: bool,
     /// The touch is locked (Back and Lap held together): a padlock left of the time.
     pub locked: bool,
     /// A ride page's MORE variant is up: "MORE" where "BLE" and the GPS bars are.
@@ -59,13 +61,13 @@ pub enum Rec {
     /// Paused, or auto-paused (stopped).
     Paused,
     /// A ride, but the recorder is not saving it to the card (failing, refused, or a build that may not write):
-    /// the dot grey.
+    /// a red cross.
     NotSaving,
 }
 
 /// The strip's boxes (x, width): BLE on the left, the time centred, then USB and the battery on the right.
 pub(super) const STRIP_BLE: (u32, u32) = (4, 3 * CELL * 2);
-pub(super) const STRIP_GPS: (u32, u32) = (STRIP_BLE.0 + STRIP_BLE.1 + 2, 3 * CELL * 2);
+pub(super) const STRIP_GPS: (u32, u32) = (STRIP_BLE.0 + STRIP_BLE.1 + 5, 3 * CELL * 2);
 pub(super) const STRIP_TIME: (u32, u32) = ((W - 5 * CELL * 2) / 2, 5 * CELL * 2);
 pub(super) const STRIP_BATTERY: (u32, u32) = (W - 4 - 4 * CELL * 2, 4 * CELL * 2);
 /// The USB symbol, 13 x 14 (bit 15 = leftmost): a trident, the plug's arrow on top.
@@ -98,6 +100,8 @@ pub(super) const STRIP_LOCK: (u32, u32) = (STRIP_GPS.0 + STRIP_GPS.1 + 1, 8);
 const PADLOCK: [u16; 10] = [0x3800, 0x4400, 0x4400, 0xfe00, 0xfe00, 0xee00, 0xee00, 0xfe00, 0xfe00, 0xfe00];
 /// A dot 10 px wide (bit 15 leftmost), and two bars.
 const REC_DOT: [u16; 10] = [0x1e00, 0x7f80, 0x7f80, 0xffc0, 0xffc0, 0xffc0, 0xffc0, 0x7f80, 0x7f80, 0x1e00];
+/// A red cross, 10 wide: the ride is not being saved (the running dot is red too, so it must differ).
+const NOT_SAVING_X: [u16; 10] = [0xc0c0, 0x6180, 0x3300, 0x1e00, 0x0c00, 0x0c00, 0x1e00, 0x3300, 0x6180, 0xc0c0];
 const PAUSE_BARS: [u16; 10] = [0xe1c0; 10];
 
 /// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" blinking grey while
@@ -135,7 +139,7 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             Rec::Idle => {}
             Rec::Running => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, RED),
             Rec::Paused => draw_bitmap(c, &PAUSE_BARS, STRIP_REC.0, top + 2, 1, ACCENT),
-            Rec::NotSaving => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, GREY),
+            Rec::NotSaving => draw_bitmap(c, &NOT_SAVING_X, STRIP_REC.0, top + 2, 1, RED),
         }
     }
     if changed(|s| s.locked as u32) {
@@ -155,8 +159,8 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
         if swapped {
             c.fill(both.0, top, both.1, LABEL.height(), BLACK);
         }
-        if swapped || changed(|s| u32::from(s.radio)) {
-            at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
+        if swapped || changed(|s| u32::from(s.radio) | u32::from(s.lost) << 1) {
+            at(c, STRIP_BLE, if s.radio && !s.lost { GREEN } else { RED }, Align::Left, "BLE");
         }
         if swapped || changed(|s| s.gps.map_or(0x100, u32::from) | u32::from(s.blink) << 9) {
             match s.gps {

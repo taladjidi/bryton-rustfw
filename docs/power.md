@@ -146,7 +146,7 @@ sheets, at their test conditions), none was measured on the unit.
   Its idle mode (8 colours) and partial mode would change what is shown. A lower frame rate (FRCTRL2, 0xC6: stock's
   0x0F is 60 Hz, 0x1F is 39 Hz) saves part of the driver's current but may flicker: to try on the unit, not done.
   The panel stays on with the backlight off: the transflective panel is read by daylight.
-- **Light sensor** (LTR-308, measuring every 250 ms while AUTO is on) and **barometer** (LPS22HH, one reading a second
+- **Light sensor** (LTR-308, measuring while AUTO is on, read every 500 ms; every 5 s for THEME AUTO alone) and **barometer** (LPS22HH, one reading a second
   while riding): about 0.1 mA and 0.01 mA (recalled from their data sheets): nothing to gain.
 
 
@@ -166,6 +166,8 @@ OFF, ON, or AUTO (on once at 20 % or less, off at the charger). It reads existin
 
 The recording is outside it: 1 s samples and the checkpoints are unchanged (a sim test compares the card's commands with it on and off).
 To measure: the same ride ON and OFF, the battery's percent after an hour (docs/status.md). Per profile (ride profiles' settings) is open.
+
+The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on the overview and exits 1 above it; set 2026-10-31 beside the 1.52 % measured that day).
 
 ## The main loop while idle (2026-10-28)
 
@@ -195,6 +197,16 @@ To measure: the same ride ON and OFF, the battery's percent after an hour (docs/
   largest part (0.23 %). Half the CPU's awake time, which is a fraction of a mA (0.5 % of the difference between
   Run and Sleep currents): the loop Stop mode needs (a long sleep that wakes on what matters) more than a saving in
   itself.
+- **A running ride (2026-10-31, review finding 9):** a pass every 100 ms (`RIDE_POLL_MS`) while nothing wants the
+  short one (no finger, key held, tone, banner, editor, AssistNow data, card failure, course or road-ahead tile being
+  read, trainer link: its control messages go one a pass). A key ends the sleep at once; the Nordic chip's bytes do not (its sensors' broadcasts would end nearly every
+  sleep): our side holds them (RTS and the RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11, the
+  enable's 0x20), its BLE and serialization queues are not known. With it (finding 10): the GNSS read waits 800 ms
+  after a whole NAV-PVT (8.8 to 5.0 SPI4 transfers a second in the simulation), the light read every 500 ms for the
+  backlight and every 5 s for THEME AUTO alone, and the per-pass date conversions and the page's widget list only
+  when used. Measured on the unit (`tools/profile.py`, RAM run, 10 s windows, the ride's window including its start
+  at 20 passes a second): awake on the overview 1.54 to 1.36 %, on the first ride page 1.42 to 1.10 %, a ride running
+  1.62 to 1.05 % (21.2 to 13.1 passes a second).
 
 ## Stop mode: plan (design, not built)
 

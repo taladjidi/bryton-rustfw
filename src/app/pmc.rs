@@ -41,7 +41,7 @@ impl App {
     /// Today, days since 1970.
     fn pmc_today(&self) -> u16 {
         let (y, m, d) = self.date;
-        u16::try_from(epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0)
+        u16::try_from(days_from_civil(y, m, d)).unwrap_or(0) // every pass (step_pmc's key): no i64 division
     }
 
     /// The TSS of the ride on its way, not in the scan yet.

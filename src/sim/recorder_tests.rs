@@ -230,7 +230,7 @@ fn a_full_copy_that_fails_never_stops_the_ride() {
 }
 
 /// The second review's R9: a recorder that fails looked like one that works (the red dot, and the warning only at
-/// the 2nd, 4th, 8th... failure of the whole run). The strip's dot is grey while it is not saving, NOT SAVING is
+/// the 2nd, 4th, 8th... failure of the whole run). The strip's mark is a red cross while it is not saving, NOT SAVING is
 /// said at the first failure (then every 5 minutes of them), and all is back once the card answers.
 #[test]
 fn a_failing_recorder_shows() {
@@ -244,6 +244,14 @@ fn a_failing_recorder_shows() {
     sim.emmc.dead = true; // the card stops answering
     run(&mut sim, &mut app, 70_000); // the checkpoint at 60 s fails
     assert_eq!(app.strip.rec, Rec::NotSaving);
+    // the strip's red cross, right of the time (the box the strip keeps for it)
+    let top = crate::ui::STRIP_H - crate::ui::LABEL.height() + 2;
+    let x0 = (W - 5 * 12) / 2 + 5 * 12 + 3;
+    let red = (top..top + 10)
+        .flat_map(|y| (x0..x0 + 10).map(move |x| (x, y)))
+        .filter(|&(x, y)| sim.screen[(y * W + x) as usize] == crate::ui::RED)
+        .count();
+    assert!((20..60).contains(&red), "a cross, not a dot: {red} red pixels");
     assert!(app.notes.list[0].as_str().ends_with("NOT SAVING"), "{}", app.notes.list[0].as_str());
     sim.emmc.dead = false;
     run(&mut sim, &mut app, 10_000); // tried again after 5 s
