@@ -276,6 +276,7 @@ impl App {
     /// Out of every menu at once, to the page the first one was opened over (the first ride page if that one is
     /// off now, as the course page once the course is stopped): a ride menu's row that acted.
     pub(crate) fn leave_menus(&mut self) {
+        self.drop_ride_it();
         let page = match self.under.first().copied() {
             Some(Screen::Ride(n)) if !self.page_on(n) => self.ride_page(0, 1),
             Some(s @ (Screen::Main | Screen::Ride(_))) => s,
@@ -286,6 +287,7 @@ impl App {
 
     /// Back to the screen under this one (a ride page switched off since shows the main screen).
     pub(crate) fn close(&mut self) {
+        self.drop_ride_it();
         self.depth = self.depth.saturating_sub(1);
         self.screen = match self.under.get(self.depth) {
             Some(&Screen::Ride(n)) if !self.page_on(n) => Screen::Main,

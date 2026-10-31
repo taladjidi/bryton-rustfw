@@ -208,7 +208,7 @@ Others
 - [ ] Road closures and hazards on the route (Garmin)
 - [ ] Favourite and recent places, navigate to one (stock)
 - [~] Course sync from Strava, Komoot, RideWithGPS (stock, all): sim; copied over USB, no app
-- [ ] Virtual ride: a course on a smart trainer (stock, Wahoo)
+- [~] Virtual ride: a course on a smart trainer (stock, Wahoo): sim (WORKOUTS > RIDE A COURSE)
 
 ## Training: zones, workouts, plans, metrics
 
