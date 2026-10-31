@@ -123,7 +123,7 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
     let hm = |s: &Strip| {
         let mut l = text::Line::<8>::new();
         for d in [s.time.0 / 10, s.time.0 % 10, 10, s.time.1 / 10, s.time.1 % 10] {
-            l.push_str(if d == 10 { ":" } else { DIGITS[usize::from(d % 10)] });
+            l.push_str(if d == 10 { ":" } else { crate::ui::digit(u32::from(d)) });
         }
         l
     };
@@ -166,7 +166,8 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             match s.gps {
                 Some(bars @ 1..) => draw_bars(c, bars),
                 Some(0) if s.blink => at(c, STRIP_GPS, GREY, Align::Left, "GPS"),
-                _ => at(c, STRIP_GPS, BLACK, Align::Left, "GPS"),
+                // the blink's off half, each second while searching: one fill, not "GPS" drawn in black glyph by glyph
+                _ => c.fill(STRIP_GPS.0, top, STRIP_GPS.1, LABEL.height(), BLACK),
             }
         }
     }

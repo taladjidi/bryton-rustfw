@@ -562,7 +562,10 @@ impl App {
                     self.graph_whole = !self.graph_whole;
                 } else if let Some(plot) = graph_plot(f) {
                     let all = ride::Plot::ALL;
-                    let next = all[(all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len()];
+                    let Some(&next) = all.get((all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len())
+                    else {
+                        return;
+                    };
                     let n = match self.screen {
                         Screen::Ride(_) if self.more_shown().is_some() => return, // no slot, nothing to redraw
                         Screen::Ride(n) => n,
@@ -815,7 +818,10 @@ impl App {
                 // under the rows, which is no row
                 let slot = (u32::from(y).checked_sub(ui::LIST_Y))
                     .filter(|&d| d < (self.menu_rows() as u32) * self.theme.menu_row + 4)
-                    .map(|d| ((d / self.theme.menu_row) as usize).min(self.menu_rows() - 1));
+                    .map(|d| {
+                        (d.checked_div(self.theme.menu_row).unwrap_or(0) as usize)
+                            .min(self.menu_rows().saturating_sub(1))
+                    });
                 let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
                 let row = match slot.map(|k| first + k) {
                     Some(row) if self.row(menu, row).is_some() => row,

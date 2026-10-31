@@ -416,14 +416,14 @@ impl App {
         };
         self.store.file.seq = s.seq;
         let boot = self.store.boot;
-        let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| (i < s.count).then_some(s.pages[i]));
+        let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| s.pages.get(i).copied().filter(|_| i < s.count));
         let mut more_in = s.more;
         let mut meta_ok = true; // names and OFF bits belong to the file's pages
         if self.store.newer || (boot != s.words && boot != s.was) {
             // changes the file did not get (a switch-off before it was written), or another build changed the
             // registers since: the registers' pages win where they differ from the file's
             for (i, (now, then)) in boot.chunks_exact(2).zip(s.words.chunks_exact(2)).enumerate() {
-                let w = [now[0], now[1]];
+                let Ok(w) = <[u32; 2]>::try_from(now) else { continue };
                 if now != then
                     && let Some(c) = PageCfg::from_words(w)
                     && let Some(slot) = list.get_mut(i)
@@ -487,7 +487,7 @@ impl App {
         was[1] &= !PAGES_NEWER;
         let s = Saved {
             seq: self.store.file.seq.wrapping_add(1),
-            pages: core::array::from_fn(|i| self.pages[i]),
+            pages: core::array::from_fn(|i| self.pages.get(i).copied().unwrap_or(self.pages[0])),
             count: self.page_count,
             words: register_words(&self.pages, self.page_count),
             was,
@@ -710,8 +710,8 @@ impl App {
         let new = Page::preset(4, [Speed, Timer, Dist, Hr, Time, Time, Time, Time]).unwrap_or(BLANK);
         let (pages, count, more) = self.set_mut(which);
         let at = at.min(*count);
-        pages.copy_within(at..PAGES - 1, at + 1);
-        more.copy_within(at..PAGES - 1, at + 1);
+        crate::storage::move_within(pages, at..PAGES - 1, at + 1);
+        crate::storage::move_within(more, at..PAGES - 1, at + 1);
         if let (Some(p), Some(m)) = (pages.get_mut(at), more.get_mut(at)) {
             (*p, *m) = (new, None);
         }
@@ -734,8 +734,8 @@ impl App {
         let which = self.view_set();
         let (pages, count, more) = self.set_mut(which);
         if e.page < *count && *count > 1 {
-            pages.copy_within(e.page + 1..PAGES, e.page);
-            more.copy_within(e.page + 1..PAGES, e.page);
+            crate::storage::move_within(pages, e.page + 1..PAGES, e.page);
+            crate::storage::move_within(more, e.page + 1..PAGES, e.page);
             more[PAGES - 1] = None;
             *count -= 1;
             if which == ride::Profile::Road {
@@ -756,9 +756,10 @@ impl App {
         }
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         let order = ui::LAYOUT_ORDER;
-        let at = p.preset_id().and_then(|id| order.iter().position(|&l| l == id)).unwrap_or(order.len() - 1);
+        let at =
+            p.preset_id().and_then(|id| order.iter().position(|&l| l == id)).unwrap_or(order.len().saturating_sub(1));
         let next = (1..=order.len())
-            .filter_map(|d| Page::preset(order[(at + d) % order.len()], p.fields))
+            .filter_map(|d| Page::preset(*order.get((at + d) % order.len())?, p.fields))
             .find(|q| q.misfits() == 0);
         let which = self.view_set();
         if let (Some(q), Some(slot)) = (next, self.set_mut(which).0.get_mut(n)) {

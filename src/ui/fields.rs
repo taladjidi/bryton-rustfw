@@ -531,7 +531,7 @@ impl Field {
             "NEXT POI",
             "NEXT DESC",
         ];
-        LABELS[self as usize]
+        LABELS.get(self as usize).copied().unwrap_or("")
     }
 
     /// Its label in the units chosen (UNITS, TEMPERATURE): a field the units do not touch keeps [`Field::label`].
@@ -798,7 +798,7 @@ pub fn rows_box(rows: &[(u8, u8)], h: u32, i: usize) -> Option<(u32, u32, u32, u
     let total: u32 = rows.iter().map(|&(share, _)| u32::from(share)).sum();
     let (mut y, mut k) = (0, i);
     for (r, &(share, n)) in rows.iter().enumerate() {
-        let rh = if r + 1 == rows.len() { h - y } else { h * u32::from(share) / total };
+        let rh = if r + 1 == rows.len() { h - y } else { (h * u32::from(share)).checked_div(total).unwrap_or(0) };
         let n = usize::from(n);
         if k < n {
             let bw = W / n as u32;

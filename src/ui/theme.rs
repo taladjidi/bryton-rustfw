@@ -392,7 +392,7 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
     debug_assert_eq!(slots.len(), METRIC_KEYS.len(), "one slot per metric key");
     for ((key, range), slot) in METRIC_KEYS.into_iter().zip(slots) {
         if let Some(n) = value("metrics", key).and_then(|v| crate::ini::decimal(v, 0)) {
-            *slot = n.clamp(range.0, range.2);
+            *slot = n.max(range.0).min(range.2); // not clamp: its min <= max check panics
         }
     }
     check(&t, &base).map(|()| t)

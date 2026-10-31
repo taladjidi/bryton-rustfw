@@ -126,7 +126,7 @@ impl Battery {
     pub fn history(&self) -> impl Iterator<Item = (u16, bool)> + '_ {
         let n = self.logged.min(LOG);
         (self.logged - n..self.logged).map(|i| {
-            let e = self.log[i % LOG];
+            let e = self.log.get(i % LOG).copied().unwrap_or(0);
             (e & 0x7fff, e & 0x8000 != 0)
         })
     }
@@ -159,11 +159,12 @@ impl Battery {
         let mut i = self.logged;
         while n < WINDOW && i > self.logged.saturating_sub(LOG) {
             i -= 1;
-            let e = self.log[i % LOG];
+            let e = self.log.get(i % LOG).copied().unwrap_or(0);
+            let Some(slot) = ys.get_mut(n) else { break };
             if e & 0x8000 != 0 {
                 break;
             }
-            ys[n] = i64::from(tenths(e & 0x7fff));
+            *slot = i64::from(tenths(e & 0x7fff));
             n += 1;
         }
         if n < MIN_MINUTES {
@@ -171,18 +172,18 @@ impl Battery {
         }
         // y = a + b x, x the minutes back from the newest: b is the drain a minute
         let (nn, mut sx, mut sy, mut sxy, mut sxx) = (n as i64, 0i64, 0i64, 0i64, 0i64);
-        for (x, &y) in ys[..n].iter().enumerate() {
+        for (x, &y) in ys.iter().take(n).enumerate() {
             let x = x as i64;
             (sx, sy, sxy, sxx) = (sx + x, sy + y, sxy + x * y, sxx + x * x);
         }
         let den = nn * sxx - sx * sx; // positive: MIN_MINUTES points at distinct minutes
         let num = nn * sxy - sx * sy; // drain a minute x den, in tenths
-        let rate = num * 60 / den; // tenths of a percent an hour
+        let rate = (num * 60).checked_div(den)?; // tenths of a percent an hour
         if rate < MODEL_RATE {
             return None;
         }
-        let now = ((sy * den - num * sx) / (nn * den)).max(0); // the fitted charge at the newest minute, tenths
-        u32::try_from(now * 60 / rate).ok()
+        let now = ((sy * den - num * sx).checked_div(nn * den)?).max(0); // the fitted charge at the newest minute, tenths
+        u32::try_from((now * 60).checked_div(rate)?).ok()
     }
 }
 

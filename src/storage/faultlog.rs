@@ -8,7 +8,7 @@
 //! 31..24  0xfa                      a fault happened (as every build since the marker wrote it)
 //! 23..11  detail (13 bits)          a panic: its source line (at most 8191); a CPU fault: its CFSR bits ([`CFSR_BITS`])
 //! 10      logged                    set by the app once the line is in the log; a new fault's marker has it clear
-//! 9..8    kind                      [`Kind`]: 0 for a marker an earlier build wrote
+//! 9..8    kind                      [`Kind`]: 0 for a marker an earlier build wrote; 3 with a detail: [`Kind::Cell`]
 //! 7..0    faults in a row           as before: the handler parks the unit past 3; the app clears the word after a minute
 //! ```
 //!
@@ -57,8 +57,11 @@ pub enum Kind {
     Cpu = 1,
     /// A panic, its line as the detail.
     Panic = 2,
-    /// The stack canary found overwritten (main.rs `stack_check`).
+    /// The stack canary found overwritten (main.rs `stack_check`), detail 0.
     Stack = 3,
+    /// A static cell built twice (main.rs `once`), its line as the detail. The two kind bits are full (bit 10 is
+    /// [`LOGGED`]), so it is kind 3 with a non-zero detail: an earlier build reads it as the canary.
+    Cell = 4,
 }
 
 /// The CFSR bits kept, in the detail's order (module doc), with their names as the log writes them.
@@ -87,10 +90,8 @@ pub const CFSR_BITS: [(u8, &str); 13] = [
 #[inline(always)]
 pub fn cfsr_detail(cfsr: u32) -> u32 {
     let mut d = 0;
-    let mut i = 0;
-    while i < CFSR_BITS.len() {
-        d |= (cfsr >> CFSR_BITS[i].0 & 1) << i;
-        i += 1;
+    for (i, bit) in CFSR_BITS.iter().enumerate() {
+        d |= (cfsr >> bit.0 & 1) << i;
     }
     d
 }
@@ -107,7 +108,12 @@ pub fn cfsr_detail(cfsr: u32) -> u32 {
 #[inline(always)]
 pub fn marker(prev: u32, kind: Kind, detail: u32) -> u32 {
     let n = if prev >> 24 == TAG { (prev & 0xff) + 1 } else { 1 };
-    TAG << 24 | detail.min(0x1fff) << 11 | (kind as u32) << 8 | n.min(0xff)
+    let (kind, detail) = match kind {
+        Kind::Cell => (Kind::Stack, detail.clamp(1, 0x1fff)),
+        Kind::Stack => (Kind::Stack, 0),
+        k => (k, detail.min(0x1fff)),
+    };
+    TAG << 24 | detail << 11 | (kind as u32) << 8 | n.min(0xff)
 }
 
 /// The kind a marker holds.
@@ -115,6 +121,7 @@ pub fn kind(word: u32) -> Kind {
     match word >> 8 & 3 {
         1 => Kind::Cpu,
         2 => Kind::Panic,
+        3 if word >> 11 & 0x1fff != 0 => Kind::Cell,
         3 => Kind::Stack,
         _ => Kind::Unknown,
     }
@@ -144,6 +151,10 @@ pub fn line(word: u32, (y, mo, d, h, mi, s): (u16, u8, u8, u8, u8, u8), build: &
     match kind(word) {
         Kind::Unknown => l.push_str(" fault (kind not kept by that build)"),
         Kind::Stack => l.push_str(" stack overflow (canary)"),
+        Kind::Cell => {
+            l.push_str(" static cell built twice at main.rs line ");
+            l.push_u32(detail);
+        }
         Kind::Panic => {
             l.push_str(" panic at line ");
             l.push_u32(detail);
@@ -206,7 +217,7 @@ pub fn append(
     if keep > 0 {
         let mut s = [0u8; 512];
         fat.read_sector(d, &h, first, &mut s)?;
-        buf[..keep].copy_from_slice(s.get(..keep).ok_or(Error::Corrupt)?);
+        buf.get_mut(..keep).ok_or(Error::Corrupt)?.copy_from_slice(s.get(..keep).ok_or(Error::Corrupt)?);
     }
     buf.get_mut(keep..keep + line.len()).ok_or(Error::Corrupt)?.copy_from_slice(line);
     let end = at + len;
@@ -231,6 +242,11 @@ mod tests {
         assert_eq!(marker(0x1234_5678, Kind::Stack, 0) & 0xff, 1, "not a marker: the first");
         assert_eq!(marker(0xfa00_00ff, Kind::Panic, 99_999) >> 11 & 0x1fff, 0x1fff, "count and line clamped");
         assert_eq!(marker(0xfa00_00ff, Kind::Panic, 0) & 0xff, 0xff);
+        let c = marker(0, Kind::Cell, 1734);
+        assert_eq!((kind(c), c >> 8 & 3), (Kind::Cell, 3), "a cell: kind 3 with its line");
+        assert_eq!(kind(marker(0, Kind::Cell, 0)), Kind::Cell, "line 0 still a cell");
+        assert_eq!(kind(marker(0, Kind::Stack, 9)), Kind::Stack, "the canary keeps detail 0");
+        assert!(line(c, (2026, 1, 2, 3, 4, 5), "b").as_str().contains("static cell built twice at main.rs line 1734"));
         assert_eq!(cfsr_detail(u32::MAX), 0x1fff);
         assert!(line(0xfa00_0001, (2026, 1, 2, 3, 4, 5), "b").as_str().contains("kind not kept"));
         // the longest line fits its buffer, the newline kept

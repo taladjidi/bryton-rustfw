@@ -444,10 +444,14 @@ impl App {
         }
     }
 
-    /// Redraws the status strip if what it shows changed.
-    pub(crate) fn update_strip(&mut self, b: &mut impl Board) {
+    /// Redraws the status strip if what it shows changed. Returns the draw's cycles (0: nothing drawn), the
+    /// profiler's `strip_draw` (the step's `strip` is the rest).
+    pub(crate) fn update_strip(&mut self, b: &mut impl Board) -> u32 {
         let want = self.ahead();
+        let t = b.cycles();
+        let mut drew = false;
         if want != self.plan.top && !self.hint_shown && self.area().0 == 0 {
+            drew = true;
             // the next-step strip takes the status strip's place for the last seconds of a step: whole when it
             // appears, its countdown's changed cells each second, the status strip back when it goes
             let mut p = Panel(b, (0, ui::H), self.look());
@@ -477,7 +481,9 @@ impl App {
                 Some(&self.strip_shown),
             );
             self.strip_shown = self.strip;
+            drew = true;
         }
+        if drew { b.cycles().wrapping_sub(t) } else { 0 }
     }
 
     /// Shows the USB link state in the strip.

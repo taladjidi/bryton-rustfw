@@ -106,7 +106,7 @@ pub fn parse_point(b: &[u8]) -> Option<((i16, i16), &[u8], u64)> {
     let name = b.get(5..5 + len)?;
     (*b.get(5 + len)? == 0).then_some(())?;
     let e = b.get(6 + len..14 + len)?;
-    let ele = u64::from_le_bytes([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]]);
+    let ele = u64::from_le_bytes(e.try_into().ok()?);
     Some(((x, y), name, ele))
 }
 
@@ -212,11 +212,11 @@ impl Pois {
             if w.off_m <= p.off_m {
                 return;
             }
-            self.list.copy_within(worst + 1..MAX, worst);
+            crate::storage::move_within(&mut self.list, worst + 1..MAX, worst);
             self.n -= 1;
         }
         let at = self.list().partition_point(|q| q.along_m <= p.along_m);
-        self.list.copy_within(at..self.n, at + 1);
+        crate::storage::move_within(&mut self.list, at..self.n, at + 1);
         if let Some(slot) = self.list.get_mut(at) {
             *slot = p;
             self.n += 1;
@@ -265,7 +265,9 @@ impl Pois {
                         && let Some(slot) = row.get_mut(n)
                     {
                         *slot = t;
-                        self.scan.nt[zi] += 1;
+                        if let Some(c) = self.scan.nt.get_mut(zi) {
+                            *c += 1;
+                        }
                     }
                 }
             }
@@ -349,6 +351,7 @@ impl Pois {
                 break; // the rest at the next pass
             }
             upto += 1;
+            let Ok(r) = <&[u8; 10]>::try_from(r) else { continue };
             let (layer, npts, class) = (r[0], u16::from_le_bytes([r[1], r[2]]), r[7]);
             let off = u32::from_le_bytes([r[3], r[4], r[5], r[6]]);
             if layer != PEAK_LAYER || npts != 1 || !(1..=3).contains(&class) || off.saturating_add(14) > p.size {
@@ -363,7 +366,8 @@ impl Pois {
             }
             let (top, bot) = self.scan.lat;
             let lat = i64::from(top) + (i64::from(bot) - i64::from(top)) * i64::from(gy) / 4096;
-            let lon = (i64::from(x) * 4096 + i64::from(gx)) * 3_600_000_000 / (4096 << z) - 1_800_000_000;
+            let lon = ((i64::from(x) * 4096 + i64::from(gx)) * 3_600_000_000).checked_div(4096 << z).unwrap_or(0)
+                - 1_800_000_000;
             let Some(plane) = c.plane_of(lat as i32, lon as i32) else { continue };
             if let Some((off_m, along_m)) = c.near(plane, NEAR_M) {
                 self.offer(Poi::new(nm, ele.min(u64::from(u16::MAX)) as u16, class == 3, along_m, off_m));

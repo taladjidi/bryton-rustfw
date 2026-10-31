@@ -300,12 +300,19 @@ impl Phone {
         }
     }
 
+    /// The value handle in slot `i` (0: none, or no such slot).
+    fn handle(&self, i: usize) -> u16 {
+        self.h.get(i).copied().unwrap_or(0)
+    }
+
     /// The slot of a characteristic of the phone's, by its UUID.
     fn slot(&self, uuid: ble::Uuid) -> Option<usize> {
         let vs = [(1, NS), (2, CP), (3, DS), (5, RC), (6, EU)];
         vs.into_iter()
-            .find(|&(k, _)| self.types[k] != 0 && uuid == (ph::uuid16(&ph::VS[k]), self.types[k]))
-            .map(|(_, s)| s)
+            .find_map(|(k, s)| {
+                let t = *self.types.get(k)?;
+                (t != 0 && uuid == (ph::uuid16(ph::VS.get(k)?), t)).then_some(s)
+            })
             .or(match uuid {
                 (0x2a2b, ble::UUID_BLE) => Some(CT),
                 (0x2a0f, ble::UUID_BLE) => Some(LTI),
@@ -669,7 +676,7 @@ impl App {
         let (handle, data): (u16, &[u8]) = match op {
             Op::App(id) => {
                 let n = ph::get_app(id.as_str(), &mut app);
-                (p.h[CP], &app[..n])
+                (p.h[CP], app.get(..n).unwrap_or(&[]))
             }
             Op::Fetch(uid) => {
                 p.ds = Default::default();
@@ -740,7 +747,8 @@ impl App {
             Event::ConnSecUpdate { conn, level } if level >= 2 && Some(conn) == self.phone.conn => {
                 self.phone.secure = true;
                 if let Some(d) = self.phone.stored.bond {
-                    let _ = ble::sys_attr_set(b, rx, conn, Some(&d.attrs[..usize::from(d.attrs_len)]));
+                    let _ =
+                        ble::sys_attr_set(b, rx, conn, Some(d.attrs.get(..usize::from(d.attrs_len)).unwrap_or(&[])));
                 }
                 if self.phone.disc == Disc::Idle {
                     self.phone.disc = Disc::Mtu;
@@ -749,7 +757,12 @@ impl App {
             }
             Event::SysAttrMissing { conn } => {
                 let attrs = self.phone.stored.bond.filter(|_| self.phone.secure);
-                let _ = ble::sys_attr_set(b, rx, conn, attrs.as_ref().map(|d| &d.attrs[..usize::from(d.attrs_len)]));
+                let _ = ble::sys_attr_set(
+                    b,
+                    rx,
+                    conn,
+                    attrs.as_ref().map(|d| d.attrs.get(..usize::from(d.attrs_len)).unwrap_or(&[])),
+                );
             }
             Event::Write { conn, uuid: ble::CCCD, .. } => {
                 self.phone.battery_sent = None; // the level again, in case it was its CCCD
@@ -815,7 +828,7 @@ impl App {
         match (p.disc, e) {
             (Disc::Mtu, Event::MtuRsp { status, mtu, .. }) => {
                 // the link uses the smaller of the two Rx MTUs (Core spec Vol 3 Part F 3.4.2.2); a refusal stays 23
-                p.mtu = if status == 0 { mtu.clamp(23, self.ble.map_or(23, |v| v.mtu)) } else { 23 };
+                p.mtu = if status == 0 { mtu.min(self.ble.map_or(23, |v| v.mtu)).max(23) } else { 23 };
                 p.disc = Disc::Service(0);
             }
             (Disc::Service(n), Event::Services { status: 0, list, .. }) => {
@@ -831,8 +844,10 @@ impl App {
             (Disc::Chars(n, from), Event::Chars { status: 0, list, .. }) if !list.is_empty() => {
                 let mut last = 0;
                 for (uuid, _, decl, value) in ble::chars(list) {
-                    if let Some(slot) = p.slot(uuid) {
-                        p.h[slot] = value;
+                    if let Some(slot) = p.slot(uuid)
+                        && let Some(h) = p.h.get_mut(slot)
+                    {
+                        *h = value;
                     }
                     if let Some(d) = p.decls.get_mut(p.n_decls) {
                         *d = decl;
@@ -895,13 +910,14 @@ impl App {
                 Disc::Descs(n) => {
                     let next = NOTIFYING
                         .get(usize::from(n))
-                        .and_then(|l| l.iter().find(|&&(v, c)| p.h[v] != 0 && p.tried & 1 << c == 0));
+                        .and_then(|l| l.iter().find(|&&(v, c)| p.handle(v) != 0 && p.tried & 1 << c == 0));
                     match next {
                         Some(&(v, c)) => {
                             (p.tried, p.looking) = (p.tried | 1 << c, c);
                             // the descriptors lie between the value and the next declaration (or the service's end)
-                            let value = p.h[v];
-                            let next_decl = p.decls[..p.n_decls].iter().filter(|&&d| d > value).min().copied();
+                            let value = p.handle(v);
+                            let next_decl =
+                                p.decls.get(..p.n_decls).unwrap_or(&[]).iter().filter(|&&d| d > value).min().copied();
                             let end = next_decl.map_or(p.svc_end, |d| d - 1);
                             value < end && ble::discover_descs(b, rx, conn, value + 1, end).is_ok()
                         }
@@ -914,7 +930,7 @@ impl App {
                 Disc::Subscribe(i) => match p.subscriptions().get(usize::from(i)) {
                     Some(&c) => {
                         let wanted = p.stored.notify || !matches!(c, NS_CCCD | DS_CCCD);
-                        wanted && p.h[c] != 0 && ble::write(b, rx, conn, p.h[c], &[1, 0]).is_ok()
+                        wanted && p.handle(c) != 0 && ble::write(b, rx, conn, p.handle(c), &[1, 0]).is_ok()
                     }
                     None => {
                         p.disc = Disc::Register(0);
@@ -929,7 +945,7 @@ impl App {
                     }
                 },
                 Disc::Read(i) => match [CT, LTI].get(usize::from(i)) {
-                    Some(&s) => p.h[s] != 0 && ble::read(b, rx, conn, p.h[s]).is_ok(),
+                    Some(&s) => p.handle(s) != 0 && ble::read(b, rx, conn, p.handle(s)).is_ok(),
                     None => {
                         p.disc = Disc::Done;
                         return self.next_op(b, conn);

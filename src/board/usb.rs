@@ -39,6 +39,8 @@ const GPVNDCTL: u32 = OTG_HS + 0x034;
 /// the high-speed drop depends on the rate. 0 (the default) is off; clamped to 10 ms.
 const PACE_US: u32 = parse_us(option_env!("USB_PACE_US"));
 
+// const evaluation: an index past the end fails the build (and `i < b.len()` guards it)
+#[allow(clippy::indexing_slicing)]
 const fn parse_us(s: Option<&str>) -> u32 {
     let Some(s) = s else { return 0 };
     let (b, mut i, mut n) = (s.as_bytes(), 0, 0u32);
@@ -310,7 +312,7 @@ pub fn start() -> Option<Link> {
     if !core_resets() {
         return None;
     }
-    let alloc: &'static UsbBusAllocator<Bus> = ALLOC.init(UsbBus::new(OtgHs, EP_MEMORY.init([0; 1024])));
+    let alloc: &'static UsbBusAllocator<Bus> = ALLOC.try_init(UsbBus::new(OtgHs, EP_MEMORY.try_init([0; 1024])?))?;
     // the patched crates' fallible allocations (vendor/PATCHES.md): no USB rather than a panic
     let cdc = CdcAcmClass::try_new(alloc, MPS as u16).ok()?;
     let msc = Msc {
@@ -360,12 +362,12 @@ impl Link {
             }
             if let Ok(n @ 1..) = self.msc.out.read(&mut buf) {
                 let mut pipe = Bulk { dev: &mut self.dev, cdc: &mut self.cdc, msc: &mut self.msc };
-                app.drive_packet(board, &buf[..n], &mut pipe);
+                app.drive_packet(board, buf.get(..n).unwrap_or(&[]), &mut pipe);
                 self.worked = true;
             }
             while effect == Effect::None {
                 match self.cdc.read_packet(&mut buf) {
-                    Ok(n) if n > 0 => effect = s.feed(&buf[..n], app, stats, self),
+                    Ok(n) if n > 0 => effect = s.feed(buf.get(..n).unwrap_or(&[]), app, stats, self),
                     _ => break,
                 }
             }
@@ -466,9 +468,12 @@ impl Host for Link {
     fn send(&mut self, mut data: &[u8]) {
         while !data.is_empty() {
             let n = data.len().min(self.out.len() - self.len);
-            self.out[self.len..self.len + n].copy_from_slice(&data[..n]);
+            let Some((now, rest)) = data.split_at_checked(n) else { return };
+            if let Some(dst) = self.out.get_mut(self.len..self.len + n) {
+                dst.copy_from_slice(now);
+            }
             self.len += n;
-            data = &data[n..];
+            data = rest;
             if self.len == self.out.len() {
                 self.write(self.len);
             }

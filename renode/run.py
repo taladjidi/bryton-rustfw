@@ -2,11 +2,12 @@
 """Runs the firmware ELF on Renode's STM32H747 (s510.repl) and checks the hardware layer the host tests cannot:
 start-up, clocks and GPIO writes, the SPI1 byte stream to the panel, no fault, no hang.
 
-  renode/run.py [--seconds 8] [--vbus | --off] [--renode PATH]
+  renode/run.py [--seconds 8] [--off] [--renode PATH]
 
 It logs every SPI1 data write together with the D/C pin (PG9), decodes the panel protocol into a screen
 (target/renode/screen.png) and compares its fixed parts (the status strip's line, the overview's empty notices area) with the simulator's preview
-(target/sim/preview.bmp, written by cargo test-host). --vbus raises PC13 first, so the USB start path runs: Renode
+(target/sim/preview.bmp, written by cargo test-host). One boot does both: after those checked seconds it raises
+PC13, so the USB start path runs: Renode
 models the OTG core but no host, so the dot must turn orange (or red if the core reset fails) and the clock keep
 running. --off then holds Back 10 s and lets go: the unit switches off, and the core must stay asleep in the
 standby's WFI (Renode has no standby: the instruction count over 2 s shows whether anything pending keeps waking it,
@@ -103,20 +104,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # 8 s: the start waits about 1 s for the Nordic chip, which Renode lacks, so its commands time out first.
     ap.add_argument('--seconds', type=float, default=8)
-    ap.add_argument('--vbus', action='store_true')
     ap.add_argument('--off', action='store_true')
     ap.add_argument('--renode', default=RENODE)
     a = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
-    log = OUT / ('vbus.log' if a.vbus else 'off.log' if a.off else 'boot.log')
+    log = OUT / ('off.log' if a.off else 'boot.log')
     script = [f'$elf=@{ELF}', f'include @{ROOT}/renode/s510.resc', 'logLevel 2',
               'logLevel 0 spi1', 'sysbus LogPeripheralAccess spi1', 'logLevel 0 gpioPortG',
               'sysbus LogPeripheralAccess gpioPortG', 'logLevel 0 usb1', 'sysbus LogPeripheralAccess usb1',
               'gpioPortE OnGPIO 3 true', 'gpioPortA OnGPIO 1 true']   # Page and Back released (low = pressed)
-    if a.vbus:
-        script.append('gpioPortC OnGPIO 13 true')
     script += [f'emulation RunFor "{a.seconds}"']
+    if not a.off:   # the cable goes in once the first screen is out: the log's "vbus" line splits the two parts
+        script += ['echo "vbus"', 'gpioPortC OnGPIO 13 true', f'emulation RunFor "{a.seconds}"']
     if a.off:
         # Back held (low; 10 s: 4 were too short in emulated time), released; the switching off ends with standby:
         # then the count, twice, 2 s apart
@@ -127,12 +127,20 @@ def main():
                    'echo "instructions"', 'cpu ExecutedInstructions']
     script += ['cpu PC', 'quit']
     with open(log, 'w') as f:
-        subprocess.run([a.renode, '--disable-gui', '--console', '-e', '; '.join(script)], stdout=f,
-                       stderr=subprocess.STDOUT, check=True, cwd=ROOT)
+        # Bounded: Renode hangs now and then on a loaded machine (2026-10-31) and a gate would wait for ever.
+        limit = float(os.environ.get('RENODE_TIMEOUT', 300))
+        try:
+            subprocess.run([a.renode, '--disable-gui', '--console', '-e', '; '.join(script)], stdout=f,
+                           stderr=subprocess.STDOUT, check=True, cwd=ROOT, timeout=limit)
+        except subprocess.TimeoutExpired:  # run() kills the child before raising
+            sys.exit(f'renode: timed out after {limit:g} s (RENODE_TIMEOUT)')
 
-    stream, dc, usb, after_usb, pc, counts, counting = [], 0, 0, 0, None, [], False
+    stream, dc, usb, after_usb, pc, counts, counting, mark = [], 0, 0, 0, None, [], False, None
     for line in open(log, errors='replace'):
         plain = re.sub(r'\x1b\[[0-9;]*m', '', line).strip()
+        if plain == 'vbus':
+            mark, usb = len(stream), 0
+            continue
         if plain == 'instructions':
             counting = True
             continue
@@ -154,6 +162,7 @@ def main():
         elif m := re.fullmatch(r'(?:\x1b\[[0-9;]*m)*(0x[0-9a-fA-F]+)\s*', line):
             pc = int(m[1], 16)
     cmds, screen = decode(stream)
+    first = decode(stream[:mark])[1] if mark is not None else screen   # the screen before the cable
     (OUT / 'screen.png').write_bytes(png(screen))
 
     fn = where(pc, symbols(ELF)) if pc is not None else '?'
@@ -170,14 +179,18 @@ def main():
         # to `cpu PC` can then be lost at `quit`. The panel traffic checks below still catch a hang.
         print('note: PC not read (log flooded)')
     preview = ROOT / 'target/sim/preview.bmp'
-    if preview.exists():
+    if not preview.exists():
+        fails.append(f'{preview} is missing: run cargo test-host first (the pixel check needs it)')
+    else:
         sim = bmp_rgb(preview)
         for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, the empty notices (src/ui/)
-            bad = [x for x in range(W) if rgb(screen, x, y) != sim[y][x]]
+            bad = [x for x in range(W) if rgb(first, x, y) != sim[y][x]]
             if bad:
                 fails.append(f'row {y} differs from the simulator at x {bad[0]}..{bad[-1]}')
                 break
-    if a.vbus:
+    if not a.off:
+        if mark is None:
+            fails.append('the vbus marker is missing from the log')
         if usb == 0:
             fails.append('PC13 high but the USB core was never touched')
         if after_usb == 0:

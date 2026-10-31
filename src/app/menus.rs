@@ -671,7 +671,9 @@ impl App {
                     && let Some(p) = self.plan.calendar.get(k)
                 {
                     // the day over the length, and the workout's profile beside them: "SAT 24 OCT" is "SAT 24"
-                    let day = label.as_str().rsplit_once(' ').map_or(label.as_str(), |d| d.0);
+                    let day = crate::storage::rfind_ascii(label.as_str(), b' ')
+                        .and_then(|i| label.as_str().get(..i))
+                        .unwrap_or(label.as_str());
                     return ui::draw_workout_row(
                         c,
                         slot,
@@ -755,10 +757,11 @@ impl App {
         }
         for i in 0..self.menu_rows() {
             let print = self.menu_row_print(menu, sel, first, i);
-            if self.menu_shown[i] != print {
+            let (Some(&shown), Some(&head)) = (self.menu_shown.get(i), self.menu_head.get(i)) else { break };
+            if shown != print {
                 let mut p = Panel(b, self.area(), self.look());
                 // only the value changed: its own box, not the 240 x 43 row
-                if self.menu_print(menu, sel, first, i, false) == self.menu_head[i] {
+                if self.menu_print(menu, sel, first, i, false) == head {
                     let at = first + i;
                     let inert = matches!(self.row(menu, at), Some(menu::Row::Empty(_))); // as in draw_menu_row
                     if let Some((label, value, color)) = self.menu_row(menu, at) {
@@ -767,8 +770,10 @@ impl App {
                 } else {
                     self.draw_menu_row(&mut p, menu, sel, first, i);
                 }
-                self.menu_head[i] = self.menu_print(menu, sel, first, i, false);
-                self.menu_shown[i] = print;
+                let now = self.menu_print(menu, sel, first, i, false);
+                if let (Some(h), Some(s)) = (self.menu_head.get_mut(i), self.menu_shown.get_mut(i)) {
+                    (*h, *s) = (now, print);
+                }
             }
         }
     }

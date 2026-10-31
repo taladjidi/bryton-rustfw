@@ -127,14 +127,16 @@ impl Rx {
         // answer the discovery waits for), so a flood of ANCS notifications cannot hide them
         if self.kept_n == self.kept.len()
             && id != Some(EVT_HVX)
-            && let Some(i) = (0..self.kept_n).find(|&i| event_id(&self.kept[i]) == Some(EVT_HVX))
+            && let Some(i) = (0..self.kept_n).find(|&i| self.kept.get(i).is_some_and(|k| event_id(k) == Some(EVT_HVX)))
         {
-            self.kept[i..].rotate_left(1);
-            self.kept_len[i..].rotate_left(1);
+            crate::storage::move_within(&mut self.kept, i + 1..self.kept_n, i);
+            crate::storage::move_within(&mut self.kept_len, i + 1..self.kept_n, i);
             self.kept_n -= 1;
         }
-        if let (Some(slot), Some(len)) = (self.kept.get_mut(self.kept_n), self.kept_len.get_mut(self.kept_n)) {
-            slot[..p.len()].copy_from_slice(p);
+        if let (Some(slot), Some(len)) = (self.kept.get_mut(self.kept_n), self.kept_len.get_mut(self.kept_n))
+            && let Some(dst) = slot.get_mut(..p.len())
+        {
+            dst.copy_from_slice(p);
             *len = p.len() as u8;
             self.kept_n += 1;
         }
@@ -163,7 +165,9 @@ impl Rx {
     /// ```
     pub fn push(&mut self, byte: u8) -> Option<&[u8]> {
         let Some(want) = self.want else {
-            self.header[self.got] = byte;
+            if let Some(h) = self.header.get_mut(self.got) {
+                *h = byte;
+            }
             self.got += 1;
             if self.got == 2 {
                 self.got = 0;
@@ -247,7 +251,7 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
             Some(match u32::from_le_bytes([r0, r1, r2, r3]) {
                 0 => {
                     let len = outputs.len().min(out.len());
-                    out[..len].copy_from_slice(&outputs[..len]);
+                    out.iter_mut().zip(outputs).for_each(|(o, &s)| *o = s);
                     Ok(len)
                 }
                 code => Err(Error::Code(code)),
@@ -340,8 +344,8 @@ fn start_as(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     let (central, mtu) = (level > 0, if level > 1 { ATT_MTU } else { 23 });
     call(b, &mut rx, &[CMD, SD_BLE_ENABLE], &mut out)?;
     let n = call(b, &mut rx, &[CMD, SD_BLE_VERSION_GET, 1], &mut out)?;
-    match out[..n] {
-        [image, b0, b1, s0, s1, ..] => Ok(Version {
+    match out.get(..n) {
+        Some(&[image, b0, b1, s0, s1, ..]) => Ok(Version {
             image,
             bootloader: u16::from_le_bytes([b0, b1]),
             sd: u16::from_le_bytes([s0, s1]),
@@ -391,10 +395,10 @@ pub fn adv_report(p: &[u8]) -> Option<AdvReport<'_>> {
     if event_id(p)? != EVT_ADV_REPORT || p.len() < 23 {
         return None;
     }
-    let mut addr = [0; 6];
-    addr.copy_from_slice(&p[6..12]);
-    let data = p.get(23..23 + usize::from(p[21]))?;
-    Some(AdvReport { addr_type: p[5], addr, rssi: p[19] as i8, data })
+    let h: &[u8; 23] = p.get(..23)?.try_into().ok()?;
+    let addr = h[6..12].try_into().ok()?;
+    let data = p.get(23..23 + usize::from(h[21]))?;
+    Some(AdvReport { addr_type: h[5], addr, rssi: h[19] as i8, data })
 }
 
 /// The advertised name in `data` (complete or shortened), if any.
@@ -722,7 +726,7 @@ impl Nearby {
 
     /// Notes a report: its signal strength, and its name if it carries one. True if the device is new.
     pub fn add(&mut self, r: &AdvReport) -> bool {
-        let known = self.devices[..self.count].iter().position(|d| d.addr == r.addr);
+        let known = self.devices.iter().take(self.count).position(|d| d.addr == r.addr);
         let new = known.is_none() && self.count < Self::MAX;
         let Some(d) = (match known {
             Some(i) => self.devices.get_mut(i),
@@ -741,7 +745,7 @@ impl Nearby {
         }
         if let Some(name) = ad_name(r.data) {
             let n = name.len().min(Device::NAME);
-            for (slot, &c) in d.name.iter_mut().zip(&name[..n]) {
+            for (slot, &c) in d.name.iter_mut().zip(name) {
                 *slot = if c.is_ascii_graphic() || c == b' ' { c } else { b'?' };
             }
             d.name_len = n as u8;
@@ -757,7 +761,9 @@ impl Nearby {
     /// The devices, strongest signal first (a sorted copy: 32 x 24 bytes of stack).
     pub fn strongest(&self) -> impl Iterator<Item = Device> {
         let mut d = self.devices;
-        d[..self.count].sort_unstable_by_key(|d| core::cmp::Reverse(d.rssi));
+        if let Some(s) = d.get_mut(..self.count) {
+            crate::storage::bytes::sort_by_key(s, |d| core::cmp::Reverse(d.rssi));
+        }
         d.into_iter().take(self.count)
     }
 }

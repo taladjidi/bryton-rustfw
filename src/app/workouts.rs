@@ -169,7 +169,9 @@ impl App {
                 m += 1;
             }
         }
-        at.is_some_and(|at| history::done_mask(&want[..n], &rides[..m]) >> at & 1 != 0)
+        at.is_some_and(|at| {
+            history::done_mask(want.get(..n).unwrap_or(&[]), rides.get(..m).unwrap_or(&[])) >> at & 1 != 0
+        })
     }
 
     /// The overview's TODAY card whole ([`ui::draw_today`]).
@@ -428,7 +430,7 @@ impl App {
             Length::Distance(m) => {
                 tail.push_u32(m / 1000);
                 tail.push_str(".");
-                tail.push_str(ui::DIGITS[(m / 100 % 10) as usize]);
+                tail.push_str(digit(m / 100));
                 tail.push_str("K");
             }
             Length::Open => tail.push_str("LAP"),

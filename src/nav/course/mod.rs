@@ -289,7 +289,9 @@ impl Descent {
             let mut j = 0;
             for i in 0..k {
                 if all.get(i).is_some_and(|d| d.max_x10 >= DESC_KEEP_X10) {
-                    all.swap(i, j);
+                    if i < all.len() && j < all.len() {
+                        all.swap(i, j);
+                    }
                     j += 1;
                 }
             }
@@ -298,7 +300,7 @@ impl Descent {
         while k > N {
             // the least steep out (the first of them), the rest keep their order
             let Some(low) = (0..k).min_by_key(|&i| all.get(i).map_or(0, |d| d.max_x10)) else { break };
-            all.copy_within(low + 1..k, low);
+            crate::storage::move_within(&mut all, low + 1..k, low);
             k -= 1;
         }
         let mut out = [Descent::NONE; N];
@@ -444,7 +446,7 @@ pub(crate) fn seg_hit(a: (i32, i32), b: (i32, i32), (da, db): (u32, u32), p: (i3
     let (apx, apy) = (i64::from(p.0) - i64::from(a.0), i64::from(p.1) - i64::from(a.1));
     let l2 = abx * abx + aby * aby;
     // where along the segment, 0 to 65536 (every value here is within 4e6 m: no overflow)
-    let t = if l2 == 0 { 0 } else { ((apx * abx + apy * aby).clamp(0, l2) << 16) / l2 };
+    let t = if l2 == 0 { 0 } else { ((apx * abx + apy * aby).max(0).min(l2) << 16) / l2 };
     let (cx, cy) = (apx - ((abx * t) >> 16), apy - ((aby * t) >> 16));
     let along = i64::from(da) + ((i64::from(db.saturating_sub(da)) * t) >> 16);
     (cx * cx + cy * cy, along.clamp(0, i64::from(u32::MAX)) as u32)
@@ -630,6 +632,8 @@ impl Course {
     }
 
     /// Keeps a point; when full, every other point goes first and the step doubles.
+    // Indexing: i < POINTS / 2, so 2 * i < POINTS and i / 32 < gaps.len() (POINTS / 32).
+    #[allow(clippy::indexing_slicing)]
     fn put(&mut self, p: (i32, i32), d: u32, a: u16) {
         if self.len >= POINTS {
             for i in 0..POINTS / 2 {
@@ -789,7 +793,7 @@ impl Course {
     pub fn lat_lon(&self, p: (i32, i32)) -> Option<(i32, i32)> {
         let (lat, lon, cos) = self.origin?;
         let dlat = i64::from(p.1) * 1_000_000 / 11_132;
-        let dlon = i64::from(p.0) * 1_000_000 * 65_536 / (11_132 * cos.max(1));
+        let dlon = (i64::from(p.0) * 1_000_000 * 65_536).checked_div(11_132 * cos.max(1)).unwrap_or(0);
         Some((
             (i64::from(lat) + dlat).clamp(-900_000_000, 900_000_000) as i32,
             (i64::from(lon) + dlon).clamp(-1_800_000_000, 1_800_000_000) as i32,
@@ -885,7 +889,7 @@ impl Course {
     pub fn grade_ahead(&self, d: u32) -> Option<i32> {
         let to = d.saturating_add(AHEAD_M).min(self.len_m());
         let len = to.checked_sub(d).filter(|&l| l >= 20)?;
-        Some((self.alt_at(to)? - self.alt_at(d)?) * 100 / len as i32)
+        ((self.alt_at(to)? - self.alt_at(d)?) * 100).checked_div(len as i32)
     }
 
     /// The ascent left from where `t` is to the end, m.
@@ -1031,7 +1035,7 @@ impl Course {
             let len = top.saturating_sub(from);
             let gain = alt_at(top).zip(alt_at(from)).map_or(0, |(t, f)| (t - f).max(0) as u32);
             if len >= min_len
-                && gain * 100 / len >= min_grade
+                && (gain * 100).checked_div(len).is_some_and(|g| g >= min_grade)
                 && let Some(slot) = out.get_mut(n)
             {
                 *slot = Climb { start_m: from, len_m: len, gain_m: gain / 10 };
@@ -1045,7 +1049,7 @@ impl Course {
         for b in 0..total.div_ceil(bin) {
             let (d0, d1) = (b.saturating_mul(bin), (b + 1).saturating_mul(bin).min(total));
             let (Some(a0), Some(a1)) = (alt_at(d0), alt_at(d1)) else { break };
-            let up = (a1 - a0) * 100 / (d1 - d0).max(1) as i32 >= UP_X10;
+            let up = ((a1 - a0) * 100).checked_div((d1 - d0).max(1) as i32).is_some_and(|g| g >= UP_X10);
             cur = match cur {
                 None if up => Some((d0, d1, a1)),
                 None => None,

@@ -188,6 +188,7 @@ impl Bikes {
     }
 
     /// See [`Bikes::active`].
+    #[allow(clippy::indexing_slicing)] // k is at most BIKES - 1, the array's last index
     pub fn active_mut(&mut self) -> &mut Bike {
         let k = usize::from(self.active).min(BIKES - 1);
         &mut self.list[k]
@@ -264,11 +265,13 @@ impl Bikes {
             e.copy_from_slice(&c.to_le_bytes());
         }
         for (b, e) in self.list.iter().zip(s[BIKES_AT..].chunks_exact_mut(BIKE_BYTES)) {
+            let Ok(e) = <&mut [u8; BIKE_BYTES]>::try_from(e) else { continue };
             e[0..2].copy_from_slice(&b.gear.wheel_mm.to_le_bytes());
             e[2..4].copy_from_slice(&b.gear.bike_hg.to_le_bytes());
             (e[4], e[5]) = (b.gear.chainrings, b.gear.cassette);
             e[6..10].copy_from_slice(&b.odo_m.to_le_bytes());
             for (p, f) in b.parts.iter().zip(e[10..].chunks_exact_mut(6)) {
+                let Ok(f) = <&mut [u8; 6]>::try_from(f) else { continue };
                 f[0..4].copy_from_slice(&p.m.to_le_bytes());
                 f[4..6].copy_from_slice(&p.every_km.to_le_bytes());
             }

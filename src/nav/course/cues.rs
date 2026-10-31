@@ -264,9 +264,27 @@ impl Turn {
         let left = deg > 0;
         Some(match deg.unsigned_abs() as i32 {
             a if a < TURN_DEG => return None,
-            a if a < SLIGHT_DEG => [Turn::SlightRight, Turn::SlightLeft][usize::from(left)],
-            a if a < SHARP_DEG => [Turn::Right, Turn::Left][usize::from(left)],
-            a if a < UTURN_DEG => [Turn::SharpRight, Turn::SharpLeft][usize::from(left)],
+            a if a < SLIGHT_DEG => {
+                if left {
+                    Turn::SlightLeft
+                } else {
+                    Turn::SlightRight
+                }
+            }
+            a if a < SHARP_DEG => {
+                if left {
+                    Turn::Left
+                } else {
+                    Turn::Right
+                }
+            }
+            a if a < UTURN_DEG => {
+                if left {
+                    Turn::SharpLeft
+                } else {
+                    Turn::SharpRight
+                }
+            }
             _ => Turn::UTurn,
         })
     }
@@ -417,14 +435,16 @@ impl Cues {
     fn halve(&mut self, q: usize) {
         let (mut w, mut j) = (0, 0usize);
         for i in 0..self.n.min(CUES) {
-            let c = self.c[i];
+            let Some(&c) = self.c.get(i) else { break };
             if usize::from(c.turn.rank()) == q {
                 j += 1;
                 if j % 2 == 0 {
                     continue;
                 }
             }
-            self.c[w] = c;
+            if let Some(slot) = self.c.get_mut(w) {
+                *slot = c;
+            }
             w += 1;
         }
         self.n = w;
@@ -462,7 +482,7 @@ impl Course {
     pub(super) fn finish_cues(&mut self) {
         let (mut from, mut n) = (0usize, 0usize);
         for i in 0..self.cues.n.min(CUES) {
-            let c = self.cues.c[i];
+            let Some(&c) = self.cues.c.get(i) else { break };
             let p = self.origin.map(|o| super::project(o, c.pos.0, c.pos.1));
             let hint = match (c.at_m, c.run) {
                 (UNPLACED, _) => None,
@@ -470,8 +490,8 @@ impl Course {
                 (d, false) => Some(self.along_of(d)),
             };
             let hit = p.and_then(|p| hint.and_then(|h| self.place_near(p, h)).or_else(|| self.place(p, from, &mut 0)));
-            if let Some((seg, at_m)) = hit {
-                self.cues.c[n] = Cue { at_m, run: false, ..c };
+            if let (Some((seg, at_m)), Some(slot)) = (hit, self.cues.c.get_mut(n)) {
+                *slot = Cue { at_m, run: false, ..c };
                 (n, from) = (n + 1, seg);
             }
         }
@@ -494,7 +514,7 @@ impl Course {
         // in order: an insertion sort (the file's cues come nearly in order; the shape's turns are, after them)
         for i in 1..n {
             let mut j = i;
-            while j > 0 && self.cues.c[j - 1].at_m > self.cues.c[j].at_m {
+            while j > 0 && matches!(self.cues.c.get(j - 1..=j), Some([a, b]) if a.at_m > b.at_m) {
                 self.cues.c.swap(j - 1, j);
                 j -= 1;
             }
@@ -541,7 +561,7 @@ impl Course {
         let mut budget = PLACE_CHUNKS;
         for (lo, hi, start) in [(first, chunks, from), (0, (first + 1).min(chunks), 0)] {
             for c in lo..hi {
-                if super::box_m(&self.boxes[c], p) > near {
+                if self.boxes.get(c).is_none_or(|b| super::box_m(b, p) > near) {
                     continue;
                 }
                 if budget == 0 {

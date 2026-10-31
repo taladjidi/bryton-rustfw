@@ -6,6 +6,24 @@
 use crate::*;
 use phone::Media;
 
+/// The Nordic UART's RX FIFO depth (USART2, RM0399 USART, FIFO mode): this many bytes found waiting in a row mean it
+/// was full and RTS was holding the chip.
+pub const NRF_FIFO: u32 = 16;
+
+/// How long the receive (main.rs `nrf_recv`) waits for a burst's next byte, in cycles at `cpu_hz`, after `run` bytes
+/// read with no empty poll between them: two byte times (20 us at 1 Mbaud) end a burst; after a full FIFO
+/// ([`NRF_FIFO`]: RTS held the chip) 200 us, for the chip to go on once reading frees the FIFO (within 4 us on the unit,
+/// BOARD.md 11). The rest of a burst split by a longer gap waits in the FIFO (RTS) for the next read.
+///
+/// ```
+/// use bryton_rustfw::nrf_wait_cycles;
+/// assert_eq!(nrf_wait_cycles(1, 200_000_000), 4_000); // 20 us
+/// assert_eq!(nrf_wait_cycles(16, 200_000_000), 40_000); // 200 us
+/// ```
+pub fn nrf_wait_cycles(run: u32, cpu_hz: u32) -> u32 {
+    if run >= NRF_FIFO { cpu_hz / 5_000 } else { cpu_hz / 50_000 }
+}
+
 /// How long a sensor's channel rests, closed, after its search timed out ([`nrf::SEARCH_TIMEOUT`]) before it
 /// searches again: so a strap not worn costs the radio 30 s of listening in 90 instead of all the time.
 pub const SEARCH_REST_MS: u32 = 60_000;
@@ -42,18 +60,18 @@ impl App {
     /// The channels resting after a search timed out ([`SEARCH_REST_MS`]) search again, `pass_ms` later each.
     pub(crate) fn reopen_rested(&mut self, b: &mut impl Board, pass_ms: u32) {
         for kind in Kind::ALL {
-            let i = kind as usize;
-            if self.radio.resting_ms[i] == u32::MAX {
+            if self.radio.resting_ms.at(kind) == u32::MAX {
                 continue;
             }
-            self.radio.resting_ms[i] = self.radio.resting_ms[i].saturating_add(pass_ms).min(u32::MAX - 1);
-            if self.radio.resting_ms[i] >= search_rest_ms(self.radio.misses[i]) {
-                let id = match self.radio.sensors[i] {
+            *self.radio.resting_ms.at_mut(kind) =
+                self.radio.resting_ms.at(kind).saturating_add(pass_ms).min(u32::MAX - 1);
+            if self.radio.resting_ms.at(kind) >= search_rest_ms(self.radio.misses.at(kind)) {
+                let id = match self.radio.sensors.at(kind) {
                     Sensor::Paired(id) => Some(id),
                     _ => None, // still pairing: search for any
                 };
                 let ok = nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok();
-                self.radio.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
+                *self.radio.resting_ms.at_mut(kind) = if ok { u32::MAX } else { 0 }; // failed: another rest
             }
         }
     }
@@ -71,23 +89,24 @@ impl App {
             Kind::Di2 => Some(Kind::Shifting),
             _ => None,
         };
-        if let Some(other) = other.filter(|&o| want != Sensor::Off && self.radio.sensors[o as usize] != Sensor::Off) {
+        if let Some(other) = other.filter(|&o| want != Sensor::Off && self.radio.sensors.at(o) != Sensor::Off) {
             self.set_sensor(b, other, Sensor::Off);
         }
         if matches!(kind, Kind::Trainer | Kind::Power) {
             self.tlink.pm = power_match::PowerMatch::new(); // another sensor: its offset is not this one's
         }
-        let i = kind as usize;
-        self.watch.owed[i] = Sensor::Off; // what the rider asks for now is what is wanted
-        let resting = self.radio.resting_ms[i] != u32::MAX;
-        if self.radio.sensors[i] != Sensor::Off && !resting && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err()
+        *self.watch.owed.at_mut(kind) = Sensor::Off; // what the rider asks for now is what is wanted
+        let resting = self.radio.resting_ms.at(kind) != u32::MAX;
+        if self.radio.sensors.at(kind) != Sensor::Off
+            && !resting
+            && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err()
         {
             return; // still open: leave it as it was
         }
-        self.radio.resting_ms[i] = u32::MAX;
-        self.radio.misses[i] = 0; // the rider's action: from the first rest again
-        self.radio.sensors[i] = Sensor::Off;
-        self.radio.heard_ms[i] = u32::MAX;
+        *self.radio.resting_ms.at_mut(kind) = u32::MAX;
+        *self.radio.misses.at_mut(kind) = 0; // the rider's action: from the first rest again
+        *self.radio.sensors.at_mut(kind) = Sensor::Off;
+        *self.radio.heard_ms.at_mut(kind) = u32::MAX;
         self.decoders.forget_ids(kind); // the percent and maker of the sensor it was
         let id = match want {
             Sensor::Off => None,
@@ -105,7 +124,7 @@ impl App {
         if want != Sensor::Off
             && nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok()
         {
-            self.radio.sensors[i] = want;
+            *self.radio.sensors.at_mut(kind) = want;
         }
     }
 
@@ -126,7 +145,7 @@ impl App {
                 } else if let Some((ch, data)) = nrf::ant_broadcast(p)
                     && let Some(kind) = Kind::from_channel(ch)
                 {
-                    if self.radio.heard_ms[kind as usize] >= sensors::STALE_MS {
+                    if self.radio.heard_ms.at(kind) >= sensors::STALE_MS {
                         // back after a drop-out: its counters may have moved on by any amount; the beats before it
                         // are not part of this series (and the beat time may have wrapped, a false interval)
                         self.decoders.restart(kind);
@@ -152,15 +171,17 @@ impl App {
                     if matches!(kind, Kind::Shifting | Kind::Di2) {
                         self.shifted(); // its presses wait in the decoders until the stream is read (below)
                     }
-                    self.radio.heard_ms[kind as usize] = 0;
-                    self.radio.misses[kind as usize] = 0;
-                    if self.radio.sensors[kind as usize] == Sensor::Search {
+                    *self.radio.heard_ms.at_mut(kind) = 0;
+                    let heard = self.radio.broadcasts.at_mut(kind);
+                    *heard = heard.saturating_add(1);
+                    *self.radio.misses.at_mut(kind) = 0;
+                    if self.radio.sensors.at(kind) == Sensor::Search {
                         self.radio.ask |= 1 << ch;
                     }
                 } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
                     // its search timed out: reopened after a rest, longer for each search in a row that found nothing
-                    self.radio.resting_ms[kind as usize] = 0;
-                    let m = &mut self.radio.misses[kind as usize];
+                    *self.radio.resting_ms.at_mut(kind) = 0;
+                    let m = self.radio.misses.at_mut(kind);
                     *m = m.saturating_add(1);
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {
                     self.powercal.unsent(); // a calibration request the meter did not take: sent again
@@ -292,4 +313,26 @@ pub(crate) fn start_chip(
         }
     }
     ChipStart { ble, ant, di2, refusal, sensors }
+}
+
+impl App {
+    /// The Nordic link's counts since the start, for the dev link's `info`: the watcher's resyncs and the ANT
+    /// broadcasts heard per sensor kind (in [`Kind::ALL`]'s order).
+    pub fn radio_counts(&self) -> (u16, [u32; Kind::ALL.len()]) {
+        (self.watch.resyncs, self.radio.broadcasts)
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    #[test]
+    fn a_full_fifo_waits_long_and_a_byte_off_the_wire_short() {
+        let hz = 200_000_000;
+        assert_eq!(nrf_wait_cycles(0, hz), hz / 50_000);
+        assert_eq!(nrf_wait_cycles(NRF_FIFO - 1, hz), hz / 50_000, "15 waiting: the FIFO was not full");
+        assert_eq!(nrf_wait_cycles(NRF_FIFO, hz), hz / 5_000);
+        assert_eq!(nrf_wait_cycles(NRF_FIFO + 30, hz), hz / 5_000, "the chip went on as the FIFO drained");
+    }
 }

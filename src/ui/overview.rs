@@ -57,7 +57,7 @@ pub fn draw_profile_bars(c: &mut impl Canvas, (x, y, h): (u32, u32, u32), colw: 
         }
         let (level, color) = unpack_bar(bar);
         if level > 0 {
-            let bh = (u32::from(level) * h / PROF_H).clamp(1, h);
+            let bh = (u32::from(level) * h / PROF_H).max(1).min(h);
             c.fill(x + i as u32 * colw, y + h - bh, (j - i) as u32 * colw, bh, color);
         }
         i = j;
@@ -207,7 +207,7 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
         let style = Style { fg: if r == 0 { WHITE } else { GREY }, ..LABEL };
         let small = Style { fg: GREY, scale: 1, ..LABEL };
         let y = NOTICES_Y + 4 + r as u32 * LIST_ROW;
-        let (time, text) = n.split_at(n.find(' ').map_or(0, |i| i + 1));
+        let (time, text) = n.split_at_checked(n.find(' ').map_or(0, |i| i + 1)).unwrap_or(("", n));
         let tw = small.width("00:00 ");
         let text = notice_fit(&style, text, W - 8 - tw);
         text::draw_in(c, &small, 4, y + style.height() - small.height(), tw, Align::Left, time);

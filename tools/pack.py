@@ -58,7 +58,8 @@ def main():
     if (sum(img[:-4]) & 0xffffffff) != int.from_bytes(img[-4:], 'little'):
         sys.exit('pack.py: image sum does not match its last 4 bytes')
     os.makedirs(OUT, exist_ok=True)
-    open(os.path.join(OUT, 'IMG.bin'), 'wb').write(img)
+    open(os.path.join(OUT, 'IMG.bin.tmp'), 'wb').write(img)   # atomic: lane P's dev.py selftest may read IMG.bin
+    os.replace(os.path.join(OUT, 'IMG.bin.tmp'), os.path.join(OUT, 'IMG.bin'))
     open(os.path.join(OUT, 'update.ini'), 'w', newline='\r\n').write(
         f'[OS]\nName=IMG.bin\nVersion={tag.decode()}\nSize={len(img)}\n')
     print(f'image {end} B used, reset 0x{reset:08x}, SP 0x{sp:08x}, tag {tag.decode()}; '

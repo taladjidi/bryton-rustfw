@@ -14,6 +14,10 @@
 #![no_std]
 #![no_main]
 #![deny(unsafe_code)] // only hw.rs may use unsafe
+#![cfg_attr(
+    not(test),
+    deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable)
+)]
 
 mod board;
 
@@ -21,6 +25,7 @@ use board::{hw, usb};
 use bryton_rustfw::dev::{Effect, Session, UsbWatch};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
+use bryton_rustfw::storage::faultlog::Kind;
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, Cable, LoopPolicy, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, Woke, standby_flags_word};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -596,7 +601,7 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
         let k = left.min(hw::DMA_WORDS);
         let ready = match d.buf(cur) {
             Some(b) if k > 0 => {
-                for w in &mut b[..k] {
+                for w in b.iter_mut().take(k) {
                     *w = run.pair();
                 }
                 left -= k;
@@ -609,12 +614,12 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
         {
             let Some(rest) = d.stop().map(|rest| rest.min(n)) else { return Err(None) };
             if let Some(b) = d.buf(i) {
-                b[n - rest..n].iter().for_each(|&w| spi_word(w));
+                b.get(n - rest..n).unwrap_or(&[]).iter().for_each(|&w| spi_word(w));
             }
             if let Some((j, m)) = ready
                 && let Some(b) = d.buf(j)
             {
-                b[..m].iter().for_each(|&w| spi_word(w));
+                b.iter().take(m).for_each(|&w| spi_word(w));
             }
             return Err(Some(left));
         }
@@ -624,7 +629,7 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
         if !dma_go(d, i, n, false) {
             // not started (the stream is idle here, so not expected): these words by the CPU, and the rest
             if let Some(b) = d.buf(i) {
-                b[..n].iter().for_each(|&w| spi_word(w));
+                b.iter().take(n).for_each(|&w| spi_word(w));
             }
             return Err(Some(left));
         }
@@ -911,19 +916,26 @@ fn nrf_send(data: &[u8]) {
     }
 }
 
-/// Reads what has arrived, and while bytes keep coming waits up to 200 us for the next one: reading frees the FIFO,
-/// RTS lets the chip go on (16 bytes take 160 us at 1 Mbaud), so a burst of events comes in one call instead of 16
-/// bytes per main loop pass. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
+/// Reads what has arrived, and while bytes keep coming waits for the next one as long as
+/// [`bryton_rustfw::nrf_wait_cycles`] says (20 us, or 200 us after a full FIFO), so a long burst comes in one call
+/// instead of 16 bytes per main loop pass. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
 fn nrf_recv(buf: &mut [u8]) -> usize {
     let mut n = 0;
+    let mut run = 0; // bytes read with no empty poll between them: a byte off the wire comes alone (10 us each)
+    let mut gap = false;
     let mut last = cycles();
-    while n < buf.len() {
+    while let Some(slot) = buf.get_mut(n) {
         if rd(U_ISR) & ISR_RXFNE != 0 {
-            buf[n] = rd(U_RDR) as u8;
+            *slot = rd(U_RDR) as u8;
             n += 1;
+            run = if gap { 1 } else { run + 1 };
+            gap = false;
             last = cycles();
-        } else if n == 0 || cycles().wrapping_sub(last) > CPU_HZ / 5000 {
-            break;
+        } else {
+            if n == 0 || cycles().wrapping_sub(last) > bryton_rustfw::nrf_wait_cycles(run, CPU_HZ) {
+                break;
+            }
+            gap = true;
         }
     }
     wr(U_ICR, 0xf); // an overrun cannot happen with RTS, but never let an error flag stop reception
@@ -1005,7 +1017,7 @@ fn beep(hz: u32) {
         return;
     }
     let clk = tim1_hz();
-    let psc = clk / (hz * 65_536); // smallest prescaler that keeps the period in 16 bits
+    let psc = clk.checked_div(hz * 65_536).unwrap_or(0); // smallest prescaler that keeps the period in 16 bits
     let arr = (clk / (psc + 1) / hz).clamp(2, 65_536) - 1;
     wr(TIM1, 0);
     wr(TIM1 + 0x28, psc); // PSC
@@ -1127,8 +1139,8 @@ fn gnss_init() {
 /// Exchanges `buf` with the receiver in place (its length a multiple of 4); gives up on a stuck SPI (0xff back).
 fn gnss_transfer(buf: &mut [u8]) {
     pin_set(GNSS_CS.0, GNSS_CS.1, false);
-    for chunk in buf.chunks_exact_mut(4) {
-        let out = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for chunk in buf.as_chunks_mut::<4>().0 {
+        let out = u32::from_le_bytes(*chunk);
         let ok = wait_us(100, || rd(SPI4 + 0x14) & (1 << 1) != 0) && {
             wr(SPI4 + 0x20, out); // TXDR
             wait_us(100, || rd(SPI4 + 0x14) & 1 != 0) // RXP: 32 bits at 4 MHz take 8 us
@@ -1295,7 +1307,7 @@ fn emmc_write(index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
     };
     let limit = (100 + len / 512).min(10_000) * (CPU_HZ / 1000); // 100 ms + 1 ms a block
     let t0 = cycles();
-    let mut words = buf.chunks_exact(4);
+    let mut words = buf.as_chunks::<4>().0.iter();
     let mut next = words.next();
     let result = loop {
         let sta = rd(SD_STA);
@@ -1309,7 +1321,7 @@ fn emmc_write(index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
         if sta & STA_TXFIFOF == 0
             && let Some(w) = next
         {
-            wr(SD_FIFO, u32::from_le_bytes([w[0], w[1], w[2], w[3]])); // the word's lowest byte goes out first
+            wr(SD_FIFO, u32::from_le_bytes(*w)); // the word's lowest byte goes out first
             next = words.next();
             continue;
         }
@@ -1669,6 +1681,8 @@ const STOP: u32 = match option_env!("DIAG_STOP") {
     None => 0,
 };
 
+// const evaluation: an index past the end fails the build (and `i < b.len()` guards it)
+#[allow(clippy::indexing_slicing)]
 const fn parse_u32(s: &str) -> u32 {
     let b = s.as_bytes();
     let (mut i, mut n) = (0, 0);
@@ -1692,6 +1706,17 @@ fn checkpoint(n: u32) {
     }
 }
 
+/// A static cell's value, or, for a second init or take (impossible by construction: each `make_*` runs once, from
+/// main), a fault marked as a cell built twice at the caller's line ([`Kind::Cell`]) and a reset (hw.rs `fault`), so
+/// no `core::panicking` call is linked as `init_with` / `take` would.
+#[track_caller]
+fn once<T>(cell: Option<&'static mut T>) -> &'static mut T {
+    match cell {
+        Some(v) => v,
+        None => hw::fault(Kind::Cell, core::panic::Location::caller().line()), // not in a closure: the caller's line
+    }
+}
+
 /// The app, kept in `.bss` (a static cell), not on main's stack: as a local, `App` (tens of KB) was held in main's
 /// frame several times over (its construction, the move), which made main's frame 111 KB of the 123 KB of stack, and
 /// opening a workout (a 17 KB frame more) overflowed into `.bss` (2026-10-24). Not inlined, so the one temporary
@@ -1706,7 +1731,7 @@ fn make_app(
     past: &'static mut bryton_rustfw::history::Past,
 ) -> &'static mut App {
     static APP: static_cell::StaticCell<App> = static_cell::StaticCell::new();
-    let app = APP.init_with(|| App::new_with(board, ANT_KEY, DI2_KEY, stock, past));
+    let app = once(APP.try_init_with(|| App::new_with(board, ANT_KEY, DI2_KEY, stock, past)));
     app.begin(board);
     app
 }
@@ -1716,7 +1741,7 @@ fn make_app(
 #[inline(never)]
 fn make_stock_scan() -> &'static mut bryton_rustfw::stock::Scan {
     static SCAN: static_cell::StaticCell<bryton_rustfw::stock::Scan> = static_cell::StaticCell::new();
-    SCAN.init_with(bryton_rustfw::stock::Scan::new)
+    once(SCAN.try_init_with(bryton_rustfw::stock::Scan::new))
 }
 
 /// The card of the past ride shown (storage/history.rs `Past`, about 11 KB), beside the app in AXI SRAM (link.x
@@ -1724,7 +1749,7 @@ fn make_stock_scan() -> &'static mut bryton_rustfw::stock::Scan {
 #[inline(never)]
 fn make_past() -> &'static mut bryton_rustfw::history::Past {
     static PAST: static_cell::StaticCell<bryton_rustfw::history::Past> = static_cell::StaticCell::new();
-    PAST.init_with(bryton_rustfw::history::Past::new)
+    once(PAST.try_init_with(bryton_rustfw::history::Past::new))
 }
 
 /// The course memory (about 70 KB: the course followed, its list), beside the app in AXI SRAM (link.x `.axibss`).
@@ -1734,7 +1759,7 @@ fn make_past() -> &'static mut bryton_rustfw::history::Past {
 fn make_courses() -> &'static mut bryton_rustfw::storage::course_file::Courses {
     static COURSES: static_cell::StaticCell<bryton_rustfw::storage::course_file::Courses> =
         static_cell::StaticCell::new();
-    COURSES.init_with(bryton_rustfw::storage::course_file::Courses::new)
+    once(COURSES.try_init_with(bryton_rustfw::storage::course_file::Courses::new))
 }
 
 /// The named points along a course (storage/named.rs: about 2 KB), a const cell of all zeros in AXI SRAM, never built
@@ -1742,7 +1767,7 @@ fn make_courses() -> &'static mut bryton_rustfw::storage::course_file::Courses {
 fn make_pois() -> &'static mut bryton_rustfw::named::Pois {
     static POIS: static_cell::ConstStaticCell<bryton_rustfw::named::Pois> =
         static_cell::ConstStaticCell::new(bryton_rustfw::named::Pois::new());
-    POIS.take()
+    once(POIS.try_take())
 }
 
 /// The road ahead (climbs_ahead.rs `Ahead`: the routing graph, the trace, about 110 KB), in AXI SRAM (link.x
@@ -1751,7 +1776,7 @@ fn make_pois() -> &'static mut bryton_rustfw::named::Pois {
 fn make_ahead() -> &'static mut bryton_rustfw::climbs_ahead::Ahead {
     static AHEAD: static_cell::ConstStaticCell<bryton_rustfw::climbs_ahead::Ahead> =
         static_cell::ConstStaticCell::new(bryton_rustfw::climbs_ahead::Ahead::new());
-    AHEAD.take()
+    once(AHEAD.try_take())
 }
 
 /// The live segments (app/segments.rs `Segments`: index and active segment, about 13 KB). Must start as zeros to stay
@@ -1759,7 +1784,7 @@ fn make_ahead() -> &'static mut bryton_rustfw::climbs_ahead::Ahead {
 fn make_segments() -> &'static mut bryton_rustfw::Segments {
     static SEGMENTS: static_cell::ConstStaticCell<bryton_rustfw::Segments> =
         static_cell::ConstStaticCell::new(bryton_rustfw::Segments::new());
-    SEGMENTS.take()
+    once(SEGMENTS.try_take())
 }
 
 /// The scan's cache of stock's rides (storage/stock.rs `Cache`, 192 KB), in AXI SRAM (link.x `.axibss`). A const
@@ -1767,7 +1792,7 @@ fn make_segments() -> &'static mut bryton_rustfw::Segments {
 fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
     static CACHE: static_cell::ConstStaticCell<bryton_rustfw::stock::Cache> =
         static_cell::ConstStaticCell::new(bryton_rustfw::stock::Cache::new());
-    CACHE.take()
+    once(CACHE.try_take())
 }
 
 /// This ride's power curve (training/power_curve.rs `Rolling`, 3.3 KB), beside the app in AXI SRAM (link.x `.axibss`): a
@@ -1775,7 +1800,7 @@ fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
 fn make_ride_curve() -> &'static mut bryton_rustfw::power_curve::Rolling {
     static CURVE: static_cell::ConstStaticCell<bryton_rustfw::power_curve::Rolling> =
         static_cell::ConstStaticCell::new(bryton_rustfw::power_curve::Rolling::new());
-    CURVE.take()
+    once(CURVE.try_take())
 }
 
 /// The reading of the recent rides for FITNESS's heart rate variability thresholds (storage/thresholds.rs `Scan`,
@@ -1783,7 +1808,7 @@ fn make_ride_curve() -> &'static mut bryton_rustfw::power_curve::Rolling {
 #[inline(never)]
 fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
     static SCAN: static_cell::StaticCell<bryton_rustfw::thresholds::Scan> = static_cell::StaticCell::new();
-    SCAN.init_with(bryton_rustfw::thresholds::Scan::new)
+    once(SCAN.try_init_with(bryton_rustfw::thresholds::Scan::new))
 }
 
 /// The three bikes and their file (app/bikes.rs `BikeStore`, under 200 bytes the app has no room for), beside the app
@@ -1791,7 +1816,7 @@ fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
 #[inline(never)]
 fn make_bikes() -> &'static mut bryton_rustfw::BikeStore {
     static BIKES: static_cell::StaticCell<bryton_rustfw::BikeStore> = static_cell::StaticCell::new();
-    BIKES.init_with(bryton_rustfw::BikeStore::new)
+    once(BIKES.try_init_with(bryton_rustfw::BikeStore::new))
 }
 
 /// The stack canary still holds its pattern, or a fault (hw.rs `fault`: the marker, a reset, the ride resumes from its
@@ -1801,7 +1826,7 @@ fn make_bikes() -> &'static mut bryton_rustfw::BikeStore {
 #[inline(always)]
 fn stack_check() {
     if !bryton_rustfw::stack_intact(rd(hw::stack_canary())) {
-        hw::fault();
+        hw::fault(Kind::Stack, 0);
     }
 }
 

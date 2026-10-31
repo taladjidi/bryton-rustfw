@@ -26,8 +26,10 @@ pub enum Sec {
     Radio,
     /// The GNSS receiver's SPI and UBX.
     Gnss,
-    /// The status strip.
+    /// The status strip: its inputs (the GPS fix, the ride's mark), the next-step lookup and the compare.
     Strip,
+    /// The status strip's parts drawn, when one changed (only its runs: calls/s is draws a second).
+    StripDraw,
     /// The scan of stock's rides.
     Scan,
     /// Courses, past rides, thresholds, `pages.bin` (card work).
@@ -69,6 +71,7 @@ impl Sec {
         Sec::Radio,
         Sec::Gnss,
         Sec::Strip,
+        Sec::StripDraw,
         Sec::Scan,
         Sec::Files,
         Sec::Ahead,
@@ -94,6 +97,7 @@ impl Sec {
             Sec::Radio => "radio",
             Sec::Gnss => "gnss",
             Sec::Strip => "strip",
+            Sec::StripDraw => "strip_draw",
             Sec::Scan => "scan",
             Sec::Files => "files",
             Sec::Ahead => "ahead",

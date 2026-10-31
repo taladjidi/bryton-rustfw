@@ -195,6 +195,26 @@ impl Gps {
     }
 }
 
+/// A per-kind array read and written by [`Kind`], the one place that indexes it.
+pub(crate) trait ByKind<T: Copy> {
+    /// The entry of `k`.
+    fn at(&self, k: Kind) -> T;
+    /// The entry of `k`, to write.
+    fn at_mut(&mut self, k: Kind) -> &mut T;
+}
+
+impl<T: Copy> ByKind<T> for [T; Kind::ALL.len()] {
+    #[allow(clippy::indexing_slicing)] // Kind's discriminants are 0..Kind::ALL.len() (channel order)
+    fn at(&self, k: Kind) -> T {
+        self[k as usize]
+    }
+
+    #[allow(clippy::indexing_slicing)] // as above
+    fn at_mut(&mut self, k: Kind) -> &mut T {
+        &mut self[k as usize]
+    }
+}
+
 /// The ANT+ side of the radio (app/radio.rs): the paired sensors, how long since each was heard, the search and the
 /// shifting system's counts.
 pub(crate) struct Radio {
@@ -220,6 +240,8 @@ pub(crate) struct Radio {
     pub(crate) lost: u8,
     /// The sensors heard in this ride (bit per kind): only those can be lost.
     pub(crate) heard: u8,
+    /// ANT broadcasts heard per kind since the start (the dev link's `info`: against about 4 Hz per sensor).
+    pub(crate) broadcasts: [u32; Kind::ALL.len()],
 }
 
 /// A paired sensor silent this long while a ride records is announced as lost.
@@ -240,6 +262,7 @@ impl Radio {
             shifts: 0,
             lost: 0,
             heard: 0,
+            broadcasts: [0; Kind::ALL.len()],
         }
     }
 
@@ -253,9 +276,8 @@ impl Radio {
         }
         let (mut lost, mut back) = (0, 0);
         for k in [Kind::Hr, Kind::Speed, Kind::Cadence, Kind::SpeedCadence, Kind::Power] {
-            let i = k as usize;
-            let (bit, h) = (1u8 << i, self.heard_ms[i]);
-            if !matches!(self.sensors[i], Sensor::Paired(_)) {
+            let (bit, h) = (1u8 << (k as usize), self.heard_ms.at(k));
+            if !matches!(self.sensors.at(k), Sensor::Paired(_)) {
                 (self.heard, self.lost) = (self.heard & !bit, self.lost & !bit);
             } else if h < sensors::STALE_MS {
                 self.heard |= bit;

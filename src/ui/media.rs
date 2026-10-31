@@ -173,7 +173,7 @@ fn split(s: &str, w: u32) -> (&str, &str) {
         return (s, "");
     }
     let head = LABEL.fit(s, w);
-    let cut = head.rfind(' ').filter(|&i| i > 0).unwrap_or(head.len());
+    let cut = crate::storage::rfind_ascii(head, b' ').filter(|&i| i > 0).unwrap_or(head.len());
     (s.get(..cut).unwrap_or(""), s.get(cut..).unwrap_or("").trim_start())
 }
 

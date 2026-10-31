@@ -23,3 +23,48 @@ pub fn le16(b: &[u8], at: usize) -> Option<u16> {
 pub fn le32(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(*b.get(at..)?.first_chunk::<4>()?))
 }
+
+/// Sorts `s` by `key`, smallest first, equal keys kept in order: an insertion sort for the few tens of items the
+/// unit sorts (the nRF's nearby devices, 32; FITNESS's rides, 32), with no panic path linked (core's `sort_unstable`
+/// keeps one for an `Ord` that is not a total order). Quadratic: only for small slices.
+///
+/// ```
+/// let mut v = [3, 1, 2];
+/// bryton_rustfw::storage::bytes::sort_by_key(&mut v, |&x| x);
+/// assert_eq!(v, [1, 2, 3]);
+/// ```
+pub fn sort_by_key<T, K: Ord>(s: &mut [T], key: impl Fn(&T) -> K) {
+    for i in 1..s.len() {
+        for j in (1..=i).rev() {
+            match s.get_mut(j - 1..=j) {
+                Some([a, b]) if key(b) < key(a) => core::mem::swap(a, b),
+                _ => break,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::sort_by_key;
+
+    #[test]
+    fn sort_by_key_matches_core_sort() {
+        let mut x = 0x1234_5678u32;
+        for n in 0..40 {
+            let mut v: std::vec::Vec<(u8, u16)> = (0..n)
+                .map(|i| {
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    ((x % 7) as u8, i)
+                })
+                .collect();
+            let mut want = v.clone();
+            want.sort_by_key(|p| p.0); // stable, as ours
+            sort_by_key(&mut v, |p| p.0);
+            assert_eq!(v, want, "n {n}");
+        }
+    }
+}

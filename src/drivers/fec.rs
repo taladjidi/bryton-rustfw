@@ -72,7 +72,10 @@ pub mod seen {
 /// assert_eq!((r.power, r.cadence, r.state), (Some(200), Some(90), 3));
 /// ```
 pub fn decode(d: [u8; 8], r: &mut Reading) {
-    let u16_at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]);
+    let u16_at = |i: usize| {
+        let g = |j: usize| d.get(j).copied().unwrap_or(0);
+        u16::from_le_bytes([g(i), g(i + 1)])
+    };
     match d[0] {
         // general FE data: speed in mm/s (0xffff: none), the heart rate with its source in byte 7
         16 => {

@@ -334,7 +334,7 @@ impl Basemap {
         };
         let Some(v) = ign.filter(|v| v.tiles.iter().take(v.n).any(|t| t.3.is_some())) else { return Ok(stock) };
         let Some(mem) = self.mem.as_deref_mut() else { return Ok(stock) };
-        let (px, rest) = mem.split_at_mut(PIXELS);
+        let Some((px, rest)) = mem.split_at_mut_checked(PIXELS) else { return Ok(stock) };
         let rasters = rest.get(SLOTS * SLOT_WORDS..).unwrap_or(&[]);
         let px = px.get_mut(..(w * h) as usize).unwrap_or(&mut []);
         if !stock {
@@ -393,8 +393,8 @@ impl Basemap {
                 continue;
             }
             let p = frame.proj(z, x as u32, y as u32);
-            if p.on_screen(w, h) {
-                tiles[n] = (x as u32, y as u32, p);
+            if let (true, Some(slot)) = (p.on_screen(w, h), tiles.get_mut(n)) {
+                *slot = (x as u32, y as u32, p);
                 n += 1;
             }
         }
@@ -403,22 +403,25 @@ impl Basemap {
         // the tiles not held go into the slots used longest ago (not one of these)
         self.tick = self.tick.wrapping_add(1);
         let mut at = [usize::MAX; SLOTS];
-        for (i, &(x, y, _)) in tiles.iter().take(n).enumerate() {
-            if let Some(s) = self.slots.iter().position(|s| s.key == (z, x, y)) {
-                at[i] = s;
-                self.slots[s].used = self.tick;
+        for (a, &(x, y, _)) in at.iter_mut().zip(tiles.iter().take(n)) {
+            if let Some((s, slot)) = self.slots.iter_mut().enumerate().find(|(_, s)| s.key == (z, x, y)) {
+                *a = s;
+                slot.used = self.tick;
             }
         }
         for (i, &(x, y, _)) in tiles.iter().take(n).enumerate() {
-            if at[i] != usize::MAX {
+            if at.get(i) != Some(&usize::MAX) {
                 continue;
             }
-            let free = (0..SLOTS).filter(|s| !at.contains(s)).min_by_key(|&s| self.slots[s].used);
+            let free =
+                (0..SLOTS).filter(|s| !at.contains(s)).min_by_key(|&s| self.slots.get(s).map_or(0, |slot| slot.used));
             let Some(s) = free else { continue };
             let Some(words) = store.get_mut(s * SLOT_WORDS..(s + 1) * SLOT_WORDS) else { continue };
-            let (feats, pts) = words.split_at_mut(FEATS * 4);
+            let Some((feats, pts)) = words.split_at_mut_checked(FEATS * 4) else { continue };
             let (feats, _) = feats.as_chunks_mut::<4>();
-            self.slots[s] = Slot { key: (0, 0, 0), feats: 0, used: self.tick };
+            if let Some(slot) = self.slots.get_mut(s) {
+                *slot = Slot { key: (0, 0, 0), feats: 0, used: self.tick };
+            }
             let name = tile_name(x, y);
             let got = match (dirs, self.osm.find(fat, d, (z, x, y))) {
                 (_, Err(e)) => Err(e),
@@ -436,9 +439,13 @@ impl Basemap {
                 Err(fat::Error::Io) => return Err(fat::Error::Io),
                 Err(_) => 0, // missing or damaged: drawn empty
             };
-            self.slots[s] = Slot { key: (z, x, y), feats, used: self.tick };
+            if let Some(slot) = self.slots.get_mut(s) {
+                *slot = Slot { key: (z, x, y), feats, used: self.tick };
+            }
             self.stats.tiles_read += 1;
-            at[i] = s;
+            if let Some(a) = at.get_mut(i) {
+                *a = s;
+            }
         }
         // draw: the background, then each draw key over all tiles
         let px = px.get_mut(..(w * h) as usize).unwrap_or(&mut []);
@@ -449,12 +456,13 @@ impl Basemap {
         let mut buf = Raster { px, w, h, written: 0 };
         for key in 0..KEYS {
             for (i, &(_, _, proj)) in tiles.iter().take(n).enumerate() {
-                let Some(slot) = self.slots.get(at[i]) else { continue };
-                let Some(words) = store.get(at[i] * SLOT_WORDS..(at[i] + 1) * SLOT_WORDS) else { continue };
-                let (feats, pts) = words.split_at(FEATS * 4);
+                let (Some(&ai), Some(cur)) = (at.get(i), cursor.get_mut(i)) else { continue };
+                let Some(slot) = self.slots.get(ai) else { continue };
+                let Some(words) = store.get(ai * SLOT_WORDS..(ai + 1) * SLOT_WORDS) else { continue };
+                let Some((feats, pts)) = words.split_at_checked(FEATS * 4) else { continue };
                 let feats = feats.as_chunks::<4>().0.get(..slot.feats).unwrap_or(&[]);
-                while let Some(f) = feats.get(cursor[i]).filter(|f| f[1] == key) {
-                    cursor[i] += 1;
+                while let Some(f) = feats.get(*cur).filter(|f| f[1] == key) {
+                    *cur += 1;
                     let Some(pts) = pts.get(usize::from(f[0]) * 2..(usize::from(f[0]) + usize::from(f[2])) * 2) else {
                         continue;
                     };
@@ -691,7 +699,7 @@ fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
     }
     // grid unit u lands at (a u + b) >> 16, so pixel s's centre is at u = ((s + 1/2) 2^16 - b) / a, 16 a pixel
     let at = |s: i32, a: i64, b: i64| {
-        let t = if a > 0 { ((i64::from(s) << 16) + 0x8000 - b).div_euclid(a * 16) } else { -1 };
+        let t = if a > 0 { ((i64::from(s) << 16) + 0x8000 - b).checked_div_euclid(a * 16).unwrap_or(0) } else { -1 };
         u16::try_from(t).ok().filter(|&t| usize::from(t) < ign::SIDE)
     };
     let mut cols = [0u16; ui::W as usize];
@@ -878,9 +886,9 @@ fn load(
         let bytes = io.get_mut(..batch as usize * 10).ok_or(fat::Error::Corrupt)?;
         t.read(false, 4 + i * 10, bytes)?;
         stats.bytes_read += bytes.len() as u32;
-        for r in bytes.chunks_exact(10) {
-            let (layer, npts, class, sub) = (u16::from(r[0]), u16::from_le_bytes([r[1], r[2]]), r[7], r[8]);
-            let off = u32::from_le_bytes([r[3], r[4], r[5], r[6]]);
+        for &[r0, r1, r2, r3, r4, r5, r6, class, sub, _] in bytes.as_chunks::<10>().0 {
+            let (layer, npts) = (u16::from(r0), u16::from_le_bytes([r1, r2]));
+            let off = u32::from_le_bytes([r3, r4, r5, r6]);
             let min = if layer == WATER_AREA { 3 } else { 2 };
             if !(ROAD..=WATERWAY).contains(&layer) || class == 0 || class > 13 || npts < min || n == feats.len() {
                 continue;
@@ -923,7 +931,7 @@ fn load(
                 }
             }
             let at = (pos - start) as usize;
-            let b = io.get(at..at + 4).ok_or(fat::Error::Corrupt)?;
+            let b: [u8; 4] = io.get(at..at + 4).and_then(|b| b.try_into().ok()).ok_or(fat::Error::Corrupt)?;
             let (x, y) = (u16::from_le_bytes([b[0], b[1]]), u16::from_le_bytes([b[2], b[3]]));
             if let Some(p) = pts.get_mut((next + j) * 2..(next + j) * 2 + 2) {
                 p.copy_from_slice(&[x, y]);
@@ -958,19 +966,24 @@ fn load(
 /// Sorts features by draw key (`f[1]`), in place: heapsort, O(n log n) and a few hundred bytes of code where
 /// core's sort_unstable costs about 6 KB of image.
 fn heapsort(v: &mut [[u16; 4]]) {
+    fn key(v: &[[u16; 4]], i: usize) -> Option<u16> {
+        v.get(i).map(|f| f[1])
+    }
     fn down(v: &mut [[u16; 4]], mut root: usize, end: usize) {
         loop {
             let mut child = 2 * root + 1;
             if child >= end {
                 return;
             }
-            if child + 1 < end && v[child][1] < v[child + 1][1] {
+            if child + 1 < end && key(v, child) < key(v, child + 1) {
                 child += 1;
             }
-            if v[root][1] >= v[child][1] {
+            if key(v, root) >= key(v, child) {
                 return;
             }
-            v.swap(root, child);
+            if root < v.len() && child < v.len() {
+                v.swap(root, child);
+            }
             root = child;
         }
     }
@@ -979,7 +992,9 @@ fn heapsort(v: &mut [[u16; 4]]) {
         down(v, root, n);
     }
     for end in (1..n).rev() {
-        v.swap(0, end);
+        if end < v.len() {
+            v.swap(0, end);
+        }
         down(v, 0, end);
     }
 }
@@ -1249,7 +1264,7 @@ impl Raster<'_> {
             // the brush centres covering row y lie on rows y - hi ..= y + lo of the segment, each row from half a
             // row above to half a row below (in half rows), so a shallow line has no gaps
             let (c0, c1) = ((2 * (y - hi) - 1).max(2 * a.1), (2 * (y + lo) + 1).min(2 * b.1));
-            let at = |c: i32| a.0 + dx * (c - 2 * a.1) / (2 * dy);
+            let at = |c: i32| a.0 + (dx * (c - 2 * a.1)).checked_div(2 * dy).unwrap_or(0);
             let (x0, x1) = if dy == 0 { (a.0, b.0) } else { (at(c0), at(c1)) };
             self.run(y, x0.min(x1) - lo, x0.max(x1) + hi, color);
         }
@@ -1288,27 +1303,30 @@ impl Raster<'_> {
         let mut xs = [0i32; 64];
         for y in top.max(0)..=bottom.min(self.h - 1) {
             let mut k = 0;
-            let mut a = ring[n - 1];
-            for &b in &ring[..n] {
+            let Some(mut a) = ring.get(n - 1).copied() else { return };
+            for &b in ring.iter().take(n) {
                 // edges crossing the row's centre, half open so a vertex counts once
-                if (a.1 <= y) != (b.1 <= y) && k < xs.len() {
-                    let x = i64::from(a.0) + i64::from(b.0 - a.0) * i64::from(y - a.1) / i64::from(b.1 - a.1);
-                    xs[k] = x as i32;
+                if (a.1 <= y) != (b.1 <= y)
+                    && let Some(slot) = xs.get_mut(k)
+                {
+                    let x = i64::from(a.0)
+                        + (i64::from(b.0 - a.0) * i64::from(y - a.1)).checked_div(i64::from(b.1 - a.1)).unwrap_or(0);
+                    *slot = x as i32;
                     k += 1;
                 }
                 a = b;
             }
-            let xs = &mut xs[..k];
+            let Some(xs) = xs.get_mut(..k) else { continue };
             for i in 1..xs.len() {
                 // insertion sort: a row crosses a few edges (core's sort costs 2 KB of image)
                 let mut j = i;
-                while j > 0 && xs[j - 1] > xs[j] {
+                while j > 0 && matches!(xs.get(j - 1..=j), Some([p, q]) if p > q) {
                     xs.swap(j - 1, j);
                     j -= 1;
                 }
             }
-            for pair in xs.chunks_exact(2) {
-                self.run(y, pair[0], pair[1] - 1, color);
+            for &[l, r] in xs.as_chunks::<2>().0 {
+                self.run(y, l, r - 1, color);
             }
         }
     }
@@ -1330,13 +1348,13 @@ fn clip(mut a: (i64, i64), mut b: (i64, i64), r: (i64, i64, i64, i64)) -> Option
         let c = if ca != 0 { ca } else { cb };
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let p = if c & 4 != 0 {
-            (a.0 + dx * (r.1 - a.1) / dy, r.1)
+            (a.0 + (dx * (r.1 - a.1)).checked_div(dy).unwrap_or(0), r.1)
         } else if c & 8 != 0 {
-            (a.0 + dx * (r.3 - a.1) / dy, r.3)
+            (a.0 + (dx * (r.3 - a.1)).checked_div(dy).unwrap_or(0), r.3)
         } else if c & 1 != 0 {
-            (r.0, a.1 + dy * (r.0 - a.0) / dx)
+            (r.0, a.1 + (dy * (r.0 - a.0)).checked_div(dx).unwrap_or(0))
         } else {
-            (r.2, a.1 + dy * (r.2 - a.0) / dx)
+            (r.2, a.1 + (dy * (r.2 - a.0)).checked_div(dx).unwrap_or(0))
         };
         if c == ca {
             a = p;

@@ -259,8 +259,13 @@ impl App {
             s => s,
         };
         self.screen = fix(self, self.screen);
-        for k in 0..self.depth.min(self.under.len()) {
-            self.under[k] = fix(self, self.under[k]);
+        for k in 0..self.depth {
+            if let Some(&u) = self.under.get(k) {
+                let u = fix(self, u);
+                if let Some(slot) = self.under.get_mut(k) {
+                    *slot = u;
+                }
+            }
         }
         if matches!(self.screen, Screen::Ride(_)) {
             self.show(b);
