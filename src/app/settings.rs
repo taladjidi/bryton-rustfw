@@ -308,6 +308,8 @@ pub struct Settings {
     pub level_step: usize,
     /// SLOPE SCALE (BIKE): an index in [`SLOPE_SCALES`] (data 169); 100 % in a file that predates it.
     pub slope_scale: usize,
+    /// GNSS SYSTEMS (BIKE): an index in [`gnss::SYSTEMS`] (data 170); the receiver's default (0) in a file that predates it.
+    pub gnss_systems: usize,
     /// LTHR (ME): the lactate threshold heart rate, bpm; 0 until it is set (the LTHR fields show "--"). Kept in
     /// settings.bin only, after the alert limits (byte 66); 0 in a file that predates it.
     pub lthr: u16,
@@ -634,6 +636,7 @@ impl Settings {
             level_step: 0,
             slope_scale: 0,
             steep_descent: 0,
+            gnss_systems: 0,
             lthr: 0,
             power_smooth: 0,
             auto_theme: false,
@@ -903,6 +906,7 @@ impl Settings {
             },
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
+            Setting::GnssSystems => l.push_str(gnss::SYSTEMS.get(self.gnss_systems).copied().unwrap_or("?")),
             Setting::PowerMatch => l.push_str(if self.power_match { "ON" } else { "OFF" }),
             Setting::LevelStep => l.push_u32(u32::from(LEVEL_STEPS.get(self.level_step).copied().unwrap_or(1))),
             Setting::SlopeScale => {
@@ -1097,6 +1101,7 @@ impl Settings {
             Setting::AutoOff => self.auto_off = (self.auto_off + 1) % AUTO_OFF_MIN.len(),
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
+            Setting::GnssSystems => self.gnss_systems = (self.gnss_systems + 1) % gnss::SYSTEMS.len(),
             Setting::PowerMatch => self.power_match = !self.power_match,
             Setting::LevelStep => self.level_step = (self.level_step + 1) % LEVEL_STEPS.len(),
             Setting::SlopeScale => self.slope_scale = (self.slope_scale + 1) % SLOPE_SCALES.len(),

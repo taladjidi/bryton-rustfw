@@ -1003,6 +1003,7 @@ impl App {
             self.save_misc(b);
             self.update_light(b);
             self.gps.reconfig |= s == menu::Setting::GpsPower; // the receiver told at its next message
+            self.gps.resys |= s == menu::Setting::GnssSystems;
             if s == menu::Setting::Font {
                 self.font_changed(b);
             }

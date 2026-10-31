@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (171 now, with STEEP DESCENT at 170, LEVEL STEP and SLOPE SCALE at 168, 169, MAP at 167, TIME ZONE and SUMMER TIME at 165, 166, CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 158 and its six fields at 159..164, the Di2 teeth at 156 and 157, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (172 now, with STEEP DESCENT at 171, GNSS SYSTEMS at 170, LEVEL STEP and SLOPE SCALE at 168, 169, MAP at 167, TIME ZONE and SUMMER TIME at 165, 166, CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 158 and its six fields at 159..164, the Di2 teeth at 156 and 157, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -152,6 +152,7 @@ impl SettingsCopy {
         put(&[s.tz as u8, s.dst as u8]);
         put(&[u8::from(s.map_up)]);
         put(&[s.level_step as u8, s.slope_scale as u8]);
+        put(&[s.gnss_systems as u8]);
         put(&[s.steep_descent as u8]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
@@ -309,7 +310,9 @@ impl SettingsCopy {
         s.map_up = flag(data.next(), d.map_up); // MAP (DISPLAY): NORTH UP in a file without the byte
         s.level_step = data.next().map(usize::from).filter(|&v| v < LEVEL_STEPS.len()).unwrap_or(d.level_step);
         s.slope_scale = data.next().map(usize::from).filter(|&v| v < SLOPE_SCALES.len()).unwrap_or(d.slope_scale);
-        // STEEP DESCENT (after SLOPE SCALE): a file without it, or a byte out of range, reads OFF
+        // GNSS SYSTEMS (after SLOPE SCALE): a file without it, or a byte out of range, reads the receiver's default
+        s.gnss_systems = data.next().map(usize::from).filter(|&v| v < gnss::SYSTEMS.len()).unwrap_or(d.gnss_systems);
+        // STEEP DESCENT (after GNSS SYSTEMS): a file without it, or a byte out of range, reads OFF
         s.steep_descent =
             data.next().map(usize::from).filter(|&v| v < STEEP_DESCENT_PCT.len()).unwrap_or(d.steep_descent);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
@@ -690,7 +693,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 171);
+        assert_eq!(len, 172);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -811,7 +814,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 171);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 172);
         assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
         let back = SettingsCopy::from_sector(&sec).unwrap().settings;
         assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
@@ -852,7 +855,7 @@ mod day_night_file_tests {
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 171);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 172);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -876,7 +879,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 171);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 172);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -910,7 +913,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 171);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 172);
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -952,7 +955,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 171);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 172);
         assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| {
@@ -1118,20 +1121,20 @@ mod day_night_file_tests {
         assert_eq!(read(&wild), Some((0, 2)), "a byte out of range");
     }
 
-    /// STEEP DESCENT (byte 170): kept; older files (170 bytes or fewer) and a wild byte read OFF.
+    /// STEEP DESCENT (byte 171): kept; older files (171 bytes or fewer) and a wild byte read OFF.
     #[test]
     fn steep_descent_round_trips_and_older_files_read_off() {
         let s = Settings { steep_descent: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(sec[28 + 170], 3);
+        assert_eq!(sec[28 + 171], 3);
         let read = |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| c.settings.steep_descent);
         assert_eq!(read(&sec), Some(3));
         let mut old = sec;
-        old[6..8].copy_from_slice(&170u16.to_le_bytes());
+        old[6..8].copy_from_slice(&171u16.to_le_bytes());
         recrc(&mut old);
-        assert_eq!(read(&old), Some(0), "a 170-byte file");
+        assert_eq!(read(&old), Some(0), "a 171-byte file");
         let mut wild = sec;
-        wild[28 + 170] = 99;
+        wild[28 + 171] = 99;
         recrc(&mut wild);
         assert_eq!(read(&wild), Some(0), "a byte out of range");
     }
@@ -1195,5 +1198,24 @@ mod day_night_file_tests {
         wild[28 + 157] = 99;
         fix(&mut wild, 158);
         assert_eq!(read(&wild), Some((0, 0)));
+    }
+
+    /// GNSS SYSTEMS (byte 170, after SLOPE SCALE): kept; an older file (170 bytes), or a byte out of range, reads the
+    /// receiver's default.
+    #[test]
+    fn gnss_systems_round_trip_and_older_files_read_the_default() {
+        let s = Settings { gnss_systems: 3, ..Settings::from_word(0) };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(sec[28 + 170], 3);
+        let read = |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| c.settings.gnss_systems);
+        assert_eq!(read(&sec), Some(3));
+        let mut old = sec;
+        old[6..8].copy_from_slice(&170u16.to_le_bytes());
+        recrc(&mut old);
+        assert_eq!(read(&old), Some(0), "a 171-byte file");
+        let mut wild = sec;
+        wild[28 + 170] = 9;
+        recrc(&mut wild);
+        assert_eq!(read(&wild), Some(0), "a byte out of range");
     }
 }

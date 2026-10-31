@@ -26,6 +26,19 @@ pub const GNSS_IDLE_MS: u32 = 10 * 60_000;
 /// A fix older than this is dropped (the receiver stopped answering).
 pub const PVT_STALE_MS: u32 = 3000;
 
+/// What goes to the receiver in a pass: the bytes (padded with 0xff) and how many 32-byte transfers hold them.
+pub(crate) type Msg = ([u8; mga::WIRE], usize);
+
+/// A message of one transfer.
+fn one(f: [u8; 32]) -> Msg {
+    let mut m = [0xff; mga::WIRE];
+    m[..32].copy_from_slice(&f);
+    (m, 1)
+}
+
+/// Passes between two AssistNow Offline messages (one a pass would be 1.7 kB/s; mga.rs has the pace).
+pub const ANO_GAP: u8 = 1;
+
 /// GNSS bytes read per pass at most: 128 per 50 ms is 2560 bytes/s, twenty times NAV-PVT at 1 Hz. A pass stops at
 /// the first 32 bytes of idle fill between frames, so most passes read 32.
 pub(crate) const GNSS_READ: usize = 128;
@@ -67,12 +80,16 @@ impl App {
 
     /// One read of the receiver: up to [`GNSS_READ`] bytes (`send` goes out with the first 32), the fixes in them
     /// taken. Found idle, the next reads wait [`GNSS_IDLE_PASSES`].
-    fn read_gnss(&mut self, b: &mut impl Board, mut send: Option<[u8; 32]>) {
+    fn read_gnss(&mut self, b: &mut impl Board, send: Option<Msg>) {
         self.gps.wait = 0;
-        for _ in 0..GNSS_READ / 32 {
-            let mut buf = send.take().unwrap_or([0xff; 32]);
+        let (out, chunks) = send.unwrap_or(([0xff; mga::WIRE], 0));
+        for i in 0..GNSS_READ / 32 {
+            let mut buf = [0xff; 32];
+            if i < chunks {
+                buf.copy_from_slice(out.get(32 * i..32 * i + 32).unwrap_or(&[0xff; 32]));
+            }
             b.gnss_transfer(&mut buf);
-            if buf == [0xff; 32] && self.gps.parser.idle() {
+            if i >= chunks && buf == [0xff; 32] && self.gps.parser.idle() {
                 self.gps.wait = GNSS_IDLE_PASSES - 1;
                 break; // nothing waiting in the receiver
             }
@@ -154,41 +171,97 @@ impl App {
         self.gps.slept
     }
 
-    /// The next message for the receiver after power-up, one per pass: the configuration, the time (UTC from the
-    /// RTC and its learnt offset, or the RTC as is with a 14 h accuracy) and the last position when known. Then
-    /// None. A change of GPS POWER, or of the power mode in force ([`App::gnss_saver`]: AUTO's choice, an MTB ride
+    /// The next message for the receiver after power-up, one per pass: the configuration with the GNSS SYSTEMS, the time (UTC from the
+    /// RTC and its learnt offset, or the RTC as is with a 14 h accuracy) and the last position when known, then today's
+    /// AssistNow Offline messages ([`App::next_ano`]). Then None. A change of GPS POWER, or of the power mode in force ([`App::gnss_saver`]: AUTO's choice, an MTB ride
     /// started or ended), sends the configuration alone again (its power mode), in the RAM layer as at start
     /// (CFG-PM-OPERATEMODE takes effect at once, UBX-22020019 2.6.2.6).
-    pub(crate) fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<[u8; 32]> {
+    pub(crate) fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<Msg> {
         let saver = self.gnss_saver();
         let config = gnss::config(saver);
         let changed = core::mem::take(&mut self.gps.reconfig) || saver != self.gps.saver;
         if self.gps.sent == 0 || changed {
             self.gps.saver = saver;
         }
-        if changed && self.gps.sent > 0 {
-            return Some(config);
+        // a change of GNSS SYSTEMS waits for the end of a ride (the receiver may drop its fix while it changes
+        // satellite systems: inferred, see gnss::systems); it goes with a power mode change if both are due
+        let resys = self.gps.resys && self.ride.state() == ride::State::Idle;
+        if self.gps.sent > 0 && (changed || resys) {
+            let sys = gnss::systems(self.settings.gnss_systems);
+            self.gps.resys &= !resys;
+            if changed && resys {
+                let mut m = one(config);
+                m.0[32..64].copy_from_slice(&sys);
+                return Some((m.0, 2));
+            }
+            return Some(one(if changed { config } else { sys }));
         }
         loop {
             self.gps.sent = self.gps.sent.saturating_add(1);
             match self.gps.sent {
-                1 => return Some(config),
+                1 => {
+                    self.gps.resys = false; // sent with the configuration
+                    // both in one pass: the start-up takes no longer than before the systems were sent
+                    let (mut m, sys) = (one(config), gnss::systems(self.settings.gnss_systems));
+                    m.0[32..64].copy_from_slice(&sys);
+                    return Some((m.0, 2));
+                }
                 2 => {
                     // the RTC holds local time: with the offset learnt at a fix, UTC within a couple of seconds;
                     // without it, the RTC as is, within 14 h (any time zone): the date still helps
                     let (offset, acc_s) = self.gps.aid.offset_15min.map_or((0, 14 * 3600), |o| (o, 2));
                     let (tr, dr) = b.rtc();
                     let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
-                    let utc = epoch_s((y, mo, d, h, m, s)) - i64::from(offset) * 900;
-                    return Some(gnss::mga_time(from_epoch_s(utc), acc_s));
+                    let utc = from_epoch_s(epoch_s((y, mo, d, h, m, s)) - i64::from(offset) * 900);
+                    // without the learnt offset the RTC's date may be a day off UTC: a day of slack
+                    self.gps.ano.start((utc.0, utc.1, utc.2), u8::from(self.gps.aid.offset_15min.is_none()));
+                    self.gps.ano_file = None;
+                    return Some(one(gnss::mga_time(utc, acc_s)));
                 }
                 3 => {
                     let Some((lat, lon)) = self.gps.aid.pos else { continue };
-                    return Some(gnss::mga_pos(lat, lon, 10_000)); // where it was: within 10 km, most rides
+                    return Some(one(gnss::mga_pos(lat, lon, 10_000))); // where it was: within 10 km, most rides
                 }
-                _ => return None,
+                _ => {
+                    self.gps.sent = 5; // stays here
+                    return self.next_ano(b);
+                }
             }
         }
+    }
+
+    /// The next AssistNow Offline message of today from `\Rustfw\mga.ubx`, one every [`ANO_GAP`] + 1 passes, at
+    /// most four sectors read looking for it. A file that cannot be read (missing, card lent to the computer or not
+    /// ready yet, damaged) is given up without a word; the card is not read before the bond is
+    /// ([`BOND_LOAD_MS`]), by when it is up.
+    fn next_ano(&mut self, b: &mut impl Board) -> Option<Msg> {
+        if self.gps.ano_gap > 0 {
+            self.gps.ano_gap -= 1;
+            return None;
+        }
+        if self.gps.ano.done() || self.emmc.lent() || self.gps.ms < BOND_LOAD_MS {
+            return None;
+        }
+        for _ in 0..4 {
+            if let Some(m) = self.gps.ano.take() {
+                self.gps.ano_gap = ANO_GAP;
+                return Some((m, 3));
+            }
+            let (at, buf) = self.gps.ano.want()?;
+            let mut d = emmc::Volume(&mut self.emmc, b);
+            let file = &mut self.gps.ano_file;
+            let n = fat::Fat::mount(&mut d)
+                .and_then(|mut fat| {
+                    let (f, seek) = match file {
+                        Some(fs) => fs,
+                        None => file.insert((fat.open(&mut d, mga::FILE)?, fat::Seek::new())),
+                    };
+                    fat.read_from(&mut d, f, at, buf, seek)
+                })
+                .unwrap_or(0);
+            self.gps.ano.filled(n);
+        }
+        None
     }
 
     /// The receiver's power mode now: GPS POWER, or for AUTO its choice.

@@ -22,8 +22,8 @@ sheets, at their test conditions), none was measured on the unit.
 | Part | Today | Options | Saving | Done here |
 |------|-------|---------|--------|-----------|
 | GNSS (u-blox M10) | 11.8 mA: continuous, 9.5 mA at VCC + 2.3 at V_IO, GPS + Galileo + BeiDou B1I | cyclic tracking (PSMCT) | about 4.8 mA (4.5 at VCC, 0.3 at V_IO) while in it | GPS POWER AUTO (default): while riding fast and straight |
-| | | GPS + Galileo only | 1.6 mA | owner's decision |
-| | | GPS only | 2.2 mA | no (fewer satellites under trees) |
+| | | GPS + Galileo only | 1.6 mA | BIKE > GNSS GPS+GAL (the owner's choice) |
+| | | GPS only | 2.2 mA | BIKE > GNSS GPS (not the default: fewer satellites under trees) |
 | | | off between rides once idle | 11.8 mA while idle | yes: 5 min without a fix, 10 min with one and no key |
 | Nordic, ANT+ search for an absent sensor | about 2.2 mA each (40 s in 100 at 5.4 mA) | longer rests | about 1.4 mA each | rests of 1, 2, then 4 min |
 | Nordic, ANT+ channel tracking a sensor | 30 to 60 uA each at 4 Hz | 2 Hz for heart rate | about 20 uA | no (beats lost for HRV) |

@@ -195,7 +195,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   ALERTS > STEEP DESCENT (OFF, 8, 10 or 12 %; off by default) says "STEEP 12% IN 300 M" in a banner with a beep when the
   next descent whose steepest 50 m passes the setting is 300 m ahead, once per descent (a retrace of the road ahead does
   not say it again). The DESCENT AHEAD field (NEXT DESC, index 118, the course group) shows the distance to the next descent
-  (what is left of it on it) and its steepest grade ("290M|12%"). Kept in settings.bin at byte 170 (after SLOPE SCALE), OFF
+  (what is left of it on it) and its steepest grade ("290M|12%"). Kept in settings.bin at byte 171 (after GNSS SYSTEMS), OFF
   when missing. Sim only (`steep_descent_alert_once`, `descents_gentle_and_steep`); the road ahead's descents share the
   finder but have no sim ride of their own.
 - **Quick Status** (PAGES > QUICK STATUS ON or OFF, and PAGES > QUICK FIELDS: six boxes, each picked like a page editor field;
@@ -681,6 +681,9 @@ BIKE > GPS POWER: AUTO (the default) puts the receiver in u-blox cyclic tracking
 under 5 m) for a minute, and back in continuous tracking at the first fix that is not, so MTB and climbs keep the full
 resolution; about 4.8 mA less while in it (estimated from u-blox's data sheet: [power.md](power.md)). FULL is
 continuous always, SAVER cyclic always.
+BIKE > GNSS (the systems tracked): which satellite systems the receiver tracks: DEFAULT (GPS, Galileo and BeiDou, as it starts), GPS, GPS+GAL or GPS+GAL+GLO. Sent to the receiver at each power-up and when the row changes (not during a ride: a change made then is sent at its
+end, since the receiver may lose its fix while it changes systems), kept in the settings file. One setting for all rides (not per profile: the three profiles share the receiver and a change restarts its satellite search). GPS alone draws about 2 mA less than the default (u-blox's data sheet, [power.md](power.md)), at the price of fewer satellites in view.
+AssistNow Offline: with `\Rustfw\mga.ubx` on the unit (`tools/assist.py` writes it; [sync.md](sync.md)), the firmware sends the receiver the orbit predictions of the newest date up to today (the file has a date every 1 to 3 days; without a learnt UTC offset a day of slack) at each power-up, a message every 100 ms after the time and last position (a few seconds in all), to help it fix sooner. A missing, stale, damaged or oversized file (read at most 512 KB) is skipped without a word.
 
 ## Workouts
 
@@ -1020,7 +1023,7 @@ UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trip
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
 C, AUTO and zeros. START REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
 DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; CHAINRINGS and CASSETTE are 156 and 157;
-QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP is 167, LEVEL STEP and SLOPE SCALE 168 and 169, STEEP DESCENT the last (170; 171 in
+QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP is 167, LEVEL STEP and SLOPE SCALE 168 and 169, GNSS SYSTEMS 170, STEEP DESCENT the last (171; 172 in
 all); they read CLOCK, OFF and the defaults when missing.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):

@@ -151,14 +151,15 @@ impl App {
 
     /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,
     /// no key for [`IDLE_AFTER_MS`], no finger, no tone or banner timed by the passes, the card not lent to the
-    /// computer), else [`POLL_MS`]. Measured 2026-10-28 overnight on the overview: 20 passes/s of 0.4 ms each.
+    /// computer, no AssistNow Offline data left to send, a few seconds after the receiver starts), else [`POLL_MS`]. Measured 2026-10-28 overnight on the overview: 20 passes/s of 0.4 ms each.
     pub fn pass_ms(&self) -> u32 {
         let idle = !self.busy()
             && !self.touching()
             && self.light.idle_ms >= IDLE_AFTER_MS
             && self.tones.quiet()
             && self.notes.ms.is_none()
-            && !self.emmc.lent();
+            && !self.emmc.lent()
+            && (self.gps.off || self.gps.ano.done()); // AssistNow Offline messages go out at a pass each
         if idle { IDLE_POLL_MS } else { POLL_MS }
     }
 
