@@ -102,12 +102,12 @@ impl Kind {
 
     /// ANT+ device type.
     pub fn device_type(self) -> u8 {
-        [0x78, 0x7b, 0x7a, 0x79, 0x0b, 0x22, 0x01, 0x11][self as usize]
+        [0x78, 0x7b, 0x7a, 0x79, 0x0b, 0x22, 0x01, 0x11].get(self as usize).copied().unwrap_or(0)
     }
 
     /// Channel period, in 1/32768 s (stock's: cadence at half rate, power at 8 Hz, the shifting ones at 4 Hz).
     pub fn period(self) -> u16 {
-        [8070, 8118, 16204, 8086, 4091, 8192, 8198, 8192][self as usize]
+        [8070, 8118, 16204, 8086, 4091, 8192, 8198, 8192].get(self as usize).copied().unwrap_or(8192)
     }
 
     /// The ANT network of its channel: 0 the ANT+ one, 1 Shimano's (stock assigns channel 6 to network 1,
@@ -118,19 +118,22 @@ impl Kind {
 
     /// Its name in the sensors menu.
     pub fn name(self) -> &'static str {
-        ["HEART RATE", "SPEED", "CADENCE", "SPEED+CAD", "POWER", "SHIFTING", "DI2", "TRAINER"][self as usize]
+        ["HEART RATE", "SPEED", "CADENCE", "SPEED+CAD", "POWER", "SHIFTING", "DI2", "TRAINER"]
+            .get(self as usize)
+            .copied()
+            .unwrap_or("")
     }
 
     /// Its short name: the panel's sensor lines, and after a maker's name in the sensors menu.
     pub fn short(self) -> &'static str {
-        ["HR", "SPEED", "CAD", "SPD+CAD", "POWER", "SHIFT", "DI2", "TRAIN"][self as usize]
+        ["HR", "SPEED", "CAD", "SPD+CAD", "POWER", "SHIFT", "DI2", "TRAIN"].get(self as usize).copied().unwrap_or("")
     }
 
     /// The RTC backup register that keeps the paired sensor (none of them is used by stock, BOARD.md 8). The two
     /// shifting kinds share 14, told apart by their tags ([`Kind::to_word`]). The trainer's entry is the old builds':
     /// it is kept in [`SENSORS_FILE`] now, and a word found here is moved there (app/trainer.rs `sensors_storage`).
     pub fn backup(self) -> usize {
-        [5, 6, 7, 8, 10, 14, 14, 14][self as usize]
+        [5, 6, 7, 8, 10, 14, 14, 14].get(self as usize).copied().unwrap_or(14)
     }
 
     /// Its paired sensor as kept in [`Kind::backup`]: [`SensorId::to_word`] (tag 0xa5), and for the shifting kinds
@@ -326,25 +329,28 @@ pub struct Live {
 impl Live {
     /// Sets `m` to `v`, fresh.
     pub fn set(&mut self, m: Metric, v: u16) {
-        self.values[m as usize] = Some(v);
-        self.age_ms[m as usize] = 0;
+        if let (Some(x), Some(a)) = (self.values.get_mut(m as usize), self.age_ms.get_mut(m as usize)) {
+            (*x, *a) = (Some(v), 0);
+        }
     }
 
     /// Drops `m`: the sensor sent it invalid.
     pub fn clear(&mut self, m: Metric) {
-        self.values[m as usize] = None;
+        if let Some(x) = self.values.get_mut(m as usize) {
+            *x = None;
+        }
     }
 
     /// The current value of `m`, if fresh enough.
     pub fn get(&self, m: Metric) -> Option<u16> {
-        self.values[m as usize]
+        self.values.get(m as usize).copied().flatten()
     }
 
     /// The value of `m` as of the last [`Live::snapshot`]: what a page shows. The sensors broadcast at 4 Hz and the
     /// digits changed at every one (UI review 2: unreadable, and a redraw each time); the page takes one reading a
     /// second, in the second's tick.
     pub fn shown(&self, m: Metric) -> Option<u16> {
-        self.shown[m as usize]
+        self.shown.get(m as usize).copied().flatten()
     }
 
     /// Takes the values now as the ones shown, once a second.
@@ -504,7 +510,12 @@ impl Decoders {
             Kind::Speed => self.speed = Revs::default(),
             Kind::Cadence => self.cadence = Revs::default(),
             Kind::SpeedCadence => (self.sc_speed, self.sc_cadence) = (Revs::default(), Revs::default()),
-            Kind::Shifting => (self.battery, self.status[kind as usize]) = ([0; 16], 0),
+            Kind::Shifting => {
+                self.battery = [0; 16];
+                if let Some(s) = self.status.get_mut(kind as usize) {
+                    *s = 0;
+                }
+            }
             // the next button page is the baseline (a press missed while silent is not made up later)
             Kind::Di2 => self.buttons = None,
             Kind::Power | Kind::Trainer => {}
@@ -513,8 +524,9 @@ impl Decoders {
 
     /// `kind`'s sensor was paired or forgotten: the percent and manufacturer heard from the last one go.
     pub fn forget_ids(&mut self, kind: Kind) {
-        self.percent[kind as usize] = None;
-        self.maker[kind as usize] = None;
+        if let (Some(p), Some(m)) = (self.percent.get_mut(kind as usize), self.maker.get_mut(kind as usize)) {
+            (*p, *m) = (None, None);
+        }
     }
 
     /// The heart-rate strap's battery in percent (page 7), if it has sent one.
@@ -554,7 +566,10 @@ impl Decoders {
                 *slot = Some(m);
             }
         }
-        let u16_at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]);
+        let u16_at = |i: usize| {
+            let g = |j: usize| d.get(j).copied().unwrap_or(0);
+            u16::from_le_bytes([g(i), g(i + 1)])
+        };
         let rpm = |r: u32| (r / 100) as u16;
         match kind {
             // common pages carry no beat (bytes 4-7 are no beat time or count): not a rate, not an interval
@@ -565,8 +580,10 @@ impl Decoders {
                 if d[7] > 0 {
                     live.set(Metric::Hr, u16::from(d[7]));
                 }
-                if d[0] & 0x7f == 7 {
-                    self.percent[kind as usize] = (d[1] <= 100).then_some(d[1]);
+                if d[0] & 0x7f == 7
+                    && let Some(p) = self.percent.get_mut(kind as usize)
+                {
+                    *p = (d[1] <= 100).then_some(d[1]);
                 }
             }
             // every page: event time in bytes 4-5, cumulative count in 6-7
@@ -634,7 +651,9 @@ impl Decoders {
                 }
                 if let Some(&worst) = self.battery.iter().max().filter(|&&s| s > 0) {
                     live.set(Metric::ShiftBattery, SHIFT_STATUS + u16::from(worst));
-                    self.status[kind as usize] = worst;
+                    if let Some(s) = self.status.get_mut(kind as usize) {
+                        *s = worst;
+                    }
                 }
             }
             Kind::Shifting => {}

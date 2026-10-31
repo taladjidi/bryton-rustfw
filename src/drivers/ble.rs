@@ -426,7 +426,8 @@ pub fn sys_attr_get(b: &mut impl Board, rx: &mut Rx, conn: u16, out: &mut [u8]) 
     match got.get(..n) {
         Some([1, l0, l1, 1, data @ ..]) => {
             let len = usize::from(u16::from_le_bytes([*l0, *l1])).min(data.len()).min(out.len());
-            out[..len].copy_from_slice(&data[..len]);
+            let (Some(o), Some(d)) = (out.get_mut(..len), data.get(..len)) else { return Err(Error::Code(u32::MAX)) };
+            o.copy_from_slice(d);
             Ok(len)
         }
         _ => Err(Error::Code(u32::MAX)),
@@ -731,7 +732,7 @@ impl Event<'_> {
 fn entries(p: &[u8], size: usize) -> Option<&[u8]> {
     let n = usize::from(crate::storage::bytes::le16(p, 0)?);
     let list = p.get(2..)?;
-    list.get(..(n * size).min(list.len() / size * size))
+    list.get(..(n * size).min(list.len() / size.max(1) * size))
 }
 
 /// Decodes BLE event packet `p` (`[BLE_EVT][id u16][fields]`); None if it is not one or is cut short.
@@ -825,26 +826,21 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
 
 /// The services of an [`Event::Services`] list: (UUID, start handle, end handle).
 pub fn services(list: &[u8]) -> impl Iterator<Item = (Uuid, u16, u16)> + '_ {
-    list.chunks_exact(7).map(|e| {
-        let h = |i: usize| u16::from_le_bytes([e[i], e[i + 1]]);
-        ((h(0), e[2]), h(3), h(5))
+    list.as_chunks::<7>().0.iter().map(|&[a, b, c, d, e, f, g]| {
+        ((u16::from_le_bytes([a, b]), c), u16::from_le_bytes([d, e]), u16::from_le_bytes([f, g]))
     })
 }
 
 /// The characteristics of an [`Event::Chars`] list: (UUID, properties, declaration handle, value handle).
 pub fn chars(list: &[u8]) -> impl Iterator<Item = (Uuid, u8, u16, u16)> + '_ {
-    list.chunks_exact(9).map(|e| {
-        let h = |i: usize| u16::from_le_bytes([e[i], e[i + 1]]);
-        ((h(0), e[2]), e[3], h(5), h(7))
+    list.as_chunks::<9>().0.iter().map(|&[a, b, c, d, _, e, f, g, h]| {
+        ((u16::from_le_bytes([a, b]), c), d, u16::from_le_bytes([e, f]), u16::from_le_bytes([g, h]))
     })
 }
 
 /// The descriptors of an [`Event::Descs`] list: (handle, UUID).
 pub fn descs(list: &[u8]) -> impl Iterator<Item = (u16, Uuid)> + '_ {
-    list.chunks_exact(5).map(|e| {
-        let h = |i: usize| u16::from_le_bytes([e[i], e[i + 1]]);
-        (h(0), (h(2), e[4]))
-    })
+    list.as_chunks::<5>().0.iter().map(|&[a, b, c, d, e]| (u16::from_le_bytes([a, b]), (u16::from_le_bytes([c, d]), e)))
 }
 
 #[cfg(test)]
