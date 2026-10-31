@@ -2,7 +2,7 @@
 //! target (touch; the keys are Page up, Lap down, Start the mode). Pure drawing against [`Canvas`], each value in its
 //! own fixed box so a second's update redraws only the boxes whose text changed.
 
-use super::{ACCENT, Canvas, DARK, GREEN, GREY, LABEL, PAGE_Y, RED, VALUE, W, WHITE, YELLOW};
+use super::{ACCENT, Canvas, DARK, GREEN, GREY, LABEL, NullCanvas, PAGE_Y, RED, VALUE, W, WHITE, YELLOW};
 use crate::text::{self, Align, Line, Style};
 
 /// A button of the screen.
@@ -119,10 +119,6 @@ pub struct Now<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Shown([u32; 9]);
 
-fn fnv(h: u32, s: &str) -> u32 {
-    s.bytes().chain([0]).fold(h, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
-}
-
 /// The whole screen: the title, the buttons, then every box.
 pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
     super::draw_title(c, "TRAINER");
@@ -142,13 +138,8 @@ pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
 
 /// What [`draw`] leaves on screen, without drawing (a screenshot row).
 pub fn shown(now: &Now) -> Shown {
-    struct Nothing;
-    impl Canvas for Nothing {
-        fn fill(&mut self, _: u32, _: u32, _: u32, _: u32, _: u16) {}
-        fn blit(&mut self, _: u32, _: u32, _: u32, _: u32, _: &mut dyn FnMut(u32, u32) -> u16) {}
-    }
     let mut s = Shown::default();
-    update(&mut Nothing, now, &mut s);
+    update(&mut NullCanvas, now, &mut s);
     s
 }
 
@@ -165,15 +156,15 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
         None => cadence.push_str("--"),
     }
     let prints = [
-        fnv(1, now.mode),
-        fnv(2, now.source),
-        fnv(3, now.target),
-        fnv(4, power.as_str()),
-        fnv(5, cadence.as_str()),
-        fnv(u32::from(now.status_color) + 6, now.status),
-        fnv(7, ["MODE", "BOTH", "RAMP", "CANCEL"][now.bottom as usize]),
-        fnv(8, now.timer),
-        fnv(fnv(9, now.source), now.pm), // the source line's box erases this one: repainted after it
+        crate::fnv_str(1, now.mode),
+        crate::fnv_str(2, now.source),
+        crate::fnv_str(3, now.target),
+        crate::fnv_str(4, power.as_str()),
+        crate::fnv_str(5, cadence.as_str()),
+        crate::fnv_str(u32::from(now.status_color) + 6, now.status),
+        crate::fnv_str(7, ["MODE", "BOTH", "RAMP", "CANCEL"][now.bottom as usize]),
+        crate::fnv_str(8, now.timer),
+        crate::fnv_str(crate::fnv_str(9, now.source), now.pm), // the source line's box erases this one: repainted after it
     ];
     let bold = Style { fg: ACCENT, ..VALUE };
     let grey = Style { fg: GREY, ..LABEL };

@@ -130,6 +130,16 @@ impl Style {
         self.font.width(s) * self.scale
     }
 
+    /// The longest start of `s` that fits `w` px in this style, whole characters ("" when the first one does not fit).
+    pub fn fit<'a>(&self, s: &'a str, w: u32) -> &'a str {
+        let end = s
+            .char_indices()
+            .map(|(i, ch)| i + ch.len_utf8())
+            .take_while(|&e| self.width(s.get(..e).unwrap_or("")) <= w)
+            .last();
+        s.get(..end.unwrap_or(0)).unwrap_or("")
+    }
+
     /// Line height in screen pixels.
     pub fn height(&self) -> u32 {
         u32::from(self.font.height) * self.scale
@@ -335,6 +345,12 @@ impl<const N: usize> Line<N> {
             }
         }
         self.push_str(core::str::from_utf8(&digits[i..]).unwrap_or(""));
+    }
+
+    /// Appends `v` mod 100 as two digits ("07", "42"): clocks, dates and the menus' values.
+    pub fn push_2d(&mut self, v: u32) {
+        self.push_str(super::DIGITS[(v / 10 % 10) as usize]);
+        self.push_str(super::DIGITS[(v % 10) as usize]);
     }
 }
 

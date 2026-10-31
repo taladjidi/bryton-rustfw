@@ -162,7 +162,7 @@ impl App {
         if let Some(d) = self.climbs_done.see(view, t, w, hr) {
             let mut l = Line::<40>::new();
             l.push_str("CLIMB ");
-            ui::card::push_km(&mut l, u32::from(d.len_m));
+            crate::push_trip(&mut l, u32::from(d.len_m), false);
             l.push_str("K ");
             l.push_str(ui::segment::time_text(u32::from(d.time_s)).as_str());
             l.push_str(" VAM ");
@@ -175,7 +175,7 @@ impl App {
     /// power was heard).
     pub(crate) fn climb_done_row(&self, k: usize, label: &mut Line<16>, value: &mut Line<12>) -> Option<()> {
         let d = self.climbs_done.get(k)?;
-        ui::card::push_km(label, u32::from(d.len_m));
+        crate::push_trip(label, u32::from(d.len_m), false);
         label.push_str("K ");
         label.push_u32(d.grade());
         label.push_str("% ");

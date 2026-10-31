@@ -63,8 +63,7 @@ pub(crate) fn push_fixed_u(l: &mut Line<8>, v: u32, decimals: u32) {
 pub(crate) fn push_hm<const N: usize>(l: &mut Line<N>, s: u32) {
     l.push_u32(s / 3600);
     l.push_str(":");
-    l.push_str(ui::DIGITS[(s / 600 % 6) as usize]);
-    l.push_str(ui::DIGITS[(s / 60 % 10) as usize]);
+    l.push_2d(s / 60 % 60);
 }
 
 /// Hours and minutes as "09:41".
@@ -81,37 +80,31 @@ pub(crate) fn push_clock<const N: usize>(l: &mut Line<N>, s: u32) {
     if s >= 3600 {
         l.push_u32(s / 3600);
         l.push_str(":");
-        l.push_str(ui::DIGITS[(s / 600 % 6) as usize]);
-        l.push_str(ui::DIGITS[(s / 60 % 10) as usize]);
+        l.push_2d(s / 60 % 60);
     } else {
         l.push_u32(s / 60);
     }
     l.push_str(":");
-    l.push_str(ui::DIGITS[(s / 10 % 6) as usize]);
-    l.push_str(ui::DIGITS[(s % 10) as usize]);
+    l.push_2d(s % 60);
 }
 
 /// Seconds as a ride field shows a duration: under an hour "MM:SS" ("M:SS" without `pad`), then "H:MM" with the
 /// seconds as a small tail ("1:23|45", [`ui::SMALL_TAIL`]), so a timer's digits are as big as a speed's.
 pub(crate) fn push_duration<const N: usize>(l: &mut Line<N>, s: u32, pad: bool) {
-    let two = |l: &mut Line<N>, v: u32| {
-        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
-        l.push_str(ui::DIGITS[(v % 10) as usize]);
-    };
     if s >= 3600 {
         l.push_u32(s / 3600);
         l.push_str(":");
-        two(l, s / 60 % 60);
+        l.push_2d(s / 60 % 60);
         l.push_str("|");
     } else {
         if pad {
-            two(l, s / 60);
+            l.push_2d(s / 60);
         } else {
             l.push_u32(s / 60);
         }
         l.push_str(":");
     }
-    two(l, s % 60);
+    l.push_2d(s % 60);
 }
 
 /// Metres as km with 2 decimals.
@@ -218,6 +211,11 @@ pub(crate) fn fnv(h: u32, bytes: &[u8]) -> u32 {
     bytes.iter().fold(h, |h, &x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
 }
 
+/// [`fnv`] over the bytes of `s` and then a 0 byte (so "ab" then "c" and "a" then "bc" differ).
+pub(crate) fn fnv_str(h: u32, s: &str) -> u32 {
+    fnv(fnv(h, s.as_bytes()), &[0])
+}
+
 /// Months as the screens write them.
 pub(crate) const MONTHS: [&str; 12] =
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
@@ -264,33 +262,27 @@ pub(crate) fn date_short((_, m, d): (u16, u8, u8), fmt: crate::DateFormat) -> Li
 
 /// The date's numbers in the format, two digits for the day and the month.
 fn push_numbers(l: &mut Line<14>, (y, m, d): (u16, u8, u8), fmt: crate::DateFormat) {
-    let two = |l: &mut Line<14>, v: u8| {
-        if v < 10 {
-            l.push_str("0");
-        }
-        l.push_u32(u32::from(v));
-    };
     match fmt {
         crate::DateFormat::Dmy => {
-            two(l, d);
+            l.push_2d(u32::from(d));
             l.push_str("/");
-            two(l, m);
+            l.push_2d(u32::from(m));
             l.push_str("/");
             l.push_u32(u32::from(y));
         }
         crate::DateFormat::Mdy => {
-            two(l, m);
+            l.push_2d(u32::from(m));
             l.push_str("/");
-            two(l, d);
+            l.push_2d(u32::from(d));
             l.push_str("/");
             l.push_u32(u32::from(y));
         }
         crate::DateFormat::Ymd => {
             l.push_u32(u32::from(y));
             l.push_str("-");
-            two(l, m);
+            l.push_2d(u32::from(m));
             l.push_str("-");
-            two(l, d);
+            l.push_2d(u32::from(d));
         }
     }
 }

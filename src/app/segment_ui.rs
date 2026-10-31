@@ -134,7 +134,7 @@ impl App {
         let n = self.climb_view()?;
         let k = &n.climb;
         h.top.push_str("CLIMB ");
-        ui::card::push_km(&mut h.top, k.len_m);
+        crate::push_trip(&mut h.top, k.len_m, false);
         h.top.push_str(" KM ");
         h.top.push_u32(k.grade_x10().div_ceil(10).max(1));
         h.top.push_str("%");

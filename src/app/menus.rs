@@ -478,11 +478,6 @@ impl App {
                 }
             }
             Row::Read(r) => {
-                let two = |l: &mut Line<12>, v: u8| {
-                    for d in [v / 10, v % 10] {
-                        l.push_str(ui::DIGITS[usize::from(d)]);
-                    }
-                };
                 let p = self.gps.pvt;
                 match (r, p) {
                     (Reading::Fix, None) => value.push_str("NO GPS"),
@@ -508,16 +503,16 @@ impl App {
                             if k > 0 {
                                 value.push_str(":");
                             }
-                            two(&mut value, v % 100);
+                            value.push_2d(u32::from(v));
                         }
                     }
                     (Reading::Date, Some(p)) => {
                         let (y, mo, d, ..) = p.utc;
                         value.push_u32(u32::from(y));
                         value.push_str("-");
-                        two(&mut value, mo % 100);
+                        value.push_2d(u32::from(mo));
                         value.push_str("-");
-                        two(&mut value, d % 100);
+                        value.push_2d(u32::from(d));
                     }
                     _ => return None,
                 }
@@ -688,9 +683,7 @@ impl App {
         let i = first + slot;
         let mut h = 0x811c_9dc5u32;
         let mut eat = |bytes: &[u8]| {
-            for &x in bytes {
-                h = (h ^ u32::from(x)).wrapping_mul(0x0100_0193);
-            }
+            h = crate::fnv(h, bytes);
         };
         match self.menu_row(menu, i) {
             Some((label, value, color)) => {
@@ -1097,5 +1090,5 @@ impl App {
 
 /// A menu title's print, to see when it changed under a menu that stays up.
 pub(crate) fn title_print(s: &str) -> u32 {
-    s.bytes().fold(0x811c_9dc5u32, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
+    crate::fnv(0x811c_9dc5, s.as_bytes())
 }

@@ -52,12 +52,8 @@ impl Head<'_> {
         for (w, b) in big.iter_mut().skip(pad).zip(self.big.bytes()) {
             *w = b;
         }
-        HeadShown { prints: [fnv(1, self.top), fnv(3, self.sub)], big, ink: self.ink }
+        HeadShown { prints: [crate::fnv_str(1, self.top), crate::fnv_str(3, self.sub)], big, ink: self.ink }
     }
-}
-
-fn fnv(h: u32, s: &str) -> u32 {
-    s.bytes().chain([0]).fold(h, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
 }
 
 /// `m:ss` of `s` seconds, minutes capped at 99.
@@ -65,8 +61,7 @@ fn push_ms<const N: usize>(l: &mut Line<N>, s: u32) {
     let s = s.min(99 * 60 + 59);
     l.push_u32(s / 60);
     l.push_str(":");
-    l.push_str(crate::ui::DIGITS[(s / 10 % 6) as usize]);
-    l.push_str(crate::ui::DIGITS[(s % 10) as usize]);
+    l.push_2d(s % 60);
 }
 
 /// The delta as the page and the card show it: "-0:12" (ahead) or "+0:08" (behind), "--" without one.
@@ -85,18 +80,7 @@ pub fn delta_text(d: Option<i32>) -> Line<8> {
 /// The time as the page, the card and the banner show it: "1:23", and "1:02:03" from an hour (to 99 hours).
 pub fn time_text(s: u32) -> Line<10> {
     let mut l = Line::new();
-    if s >= 3600 {
-        let s = s.min(99 * 3600 + 3599);
-        l.push_u32(s / 3600);
-        l.push_str(":");
-        l.push_str(crate::ui::DIGITS[(s / 600 % 6) as usize]);
-        l.push_str(crate::ui::DIGITS[(s / 60 % 10) as usize]);
-        l.push_str(":");
-        l.push_str(crate::ui::DIGITS[(s / 10 % 6) as usize]);
-        l.push_str(crate::ui::DIGITS[(s % 10) as usize]);
-    } else {
-        push_ms(&mut l, s);
-    }
+    crate::push_clock(&mut l, s.min(99 * 3600 + 3599));
     l
 }
 

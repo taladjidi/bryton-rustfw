@@ -213,18 +213,6 @@ pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top
     }
 }
 
-/// A distance in km to 0.1 km, as a card and the history list show it (a card's value box holds 5 characters).
-///
-/// ```
-/// let km = |m| { let mut l = bryton_rustfw::text::Line::<8>::new(); bryton_rustfw::ui::card::push_km(&mut l, m); l };
-/// assert_eq!([km(0).as_str(), km(14_455).as_str(), km(123_456).as_str()], ["0.0", "14.4", "123.4"]);
-/// ```
-pub fn push_km<const N: usize>(l: &mut Line<N>, m: u32) {
-    l.push_u32(m / 1000);
-    l.push_str(".");
-    l.push_u32(m % 1000 / 100);
-}
-
 impl Card {
     /// No title, no numbers.
     pub const EMPTY: Card = Card { title: Line::new(), stats: [("", Line::new()); STATS] };
@@ -250,12 +238,9 @@ impl Card {
             l
         };
         let mut time = Line::<10>::new();
-        time.push_u32(s.timer_s / 3600);
-        time.push_str(":");
-        time.push_str(super::DIGITS[(s.timer_s / 600 % 6) as usize]);
-        time.push_str(super::DIGITS[(s.timer_s / 60 % 10) as usize]);
+        crate::push_hm(&mut time, s.timer_s);
         let mut km = Line::<10>::new();
-        crate::push_trip(&mut km, s.dist_m, imperial); // 1 decimal, as push_km
+        crate::push_trip(&mut km, s.dist_m, imperial); // 1 decimal, as the lists' km
         let mut speed = Line::<10>::new();
         match s.avg_speed_x10.map(|v| if imperial { crate::mph_x10(u32::from(v)) } else { u32::from(v) }) {
             Some(v) => {
