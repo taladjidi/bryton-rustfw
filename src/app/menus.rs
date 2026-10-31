@@ -86,6 +86,12 @@ pub enum Menu {
     Places,
     /// Place `n`: its ALTITUDE (typed by hand) and DELETE.
     Place(usize),
+    /// BIKES (BIKE > BIKES, app/bikes.rs): ACTIVE BIKE, then the three bikes.
+    Bikes,
+    /// Bike `k`: its odometer and its parts.
+    BikeParts(usize),
+    /// Part `p` of bike `k`: SERVICE EVERY and RESET.
+    Part(usize, usize),
 }
 
 /// A menu's title (a page's is followed by its number).
@@ -129,6 +135,9 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::BtTrainers => "BT TRAINERS",
         Menu::Places => "PLACES",
         Menu::Place(_) => "PLACE",
+        Menu::Bikes => "BIKES",
+        Menu::BikeParts(k) => bike_name(k),
+        Menu::Part(_, p) => bikes::PART_NAMES.get(p).copied().unwrap_or("PART"),
     }
 }
 
@@ -277,6 +286,7 @@ impl App {
                 [Row::Set(menu::Setting::Altitude), Row::DeletePlace(k)].get(i).copied()
             }
             Menu::Place(_) => None,
+            Menu::Bikes | Menu::BikeParts(_) | Menu::Part(..) => self.bike_rows(menu, i),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(QUICK) => (i < 6).then_some(Row::Field(QUICK, i)),       // always six
             Menu::Page(n) => match i {
@@ -348,6 +358,12 @@ impl App {
                 }
                 self.edit_row_value(menu, r, &mut value, &mut color);
             }
+            Row::Open(Menu::BikeParts(_))
+            | Row::ActiveBike
+            | Row::BikeOdo(_)
+            | Row::Part(..)
+            | Row::PartEvery(..)
+            | Row::PartReset(..) => color = self.bike_value(row, &mut value),
             Row::Open(_) | Row::Nearby | Row::About | Row::EditPage(_) | Row::Screenshot => {}
             Row::BtTrainer => {
                 let heard = self.ftms_on() && self.trainer_heard();
@@ -808,6 +824,18 @@ impl App {
             }
             Some(Row::AltGps) => self.alt_from_gps(),
             Some(Row::SavePlace) => self.save_place(b),
+            Some(Row::ActiveBike) => self.next_bike(b),
+            Some(Row::BikeOdo(_)) => {}
+            Some(Row::Part(k, p)) => self.open(Screen::Menu(Menu::Part(k, p), 0)),
+            Some(Row::PartEvery(k, p)) => self.next_every(b, k, p),
+            Some(Row::PartReset(k, p)) => {
+                let mut what = Line::<24>::new();
+                what.push_str("RESET ");
+                what.push_str(bikes::PART_NAMES.get(p).copied().unwrap_or(""));
+                if self.confirmed(menu, sel, what.as_str()) {
+                    self.reset_part(b, k, p);
+                }
+            }
             Some(Row::Place(k)) => self.open(Screen::Menu(Menu::Place(k), 0)),
             Some(Row::DeletePlace(k)) => {
                 if self.confirmed(menu, sel, "DELETE PLACE") {

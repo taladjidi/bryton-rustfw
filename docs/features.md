@@ -469,7 +469,8 @@ MENU
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE, SUNSET ALERT
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, THEME
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
-     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
+     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER),
+     |             BIKES > ACTIVE BIKE, BIKE 1 to 3 > ODOMETER, a part > SERVICE EVERY, RESET
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >,
                    SCREENSHOT
  +- PLACES >       SAVE PLACE, then the favourite places (distance and bearing from here) -> ALTITUDE (typed), DELETE
@@ -876,6 +877,22 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
   save), and the totals reach `settings.bin` between rides: nothing is written to the card during a ride. The fields show the
   saved total plus the ride running and the rides ended and not yet saved, as WEEK KM does. Select on a TRIP row asks twice (START: YES) and resets it; the ODOMETER
   is never reset. They count from the build that has them: earlier rides are not added.
+- **Three bikes and part wear** (SETTINGS > BIKE > BIKES, `\Rustfw\bikes.bin`): ACTIVE BIKE (1, 2 or 3) puts that bike's
+  WHEEL, WEIGHT, CHAINRINGS and CASSETTE into the settings the ride uses; editing them in BIKE edits the active bike. Each
+  bike (BIKE 1 to 3; fixed names) has its own ODOMETER and five parts, CHAIN, CASSETTE, TYRE F, TYRE R and BRAKES (the
+  pads), each with its km since RESET (asked twice) and SERVICE EVERY (OFF, 500 to 10000 km); a part past its interval
+  is red in its bike's menu and said at the start ("CHAIN 3000 KM: SERVICE") and when a ride takes it past. Each saved
+  ride goes to the active bike once, a few seconds after its save, when the ride scan has read it in `\Activities`; a
+  ride of stock's goes to the bike active here. The file's mark (the newest ride counted) is written with the sums in one
+  copy, so a power cut between the save and the write, or during the write, counts the ride at the next start, once.
+  The mark is to the minute, with the files of the rides counted in that minute, so a second ride started in the same
+  minute counts too. A ride named over a day ahead (a clock set wrong) is left out; if the clock goes back, the rides
+  named before the mark wait until it passes it again. WHEEL changed during a ride is kept over a reset (the file's
+  gear wins at the start only with no ride open). The first start of this build makes BIKE 1 from the single bike of
+  the settings and their ODOMETER, and counts the rides from a minute before then (before the ride open then, if
+  any); `settings.bin` and the backup registers keep the active bike's gear, so an older build and stock see
+  it. Part distances and intervals are in km whatever UNITS says. Not done: a name per bike, a profile's own bike.
+  ![BIKES](img/bikes-menu.png)
 - **Not done:** the CLIMB filter (no climb has a category today, so "medium and above" needs thresholds chosen) and the time zone,
   daylight saving and the date and time formats (the clock takes its offset from the GPS fix; a 12 h or DD/MM format touches
   every time and date text).

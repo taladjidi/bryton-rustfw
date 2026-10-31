@@ -1765,6 +1765,14 @@ fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
     SCAN.init_with(bryton_rustfw::thresholds::Scan::new)
 }
 
+/// The three bikes and their file (app/bikes.rs `BikeStore`, under 200 bytes the app has no room for), beside the app
+/// in AXI SRAM (link.x `.axibss`), as the thresholds' scan.
+#[inline(never)]
+fn make_bikes() -> &'static mut bryton_rustfw::BikeStore {
+    static BIKES: static_cell::StaticCell<bryton_rustfw::BikeStore> = static_cell::StaticCell::new();
+    BIKES.init_with(bryton_rustfw::BikeStore::new)
+}
+
 /// The stack canary still holds its pattern, or a fault (hw.rs `fault`: the marker, a reset, the ride resumes from its
 /// checkpoint). An overflow cannot be caught when it happens: with interrupts masked (PRIMASK) an MPU guard's fault
 /// escalates to HardFault, whose stacking on the overflowed stack locks the core up (seen on the unit 2026-10-29,
@@ -1842,6 +1850,7 @@ fn main() -> ! {
     app.set_segment_memory(make_segments());
     app.set_scan_cache(make_scan_cache());
     app.set_threshold_memory(make_thresholds());
+    app.set_bike_memory(make_bikes());
     app.set_ride_curve(make_ride_curve());
     checkpoint(5);
     let mut link: Option<usb::Link> = None;

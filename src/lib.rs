@@ -27,7 +27,7 @@ pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, mga, nrf
 pub use link::{dev, msc, phone, prof};
 pub use nav::{altitude, climbs_ahead, course, places, segment, segment_match, sun};
 pub use storage::{
-    fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds, trash, volume,
+    bikes, fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds, trash, volume,
 };
 pub use training::{
     alerts, hrtss, hrv, hrvt, load, pacing, power, power_curve, power_match, ramp, ride, trainer, workout,
@@ -410,6 +410,8 @@ pub struct App {
     /// The recent full copies read for the heart rate variability thresholds (FITNESS, app/fitness.rs; memory from
     /// main.rs: [`App::set_threshold_memory`], 5 KB the app has no room for).
     thresholds: Option<&'static mut thresholds::Scan>,
+    /// The three bikes and their file (app/bikes.rs; memory from main.rs: [`App::set_bike_memory`], the app has no room).
+    bikes: Option<&'static mut BikeStore>,
     /// The climb pacer's plan (app/pace.rs).
     pace: PaceState,
     /// The road ahead: climbs found with no course followed (memory from main.rs: [`App::set_ahead_memory`]).
@@ -580,6 +582,7 @@ impl App {
             seg_ui: SegUi::new(),
             pace: PaceState::new(),
             thresholds: None,
+            bikes: None,
             ahead: None,
             ahead_us: AheadUs::default(),
             descent_said: None,
@@ -724,6 +727,7 @@ impl App {
             self.step_past(b);
             self.step_survey(b);
             self.step_thresholds(b);
+            self.step_bikes(b); // before the settings: bikes.bin is written first (app/bikes.rs)
             self.step_settings(b);
             self.step_places(b);
             self.step_pages(b);

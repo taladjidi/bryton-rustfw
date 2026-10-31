@@ -536,7 +536,14 @@ impl App {
         }
         self.pay_trips();
         let st = self.settings_store;
-        if !(self.card_writable && st.loaded && st.dirty && self.ride_settled() && self.gps.ms >= st.retry_ms) {
+        // bikes.bin first (app/bikes.rs: after a cut between the two writes, it is the newer)
+        if !(self.card_writable
+            && st.loaded
+            && st.dirty
+            && self.ride_settled()
+            && self.gps.ms >= st.retry_ms
+            && !self.bikes_due())
+        {
             return;
         }
         if !st.sound {

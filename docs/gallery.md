@@ -98,8 +98,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | The menu: what to ride, what was ridden, then the set-up; 44 px rows, a tap acts on a row (sim) | Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS > ME: values with their units, edited in place (sim) |
 | ![SETTINGS menu](img/menu-settings.png) | ![BIKE menu](img/menu-bike.png) | ![ME menu](img/me-menu.png) |
 | SETTINGS: a menu per subject, any setting three levels down at most (sim) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) | SETTINGS > ME: MAX HR, LTHR, ZONES BY, ZONES, FTP, then sex, birth year and height (sim) |
-| ![ZONES menu](img/zones-edit-menu.png) | ![PROFILE](img/menu-bike-profile.png) |  |
-| ME > ZONES: the top of each heart-rate and power zone, edited one by one (an edited bound is kept; RESET at the end) (sim) | SETTINGS > BIKE > PROFILE on COMMUTE, after AUTO, ROAD, INDOOR, MTB, GRAVEL and CX (sim) |  |
+| ![ZONES menu](img/zones-edit-menu.png) | ![PROFILE](img/menu-bike-profile.png) | ![BIKES](img/bikes-menu.png) |
+| ME > ZONES: the top of each heart-rate and power zone, edited one by one (an edited bound is kept; RESET at the end) (sim) | SETTINGS > BIKE > PROFILE on COMMUTE, after AUTO, ROAD, INDOOR, MTB, GRAVEL and CX (sim) | BIKE > BIKES: the active bike, each bike's odometer (sim) |
+| ![BIKE 1](img/bikes-parts.png) |  |  |
+| BIKES > BIKE 1: its odometer and its parts' km since RESET, red past SERVICE EVERY (sim) |  |  |
 | | | |
 |:-:|:-:|:-:|
 | ![ABOUT](img/about.png) | ![STORAGE](img/storage.png) | ![STORAGE's oldest ride](img/storage-ride.png) |
