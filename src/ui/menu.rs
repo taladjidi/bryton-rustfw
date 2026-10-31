@@ -547,6 +547,8 @@ pub enum Row {
     Notif(usize),
     /// Climb done `n` of CLIMBS DONE, newest first (no action).
     Done(usize),
+    /// Month `n` of FITNESS > MONTHS, newest first: Select changes what the rows show.
+    Month(usize),
     /// Past ride `n` of the history, newest first: Select opens its card.
     Past(usize),
     /// Planned workout `n` of the calendar ([`crate::storage::workout_file::Calendar`]): Select shows its steps.
@@ -642,6 +644,7 @@ impl Row {
             | Row::Past(_)
             | Row::Notif(_)
             | Row::Done(_)
+            | Row::Month(_)
             | Row::Workout(_)
             | Row::Step(_)
             | Row::Course(_)
@@ -730,6 +733,10 @@ pub enum StockRow {
     Scan,
     /// Select opens the power curve (app/curve.rs).
     Curve,
+    /// Select opens the TRAINING LOAD chart (app/pmc.rs): CTL, ATL and TSB over 90 days.
+    Load,
+    /// Select opens the month totals.
+    Months,
     /// Critical power from the last 90 days' power curve.
     Cp,
     /// W'.
@@ -772,6 +779,8 @@ impl StockRow {
         match self {
             StockRow::Scan => "READ RIDES",
             StockRow::Curve => "POWER CURVE",
+            StockRow::Load => "TRAINING LOAD",
+            StockRow::Months => "MONTHS",
             StockRow::Cp => "CP",
             StockRow::WPrime => "W'",
             StockRow::Fit => "CP FIT",
@@ -794,11 +803,13 @@ impl StockRow {
 }
 
 /// The fitness menu (HISTORY > FITNESS): what stock's rides give. Their settings' import is in SYSTEM.
-pub const FITNESS: [StockRow; 18] = {
+pub const FITNESS: [StockRow; 20] = {
     use StockRow::*;
     [
         Scan,
         Curve,
+        Load,
+        Months,
         Cp,
         WPrime,
         Fit,

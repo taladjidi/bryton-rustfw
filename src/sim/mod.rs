@@ -1562,6 +1562,8 @@ mod menu_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
+mod pmc_tests;
+#[cfg(test)]
 mod ride_tests;
 #[cfg(test)]
 mod segment_tests;

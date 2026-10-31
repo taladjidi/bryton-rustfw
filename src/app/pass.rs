@@ -108,6 +108,7 @@ impl App {
                 | Menu::Courses
                 | Menu::Segments
                 | Menu::Climbs
+                | Menu::Months
                 | Menu::System
                 | Menu::BuiltIn
                 | Menu::Storage

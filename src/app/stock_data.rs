@@ -44,7 +44,8 @@ impl App {
             (S::Scan, _) if self.stock.ready() => v.push_u32(u32::from(o.all.rides)),
             (S::Scan, stock::Status::Failed(_)) => v.push_str("NONE"),
             (S::Import, _) => v.push_str("FROM STOCK"),
-            (S::Curve, _) => v.push_str("SHOW"),
+            (S::Curve | S::Months, _) => v.push_str("SHOW"),
+            (S::Load, _) => v.push_str(if self.pmc.load.is_built() { "SHOW" } else { "--" }),
             _ if !self.stock.ready() => v.push_str("--"),
             (S::Cp | S::WPrime | S::Fit, _) if cp.is_none() => v.push_str("--"),
             (S::Cp, _) => {

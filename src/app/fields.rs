@@ -481,6 +481,24 @@ impl App {
                 }
                 return l;
             }
+            Field::Ctl | Field::Atl | Field::Tsb => {
+                // the scan's rides and the one on its way (app/pmc.rs)
+                let d = self.pmc.load.now(self.pmc_extra());
+                match d.map(|d| match f {
+                    Field::Ctl => d.ctl,
+                    Field::Atl => d.atl,
+                    _ => d.tsb,
+                }) {
+                    Some(v) => {
+                        if v < 0 {
+                            l.push_str("-");
+                        }
+                        l.push_u32(u32::from(v.unsigned_abs()));
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
             Field::BattHrs => {
                 // the drain of drivers/battery.rs; the charger's minutes are left out there, the strip says it now too
                 left_text(&mut l, self.battery.minutes_left().filter(|_| !self.strip.charging));
@@ -749,7 +767,8 @@ mod tests {
         assert_eq!(Field::from_index(107), Field::ClimbLeft);
         assert_eq!([Field::from_index(108), Field::from_index(109)], [Field::TorqueEff, Field::PedalSmooth]);
         assert_eq!([Field::from_index(109), Field::from_index(110)], [Field::PedalSmooth, Field::BattHrs]);
-        assert_eq!(Field::ALL.len(), 111);
+        assert_eq!([Field::from_index(111), Field::from_index(113)], [Field::Ctl, Field::Tsb]);
+        assert_eq!(Field::ALL.len(), 114);
     }
 
     #[test]

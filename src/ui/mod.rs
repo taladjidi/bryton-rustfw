@@ -4,6 +4,7 @@
 pub mod card;
 pub mod curve;
 pub mod fonts;
+pub mod load;
 pub mod map;
 pub mod media;
 pub mod menu;

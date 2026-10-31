@@ -254,12 +254,18 @@ pub enum Field {
     /// The time left on the battery, "45M" under an hour, "9.5H", then "12H"; "--" on the charger or before the drain
     /// is measured.
     BattHrs,
+    /// Fitness: CTL, the 42-day average of the daily TSS, with the ride on its way (training/load.rs).
+    Ctl,
+    /// Fatigue: ATL, the 7-day average.
+    Atl,
+    /// Form: TSB, yesterday's CTL minus yesterday's ATL.
+    Tsb,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 111] = {
+    pub const ALL: [Field; 114] = {
         use Field::*;
         [
             Time,
@@ -373,6 +379,9 @@ impl Field {
             TorqueEff,
             PedalSmooth,
             BattHrs,
+            Ctl,
+            Atl,
+            Tsb,
         ]
     };
 
@@ -495,6 +504,9 @@ impl Field {
             "TE L/R",
             "PS L/R",
             "BATT HRS",
+            "CTL",
+            "ATL",
+            "TSB",
         ];
         LABELS[self as usize]
     }
@@ -550,7 +562,7 @@ impl Field {
             "88:88", "888", "88:88", "888", "888", "888", "888", "8888", "8888", "8888", "8888", "88.88", "88.88",
             "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
             "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT", "88888.8", "88888.8", "88888.8", "888.8",
-            "888.8", "", "88:88", "88.8|KM", "888/888", "888/888", "8.8H",
+            "888.8", "", "88:88", "88.8|KM", "888/888", "888/888", "8.8H", "888", "888", "-88",
         ];
         WIDEST[self as usize]
     }
@@ -664,7 +676,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
                 ClimbLeft,
             ],
         ),
-        ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm, Trip1, Trip2, Odo, Trip1Time, Trip2Time]),
+        ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm, Trip1, Trip2, Odo, Trip1Time, Trip2Time, Ctl, Atl, Tsb]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),
         ("TRAINER", &[TrainerMode, TrainerTarget, ErgTarget]),

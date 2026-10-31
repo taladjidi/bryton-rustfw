@@ -571,6 +571,22 @@ back (while riding Start and Lap stay the ride's), a tap on the plot picks the n
 plot is drawn when the screen opens, and again while a ride runs when its curve changed (at most every 5 s); the
 cursor redraws only its strip and readout. Colours are the theme roles (docs/gallery.md, DARK and LIGHT).
 
+**TRAINING LOAD** (HISTORY > FITNESS > TRAINING LOAD, training/load.rs, app/pmc.rs): Coggan's performance management
+chart from the rides the scan read. Each ride has a TSS: from power (NP and the time with power against FTP) or, for a
+ride without power, the hrTSS of its average heart rate over its moving time (the scan keeps no per-second heart rate,
+so that one is low for a variable ride). CTL (fitness) and ATL (fatigue) are the 42- and 7-day exponentially weighted
+averages of the daily TSS, `x = x + (TSS - x) / N`, starting at 0 four months before the chart; TSB (form) is
+**yesterday's** CTL minus yesterday's ATL, as TrainingPeaks has it. The chart shows 90 days, two columns a day: CTL
+orange, ATL yellow, TSB as bars (green over 0, red under), a white cursor under the plot and its day read below
+("FRI 23 OCT", TSS, CTL, ATL, TSB): Page and Lap step a day, a tap on the plot picks one, Back leaves; the plot is drawn
+once when the screen opens (and again when the scan finishes under it). The fields **CTL**, **ATL** and **TSB** (group
+TOTALS) show today's, with the ride on its way added, so they move as it goes. It is worked out again whenever the
+scan's results, the day, FTP, LTHR, max heart rate or sex change; nothing is written to the card (a ride's TSS is not
+kept in the scan's cache: FTP moves). Only the scan's newest 128 rides count: a rider with more in 7 months gets a low
+CTL at the far end. **MONTHS** (HISTORY > FITNESS > MONTHS): a row per month, newest first, "OCT 26  340 KM"; Select
+changes what every row shows (km or miles, hours, rides, ascent, TSS). The oldest month of a full index is left out
+(it is cut short).
+
 ## Laps
 
 - **AUTO LAP** (SETTINGS > BIKE): OFF (the default), BY DISTANCE or BY TIME, with LAP EVERY 1 to 50 km (5) or 1 to 60 min (10). An auto lap is the Lap key's lap (`Ride::lap`, the same recorder event), so the FIT file holds the same lap message; it does not move a workout on. Only while the ride runs.
