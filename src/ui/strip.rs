@@ -44,6 +44,8 @@ pub struct Strip {
     pub locked: bool,
     /// A ride page's MORE variant is up: "MORE" where "BLE" and the GPS bars are.
     pub more: bool,
+    /// BATTERY SAVER is on: a green "S" between the USB symbol and the battery.
+    pub saver: bool,
 }
 
 /// The ride's state as the strip shows it.
@@ -83,6 +85,9 @@ pub const USB_ICON: [u16; 14] = [
     0b0000011100000000,
     0b0000011100000000,
 ];
+/// The battery saver's tag, 6 wide, with a pixel of black each side between the USB symbol and the battery's widest text.
+pub(super) const STRIP_SAVER: (u32, u32) = (STRIP_USB.0 + STRIP_USB.1 + 1, 6);
+const SAVER_TAG: [u16; 10] = [0x7800, 0x8400, 0x8000, 0x8000, 0x7800, 0x0400, 0x0400, 0x0400, 0x8400, 0x7800];
 /// The USB symbol's left edge and width, between the time and the battery.
 pub(super) const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
 /// The ride's state, right of the time: a red dot while it records, orange bars while paused, nothing otherwise.
@@ -171,6 +176,12 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
         };
         // level with the capitals next to it: 7 font rows at 2x = 14 px, the symbol's height, from the text's top
         draw_bitmap(c, &USB_ICON, STRIP_USB.0, top, 1, usb);
+    }
+    if changed(|s| u32::from(s.saver)) {
+        c.fill(STRIP_SAVER.0, top + 2, STRIP_SAVER.1, 10, BLACK);
+        if s.saver {
+            draw_bitmap(c, &SAVER_TAG, STRIP_SAVER.0, top + 2, 1, GREEN);
+        }
     }
     if changed(|s| s.battery.map_or(0x100, u32::from) | u32::from(s.charging) << 9) {
         let mut l = text::Line::<8>::new();

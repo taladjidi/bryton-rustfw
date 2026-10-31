@@ -123,7 +123,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); ~~a virtual course as a workout from the workout list~~ done, sim (features.md, RIDE A COURSE);
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~a larger ATT MTU,
   the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md);
-- ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); a battery saver mode; ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
+- ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); ~~a battery saver mode~~ done, sim (SYSTEM > BATTERY SAVER, features.md; per profile and the measured gain are open); ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
   computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); ~~altitude calibration at saved places; favourite places~~ done, sim (PLACES, `\Rustfw\places.bin`,
   features.md; not seen on the unit, status.md); a place named after the nearest named point, routing to a place.
 

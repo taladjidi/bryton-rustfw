@@ -170,6 +170,7 @@ Others
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin): sim
 - [~] Laps, session and activity messages at the end (stock, all): sim
 - [~] AUTO OFF (SYSTEM): switches off after idle (stock, Garmin): sim; never with a ride open
+- [~] Battery saver (SYSTEM): OFF / ON / AUTO at 20 %, GPS cyclic, backlight capped, slower map redraw, strip tag (Garmin, Wahoo): sim
 - [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): sim; ROAD, INDOOR and MTB, no bikes
 - [ ] Settings in a file, two copies (stock, all): backup registers for now
 - [~] Screenshots saved to the volume (stock): sim; SYSTEM > SCREENSHOT, `\Screenshot\YYYYMMDDhhmmss.bmp`, no ride open
