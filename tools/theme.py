@@ -154,7 +154,7 @@ def selftest():
     files = examples()
     for fname, text in files.items():
         assert len(text.encode("ascii")) < 4096, fname + ": over the 4 KB a theme file may be"
-        assert all(ch.isascii() for ch in text) and "–" not in text and "—" not in text, fname
+        assert all(ch.isascii() for ch in text) and "\u2013" not in text and "\u2014" not in text, fname
         lines = text.split("\n")
         for i, line in enumerate(lines):
             if line.startswith(";"):

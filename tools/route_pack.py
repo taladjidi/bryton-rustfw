@@ -28,7 +28,6 @@ import gzip
 import math
 import os
 import struct
-import sys
 
 Z = 14
 BITS = 20

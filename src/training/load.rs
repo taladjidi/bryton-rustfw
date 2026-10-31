@@ -1,6 +1,6 @@
 //! Training load: CTL (fitness), ATL (fatigue) and TSB (form) from the daily TSS of the scanned rides, and month totals.
 //!
-//! - **TSS of a ride** ([`ride_tss`]): from power, NP and the time with power against FTP ([`crate::power::tss`]);
+//! - **TSS of a ride** (`ride_tss`): from power, NP and the time with power against FTP ([`crate::power::tss`]);
 //!   without power, the hrTSS ([`crate::hrtss`]) of the ride's *average* heart rate over its moving time. The scan keeps
 //!   no per-second heart rate, so that hrTSS is **inferred** to be low for a variable ride (TRIMP grows faster than
 //!   linearly with heart rate, and an average flattens it).
@@ -78,11 +78,12 @@ pub struct Load {
 }
 
 /// TSS of a ride: from power at `ftp`, else the hrTSS of its average heart rate; None with neither.
+#[cfg(test)]
 pub fn ride_tss(r: &Ride, ftp: u16, lthr: u16, max_hr: u16, female: bool) -> Option<u32> {
     ride_tss_est(r, ftp, lthr, max_hr, female).map(|t| t.0)
 }
 
-/// As [`ride_tss`], and whether it is the heart rate estimate. A power ride of zero TSS (a meter that dropped out)
+/// As `ride_tss`, and whether it is the heart rate estimate. A power ride of zero TSS (a meter that dropped out)
 /// with a heart rate falls back to the heart rate.
 pub fn ride_tss_est(r: &Ride, ftp: u16, lthr: u16, max_hr: u16, female: bool) -> Option<(u32, bool)> {
     if ftp > 0
