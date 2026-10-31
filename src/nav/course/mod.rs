@@ -1142,7 +1142,7 @@ pub(crate) mod tests {
     #[test]
     fn a_steep_descent_after_ten_gentle_ones_is_kept() {
         let mut pts = std::vec![(0.0, 0.0, 600.0)];
-        let (mut x, mut z) = (0.0, 600.0);
+        let (mut x, z) = (0.0, 600.0);
         for _ in 0..10 {
             // 600 m at 4 %, then a 700 m climb back
             pts.push((x + 600.0, 0.0, z - 24.0));
