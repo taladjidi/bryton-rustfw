@@ -286,7 +286,7 @@ impl App {
         match row {
             Row::ActiveBike => value.push_u32(u32::from(list.active) + 1), // "BIKE 2" does not fit beside the label
             Row::Open(Menu::BikeParts(k)) | Row::BikeOdo(k) => {
-                super::fields::push_trip(value, list.list.get(k).map_or(0, |b| b.odo_m), self.settings.imperial);
+                super::fields::push_odo(value, list.list.get(k).map_or(0, |b| b.odo_m), self.settings.imperial);
                 value.push_str(unit);
             }
             Row::Part(k, p) | Row::PartReset(k, p) => {

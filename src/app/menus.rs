@@ -481,11 +481,13 @@ impl App {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
                     (true, _) if kind.network() == 1 && !self.di2 => value.push_str("NO KEY"),
                     (true, Sensor::Off) => value.push_str("OFF"),
-                    (true, Sensor::Search) => value.push_str("SEARCH"),
-                    (true, Sensor::Paired(id)) => value.push_u32(u32::from(id.device)),
-                }
-                if self.radio.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS) {
-                    color = ui::GREEN;
+                    (true, Sensor::Search) => value.push_str("SEARCHING"),
+                    // heard lately: connected; paired but silent: looked for again
+                    (true, Sensor::Paired(_)) => {
+                        let heard = self.radio.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
+                        value.push_str(if heard { "CONNECTED" } else { "SEARCHING" });
+                        color = if heard { ui::GREEN } else { ui::GREY };
+                    }
                 }
             }
             Row::Read(r @ (Reading::Lux | Reading::TempC | Reading::Hpa)) => {
@@ -549,11 +551,16 @@ impl App {
             }
             Row::Stock(r) => self.stock_value(r, &mut value),
             Row::Past(n) => {
-                // "24/10/2026", "42.1" (km: a unit does not fit beside the date)
+                // "24/10 09:12" over "42.1 KM": two rides of one day differ by their start (drawn on two lines)
                 let r = self.stock.index.get(n)?;
-                let (y, mo, d, ..) = r.start;
-                label.push_str(date_numbers((y, mo, d), self.settings.date_fmt).as_str());
+                let (y, mo, d, h, mi) = r.start;
+                label.push_str(date_short((y, mo, d), self.settings.date_fmt).as_str());
+                label.push_str(" ");
+                label.push_2d(u32::from(h));
+                label.push_str(":");
+                label.push_2d(u32::from(mi));
                 push_trip(&mut value, r.dist_m, self.settings.imperial);
+                value.push_str(if self.settings.imperial { " MI" } else { " KM" });
             }
             Row::Notif(k) => {
                 // the sender (the app when it sent no title), and when it came
@@ -667,21 +674,37 @@ impl App {
         match self.menu_row(menu, i) {
             Some((label, value, color)) => {
                 let inert = matches!(self.row(menu, i), Some(menu::Row::Empty(_))); // a note is not selected
-                if let Some(menu::Row::Workout(k)) = self.row(menu, i)
+                // two lines: a workout's name over its day and length, with its profile beside them; a ride's start
+                // over its distance
+                let row = self.row(menu, i);
+                if let Some(menu::Row::Workout(k)) = row
                     && let Some(p) = self.plan.calendar.get(k)
                 {
-                    // the day over the length, and the workout's profile beside them: "SAT 24 OCT" is "SAT 24"
-                    let day = crate::storage::rfind_ascii(label.as_str(), b' ')
-                        .and_then(|i| label.as_str().get(..i))
-                        .unwrap_or(label.as_str());
+                    let mut sub = Line::<24>::new();
+                    sub.push_str(label.as_str());
+                    sub.push_str(" ");
+                    sub.push_str(value.as_str());
+                    let mut name = Line::<16>::new();
+                    push_cut(&mut name, p.name.as_str(), 12); // the title box: 150 px of 12
+                    let title = if name.as_str().is_empty() { label.as_str() } else { name.as_str() };
                     return ui::draw_workout_row(
                         c,
                         slot,
-                        (day, value.as_str()),
+                        (title, sub.as_str()),
                         i == sel,
                         &p.prof,
                         self.workout_done(k),
                     );
+                }
+                if let Some(menu::Row::Sensor(k)) = row
+                    && let Some(&kind) = Kind::ALL.get(k)
+                {
+                    let paired = matches!(self.radio.sensors.get(k), Some(Sensor::Paired(_)));
+                    let battery = if paired { self.quick_battery(kind) } else { ui::quick::Battery::Unknown };
+                    return ui::draw_sensor_row(c, slot, (label.as_str(), value.as_str(), color), battery, i == sel);
+                }
+                if matches!(row, Some(menu::Row::Past(_))) {
+                    return ui::draw_workout_row(c, slot, (label.as_str(), value.as_str()), i == sel, &[], false);
                 }
                 ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel && !inert);
                 if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =
@@ -713,11 +736,22 @@ impl App {
                 eat(label.as_str().as_bytes());
                 eat(&[0]);
                 let cut = ui::menu_label_w(label.as_str(), value.as_str()) < ui::menu_label_w(label.as_str(), "");
-                let workout = matches!(self.row(menu, i), Some(menu::Row::Workout(_)));
+                // the two-line rows are drawn whole: their value and colour are part of the head
+                let sensor = matches!(self.row(menu, i), Some(menu::Row::Sensor(_)));
+                let workout = sensor || matches!(self.row(menu, i), Some(menu::Row::Workout(_)));
+                if let Some(menu::Row::Sensor(k)) = self.row(menu, i)
+                    && let Some(&kind) = Kind::ALL.get(k)
+                {
+                    eat(&[match self.quick_battery(kind) {
+                        ui::quick::Battery::Unknown => 0,
+                        ui::quick::Battery::Low => 1,
+                        ui::quick::Battery::Bars(n) => n.saturating_add(2),
+                    }]);
+                }
                 if with_value || cut || workout {
                     eat(value.as_str().as_bytes());
                 }
-                if with_value || value.as_str().is_empty() {
+                if with_value || sensor || value.as_str().is_empty() {
                     eat(&color.to_le_bytes());
                 }
                 eat(&[u8::from(i == sel)]);

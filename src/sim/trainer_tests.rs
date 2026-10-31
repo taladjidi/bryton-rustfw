@@ -97,7 +97,7 @@ fn pairs_reads_and_waits_to_be_taken_over() {
     let (label, value, _) = app
         .menu_row(Menu::Sensors, super::tests::row_in(&app, Menu::Sensors, Row::Sensor(Kind::Trainer as usize)))
         .unwrap();
-    assert_eq!((label.as_str(), value.as_str()), ("TRAINER", "5555"));
+    assert_eq!((label.as_str(), value.as_str()), ("TRAINER", "CONNECTED"));
     let live = |app: &App, m| app.live.get(m);
     assert_eq!(
         [Metric::Power, Metric::Cadence, Metric::Speed].map(|m| live(&app, m)),

@@ -146,6 +146,16 @@ pub(crate) fn push_trip<const N: usize>(l: &mut Line<N>, m: u32, imperial: bool)
     l.push_str(digit(v));
 }
 
+/// An odometer: [`push_trip`], but whole units from 10 000 on ("45678", not "45678.9"), so a label keeps its gap.
+pub(crate) fn push_odo<const N: usize>(l: &mut Line<N>, m: u32, imperial: bool) {
+    let v = dist_x100(m, imperial) / 10;
+    if v >= 100_000 {
+        l.push_u32(v / 10);
+    } else {
+        push_trip(l, m, imperial);
+    }
+}
+
 /// km/h x 10 as mph x 10, rounded.
 pub(crate) fn mph_x10(kmh_x10: u32) -> u32 {
     ((u64::from(kmh_x10) * 621_371 + 500_000) / 1_000_000) as u32
@@ -237,12 +247,23 @@ pub(crate) fn date_text((y, m, d): (u16, u8, u8)) -> Line<12> {
     l
 }
 
-/// The date alone, "23/10/2026", "10/23/2026" or "2026-10-23" (DATE FORMAT): the history and workout rows, where
-/// the weekday does not fit the label.
-pub(crate) fn date_numbers((y, m, d): (u16, u8, u8), fmt: crate::DateFormat) -> Line<14> {
-    let mut l = Line::new();
-    push_numbers(&mut l, (y, m, d), fmt);
-    l
+/// `name` in capitals (the font has no lowercase), in at most `room` characters: longer, it is cut at the last space
+/// that leaves room for "..", or inside its first word when there is none.
+pub(crate) fn push_cut<const N: usize>(l: &mut Line<N>, name: &str, room: usize) {
+    let mut up = Line::<32>::new();
+    for ch in name.chars() {
+        up.push_str(ch.to_ascii_uppercase().encode_utf8(&mut [0; 4]));
+    }
+    let full = up.as_str();
+    if full.chars().count() <= room {
+        return l.push_str(full);
+    }
+    let keep = room.saturating_sub(2);
+    let end = |n: usize| full.char_indices().nth(n).map_or(full.len(), |(i, _)| i);
+    let head = full.get(..end(keep + 1)).unwrap_or("");
+    let cut = head.rfind(' ').filter(|&i| i > 0).unwrap_or(end(keep));
+    l.push_str(full.get(..cut).unwrap_or(""));
+    l.push_str("..");
 }
 
 /// The date without the year, "23/10", "10/23" or "10-23": the workout rows, where a profile graph takes the room.
@@ -263,33 +284,6 @@ pub(crate) fn date_short((_, m, d): (u16, u8, u8), fmt: crate::DateFormat) -> Li
         l.push_u32(u32::from(v));
     }
     l
-}
-
-/// The date's numbers in the format, two digits for the day and the month.
-fn push_numbers(l: &mut Line<14>, (y, m, d): (u16, u8, u8), fmt: crate::DateFormat) {
-    match fmt {
-        crate::DateFormat::Dmy => {
-            l.push_2d(u32::from(d));
-            l.push_str("/");
-            l.push_2d(u32::from(m));
-            l.push_str("/");
-            l.push_u32(u32::from(y));
-        }
-        crate::DateFormat::Mdy => {
-            l.push_2d(u32::from(m));
-            l.push_str("/");
-            l.push_2d(u32::from(d));
-            l.push_str("/");
-            l.push_u32(u32::from(y));
-        }
-        crate::DateFormat::Ymd => {
-            l.push_u32(u32::from(y));
-            l.push_str("-");
-            l.push_2d(u32::from(m));
-            l.push_str("-");
-            l.push_2d(u32::from(d));
-        }
-    }
 }
 
 impl App {
@@ -938,16 +932,33 @@ mod tests {
 #[cfg(test)]
 mod date_format_tests {
     use super::*;
-    use crate::DateFormat::{Dmy, Mdy, Ymd};
 
-    /// The rows' date in each DATE FORMAT: two digits for the day and the month, the year in full; 10 characters.
+    /// Names in capitals, cut at a word with "..", never past `room`.
     #[test]
-    fn date_numbers_in_each_format() {
-        assert_eq!(date_numbers((2026, 10, 23), Dmy).as_str(), "23/10/2026");
-        assert_eq!(date_numbers((2026, 10, 23), Mdy).as_str(), "10/23/2026");
-        assert_eq!(date_numbers((2026, 10, 23), Ymd).as_str(), "2026-10-23");
-        assert_eq!(date_numbers((2026, 1, 3), Dmy).as_str(), "03/01/2026");
-        assert_eq!([Dmy, Mdy, Ymd].map(|f| date_numbers((2026, 12, 31), f).as_str().len()), [10, 10, 10]);
+    fn names_are_cut_at_a_word() {
+        let cut = |n: &str, room| {
+            let mut l = Line::<16>::new();
+            push_cut(&mut l, n, room);
+            l
+        };
+        assert_eq!(cut("Test climb", 10).as_str(), "TEST CLIMB");
+        assert_eq!(cut("2 Dernieres", 8).as_str(), "2..");
+        assert_eq!(cut("Col de la Croix", 10).as_str(), "COL DE..");
+        assert_eq!(cut("D512: Climbing", 9).as_str(), "D512:..");
+        assert_eq!(cut("Supercalifragilistic", 9).as_str(), "SUPERCA..");
+        assert!(["a b c d e f g", "xxxxxxxxxxxxxxxxxxxxxxxx"].iter().all(|n| cut(n, 6).as_str().len() <= 6));
+    }
+
+    #[test]
+    fn odometers_drop_the_decimal_from_10000() {
+        let odo = |m| {
+            let mut l = Line::<12>::new();
+            push_odo(&mut l, m, false);
+            l
+        };
+        assert_eq!(odo(9_999_900).as_str(), "9999.9");
+        assert_eq!(odo(10_000_000).as_str(), "10000");
+        assert_eq!(odo(45_678_900).as_str(), "45678");
     }
 
     #[test]

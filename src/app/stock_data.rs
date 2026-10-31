@@ -201,6 +201,10 @@ impl App {
             Some(Ok(())) => {
                 self.open(Screen::Past);
                 self.show(b);
+                // the read is done: its banner would stay over the ride's date
+                if self.notes.ms.is_some() && self.notes.text.as_str() == "READING RIDE" {
+                    self.unbanner(b);
+                }
             }
             Some(Err(_)) => self.notice("BAD RIDE FILE"),
             None => {}

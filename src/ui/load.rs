@@ -149,6 +149,9 @@ pub fn draw_cursor(c: &mut impl Canvas, d: &[Day; SHOWN], cursor: usize, date: &
     draw_in(c, &sty(YELLOW), 120, READ_Y + READ_H, W - 128, Align::Left, num("ATL", i32::from(day.atl)).as_str());
     let form = if day.tsb < 0 { RED } else { GREEN };
     draw_in(c, &sty(form), 8, READ_Y + 2 * READ_H, 112, Align::Left, num("TSB", i32::from(day.tsb)).as_str());
+    // one word from the form, labelled so it is not taken for a maker's training status
+    draw_in(c, &sty(GREY), 8, READ_Y + 3 * READ_H, 60, Align::Left, "FORM");
+    draw_in(c, &sty(form), 68, READ_Y + 3 * READ_H, W - 76, Align::Left, crate::load::form_word(day.tsb));
 }
 
 #[cfg(test)]
@@ -196,6 +199,15 @@ mod tests {
     }
 
     #[test]
+    fn form_words_at_their_edges() {
+        let w = crate::load::form_word;
+        let got = [w(6), w(5), w(-10), w(-11), w(-30), w(-31)];
+        assert_eq!(got, ["FRESH", "NEUTRAL", "NEUTRAL", "TIRED", "TIRED", "OVERLOAD"]);
+        const { assert!(READ_Y + 4 * READ_H <= H) };
+        assert!(LABEL.width("FORM OVERLOAD") <= W - 8);
+    }
+
+    #[test]
     fn the_axis_holds_every_value() {
         let d = days(|i| (40 + i as i16 / 3, 60 + i as i16 / 2, -25 + i as i16 / 2));
         let a = Axis::of(&d);
@@ -220,7 +232,7 @@ mod tests {
             assert!(has(ACCENT) && has(YELLOW) && has(GREEN) && has(RED) && has(WHITE));
             let mut g = Frame::themed(t);
             draw_cursor(&mut g, &d, 3, "FRI 23 OCT");
-            assert!(g.filled() < 16_000, "the cursor strip and readout only: {}", g.filled());
+            assert!(g.filled() < 20_000, "the cursor strip and readout only: {}", g.filled());
         }
     }
 }

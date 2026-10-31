@@ -803,15 +803,14 @@ fn a_live_menu_value_repaints_its_own_box() {
     }
 }
 
-/// The History and Workout rows show the date in each DATE FORMAT, numbers only: beside the distance or the time, the
-/// label fits its row.
+/// A History row's title, the date and the start time in each DATE FORMAT, fits the row beside no profile.
 #[test]
 fn date_rows_fit_in_each_format() {
     use crate::DateFormat::{Dmy, Mdy, Ymd};
     for f in [Dmy, Mdy, Ymd] {
-        let label = crate::date_numbers((2026, 12, 31), f);
-        for value in ["123.4", "10:30"] {
-            assert!(ui::LABEL.width(label.as_str()) <= ui::menu_label_w(label.as_str(), value), "{f:?} {value}");
-        }
+        let mut label = text::Line::<16>::new();
+        label.push_str(crate::date_short((2026, 12, 31), f).as_str());
+        label.push_str(" 23:59");
+        assert!(ui::LABEL.width(label.as_str()) <= ui::W - 8 - 4 - 20 - 2, "{f:?}");
     }
 }

@@ -469,7 +469,7 @@ fn strap_name_and_battery() {
     assert_eq!(app.field_text(crate::ui::Field::HrBatt).as_str(), "87%");
     let i = super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::Sensor(Kind::Hr as usize));
     let (label, value, _) = app.menu_row(Menu::Sensors, i).unwrap();
-    assert_eq!((label.as_str(), value.as_str()), ("POLAR HR", "9"));
+    assert_eq!((label.as_str(), value.as_str()), ("POLAR HR", "CONNECTED"));
     run(&mut sim, &mut app, 4000);
     app.press(&mut sim, Press::Long(Key::Page));
     super::tests::to_row(&mut sim, &mut app, crate::menu::Row::Open(Menu::Sensors));

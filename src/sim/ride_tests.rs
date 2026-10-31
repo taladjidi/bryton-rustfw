@@ -970,7 +970,7 @@ fn imperial_units_on_a_ride_page() {
     }
     assert!(app.end_stats().as_str().ends_with(" MI"), "the end-ride screen");
     let card = app.ride_card();
-    assert_eq!((card.stats[1].0, card.stats[2].0, card.stats[3].0), ("MI", "AVG MPH", "ASCENT FT"), "the summary card");
+    assert_eq!((card.stats[1].0, card.stats[2].0, card.stats[3].0), ("MI", "MPH", "ASC"), "the summary card");
     app.settings.limits[4] = 30;
     let mut l = crate::Line::<12>::new();
     app.settings.text(crate::menu::Setting::Limit(4), &mut l);

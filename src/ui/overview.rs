@@ -121,12 +121,13 @@ pub fn draw_done(c: &mut impl Canvas, done: bool) {
     }
 }
 
-/// A WORKOUTS list row in slot `slot`: the day over the length on the left, the workout's profile on the right
-/// ([`draw_profile_bars`], 2 px a column, on black even when the row is selected), a green tick between them when `done`.
+/// A two-line list row in slot `slot` (WORKOUTS, HISTORY): `title` over `sub` on the left, the workout's profile on
+/// the right ([`draw_profile_bars`], 1 px a column so the title keeps 12 characters, on black even when the row is
+/// selected), a green tick after `sub` when `done`.
 pub fn draw_workout_row(
     c: &mut impl Canvas,
     slot: usize,
-    (day, length): (&str, &str),
+    (title, sub): (&str, &str),
     selected: bool,
     prof: &[u8],
     done: bool,
@@ -137,14 +138,48 @@ pub fn draw_workout_row(
     c.fill(0, y, W, row - 1, bg);
     c.fill(0, y + row - 1, W, 1, DARK);
     let style = Style { fg, bg, ..LABEL };
-    text::draw(c, &style, NEARBY.0, y + 1, Align::Left, day);
-    text::draw(c, &style, NEARBY.0, y + 21, Align::Left, length);
+    let (bx, bw) = (W - 8 - prof.len() as u32 - 4, prof.len() as u32 + 4);
+    text::draw_in(c, &style, NEARBY.0, y + 1, bx - NEARBY.0 - 2, Align::Left, title);
+    text::draw(c, &style, NEARBY.0, y + 21, Align::Left, sub);
     if done {
-        draw_tick(c, 96, y + 16);
+        draw_tick(c, NEARBY.0 + style.width(sub) + 6, y + 16);
     }
-    let (bx, bw) = (W - 8 - 2 * prof.len() as u32 - 4, 2 * prof.len() as u32 + 4);
     c.fill(bx, y + 3, bw, row - 7, BLACK);
-    draw_profile_bars(c, (bx + 2, y + 5, row - 11), 2, prof);
+    draw_profile_bars(c, (bx + 2, y + 5, row - 11), 1, prof);
+}
+
+/// A SENSORS list row in slot `slot`: the sensor's name over its state in the state's colour, and its battery tag
+/// ([`super::quick::draw_battery`]) at the right end of the state's line.
+pub fn draw_sensor_row(
+    c: &mut impl Canvas,
+    slot: usize,
+    (name, state, color): (&str, &str, u16),
+    battery: super::quick::Battery,
+    selected: bool,
+) {
+    let row = c.theme().menu_row;
+    let y = LIST_Y + slot as u32 * row;
+    let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, WHITE) };
+    // each pixel once (the rows are redrawn whole on a selection): the bands between the text, then the text boxes
+    let (h, ty) = (LABEL.height(), [y + 1, y + 21]);
+    let (gap, end) = (ty[1] - ty[0] - h, ty[1] + h);
+    c.fill(0, y, W, 1, bg);
+    c.fill(0, ty[0] + h, W, gap, bg);
+    c.fill(0, end, W, y + row - 1 - end, bg);
+    c.fill(0, y + row - 1, W, 1, DARK);
+    let tag = 38;
+    for ty in ty {
+        c.fill(0, ty, NEARBY.0, h, bg);
+        c.fill(W - NEARBY.0, ty, NEARBY.0, h, bg);
+    }
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty[0], W - 2 * NEARBY.0, Align::Left, name);
+    let fg = if selected { ON_ACCENT } else { color };
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty[1], W - 2 * NEARBY.0 - tag, Align::Left, state);
+    if battery == super::quick::Battery::Unknown {
+        c.fill(W - NEARBY.0 - tag, ty[1], tag, h, bg);
+    } else {
+        super::quick::draw_battery(c, W - NEARBY.0 - tag, ty[1], battery);
+    }
 }
 
 /// The menu button on the overview: a cog, [`COG`] px square.

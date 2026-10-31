@@ -82,13 +82,13 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![End of a ride](img/end-ride.png) | ![Discard asked](img/end-ride-discard.png) | ![Ride card](img/card.png) |
 | Start held while paused: RESUME, SAVE (selected), DISCARD, big enough for gloves (sim) | DISCARD asks once more; the ride is moved to `\Rustfw\Discarded`, never erased (sim) | The ride's card when it ends: map, profile, numbers (sim) |
 | ![History](img/history_list.png) | ![A past ride](img/history.png) | ![FITNESS](img/fitness.png) |
-| History: stock's rides, newest first (sim) | A past ride's card, read from its file; DELETE in red asks first (sim) | HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) |
+| History: stock's rides, newest first, each as its start (day, time) over its distance in KM (sim) | A past ride's card, read from its file (the numbers in two columns at the labels' size); DELETE in red asks first (sim) | HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) |
 | ![Power curve](img/power-curve.png) | ![Power curve, LIGHT](img/power-curve-light.png) |  |
 | HISTORY > FITNESS > POWER CURVE: the 90 days' bests (orange) and this ride's (green) on a log axis from 1 s to 1 h, CP and W', the cursor reading 5 MIN (sim) | The same in LIGHT (sim) |  |
 | ![Training load](img/training-load.png) | ![Training load, LIGHT](img/training-load-light.png) | ![Months](img/months.png) |
-| HISTORY > FITNESS > TRAINING LOAD: 90 days of CTL (orange), ATL (yellow) and TSB (bars), the cursor reading a day (sim, synthetic rides) | The same in LIGHT (sim) | FITNESS > MONTHS: a row per month, Select changes km, hours, rides, ascent, TSS (sim) |
+| HISTORY > FITNESS > TRAINING LOAD: 90 days of CTL (orange), ATL (yellow) and TSB (bars), the cursor reading a day, with its FORM word (FRESH, NEUTRAL, TIRED, OVERLOAD) from the TSB (sim, synthetic rides) | The same in LIGHT (sim) | FITNESS > MONTHS: a row per month, Select changes km, hours, rides, ascent, TSS (sim) |
 | ![Laps of a past ride](img/history_laps.png) | ![No laps](img/history_no_laps.png) |  |
-| A past ride's LAPS: number, time, distance, speed, power and heart rate per lap, from its `lap` messages (sim; the sim's ride has no speed or sensors) | A ride with no lap messages (sim) |  |
+| A past ride's LAPS: time, distance, power and heart rate per lap at the labels' size, 32 px rows scrolled by Page or a swipe, the header once, from its `lap` messages (sim; the sim's ride has no sensors) | A ride with no lap messages (sim) |  |
 
 ## Menus and settings
 
@@ -117,7 +117,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | | | |
 |:-:|:-:|:-:|
 | ![Sensors](img/sensors.png) | ![GPS](img/gps.png) | ![Power meter calibration](img/power-zero.png) |
-| Sensors and built-in readings (sim) | Speed page (sim) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) |
+| Sensors and built-in readings: each paired sensor CONNECTED or SEARCHING, with its battery tag when it said (sim) | Speed page (sim) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) |
 | ![Sensor names](img/sensors-names.png) | ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |
 | SENSORS with the strap's maker from ANT+ common page 80 (POLAR HR, device number 9: synthetic) (sim) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |
 | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |  |

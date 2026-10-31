@@ -532,8 +532,8 @@ fn segments_menu_lists_the_card() {
     assert_eq!(row(0), Some(("LIVE SEGMENTS".into(), "ON".into())));
     assert_eq!(row(1), Some(("TARGET".into(), "AUTO".into())));
     let (name, value) = row(2).unwrap();
-    assert_eq!(name, "Test climb");
-    assert!(value.ends_with('M') && value.contains("K "), "{value}");
+    assert_eq!(name, "TEST CLIMB");
+    assert!(value.ends_with(" KM"), "{value}");
     assert_eq!(row(3), Some(("SKIPPED FILES".into(), "3".into())));
     assert_eq!(row(4), None);
     sim.save("segment_menu");

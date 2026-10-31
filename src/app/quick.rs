@@ -110,7 +110,7 @@ impl App {
     }
 
     /// The sensor's battery tag, from page 82 (the shifting systems: their metric, a percent for a Di2).
-    fn quick_battery(&self, kind: Kind) -> Battery {
+    pub(crate) fn quick_battery(&self, kind: Kind) -> Battery {
         match (kind, self.live.get(Metric::ShiftBattery)) {
             (Kind::Shifting | Kind::Di2, Some(s)) if s >= sensors::SHIFT_STATUS => {
                 q::battery_of_status((s - sensors::SHIFT_STATUS) as u8)

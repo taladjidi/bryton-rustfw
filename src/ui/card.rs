@@ -73,10 +73,11 @@ pub fn draw_laps_label(c: &mut impl Canvas) {
     text::draw_in(c, &white, 4, PAGE_Y + 8, white.width("LAPS"), Align::Left, "LAPS");
 }
 
-/// Laps a list screen shows at once: rows of 20 px under the title and a column header.
+/// Laps a list screen shows at once: rows of 32 px (a LABEL line, room to tell the rows apart) under the title and a
+/// column header.
 pub const LAP_ROWS: usize = ((H - LAPS_Y) / LAP_ROW) as usize;
-const LAP_ROW: u32 = 20;
-const LAPS_Y: u32 = super::LIST_Y + 16;
+const LAP_ROW: u32 = 32;
+const LAPS_Y: u32 = super::LIST_Y + 18;
 
 /// One lap of a past ride as its list shows it, in 10 bytes: a field all ones is not known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,9 +139,9 @@ impl LapRow {
     }
 }
 
-/// The list of a past ride's laps from row `top`: number, time, distance, average speed, power and heart rate (a
-/// missing one "--"); "NO LAPS" for a ride with none; the title says "FIRST 99 OF 120" when `total` laps are more than
-/// `laps`. Drawn whole (a screen opens or scrolls).
+/// The list of a past ride's laps from row `top`: time, distance, average power and heart rate, each at LABEL size (a
+/// missing one "--"), the header once on top; "NO LAPS" for a ride with none; the title says "FIRST 99 OF 120" when
+/// `total` laps are more than `laps`. Drawn whole (a screen opens or scrolls).
 pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top: usize, imperial: bool) {
     let mut title = Line::<20>::new();
     if total > laps.len() {
@@ -152,25 +153,23 @@ pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top
         title.push_str("LAPS");
     }
     super::draw_title(c, title.as_str());
-    let grey = Style { fg: super::GREY, scale: 1, ..LABEL };
+    let grey = Style { fg: super::GREY, ..LABEL };
     if laps.is_empty() {
         text::draw_in(c, &grey, 0, super::LIST_Y + 20, W, Align::Centre, "NO LAPS");
         return;
     }
-    // (left, width) of each column: #, time, distance, speed, W, HR
-    const COLS: [(u32, u32); 6] = [(2, 22), (28, 48), (80, 34), (118, 34), (156, 34), (194, 34)];
-    let head = ["#", "TIME", if imperial { "MI" } else { "KM" }, if imperial { "MPH" } else { "KMH" }, "W", "HR"];
+    // (left, width) of each column: time, distance, W, HR
+    const COLS: [(u32, u32); 4] = [(2, 84), (90, 50), (144, 48), (196, 40)];
+    let head = ["TIME", if imperial { "MI" } else { "KM" }, "W", "HR"];
     for (&(x, w), h) in COLS.iter().zip(head) {
         text::draw_in(c, &grey, x, super::LIST_Y + 2, w, Align::Right, h);
     }
-    let white = Style { scale: 1, ..LABEL };
-    for (r, (i, l)) in laps.iter().enumerate().skip(top).take(LAP_ROWS).enumerate() {
-        let y = LAPS_Y + r as u32 * LAP_ROW + 4;
-        let mut cells = [Line::<10>::new(); 6];
-        let [no, time, dist, speed, power, hr] = &mut cells;
-        no.push_u32(i as u32 + 1);
-        // time to 99:59:59, distance to 999.9 km, power to 9999 W: what a column holds
-        match l.timer_s().map(|t| t.min(99 * 3600 + 3599)) {
+    for (r, l) in laps.iter().skip(top).take(LAP_ROWS).enumerate() {
+        let y = LAPS_Y + r as u32 * LAP_ROW + (LAP_ROW - LABEL.height()) / 2;
+        let mut cells = [Line::<10>::new(); 4];
+        let [time, dist, power, hr] = &mut cells;
+        // time to 9:59:59, distance to 99.9 km, power to 9999 W: what a column holds
+        match l.timer_s().map(|t| t.min(9 * 3600 + 3599)) {
             Some(t) => {
                 let (h, m, sec) = (t / 3600, t / 60 % 60, t % 60);
                 if h > 0 {
@@ -188,16 +187,8 @@ pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top
             None => time.push_str("--"),
         }
         match l.dist_m() {
-            Some(m) => crate::push_trip(dist, m.min(999_900), imperial),
+            Some(m) => crate::push_trip(dist, m.min(99_900), imperial),
             None => dist.push_str("--"),
-        }
-        match l.speed_x10().map(|v| if imperial { crate::mph_x10(u32::from(v)) } else { u32::from(v) }) {
-            Some(v) => {
-                speed.push_u32(v.min(9999) / 10);
-                speed.push_str(".");
-                speed.push_u32(v.min(9999) % 10);
-            }
-            None => speed.push_str("--"),
         }
         match l.power() {
             Some(v) => power.push_u32(u32::from(v.min(9999))),
@@ -208,7 +199,7 @@ pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top
             None => hr.push_str("--"),
         }
         for (&(x, w), cell) in COLS.iter().zip(&cells) {
-            text::draw_in(c, &white, x, y, w, Align::Right, cell.as_str());
+            text::draw_in(c, &LABEL, x, y, w, Align::Right, cell.as_str());
         }
     }
 }
@@ -254,16 +245,16 @@ impl Card {
         card.stats = [
             ("TIME", time),
             (if imperial { "MI" } else { "KM" }, km),
-            (if imperial { "AVG MPH" } else { "AVG KM/H" }, speed),
+            (if imperial { "MPH" } else { "KMH" }, speed),
             if imperial {
-                ("ASCENT FT", num(s.ascent_m.map(|m| crate::feet(m.min(i32::MAX as u32) as i32) as u32)))
+                ("ASC", num(s.ascent_m.map(|m| crate::feet(m.min(i32::MAX as u32) as i32) as u32)))
             } else {
-                ("ASCENT M", num(s.ascent_m))
+                ("ASC", num(s.ascent_m))
             },
             ("NP", w(s.np)),
-            ("AVG W", w(s.avg_power)),
-            ("AVG HR", w(s.avg_hr)),
-            ("MAX HR", w(s.max_hr)),
+            ("W", w(s.avg_power)),
+            ("HR", w(s.avg_hr)),
+            ("MAX", w(s.max_hr)),
             ("TSS", num(s.tss)),
             ("KJ", num(s.kj)),
         ];
@@ -286,12 +277,12 @@ pub fn draw(
     let (x, y, w, h) = ELEV;
     super::draw_graph(c, (x, y, w, h), elev);
     c.fill(x, y + h, w, 1, super::DARK);
-    let small = Style { scale: 1, ..grey };
     for (i, (label, value)) in card.stats.iter().enumerate() {
         let (col, row) = ((i % 2) as u32, (i / 2) as u32);
-        let (cx, cy) = (col * W / 2 + 2, STATS_Y + row * STAT_H);
-        let cw = W / 2 - 4;
-        text::draw_in(c, &small, cx, cy + 6, cw - VALUE_W, Align::Left, label);
+        // 12 px between the columns: the left value's right edge is not the right label's left edge
+        let (cx, cy) = (col * W / 2 + 2 + col * 4, STATS_Y + row * STAT_H);
+        let cw = W / 2 - 8;
+        text::draw_in(c, &grey, cx, cy, cw - VALUE_W, Align::Left, label);
         text::draw_in(c, &LABEL, cx + cw - VALUE_W, cy, VALUE_W, Align::Right, value.as_str());
     }
 }
@@ -304,26 +295,12 @@ mod tests {
     /// The widest realistic values and labels fit their cells whole, and LAPS leaves the title alone.
     #[test]
     fn stat_cells_and_title_are_whole() {
-        let (cw, small) = (W / 2 - 4, Style { scale: 1, ..LABEL });
+        let cw = W / 2 - 8;
         for v in ["109.3", "999.9", "9999", "1234.", "99:59", "187"] {
             assert!(LABEL.width(v) <= VALUE_W, "{v}");
         }
-        for l in [
-            "TIME",
-            "KM",
-            "MI",
-            "AVG KM/H",
-            "AVG MPH",
-            "ASCENT FT",
-            "ASCENT M",
-            "NP",
-            "AVG W",
-            "AVG HR",
-            "MAX HR",
-            "TSS",
-            "KJ",
-        ] {
-            assert!(small.width(l) <= cw - VALUE_W, "{l}");
+        for l in ["TIME", "KM", "MI", "KMH", "MPH", "ASC", "NP", "W", "HR", "MAX", "TSS", "KJ"] {
+            assert!(LABEL.width(l) <= cw - VALUE_W, "{l}");
         }
         let mut card = Card::default();
         card.title.push_str("30 OCT 10:17");
@@ -349,7 +326,7 @@ mod tests {
         let mut card = Card::default();
         card.title.push_str("23 OCT 09:12");
         for (label, value) in &mut card.stats {
-            *label = "AVG KM/H";
+            *label = "TIME";
             value.push_str("1:32:10");
         }
         draw(&mut f, &card, (&map::Track::new(), None, None), &|i| (i % 30, super::super::GREY));

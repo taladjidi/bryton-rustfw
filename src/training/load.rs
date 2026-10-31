@@ -22,6 +22,27 @@ use crate::{epoch_s, hrtss};
 
 /// Days the chart shows.
 pub const SHOWN: usize = 90;
+
+/// Form (TSB) above this is FRESH. Inferred: TrainingPeaks calls TSB within -10..+10 neutral and gives +15..+25 as a
+/// peak (<https://www.trainingpeaks.com/learn/articles/the-science-of-the-performance-manager/> and
+/// <https://www.trainingpeaks.com/blog/a-coachs-guide-to-atl-ctl-tsb/>); +5 is this firmware's cut, so a day after an
+/// easy spin reads FRESH.
+pub const FORM_FRESH: i16 = 5;
+/// Form from here up to [`FORM_FRESH`] is NEUTRAL; below it TIRED, the upper edge of TrainingPeaks' "ideal training
+/// zone for TSB" of -10 to -30 (same coach's guide).
+pub const FORM_TIRED: i16 = -10;
+/// Form below this is OVERLOAD: "beyond -30 they are headed for extreme strain" (same coach's guide).
+pub const FORM_OVERLOAD: i16 = -30;
+
+/// The one word for a form (TSB): FRESH, NEUTRAL, TIRED or OVERLOAD.
+pub fn form_word(tsb: i16) -> &'static str {
+    match tsb {
+        t if t > FORM_FRESH => "FRESH",
+        t if t >= FORM_TIRED => "NEUTRAL",
+        t if t >= FORM_OVERLOAD => "TIRED",
+        _ => "OVERLOAD",
+    }
+}
 /// Days before the chart that the averages run over, so that they start close to the rider's real level (the 42-day
 /// average forgets its start as e^(-120/42), under 6 %).
 const WARM: usize = 120;

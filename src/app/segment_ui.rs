@@ -21,7 +21,6 @@ pub(crate) const FIXED_ROWS: usize = 2;
 pub(crate) struct ListRow {
     name: [u8; 12],
     dist_m: u32,
-    gain_m: u16,
     /// The header could not be read (a ride runs, or the file went).
     ok: bool,
 }
@@ -344,12 +343,7 @@ impl App {
                         for (o, i) in name.iter_mut().zip(h.name()) {
                             *o = *i;
                         }
-                        ListRow {
-                            name,
-                            dist_m: h.distance_m,
-                            gain_m: u16::try_from(h.elevation_m).unwrap_or(u16::MAX),
-                            ok: true,
-                        }
+                        ListRow { name, dist_m: h.distance_m, ok: true }
                     },
                 );
             }
@@ -360,7 +354,7 @@ impl App {
     }
 
     /// Row `k` of the SEGMENTS list: its id as the label until the header is read (or while a ride runs), then the
-    /// name, with the distance and the gain as the value ("12.3K 250M").
+    /// name in capitals (cut at a word, "..") with the distance as the value ("12.3 KM").
     pub(crate) fn segment_row(&self, k: usize, label: &mut Line<16>, value: &mut Line<12>) -> Option<()> {
         let id = self.segments()?.id_at(k)?;
         let row = k
@@ -370,13 +364,12 @@ impl App {
         match row {
             Some(r) => {
                 let n = r.name.iter().position(|&c| c == 0).unwrap_or(r.name.len());
-                label.push_str(ascii(r.name.get(..n)?));
                 value.push_u32(r.dist_m / 1000);
                 value.push_str(".");
                 value.push_u32(r.dist_m % 1000 / 100);
-                value.push_str("K ");
-                value.push_u32(u32::from(r.gain_m));
-                value.push_str("M");
+                value.push_str(" KM");
+                // the label gets what the value leaves (12 px a character, 200 px a row)
+                super::fields::push_cut(label, ascii(r.name.get(..n)?), 200 / 12 - value.as_str().len());
             }
             None => {
                 label.push_u32(id);

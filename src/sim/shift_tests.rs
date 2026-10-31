@@ -73,7 +73,7 @@ fn di2_pairs_and_shows_gear_and_battery() {
     run(&mut sim, &mut app, 3000);
     let id = SensorId { device: 4321, trans: 0xf1 };
     assert_eq!(sim.backup[14], Kind::Di2.to_word(id), "paired and kept");
-    assert_eq!(sensor_row(&app, 6), "DI2 4321");
+    assert_eq!(sensor_row(&app, 6), "DI2 CONNECTED");
     assert_eq!(app.field_text(Field::Gear).as_str(), "2-11");
     assert_eq!(app.field_text(Field::ShiftBattery).as_str(), "60%");
     assert_eq!(app.field_color(Field::ShiftBattery), crate::ui::WHITE);
@@ -305,12 +305,12 @@ fn one_shifting_system_at_a_time() {
     sim.nordic.sensors.push(AntSensor { device_type: 1, id: 4321, data: di2, network: 1, ack: &[4] });
     sim.nordic.sensors.push(AntSensor { device_type: 0x22, id: 77, data: axs, network: 0, ack: &[] });
     let mut app = App::start_with(&mut sim, Some(KEY), Some(DI2_KEY));
-    assert_eq!(sensor_row(&app, 6), "DI2 4321");
+    assert_eq!(sensor_row(&app, 6), "DI2 SEARCHING");
     select_sensor(&mut sim, &mut app, Kind::Shifting as usize);
     assert!(sim.nordic.got.contains(&vec![6, 0xc5, 6]), "the Di2's channel closed");
     run(&mut sim, &mut app, 3000);
     assert_eq!(sensor_row(&app, 6), "DI2 OFF");
-    assert_eq!(sensor_row(&app, 5), "SHIFTING 77");
+    assert_eq!(sensor_row(&app, 5), "SHIFTING CONNECTED");
     assert_eq!(sim.backup[14], Kind::Shifting.to_word(SensorId { device: 77, trans: 0xf1 }));
 }
 

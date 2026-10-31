@@ -411,7 +411,7 @@ fn ride_history() {
     run(&mut sim, &mut app, 1000);
     let rows: Vec<_> = (1..6).map(|i| row(&app, i)).collect();
     assert_eq!(row(&app, 0).unwrap(), "FITNESS >", "first, what the rides give");
-    let want = ["22/10/2026 5.0", "20/10/2026 14.4", "01/10/2026 12.0", "15/03/2025 6.0"];
+    let want = ["22/10 10:00 5.0 KM", "20/10 08:00 14.4 KM", "01/10 07:00 12.0 KM", "15/03 09:00 6.0 KM"];
     assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "newest first");
     assert_consistent(&sim, &app);
     sim.save("history_list");
@@ -425,6 +425,7 @@ fn ride_history() {
         run(&mut sim, &mut app, u64::from(POLL_MS));
         assert!(sim.ms - t0 < 5000, "the card opens");
     }
+    assert!(app.notes.ms.is_none(), "the READING RIDE banner is gone once the card is up");
     let reads = sim.emmc.cmds[cmds0..].iter().filter(|c| c.0 == 17 || c.0 == 18).count();
     let file = app.stock.index.get(1).unwrap().file.size;
     assert_eq!(app.past.bytes, file, "the whole file, once");
@@ -445,12 +446,12 @@ fn ride_history() {
     let want = [
         "TIME 0:30".into(),
         "KM 14.4".into(),
-        "AVG KM/H 28.8".into(),
-        "ASCENT M 80".into(),
+        "KMH 28.8".into(),
+        "ASC 80".into(),
         std::format!("NP {np}"),
-        "AVG W 260".into(),
-        "AVG HR 140".into(),
-        "MAX HR 140".into(),
+        "W 260".into(),
+        "HR 140".into(),
+        "MAX 140".into(),
         std::format!("TSS {tss}"),
         "KJ 468".into(),
     ];
@@ -555,7 +556,7 @@ fn delete_rides() {
     assert_eq!(file(img, "Rustfw/Deleted/Full/261020080000.fit"), Some(full), "the full copy too");
     assert_eq!(crate::fat::write::tests::fsck(img), Ok(0));
     let rows: Vec<_> = (1..5).map(|i| row(&app, i)).collect();
-    let want = ["22/10/2026 5.0", "01/10/2026 12.0", "15/03/2025 6.0"];
+    let want = ["22/10 10:00 5.0 KM", "01/10 07:00 12.0 KM", "15/03 09:00 6.0 KM"];
     assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "at once");
     let all = app.stock.out.all;
     assert_eq!((all.rides, all.dist_m, all.time_s), (all0.rides - 1, all0.dist_m - 14_400, all0.time_s - 1800));
@@ -585,7 +586,7 @@ fn delete_rides() {
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000-1.fit").is_some_and(|f| !f.is_empty()));
     assert_eq!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000.fit"), Some(Vec::new()), "the other kept");
-    assert_eq!(row(&app, 1).unwrap(), "01/10/2026 12.0");
+    assert_eq!(row(&app, 1).unwrap(), "01/10 07:00 12.0 KM");
 
     // refused during a ride, and with a ride waiting to be resumed or saved
     open_card(&mut sim, &mut app, 1);
@@ -668,7 +669,7 @@ fn delete_past_the_cache() {
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
     let row = |app: &App| app.menu_row(Menu::History, 1).map(|(l, v, _)| std::format!("{} {}", l.as_str(), v.as_str()));
     let (first, all0) = (row(&app), app.stock.out.all);
-    assert_eq!(first.as_deref(), Some("22/10/2026 5.0"));
+    assert_eq!(first.as_deref(), Some("22/10 10:00 5.0 KM"));
     app.press(&mut sim, Press::Short(Key::Start)); // row 1: the newest ride's card
     for _ in 0..100 {
         run(&mut sim, &mut app, u64::from(POLL_MS));
@@ -681,11 +682,11 @@ fn delete_past_the_cache() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.notes.text.as_str(), "RIDE DELETED");
     assert_eq!(app.stock.status(), crate::stock::Status::Running, "rides past the cache: read again");
-    assert_eq!(row(&app).as_deref(), Some("20/10/2026 14.4"), "gone from the list at once");
+    assert_eq!(row(&app).as_deref(), Some("20/10 08:00 14.4 KM"), "gone from the list at once");
     while app.stock.status() == crate::stock::Status::Running {
         run(&mut sim, &mut app, u64::from(POLL_MS));
         assert!(sim.ms < 1_200_000);
     }
-    assert_eq!(row(&app).as_deref(), Some("20/10/2026 14.4"));
+    assert_eq!(row(&app).as_deref(), Some("20/10 08:00 14.4 KM"));
     assert_eq!((app.stock.out.all.rides, app.stock.out.all.dist_m), (all0.rides - 1, all0.dist_m - 5000));
 }

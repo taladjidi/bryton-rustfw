@@ -152,7 +152,7 @@ pub fn draw_gauge(
         None => c.fill(bar.0, bar.1, bar.2, bar.3, BLACK),
     }
     if h >= 100 {
-        text::draw_in(c, &small, x + 1, target_y, w.saturating_sub(2), Align::Centre, target);
+        text::draw_in(c, &Style { fg, ..small }, x + 1, target_y, w.saturating_sub(2), Align::Centre, target);
     }
 }
 
