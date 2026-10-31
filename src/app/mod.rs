@@ -50,6 +50,8 @@ mod workouts;
 
 pub use barometer::*;
 pub(crate) use climbs_done::ClimbsDone;
+#[cfg(test)]
+pub(crate) use climbs_done::MAX as CLIMBS_MAX;
 pub use clock::*;
 pub(crate) use courses::push_grade;
 pub use device::*;

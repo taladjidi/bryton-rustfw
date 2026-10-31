@@ -660,6 +660,26 @@ impl App {
         h
     }
 
+    /// The ride menu's rows come and go (a workout, a course, CLIMBS DONE): when their count changes under an open
+    /// menu, the selection stays on the same row and the menu is drawn again.
+    pub(crate) fn track_ride_menu(&mut self, b: &mut impl Board) {
+        let Screen::Menu(m @ Menu::Ride(_), sel) = self.screen else {
+            self.ride_menu = None;
+            return;
+        };
+        let (n, mut row) = (self.rows(m), self.row(m, sel));
+        if let Some((n0, r0)) = self.ride_menu
+            && n0 != n
+            && row != Some(r0)
+            && let Some(i) = (0..n).find(|&i| self.row(m, i) == Some(r0))
+        {
+            self.screen = Screen::Menu(m, i);
+            self.show(b);
+            row = Some(r0);
+        }
+        self.ride_menu = row.map(|r| (n, r));
+    }
+
     /// Redraws the menu rows that changed since they were drawn (the selection, a value).
     pub(crate) fn update_menu_rows(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
         let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));

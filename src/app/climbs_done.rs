@@ -12,8 +12,10 @@ use crate::*;
 pub(crate) const MAX: usize = 20;
 /// A climb is joined only in its first metres.
 const JOIN_M: u32 = 100;
-/// The top counts as reached this close to the end when the climb leaves the view (a second is up to 15 m).
-const END_SLACK_M: u32 = 60;
+/// The top counts as reached this close to the end when the climb leaves the view (a second is up to 15 m, the rider still moving forward).
+const END_SLACK_M: u32 = 30;
+/// A climb out of view this long (s) is given up.
+const GRACE_S: u32 = 10;
 
 /// A climb done, packed (10 bytes); 0 for the average of a reading never heard.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -45,6 +47,8 @@ struct Cur {
     t0: u32,
     last_t: u32,
     last_along: u32,
+    /// The last second moved up the climb.
+    fwd: bool,
     sum_w: u32,
     n_w: u32,
     sum_hr: u32,
@@ -101,24 +105,15 @@ impl ClimbsDone {
     }
 
     /// One second: the climb in view and the rider's metres along (None: none in view), the ride's timer, the
-    /// readings. Returns the climb that was just completed (its top reached, or left in view close to it).
+    /// readings. Returns the climb that was just completed: its top reached going forward, or left in view close
+    /// to it. A climb that drops out of view (or another one shows) is kept [`GRACE_S`] before it is given up.
     pub(crate) fn see(&mut self, view: Option<(Climb, u32)>, t: u32, w: Option<u16>, hr: Option<u16>) -> Option<Done> {
-        let mut out = None;
-        if let Some(c) = self.cur
-            && view.is_none_or(|(k, _)| k.start_m != c.k.start_m)
-        {
-            if c.last_along + END_SLACK_M >= c.k.end_m() {
-                out = Some(c.done());
-            }
-            self.cur = None;
-        }
-        if let Some((k, along)) = view
-            && along >= k.start_m
-        {
-            if self.cur.is_none() && along <= k.start_m + JOIN_M && along < k.end_m() {
-                self.cur = Some(Cur { k, t0: t, last_t: t, last_along: along, sum_w: 0, n_w: 0, sum_hr: 0, n_hr: 0 });
-            }
-            if let Some(c) = &mut self.cur {
+        let mut finish = false;
+        if let Some(c) = &mut self.cur {
+            let end = c.k.end_m();
+            let same = view.filter(|(k, _)| k.start_m == c.k.start_m);
+            if let Some((_, along)) = same {
+                c.fwd = along > c.last_along;
                 (c.last_t, c.last_along) = (t, along);
                 if let Some(w) = w {
                     (c.sum_w, c.n_w) = (c.sum_w + u32::from(w), c.n_w + 1);
@@ -126,11 +121,27 @@ impl ClimbsDone {
                 if let Some(h) = hr {
                     (c.sum_hr, c.n_hr) = (c.sum_hr + u32::from(h), c.n_hr + 1);
                 }
-                if along >= c.k.end_m() {
-                    out = Some(c.done());
+                finish = along >= end && c.fwd;
+            } else {
+                // another climb in view past this one's end, or none: over if the top was all but reached
+                let past = view.is_some_and(|(_, along)| along >= end);
+                finish = c.fwd && (past || (view.is_none() && c.last_along + END_SLACK_M >= end));
+                if !finish && t.saturating_sub(c.last_t) > GRACE_S {
                     self.cur = None;
                 }
             }
+        }
+        let mut out = None;
+        if finish {
+            out = self.cur.take().map(|c| c.done());
+        } else if self.cur.is_none()
+            && let Some((k, along)) = view
+            && along >= k.start_m
+            && along <= k.start_m + JOIN_M
+            && along < k.end_m()
+        {
+            self.cur =
+                Some(Cur { k, t0: t, last_t: t, last_along: along, fwd: false, sum_w: 0, n_w: 0, sum_hr: 0, n_hr: 0 });
         }
         if let Some(d) = out {
             self.push(d);
@@ -156,7 +167,7 @@ impl App {
             l.push_str(ui::segment::time_text(u32::from(d.time_s)).as_str());
             l.push_str(" VAM ");
             l.push_u32(d.vam());
-            self.say_as(l.as_str(), Banner::Summary);
+            self.say_as(l.as_str(), Banner::Ride);
         }
     }
 
@@ -209,13 +220,32 @@ mod tests {
     fn a_climb_left_near_the_top_counts_and_one_left_early_does_not() {
         let mut c = ClimbsDone::new();
         c.see(Some((K, 1000)), 0, None, None);
-        c.see(Some((K, 1950)), 90, None, None);
+        c.see(Some((K, 1960)), 88, None, None);
+        c.see(Some((K, 1975)), 90, None, None);
         assert!(c.see(None, 91, None, None).is_some(), "left within the slack");
         assert_eq!(c.get(0).unwrap().avg_w, 0, "no power heard");
         c.see(Some((K, 1000)), 100, None, None);
         c.see(Some((K, 1500)), 150, None, None);
         assert!(c.see(None, 151, None, None).is_none(), "turned off half way");
         assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn a_dropout_mid_climb_still_completes() {
+        let mut c = ClimbsDone::new();
+        c.see(Some((K, 1000)), 0, None, None);
+        c.see(Some((K, 1400)), 40, None, None);
+        for t in 41..44 {
+            assert!(c.see(None, t, None, None).is_none());
+        }
+        c.see(Some((K, 1450)), 44, None, None);
+        c.see(Some((K, 1990)), 99, None, None);
+        assert!(c.see(Some((K, 2000)), 100, None, None).is_some());
+        assert_eq!(c.get(0).unwrap().time_s, 100);
+        // a long dropout gives the climb up
+        c.see(Some((K, 1000)), 200, None, None);
+        c.see(None, 215, None, None);
+        assert!(c.see(Some((K, 2000)), 216, None, None).is_none());
     }
 
     #[test]

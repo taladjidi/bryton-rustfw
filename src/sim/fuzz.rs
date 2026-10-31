@@ -5387,3 +5387,39 @@ fn two_finger_gestures() {
     std::println!("two-finger fuzz: {apart} apart, {together} together, {taps} taps and swipes, {lone} lone samples");
     assert!(apart > 20 && together > 20 && taps > 20 && lone > 100, "the fuzz reaches both pinches and single fingers");
 }
+
+/// ClimbsDone::see over random views: climbs that start, stall, run backwards, drop out, have no length, and a time
+/// that does not increase. The list stays bounded and its getter agrees with len(); some seeds complete climbs.
+#[test]
+fn climbs_done_views() {
+    use crate::CLIMBS_MAX as MAX;
+    use crate::course::Climb;
+    let mut completed = 0u32;
+    for seed in 1..200u32 {
+        let mut r = xorshift(seed);
+        let mut c = crate::ClimbsDone::new();
+        let (mut t, mut along, mut k) = (0u32, 0u32, Climb { start_m: 1000, len_m: 500, gain_m: 40 });
+        for _ in 0..400 {
+            t = if r().is_multiple_of(16) { t.saturating_sub(r() % 5) } else { t + 1 + r() % 3 };
+            along = match r() % 8 {
+                0 => along.saturating_sub(r() % 200),
+                1 => r() % 5000,
+                _ => along + r() % 40,
+            };
+            if r().is_multiple_of(40) {
+                k = Climb { start_m: r() % 4000, len_m: r() % 800, gain_m: r() % 90 };
+            }
+            let view = (!r().is_multiple_of(6)).then_some((k, along));
+            let (w, hr) = (
+                (!r().is_multiple_of(3)).then_some((r() % 900) as u16),
+                (!r().is_multiple_of(3)).then_some((r() % 220) as u16),
+            );
+            completed += u32::from(c.see(view, t, w, hr).is_some());
+            assert!(c.len() <= MAX);
+            for i in 0..MAX + 2 {
+                assert_eq!(c.get(i).is_some(), i < c.len());
+            }
+        }
+    }
+    assert!(completed > 0, "the fuzz never completed a climb");
+}

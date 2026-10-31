@@ -44,6 +44,7 @@ impl App {
         }
         if ev == ride::Event::Start {
             self.power.new_ride();
+            self.climbs_done.clear();
             self.zone_s = ride::ZoneTime::default();
             self.hrtss = hrtss::Hrtss::default();
             self.rec.model = Some(self.model_now()); // kept for the whole ride (app/fitness.rs)
