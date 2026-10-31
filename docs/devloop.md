@@ -25,6 +25,10 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
                                   # discarded), a markdown table each
     tools/walk.py --build out/IMG.bin   # the unit walk: the simulator's screen walk replayed by key, unit vs sim
                                   # contact sheets in target/walk/ (gitignored: shots may show the owner's position)
+                                  # Only for a build WITHOUT EMMC_WRITE (what check.sh builds): dev.py run loads into
+                                  # RAM, but the image's own writes still happen in an EMMC_WRITE build. Build it from
+                                  # the main checkout (a worktree lacks ant_key.bin / di2_key.bin: sensor screens show
+                                  # NO KEY). Start is pressed only in static menus; --rides adds the ride pages.
 
 - **The profiler** (`src/link/prof.rs`, always on): `App::step`'s sections (`App::timed`, one DWT read each) and the
   main loop's own (touch, input, USB), each its calls, cycles and longest run; the panel's pixels and the eMMC's
