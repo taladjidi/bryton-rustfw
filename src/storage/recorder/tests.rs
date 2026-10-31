@@ -3274,6 +3274,62 @@ fn a_second_while_paused_keeps_the_timer_stopped() {
     assert_eq!(events(true), without);
 }
 
+/// `io_after`: the full copy takes the name the clean one's save of the same ride took, never an earlier ride's: a
+/// ride saved a second later (its name taken in `\Activities`), then the next ride's clean save failing and kept in
+/// its rides folder: that ride's full copy is saved under its own name.
+#[test]
+fn the_full_copy_never_takes_an_earlier_rides_saved_name() {
+    let mut d = card(crate::fat::tests::image());
+    let (mut rs, mut last) = (pair(), [Outcome::Nothing; 2]);
+    for r in rs.iter_mut() {
+        r.start(T0 - 1, NAME, false);
+    }
+    seconds(&mut rs, &mut d, 0, 100, &mut last);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let dir = fat.open(&mut d, ACTIVITIES).unwrap();
+    fat.create(&mut d, dir, "261023100000.fit", (0, 0)).unwrap();
+    for r in rs.iter_mut() {
+        r.end(T0 + 100, words(100));
+    }
+    for _ in 0..3 {
+        pass(&mut rs, &mut d, 100, &mut last);
+    }
+    const ONE_ON: [u8; 12] = *b"261023100001";
+    assert_eq!(last, [Outcome::Saved(ONE_ON); 2], "the earlier ride a second later");
+    // the next ride: its clean copy's save fails (`\Activities` refused) and is kept in `\Rustfw\Rides`
+    const NEXT: [u8; 12] = *b"261023110000";
+    let bad = std::vec![dir_lbas(&d.img, ACTIVITIES)];
+    let mut d = Bad { card: d, bad, unread: Vec::new(), on: false };
+    let mut out = [Vec::new(), Vec::new()];
+    for t in 1000..3000 {
+        let [clean, full] = &mut rs;
+        if t == 1000 {
+            clean.start(T0 + t - 1, NEXT, false);
+            full.start_after(clean, T0 + t - 1, NEXT, false);
+        }
+        if t < 1100 {
+            clean.second(&sample(t), words(t));
+            full.second(&sample(t), words(t));
+        } else if t == 1100 {
+            clean.end(T0 + t, words(t));
+            full.end(T0 + t, words(t));
+            d.on = true;
+        }
+        clean.keep_up(full);
+        full.keep_up(clean);
+        if clean.due() {
+            out[0].push(clean.io(&mut d, local(t)));
+        }
+        if full.due() {
+            out[1].push(full.io_after(clean, &mut d, local(t)));
+        }
+    }
+    assert_eq!(out[0].last(), Some(&Outcome::Kept(NEXT)), "{:?}", out[0]);
+    assert_eq!(out[1].last(), Some(&Outcome::Saved(NEXT)), "its own name: {:?}", out[1]);
+    assert!(saved(&d.card.img, "Rustfw/Activities/261023110000.fit").is_ok_and(|s| s.1));
+    assert!(saved(&d.card.img, "Rustfw/Activities/261023100002.fit").is_err(), "never after the earlier name");
+}
+
 /// `second`: a checkpoint at least every minute of ride, however small the records (the buffer far from low).
 #[test]
 fn a_checkpoint_every_minute_whatever_the_buffer() {

@@ -58,8 +58,14 @@ impl App {
                 }
             }
             Err(fat::Error::NotFat32) => self.fault_given_up(b, word), // no volume (a card stock never formatted)
-            // no folder yet: never made here (module doc), looked for again later; the line kept in memory
-            Err(fat::Error::NotFound) => self.fault_due = Some((word, at, self.up_ms.saturating_add(RETRY_MS), tries)),
+            // no folder yet: never made here (module doc), looked for again later; the line kept in memory. Only after
+            // the sync succeeded: the FAT copies are equal, so the next look reads no FAT (15 MB) again
+            Err(fat::Error::NotFound) => {
+                if suspect {
+                    self.fats_equal();
+                }
+                self.fault_due = Some((word, at, self.up_ms.saturating_add(RETRY_MS), tries));
+            }
             Err(_) => {
                 self.fats_unsure(); // the next writes compare the FAT copies first
                 if tries == 0 {

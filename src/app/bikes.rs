@@ -12,7 +12,8 @@
 //! again, and nothing is changed or counted until it succeeds: a first copy is never written beside a newer one.
 //! The file is never made here (nor made whole): a ride's start makes it, zeroed (storage/recorder/mod.rs `make_kept`,
 //! so no write between rides touches `\Rustfw`'s directory sector). Without it a change waits for the next ride
-//! (`no_file`), and the settings do not wait for it.
+//! (`no_file`), and the settings do not wait for it; ACTIVE BIKE, SERVICE EVERY and RESET are refused until then
+//! ("START A RIDE FIRST"): a reboot before that ride migrates again from the settings, which would undo them.
 //!
 //! **The migration** (no file, or no whole copy): BIKE 1 gets the settings' wheel, weight, chainrings and cassette and
 //! its ODOMETER; BIKE 2 and 3 the defaults. `settings.bin` and the backup registers are left as they are (they keep
@@ -25,7 +26,8 @@
 //! ride is open: then the settings' (a WHEEL changed during the ride, kept by the registers over a reset) stay and go
 //! to the active bike. Nothing is read while a ride waits to be resumed.
 //! `bikes.bin` is written before `settings.bin` (the settings wait while it is due), so a power cut between the two
-//! writes leaves the newer in the bikes' file, which wins.
+//! writes leaves the newer in the bikes' file, which wins; except on a card without bikes.bin, where the settings go
+//! alone (the bikes then migrate from them).
 //!
 //! **The rides** are counted from the ride scan's list when a scan has ended with a list not counted yet (its
 //! revision, so a scan that ends within a pass is not missed; [`bikes::Bikes::count`], idempotent: the mark and the
@@ -198,8 +200,15 @@ impl App {
         let loaded = self.bikes().is_some();
         if !loaded {
             self.say(if self.emmc.lent() { "USB DRIVE ON" } else { "BIKES NOT READ" });
+            return false;
         }
-        loaded
+        // no file to keep the change (a ride's start makes it): a reboot would migrate again from the settings,
+        // undoing a switch (BIKE 1 taking BIKE 2's gear), so nothing is changed until then (module doc)
+        if self.bikes.as_deref().is_some_and(|s| s.file.no_file) {
+            self.say("START A RIDE FIRST");
+            return false;
+        }
+        true
     }
 
     /// The bikes changed by the rider: written at the next pass.

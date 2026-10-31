@@ -132,12 +132,18 @@ fn bikes_wait_for_a_ride_to_make_their_file() {
     let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
     assert!(read_all(&mut fat, &mut d, "Rustfw/bikes.bin").is_err(), "never made between rides");
     assert!(!app.bikes_due(), "the settings do not wait for it");
+    // no switch the file cannot keep: a reboot before a ride would migrate again, BIKE 1 taking BIKE 2's gear
+    app.next_bike(&mut sim);
+    assert_eq!(app.notes.text.as_str(), "START A RIDE FIRST");
+    assert_eq!(bikes(&app).active, 0, "BIKE 1 still");
     ride(&mut sim, &mut app);
     settle(&mut sim, &mut app);
     let file = file(&sim).expect("written after the ride").1;
     assert_eq!(file.list[0].gear, b.list[0].gear, "the migration");
     assert_eq!(file.list[1..], b.list[1..]);
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    app.next_bike(&mut sim);
+    assert_eq!(bikes(&app).active, 1, "the file there: BIKE 2");
 }
 
 /// The scan after a short ride's save ends in the pass after it (a small card): the ride is counted at once, not at

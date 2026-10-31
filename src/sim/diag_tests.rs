@@ -179,6 +179,18 @@ fn fault_log_written_once_and_appended() {
     assert_eq!(files(&sim.emmc.image, "Rustfw/Log"), None, "the folder never made here");
     assert!(app.fault_due.is_some_and(|f| f.3 == 0), "kept, no try counted: {:?}", app.fault_due);
     assert!(!app.notes.list.iter().any(|n| n.as_str().ends_with("FAULT LOG NOT SAVED")));
+    // a ride's start makes the folder: the line written once that ride is saved, once, the marker gone
+    app.start_pause();
+    run(&mut sim, &mut app, 70_000);
+    app.start_pause();
+    app.end_ride();
+    run(&mut sim, &mut app, 70_000);
+    assert!(app.ride_settled(), "the ride saved");
+    let text = log(&sim.emmc.image).expect("written after the ride");
+    assert_eq!(text.lines().filter(|l| l.contains(" panic at line 412,")).count(), 1, "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert_eq!(sim.backup[FAULT_BKP], 0, "logged past its minute: the marker cleared");
+    assert_eq!(fsck(&sim.emmc.image), Ok(0));
 
     let (mut sim, mut app) = faulted(crate::recorder::tests::kept_card(), [0; 32], marker(0, Kind::Panic, 412));
     run(&mut sim, &mut app, 1000);

@@ -776,15 +776,11 @@ impl Recorder {
             }
         }
         // a folder made or grown takes a cluster: never from the reserve the next ride's clean copy needs. FSInfo's
-        // count counted again after any card error (a failed FSInfo write after a grow leaves it high: the second
-        // review of S5 and S6); a rescue follows errors as a rule: a whole FAT read, once, on the owner's request
-        let free = match fat.free_clusters(d)? {
-            Some(n) if self.errors == 0 => Some(n),
-            _ => {
-                fat.sync_fats(d)?;
-                fat.free_clusters(d)?
-            }
-        };
+        // count counted again from the FAT (a failed FSInfo write after a grow leaves it high: the second review of
+        // S5 and S6); a rescue always follows card errors (`give_up_on` counts one first): a whole FAT read, once, on
+        // the owner's request
+        fat.sync_fats(d)?;
+        let free = fat.free_clusters(d)?;
         if free.is_none_or(|n| u64::from(n) * u64::from(fat.cluster_bytes()) < FULL_RESERVE) {
             return Err(Error::Refused);
         }
