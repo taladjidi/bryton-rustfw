@@ -76,12 +76,19 @@ pub struct Sim {
     /// The work an eMMC read costs, ns a byte (reading and parsing what was read: about 430 on the unit, 2.3 MB/s,
     /// `tools/dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`prof::Clock::us`]. 0 (the default): free.
     pub work_ns_per_byte: u64,
-    /// Work done so far, ns.
+    /// Work done so far, ns. Must not advance by more than 4 s between two Clock reads: the u32 cycle counter wraps
+    /// at 4.29 s of work and Clock catches one wrap only.
     pub awake_ns: u64,
     /// The cycle counter ([`Board::cycles`]): each read moves it on by [`Sim::cycles_step`], wrapping as CYCCNT does.
     pub cycles: u32,
     /// What each read of the cycle counter adds (0, the default: the counter stands still).
     pub cycles_step: u32,
+    /// The channels `adc_read` was asked, in order (the first [`Sim::adc_n`] entries; more are not kept).
+    pub adc_calls: [u8; 4],
+    /// How many channels were asked.
+    pub adc_n: u8,
+    /// A channel that answers `None` (a failed conversion), or none.
+    pub adc_fail: Option<u8>,
 }
 
 /// The Sitronix touch controller (BOARD.md 17), as the protocol doc describes it: Init for 50 ms after its reset
@@ -1233,6 +1240,9 @@ impl Sim {
             awake_ns: 0,
             cycles: 0,
             cycles_step: 0,
+            adc_calls: [0; 4],
+            adc_n: 0,
+            adc_fail: None,
         }
     }
 
@@ -1441,7 +1451,14 @@ impl Board for Sim {
     }
 
     fn adc_read(&mut self, channel: u8) -> Option<u16> {
+        if let Some(slot) = self.adc_calls.get_mut(usize::from(self.adc_n)) {
+            *slot = channel;
+        }
+        self.adc_n = self.adc_n.saturating_add(1);
         // VDDA 3.3 V: VREFINT reads its calibration value; the pin sees the battery through the divider by 1.5
+        if self.adc_fail == Some(channel) {
+            return None;
+        }
         let mv = self.battery_mv?;
         Some(if channel == 19 { 24_000 } else { (u32::from(mv) * 2 * 65535).div_ceil(3 * 3300) as u16 })
     }

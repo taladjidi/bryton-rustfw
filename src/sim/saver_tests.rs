@@ -169,3 +169,26 @@ fn the_tag_clears_usb_and_a_full_battery() {
     run(&mut sim, &mut app, 12_000);
     sim.save("saver_strip_usb");
 }
+
+/// The battery poll reads VREFINT (channel 19) and then the battery (channel 1), in that order; a failed battery
+/// conversion gives no reading at all, and the percent stays unknown.
+#[test]
+fn battery_reads_vref_then_battery_and_fails_whole() {
+    for fail in [None, Some(1)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.adc_fail = fail;
+        let mut app = App::start(&mut sim, None);
+        // the first poll after the start: the reads are recorded from here
+        sim.adc_n = 0;
+        for _ in 0..200 {
+            run(&mut sim, &mut app, 1000);
+            if sim.adc_n >= 2 {
+                break;
+            }
+        }
+        let calls = &sim.adc_calls[..usize::from(sim.adc_n).min(4)];
+        assert_eq!(&calls[..2], &[19, 1], "fail {fail:?}");
+        assert_eq!(app.strip.battery.is_some(), fail.is_none(), "fail {fail:?}: {:?} %", app.strip.battery);
+    }
+}
