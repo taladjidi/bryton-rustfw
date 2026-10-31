@@ -64,7 +64,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | Courses on the card: stock's routes, FIT, GPX (sim) | The CLIMB page, opened when the climb starts: the climb's title (length, grade) and the gain left in metres, its profile by grade with the part done dark and the rider white, the climb coach's gauge, the elapsed time and the distance left (sim, made-up road) | The profile names the next peak or col (title: name and elevation) and marks each one with a cyan column; NEXT POI is the distance to it (sim, made-up names on synthetic tiles) |
 
 | ![Steep descent](img/steep-descent.png) | | |
-| STEEP DESCENT 10 %: the banner 300 m before a 12 % drop, and the DESCENT AHEAD field counting down (sim, made-up course) | | |
+| STEEP DESC 10 %: the banner 300 m before a 12 % drop, and the DESCENT AHEAD field counting down (sim, made-up course) | | |
 
 ## Workouts and training
 
@@ -156,7 +156,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | | |
 |:-:|:-:|
 | ![Lap banner](img/auto-lap.png) | |
-| AUTO LAP BY DISTANCE 5 km: the banner of lap 1 with its number, time, distance and average speed (sim) | |
+| AUTO LAP DISTANCE 5 km: the banner of lap 1 with its number, time, distance and average speed (sim) | |
 
 ## Live segments
 

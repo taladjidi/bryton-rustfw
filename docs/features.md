@@ -189,14 +189,14 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   "HEART RATE LOW", "DFA A1 LOW") with the same three beeps and queue. Reminders by distance (every N km, 1 to 99), kcal and kJ
   (every N, steps of 10) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
   step (the first second of a ride, and a step set mid-ride, do not fire). Speed limits are in km/h whatever the units.
-- **Sunset alert** (ALERTS > SUNSET ALERT: OFF, 15, 30 or 60 MIN; off by default): a red-free reminder "SUNSET SOON" with the
+- **Sunset alert** (ALERTS > SUNSET: OFF, 15, 30 or 60 MIN; off by default): a red-free reminder "SUNSET SOON" with the
   three beeps when the sun is that many minutes from its set (the NOAA times the fields use, with a fix). Once a ride:
   a pause and resume do not say it again; a reset resume may. No fix or no sun times, no alert. Kept in settings.bin
   at byte 155 (after DATE FORMAT). Sim only (`sunset_alert_says_once_before_the_set`).
 - **Descents and the steep descent alert** (`nav/course`, `app/descents.rs`; sim): the descents of a course followed, and of
   the road ahead with no course, are found by the climbs' own finder on the profile upside down (at least 300 m and 3 % on
   average, up to 8 of a course, 4 of the trace), each with its length, drop, average grade and steepest grade over 50 m.
-  ALERTS > STEEP DESCENT (OFF, 8, 10 or 12 %; off by default) says "STEEP 12% IN 300 M" in a banner with a beep when the
+  ALERTS > STEEP DESC (OFF, 8, 10 or 12 %; off by default) says "STEEP 12% IN 300 M" in a banner with a beep when the
   next descent whose steepest 50 m passes the setting is 300 m ahead, once per descent (a retrace of the road ahead does
   not say it again). The DESCENT AHEAD field (NEXT DESC, index 118, the course group) shows the distance to the next descent
   (what is left of it on it) and its steepest grade ("290M|12%"). Kept in settings.bin at byte 171 (after GNSS SYSTEMS), OFF
@@ -241,7 +241,7 @@ settings) starts with BRIGHTNESS AUTO and OFF AFTER 30 S; saved settings, or sto
 AUTO OFF (SYSTEM > AUTO OFF: off, or after 5, 10, 30 or 60 min idle) switches the unit off with no ride, cable, drive
 or write waiting and no movement; details: docs/power.md.
 
-BATTERY SAVER (SYSTEM > BATTERY SAVER: OFF, ON or AUTO; settings file byte 172, one setting for all profiles): ON applies, on top of
+BATT SAVER (SYSTEM > BATT SAVER: OFF, ON or AUTO; settings file byte 172, one setting for all profiles): ON applies, on top of
 the other settings (it changes none of them, so OFF gives them back exactly), the GPS in cyclic tracking (GPS POWER SAVER's mode) while no ride is running (a running ride, and an MTB ride, keep the rider's GPS POWER: its distance
 comes from the GPS speed), the backlight capped at 30 % with a 10 s time-out at most (never off and 30 / 60 s become 10 s; a running ride keeps its
 time-out, only the level is capped), and the graphs of a ride page redrawn every 5 s instead of each second (at once on a touch or a key; the map and
@@ -329,7 +329,7 @@ moves; the screen is redrawn at once and the choice is kept in the settings file
 text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
 Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
-**Theme AUTO.** THEME's list starts with AUTO: the day theme (DAY THEME, OUTDOOR at first) and the night one (NIGHT THEME,
+**Theme AUTO.** THEME's list starts with AUTO: the day theme (DAY, OUTDOOR at first) and the night one (NIGHT,
 DARK at first) then follow the ambient light: night under 20 lux, day again over 50 lux, each held 30 s, at most one
 switch a minute, a full redraw at each. The light sensor measures while AUTO is on. Details: theming.md 4b.
 
@@ -466,7 +466,7 @@ MENU
                    SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING, BT TRAINER; DI2 KEYS >; PHONE >
  +- SETTINGS >
      +- ME >       MAX HR, FTP, WEIGHT, W'
-     +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE, SUNSET ALERT
+     +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE, SUNSET
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, THEME
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER),
@@ -628,9 +628,9 @@ changes what every row shows (km or miles, hours, rides, ascent, TSS). The oldes
 
 ## Laps
 
-- **AUTO LAP** (SETTINGS > BIKE): OFF (the default), BY DISTANCE or BY TIME, with LAP EVERY 1 to 50 km (5) or 1 to 60 min (10). An auto lap is the Lap key's lap (`Ride::lap`, the same recorder event), so the FIT file holds the same lap message; it does not move a workout on. Only while the ride runs.
-- **BY DISTANCE** counts from the last lap, manual or auto, not from the ride's total (as Garmin restarts it after a manual lap): with 5 km, a manual lap at 7 km makes the next at 12 km. The lap falls on the first second past the step, so it can be a few metres over.
-- **BY TIME** counts moving time (the lap time field): a stop or a pause does not count.
+- **AUTO LAP** (SETTINGS > BIKE): OFF (the default), DISTANCE or TIME, with LAP EVERY 1 to 50 km (5) or 1 to 60 min (10). An auto lap is the Lap key's lap (`Ride::lap`, the same recorder event), so the FIT file holds the same lap message; it does not move a workout on. Only while the ride runs.
+- **DISTANCE** counts from the last lap, manual or auto, not from the ride's total (as Garmin restarts it after a manual lap): with 5 km, a manual lap at 7 km makes the next at 12 km. The lap falls on the first second past the step, so it can be a few metres over.
+- **TIME** counts moving time (the lap time field): a stop or a pause does not count.
 - **The lap banner** (Lap key or auto lap, 8 s or until a key): lap number, lap time and distance, then average power (speed without power) and average heart rate if a strap was heard. In a workout the step banner shows instead of it (Lap moves the step on, and the step change tells the rider); so do the step laps.
 - Kept in settings.bin at data 94 (mode), 95 (km) and 96 (minutes); an older file reads OFF, 5 km, 10 min. Not yet: the lap list of a past ride.
 
@@ -863,8 +863,8 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
 - **SOUND** (DISPLAY, ON): OFF drops every tone the app plays (alerts, course and workout tones, the start and pause beeps) and cuts
   the one sounding. The alerts' banners still show. It also silences the heart rate alarm, the off-course alarm and the low battery tone: only
   the banner shows. The power-on and power-off melodies stay (they play before the settings are read and after the screen is off). There is no key click: this unit's keys have no beep today, so a key click was not added.
-- **Start reminder and ready check** (SETTINGS > BIKE: START REMINDER and READY CHECK, both ON; app/start_cues.rs). Neither starts, stops or touches the recording by itself.
-  - START REMINDER: with no ride (not running, not paused), on the overview or a ride page, the cable out, the bike moving for 10 s in a row (GPS speed over 8 km/h, a paired wheel sensor turning, or power above 0) says START THE RIDE? in a banner with one beep (SOUND OFF: the banner only), at most every 5 minutes. Start then starts the ride as it always does. A menu open, USB power in, or a ride running or paused: nothing, and the count starts again.
+- **Start reminder and ready check** (SETTINGS > BIKE: REMINDER and READY CHECK, both ON; app/start_cues.rs). Neither starts, stops or touches the recording by itself.
+  - REMINDER: with no ride (not running, not paused), on the overview or a ride page, the cable out, the bike moving for 10 s in a row (GPS speed over 8 km/h, a paired wheel sensor turning, or power above 0) says START THE RIDE? in a banner with one beep (SOUND OFF: the banner only), at most every 5 minutes. Start then starts the ride as it always does. A menu open, USB power in, or a ride running or paused: nothing, and the count starts again.
   - READY CHECK: Start on a new ride (a resume or a pause shows nothing) shows a two-line card for 3 s: the GPS fix (YES / NO) and the unit's battery, then the warning: LOW BATT at 15 % or less, NO and the names of the paired sensors not heard in the last 5 s, else the sensors found and OK (NO SENSORS PAIRED with none). Names are written while they fit the banner, then "+N" for the rest. Shifting and Di2 count only when heard (they may stay silent at a standstill, which cannot be told from the sensor being gone without the unit). Any input skips it; Start on it only skips it, with a short tone (SOUND) and a RECORDING notice, so a rider who meant to pause knows it did not. **The recording starts at the press**, in the same call as without the card (the FIT start is the press, no data is lost); the card is a banner over the ride page, so it can neither delay nor prevent the start. The sensors are judged as heard at the press: the channels that were resting search again from it. Kept in settings.bin data 150 and 151 (ON in a file that predates them).
   ![Start reminder](img/start-reminder.png) ![Ready card](img/ready-card.png)
 - **BACKLIGHT ALWAYS ON** is LIGHT OFF NEVER (SETTINGS > DISPLAY), as before.
@@ -1025,7 +1025,7 @@ STOCK):
   ride pages and the overview only (a lap on the overview too while riding), never as keys in a menu or on a call;
   play and the tracks work everywhere. The Di2 repeats its last press, so its first button page after a start is
   not a press. IMPORT takes the Di2 and its
-  button actions from stock's Sensor.ini (P12's numbers included). **CHAINRINGS** and **CASSETTE** (the DI2 KEYS menu, presets such as 50/34 and 11-30 11S, OFF by default) turn the GEAR field into teeth, "50x17" (the Di2 reports positions only; rear 1 as the largest cog and front 1 as the smallest ring are inferred). Not done: the gear ratio or gear inches as a field, teeth read from the Di2 itself (stock stores them from the Di2 info record, `Sensor_Di2StoreGearConfig`; its layout is not decoded here), the ANT+ Shifting remotes' buttons (no public layout).
+  button actions from stock's Sensor.ini (P12's numbers included). **CHAINRINGS** and **CASSETTE** (the DI2 KEYS menu, presets such as 50/34 and 11-30/11, OFF by default) turn the GEAR field into teeth, "50x17" (the Di2 reports positions only; rear 1 as the largest cog and front 1 as the smallest ring are inferred). Not done: the gear ratio or gear inches as a field, teeth read from the Di2 itself (stock stores them from the Di2 info record, `Sensor_Di2StoreGearConfig`; its layout is not decoded here), the ANT+ Shifting remotes' buttons (no public layout).
 - **GPS** (u-blox M10): speed when no wheel sensor is paired; at power-up it gets the time and the last position,
   for a faster fix.
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
@@ -1059,7 +1059,7 @@ weight, bike weight, W', eat, drink, heart rate alert), then the choices, one by
 before the limits (an earlier build's) reads them OFF. A later build appends its settings and raises the length: SOUND,
 UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trips and the odometer as five u32 (TRIP 1 m
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
-C, AUTO and zeros. START REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
+C, AUTO and zeros. REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
 DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; CHAINRINGS and CASSETTE are 156 and 157;
 QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP is 167, LEVEL STEP and SLOPE SCALE 168 and 169, GNSS SYSTEMS 170, STEEP DESCENT the last (171; 172 in
 all); they read CLOCK, OFF and the defaults when missing.

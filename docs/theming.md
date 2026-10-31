@@ -221,8 +221,8 @@ repository.
 16 at most) as COURSES does. A tap applies it at once (full redraw); `settings.bin` is written when no ride is open.
 FONT stays its own setting; a theme's `font` key (level b) sets FONT when the theme is picked (T3), not on an AUTO switch.
 
-**4b. THEME AUTO (T5, built).** THEME's list starts with AUTO. With it, the theme in use is DAY THEME (OUTDOOR at
-first) or NIGHT THEME (DARK at first), each picked as THEME is (the built-ins, then the files), and the ambient light
+**4b. THEME AUTO (T5, built).** THEME's list starts with AUTO. With it, the theme in use is DAY (OUTDOOR at
+first) or NIGHT (DARK at first), each picked as THEME is (the built-ins, then the files), and the ambient light
 chooses between them. The thresholds are stock's backlight curve (drivers/ambient.rs `AUTO_BANDS`): night under 20 lux,
 the top of its dusk band, where the backlight is at 20 %; day again over 50 lux, the top of its 30 % band, 2.5 times
 the night threshold, so a dusk that flickers stays on its side. Each is held 30 s (the mean of each second's readings,
@@ -232,8 +232,8 @@ between rides (`App::load_day_night`: a missing file gives its side's default, w
 the card. A switch is a full redraw, only when the
 name in use changes. While AUTO is on the light sensor is read once a second when only AUTO wants it (every 250 ms while the backlight
 follows it too), a cost on
-the battery that the unit has not measured yet (status.md). The settings file keeps AUTO (a byte), DAY THEME and
-NIGHT THEME (12 bytes each) after POWER SMOOTH (data bytes 69 to 93); a file of 44, 66 or 69 bytes reads AUTO off.
+the battery that the unit has not measured yet (status.md). The settings file keeps AUTO (a byte), DAY and
+NIGHT (12 bytes each) after POWER SMOOTH (data bytes 69 to 93); a file of 44, 66 or 69 bytes reads AUTO off.
 
 ## 5. Phases
 

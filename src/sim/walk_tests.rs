@@ -139,6 +139,24 @@ fn visit(sim: &mut Sim, app: &mut App, w: &mut Walk, m: Menu, name: &str) {
                 _ => {
                     w.cur = format!("{name}/{label}");
                     run(sim, app, 300);
+                    if app.screen() == Screen::Past {
+                        // the card of a long hard ride, whatever the file read says
+                        let big = crate::ui::card::Stats {
+                            start: ((2026, 10, 30), (10, 17)),
+                            timer_s: 40_000,
+                            dist_m: 312_400,
+                            avg_speed_x10: Some(1093),
+                            ascent_m: Some(2345),
+                            np: Some(420),
+                            avg_power: Some(380),
+                            avg_hr: Some(187),
+                            max_hr: Some(199),
+                            tss: Some(1234),
+                            kj: Some(4321),
+                        };
+                        app.past.card = crate::ui::card::Card::of(&big, app.settings.imperial);
+                        app.show(sim);
+                    }
                     w.drain();
                     w.shot(sim);
                 }

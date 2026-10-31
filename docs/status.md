@@ -16,7 +16,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   BIKE 1 from the settings' wheel and ODOMETER (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
   switching the wheel and weight (the speed from a wheel sensor follows); a ride saved, then within a minute its distance
   on the active bike and its parts; a power cut right after "RIDE SAVED" counting the ride once at the next start; a
-  part's SERVICE EVERY passed and its notice at the start; the scan's time to count on the unit's card (70 rides).
+  part's SERVICE passed and its notice at the start; the scan's time to count on the unit's card (70 rides).
 
 - **GRAVEL, CX and COMMUTE profiles**: sim only. Still to see: BIKE > PROFILE cycling to them and back to AUTO; a GRAVEL ride
   (file as gravel_cycling, auto-pause at 3 km/h, continuous tracking), a CX one (cyclocross, never pauses, laps by hand), a
@@ -134,7 +134,7 @@ A feature not listed here was seen on the unit.
   (2027-10-31), without the phone setting the RTC; the RTC itself unchanged (stock shows it as is); a ride across the
   change keeping its name, its FIT times read in the Bryton app or Intervals.icu without a jump; the sun's times on
   the new hour.
-- **The sunset alert (ALERTS > SUNSET ALERT)**: sim only. Still to see: "SUNSET SOON" and its three beeps on a ride about 30 minutes before the set, once, and not again after a pause.
+- **The sunset alert (ALERTS > SUNSET)**: sim only. Still to see: "SUNSET SOON" and its three beeps on a ride about 30 minutes before the set, once, and not again after a pause.
 - **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
   the red banner on the unit for a limit crossed on a ride.
 - **The trip, lap and slope fields (training/ride.rs, app/fields.rs; the page with trip time, laps, last lap, lap power
@@ -190,7 +190,7 @@ A feature not listed here was seen on the unit.
 - **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: seen on the unit 2026-10-29: 7 passes a second idle
   on the overview (`prof`, 1 s window, 0.91 % awake). Still to see: a real press of each key, after 30 s idle, acts at
   once (not up to 250 ms later).
-- **BATTERY SAVER (SYSTEM, `App::saver_on`)**: sim only. On the unit: the same ride (same route, brightness, pages) once with
+- **BATT SAVER (SYSTEM, `App::saver_on`)**: sim only. On the unit: the same ride (same route, brightness, pages) once with
   it OFF and once ON, the battery's percent and `tools/dev.py info` awake share read at the start and after an hour: the
   drain per hour ON against OFF (estimated gain in docs/power.md "Battery saver"); the "S" in the strip; the map
   redrawing every 5 s on a map page; AUTO turning on at 20 % with its notice and off on the charger; the receiver in cyclic
