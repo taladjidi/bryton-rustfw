@@ -328,6 +328,7 @@ impl App {
     pub(crate) fn dial_colors(&self, f: Field) -> ui::DialColors {
         let zones = self.settings.zones();
         let (full, hr) = match f.dial() {
+            Some((_, false)) => return [ui::ACCENT; ui::RING_STEPS as usize], // a bar: one colour, no zones
             Some((Field::Hr, _)) => (u32::from(self.settings.max_hr), true),
             _ => (u32::from(self.settings.ftp) * 3 / 2, false),
         };
@@ -337,13 +338,15 @@ impl App {
         })
     }
 
-    /// Gauge field `f` in box `bx` now: its value, the value's colour, the gauge's (its zone's, else white) and the
-    /// steps lit: the reading over its full scale (150 % of FTP, the maximum heart rate, 120 rpm).
+    /// Gauge field `f` in box `bx` now: its value, the value's colour and the steps lit: the reading over its full
+    /// scale (150 % of FTP, the maximum heart rate, 120 rpm; 0 FTP or maximum heart rate: empty). The power is the
+    /// POWER 3S field's, over its window (3, 10 or 30 s, the one chosen by a tap), so the ring and the digits agree.
     pub(crate) fn dial_now(&self, f: Field, bx: (u32, u32, u32, u32)) -> Drawn {
         let Some((base, ring)) = f.dial() else { return Drawn::Fixed };
         let (reading, full) = match base {
-            // the 3 s power, as the POWER 3S field: the ring and its digits move gently
-            Field::Power => (self.power.average(3).map(u32::from), u32::from(self.settings.ftp) * 3 / 2),
+            Field::Power => {
+                (self.power.rolling(self.settings.wkt_avg).map(u32::from), u32::from(self.settings.ftp) * 3 / 2)
+            }
             Field::Hr => (self.live.shown(Metric::Hr).map(u32::from), u32::from(self.settings.max_hr)),
             _ => (self.live.shown(Metric::Cadence).map(u32::from), 120),
         };

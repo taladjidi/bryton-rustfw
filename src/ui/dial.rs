@@ -107,11 +107,16 @@ fn arc_box(rg: &Ring, (lo, hi): (u32, u32)) -> (u32, u32, u32, u32) {
     (x0, y0, x1.min(rg.cx + rg.r) as u32 + 1 - x0, y1.min(rg.cy + rg.r) as u32 + 1 - y0)
 }
 
-/// The ring's box `(x, y, w, h)` repainted for `level` steps lit in `color`, except the value's rows, which it leaves
+/// The ring's box `(x, y, w, h)` repainted for `level` steps lit in the colours `ink` (the steps', dark, black: as the
+/// canvas has them, translated once per draw),  except the value's rows, which it leaves
 /// to the value: the box less that band, as up to four blits.
-fn ring_paint(c: &mut impl Canvas, rg: &Ring, cols: &DialColors, level: u32, (x, y, w, h): (u32, u32, u32, u32)) {
-    let cols = &cols.map(|k| c.ink(k));
-    let ink = (cols, c.ink(DARK), c.ink(BLACK));
+fn ring_paint(
+    c: &mut impl Canvas,
+    rg: &Ring,
+    ink: (&DialColors, u16, u16),
+    level: u32,
+    (x, y, w, h): (u32, u32, u32, u32),
+) {
     let (vx, vy, vw, vh) = ring_value_box(rg);
     let (bx0, bx1, by0, by1) = (
         vx.clamp(x, x + w),
@@ -147,7 +152,8 @@ pub fn draw_dial(
     if ring {
         let rg = ring_of(bx);
         let side = 2 * rg.r as u32 + 1;
-        ring_paint(c, &rg, cols, level, (rg.cx as u32 - rg.r as u32, rg.cy as u32 - rg.r as u32, side, side));
+        let ink = (&cols.map(|k| c.ink(k)), c.ink(DARK), c.ink(BLACK));
+        ring_paint(c, &rg, ink, level, (rg.cx as u32 - rg.r as u32, rg.cy as u32 - rg.r as u32, side, side));
     } else {
         draw_bar(c, bx, cols[0], (0, dial_steps(bx, false)), level);
     }
@@ -177,10 +183,11 @@ pub fn update_dial(
     let (lo, hi) = (old.2.min(new.2), old.2.max(new.2));
     if ring {
         let rg = ring_of(bx);
+        let ink = (&cols.map(|k| c.ink(k)), c.ink(DARK), c.ink(BLACK));
         let mut s = lo;
         while s < hi {
             let e = hi.min((s / PIECE + 1) * PIECE);
-            ring_paint(c, &rg, cols, new.2, arc_box(&rg, (s, e)));
+            ring_paint(c, &rg, ink, new.2, arc_box(&rg, (s, e)));
             s = e;
         }
     } else if lo < hi {
@@ -265,7 +272,8 @@ mod tests {
             ((0, RIDE_Y, 120, 60), false, 108),
             ((0, RIDE_Y, 240, 100), false, 228),
         ] {
-            for (a, b) in (0..=steps).step_by(7).flat_map(|a| (0..=steps).step_by(5).map(move |b| (a, b))) {
+            let levels = |k: usize| (0..=steps).step_by(k).chain([steps - 1, steps]).collect::<std::vec::Vec<_>>();
+            for (a, b) in levels(7).into_iter().flat_map(|a| levels(5).into_iter().map(move |b| (a, b))) {
                 let mut fr = Frame::new();
                 draw_dial(&mut fr, bx, ring, &COLS, "150", WHITE, a);
                 update_dial(&mut fr, bx, ring, &COLS, ("150", WHITE, a), ("151", WHITE, b));
@@ -278,6 +286,16 @@ mod tests {
                     .collect();
                 assert!(bad.is_empty(), "{bx:?} ring {ring}: {a} to {b}: {bad:?}");
             }
+            // a reading lost: "--" and an empty gauge, as drawn whole; again lost: nothing sent
+            let mut fr = Frame::new();
+            draw_dial(&mut fr, bx, ring, &COLS, "150", WHITE, 20);
+            update_dial(&mut fr, bx, ring, &COLS, ("150", WHITE, 20), ("--", WHITE, 0));
+            let mut whole = Frame::new();
+            draw_dial(&mut whole, bx, ring, &COLS, "--", WHITE, 0);
+            assert!(fr.px == whole.px, "{bx:?}: a reading lost");
+            let sent = fr.filled();
+            update_dial(&mut fr, bx, ring, &COLS, ("--", WHITE, 0), ("--", WHITE, 0));
+            assert_eq!(fr.filled(), sent, "{bx:?}: nothing changed, nothing sent");
             let mut fr = Frame::new();
             draw_dial(&mut fr, bx, ring, &COLS, "150", WHITE, 5);
             update_dial(&mut fr, bx, ring, &COLS, ("150", WHITE, 5), ("150", RED, 5));

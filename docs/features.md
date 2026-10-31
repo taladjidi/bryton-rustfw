@@ -88,9 +88,9 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   and the power meter's and the heart-rate strap's ANT+ status (page 82: NEW, GOOD, OK, LOW, CRIT). The Di2 battery is the
   shifting field. The sunset alert is in ALERTS (features.md, reminders).
 - **Gauge fields (ui/dial.rs; POWER RING in POWER, HR RING in HEART, CAD BAR in RIDE)**: the plain field's value with a
-  gauge that fills with it. The ring surrounds the value (of the 3 s power, as POWER 3S, full at 150 % of FTP, at the maximum heart rate), with each step in the colour of its own zone (a scale, fixed) and a dark track; the bar runs under the value (cadence, full at 120 rpm). Appended to the field list,
+  gauge that fills with it. The ring surrounds the value (of the POWER 3S field's window, 3 / 10 / 30 s, so the ring and the digits agree; full at 150 % of FTP, at the maximum heart rate), with each step in the colour of its own zone (a scale, fixed) and a dark track; the bar runs under the value (cadence, full at 120 rpm). Appended to the field list,
   so pages.bin keeps them as indexes and needs no new byte; an editor box takes one only where it fits (the ring from
-  120 x 118, the bar a row more than a value). The value in a ring is sized to its hole. Both are drawn with the box;
+  120 x 118, the bar a row more than a value). The ring stays empty until FTP / max HR is set, and when the sensor is lost ("--", cleared once). The bar is the accent colour. The value in a ring is sized to its hole. Both are drawn with the box;
   a second sends the bar's columns or the ring's arc between the old level and the new (blits of the arc's bounding
   boxes, 2 steps of 48 each, less the value's rows) and the value's changed digits; a new zone repaints nothing (the digits stay white).
   Measured in the sim (power with 0 to 60 W of noise a second, ring 240 x 296): 2 800 px/s, the plain value 1 200, the
