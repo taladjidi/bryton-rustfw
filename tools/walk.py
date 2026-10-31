@@ -59,7 +59,7 @@ def is_ride(entry):
 
 
 def press(s, k):
-    answer = dev.command(s, 'key ' + k)
+    answer = dev.command(s, 'key ' + k.replace(' --long', ' long'))  # the wire form (src/link/dev.rs)
     if answer != 'ok':
         sys.exit(f'walk.py: key {k}: {answer}')
     time.sleep(SETTLE)
