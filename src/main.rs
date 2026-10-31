@@ -1625,11 +1625,18 @@ impl Board for S510 {
         !pin_low(VBUS.0, VBUS.1)
     }
     fn backup_read(&mut self, n: usize) -> u32 {
-        rd(RTC_BKP0R + 4 * (n as u32 % 32))
+        // No aliasing: an index past the 32 registers reads 0 (the simulator's panic catches it in the tests).
+        if n >= 32 {
+            return 0;
+        }
+        rd(RTC_BKP0R + 4 * n as u32)
     }
     fn backup_write(&mut self, n: usize, v: u32) {
+        if n >= 32 {
+            return; // no aliasing: see backup_read
+        }
         modify(PWR_CR1, 0, 1 << 8); // DBP: backup domain writable (the bootloader leaves it set; seen on the unit)
-        wr(RTC_BKP0R + 4 * (n as u32 % 32), v);
+        wr(RTC_BKP0R + 4 * n as u32, v);
     }
     fn emmc_power_on(&mut self) {
         emmc_power_on();

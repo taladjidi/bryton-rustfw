@@ -2065,3 +2065,27 @@ fn sunset_alert_says_once_before_the_set() {
     assert_eq!(says(2, false, -35, false), (0, true), "no fix, no sun times: never");
     assert_eq!(says(2, true, 5, false), (0, true), "a ride starting after the set: never");
 }
+
+#[test]
+fn backup_indexes_fit_the_rtc_registers() {
+    // The board's backup_read / backup_write ignore an index past the 32 registers (no aliasing): every index the
+    // library uses must be one of them, or its value would be lost on the unit.
+    // typed by hand: a new backup constant must be added here; the simulator's panic on backup[n] is the net for the
+    // paths the tests run
+    let mut used = vec![
+        crate::USB_DROPS_BKP,
+        crate::USB_LAST_BKP,
+        crate::FAULT_BKP,
+        crate::ALERTS_BKP,
+        crate::RIDE_BKP,
+        crate::WHEEL_BKP,
+        crate::POWER_BKP,
+        crate::STOCK_BKP19,
+    ];
+    used.extend(crate::SNAP_BKP);
+    used.extend(crate::OLD_PAGE_BKP);
+    used.extend(crate::AID_BKP);
+    used.extend(crate::PAGE_BKP.iter().chain(crate::PAGE_BKP_B.iter()).flatten());
+    used.extend(crate::Kind::ALL.iter().map(|k| k.backup()));
+    assert!(used.iter().all(|&n| n < 32), "backup index out of the 32 registers: {used:?}");
+}

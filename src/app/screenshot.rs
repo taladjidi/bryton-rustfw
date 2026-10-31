@@ -37,6 +37,7 @@ impl App {
             Ok(true) => self.notice("SCREENSHOT SAVED"),
             Ok(false) => self.notice("SCREENSHOT: TRY AGAIN"), // one taken this second already
             Err(fat::Error::Refused) => self.notice("CARD FULL: NO SCREENSHOT"),
+            Err(fat::Error::NotFound) => self.notice("NO SCREENSHOT FOLDER"),
             Err(_) => {
                 self.fats_unsure(); // the next writes compare the FAT copies first
                 self.notice("SCREENSHOT NOT SAVED");
@@ -54,7 +55,7 @@ impl App {
             fat.sync_fats(&mut emmc::Volume(&mut self.emmc, b))?;
             self.fats_equal();
         }
-        let Some(mut shot) = screenshot::Shot::begin(&mut fat, &mut emmc::Volume(&mut self.emmc, b), name, t)? else {
+        let Some(mut shot) = screenshot::Shot::begin(&mut fat, &mut emmc::Volume(&mut self.emmc, b), name)? else {
             return Ok(false);
         };
         let mut buf = [0u8; screenshot::CHUNK * 512];
