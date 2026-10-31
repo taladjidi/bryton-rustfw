@@ -184,7 +184,7 @@ Others
 - [~] Map zoom and pan by touch (stock, all): sim; pinch to zoom in the driver (two fingers not seen on the unit)
 - [~] Map heading up or north up (Garmin, Wahoo): sim (DISPLAY > MAP; turned basemap, track, arrow, north arrow)
 - [~] IGN Plan v2 maps from packs made on the computer, "(c) IGN" on the map (ours): sim; not seen on the unit
-- [ ] Our own OpenStreetMap packs over USB (all have region maps)
+- [~] Our own OpenStreetMap packs over USB (all have region maps): `tools/map_pack.py`, tracks and paths included; sim (synthetic area); not seen on the unit
 - [~] Contour lines, POIs, street names on the map (Garmin, Wahoo, Karoo): in IGN's tiles, France only
 - [x] Follow a course (FIT or GPX): line on the map, distance to go (stock, all): sim
 - [~] Off-course alert, back on track (stock, Wahoo, all): sim; the alert and the distance off, no way back drawn

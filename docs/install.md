@@ -95,6 +95,31 @@ individuals: the tool only fetches Plan IGN v2.
      test. This firmware reads the folder, never writes it; stock ignores it.
 4. On the unit, check the map: the draw time per view, the zoom chosen, and "(c) IGN" in the corner.
 
+## OpenStreetMap maps
+
+Roads, tracks and paths, cycleways, rail and water from OpenStreetMap (c) OpenStreetMap contributors, ODbL (the About
+page says so), for the area you choose; works anywhere in the world and shows the tracks that stock's maps leave out.
+Needs Python 3 and a way to download one file (curl). No Python package.
+
+1. Query Overpass for the area (bounding box in degrees: west, south, east, north; keep it to what you ride, a few
+   tens of km a side: the public servers refuse very large queries):
+
+       tools/map_pack.py query --bbox LON0,LAT0,LON1,LAT1 > ~/osm-query.ql
+       curl --data-urlencode data@$HOME/osm-query.ql https://overpass-api.de/api/interpreter -o ~/osm-area.json
+
+2. Pack it (zooms 11 to 14 by default; tracks and paths exist at zoom 14 only):
+
+       tools/map_pack.py pack --osm ~/osm-area.json --bbox LON0,LAT0,LON1,LAT1 --out ~/osm-packs
+
+   It writes `OSM<z>_<x / 16>_<y / 16>.PAK` (one per zoom and block of 16 x 16 tiles) and `ATTRIB.TXT`, and says when
+   a tile was over the unit's caps.
+3. Copy them to `Rustfw/Maps/osm` at the drive's top, and compare, exactly as for the IGN packs above (step 3). The
+   unit draws them where it has no IGN tile: at a zoom where the pack has the tile under the view's centre, else
+   stock's map.
+4. On the unit, check the map: the zoom chosen, the tracks and the lakes.
+
+A lake made of several OpenStreetMap ways, a name, a contour line or a viewpoint is not in the pack.
+
 ## Day to day
 
 Once installed, later builds don't need a flash: with the cable in and the USB symbol green, `./dev.py run` runs

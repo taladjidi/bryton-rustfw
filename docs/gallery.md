@@ -51,8 +51,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Map](img/map.png) | ![IGN map](img/ign-map.png) | ![Map zoom](img/map-zoom.png) |
 | Map with the track (sim) | The map over IGN pack tiles, "(c) IGN" in the corner (sim, synthetic tiles, not a map) | The map zoomed in with "+" and "-", panned by a drag, the crosshair to follow again (sim, synthetic tiles) |
 
-| ![Map, heading up](img/map-heading-up.png) | | |
-| HEADING UP (DISPLAY > MAP): riding west, the map turns so the top is the course; the red arrow is north (sim, synthetic tiles) | | |
+| ![Map, heading up](img/map-heading-up.png) | ![OSM pack map](img/osm-map.png) | |
+| HEADING UP (DISPLAY > MAP): riding west, the map turns so the top is the course; the red arrow is north (sim, synthetic tiles) | A synthetic OpenStreetMap pack (tools/map_pack.py): a lake with an island, a motorway, a cycleway, a rail line (sim, a made-up area, not a map) | |
 
 ## Courses and climbs
 
