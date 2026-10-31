@@ -37,8 +37,10 @@ This page has what is known, what was tried, and what to ask or try next. Last u
   storage (src/link/msc.rs), 512-byte bulk packets at high speed.
 - **Patched copies of the crates, without panics** (`vendor/`, 2026-10-31): usb-device, synopsys-usb-otg and
   usbd-serial are built from `vendor/` (Cargo.toml `[patch.crates-io]`), each panic site rewritten as an `Err` or a
-  clamp (`vendor/PATCHES.md`, site by site). A malformed or unexpected packet, a FIFO overflow or an allocation that
-  fails no longer resets the unit: the transfer stalls or is dropped, or USB stays off (usb.rs `start` returns None).
+  clamp (`vendor/PATCHES.md`, site by site). A malformed or unexpected packet or an allocation that fails no longer
+  resets the unit: the transfer stalls or is dropped, or USB stays off (usb.rs `start` returns None). FIFOs past the
+  core's RAM (unreachable after the allocation's own check) leave the device on the bus without enumerating, the link
+  still Some, instead of a reset.
   `CdcAcmClass::try_new`, `UsbBusAllocator::alloc` and `UsbDeviceBuilder::try_build` are the fallible calls usb.rs
   uses.
 - **FIFOs: the crate sizes them to the minimum.**

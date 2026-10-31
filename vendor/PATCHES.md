@@ -6,7 +6,7 @@ whenever a cable is in (a desk session, a charge on a ride). Cargo.toml's `[patc
 instead of the registry's; after the patch `tools/panics.py` finds no site in them.
 
 Each folder is the crate as published, copied from `~/.cargo/registry/src/*/<crate>-<version>/` at the version
-Cargo.lock pinned (LICENSE, Cargo.toml and everything else kept), with only the sites below rewritten. Every rewritten
+Cargo.lock pinned (LICENSE, Cargo.toml and everything else kept but `.cargo-ok`, cargo's extraction marker), with only the sites below rewritten. Every rewritten
 place carries a `patched (vendor/PATCHES.md)` comment. The behaviour on well-formed traffic is unchanged: the same
 descriptor bytes, the same endpoint numbers and FIFO sizes, the same control pipe states; only a case that panicked
 now returns an error, or a clamped value where the function returns none. Files keep their line endings (usb-device
@@ -25,6 +25,10 @@ whole patch. Lines below are the original file's.
 3. Restore the patch line, `cargo build --release`, `python3 tools/panics.py`: no line may name `vendor/` or a
    function of the three crates. Update this file, then `./check.sh`; a unit check (dev.py run, info, shot) before a
    ride build.
+
+At each toolchain or dependency bump, and at a refresh: `cargo deny` matches advisories by registry source, so with
+the patch the three crates (path crates) are no longer checked. Run `cargo deny check advisories` with the three
+patch lines commented out, or look the three names up on RustSec (https://rustsec.org/packages/) by hand.
 
 ## usb-device 0.3.2
 
@@ -66,7 +70,8 @@ they are not in the image. `panics.py` shows them again if a caller appears.
 
 | Site (original) | What it did | What it does now |
 | --- | --- | --- |
-| bus.rs:86 `configure_all` | `assert!(fifo_top <= FIFO_DEPTH_WORDS)` | returns before configuring the endpoints (no USB, no reset) |
+| lib.rs:3 | its 64 warnings printed on every build (a path dependency's lints are not capped as a registry one's) | `#![allow(warnings)]`: upstream's warnings, not ours |
+| bus.rs:86 `configure_all` | `assert!(fifo_top <= FIFO_DEPTH_WORDS)` | returns before configuring the endpoints; unreachable after `alloc_ep`'s check (`allocate_tx_buffer` keeps the same total within the depth); if reached, the device does not enumerate and the link stays Some (no reset) |
 | bus.rs:340, 346 `EndpointAllocator::alloc_ep` | `self.endpoints_out[i] = ..`, `endpoints_in[i]` | `get_mut`, `Err(InvalidEndpoint)` |
 | bus.rs:542, 554 `write` / `read` | `endpoints_in[i]`, `endpoints_out[i]` (after the range check) | `get`, `Err(InvalidEndpoint)` |
 | bus.rs:630 `poll`, high speed | `panic!("AHB frequency is too low")` below 30 MHz | TRDT 0x9 (this board: 100 MHz, BOARD.md 1) |

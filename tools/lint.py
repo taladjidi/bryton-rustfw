@@ -3,8 +3,8 @@
 
 Each hit prints `lint: <check>: file:line: what`; the exit status is 1 on any hit.
   unused-pub  a pub / pub(crate) item of src/ that only tests (or doc tests) use: make it #[cfg(test)] or ALLOW it
-  dashes      U+2014 / U+2013 in a tracked text file (AGENTS.md, Wording), outside vendor/ (the patched USB crates
-              are upstream's text, not ours; the keys check still scans them)
+  dashes      U+2014 / U+2013 in a tracked text file (AGENTS.md, Wording), outside vendor/<crate>/ (the patched USB
+              crates are upstream's text, not ours; vendor/PATCHES.md is ours; the keys check still scans them)
   keys        a licensed key file's bytes (raw, hex in any layout, decimal / 0x byte arrays, a little-endian
               literal, base64) inside a tracked or new file, or a key file itself tracked; only file names are
               printed. The key files are looked for in the worktree and in the main checkout.
@@ -147,7 +147,8 @@ def unused_pub(root):
 def dashes(root):
     hits = []
     for n in files(root):
-        if n.endswith(TEXT) and not n.startswith("vendor/"):  # upstream crates' wording is not ours (vendor/PATCHES.md)
+        # vendor/<crate>/ is upstream's wording, not ours; vendor/PATCHES.md is ours
+        if n.endswith(TEXT) and not (n.startswith("vendor/") and n.count("/") > 1):
             for i, l in enumerate((root / n).read_text(errors="replace").splitlines(), 1):
                 if "\u2014" in l or "\u2013" in l:
                     hits.append(f"lint: dashes: {n}:{i}: em or en dash")
@@ -285,9 +286,12 @@ def selftest():
             ALLOW = {}
             (root / "docs/x.md").write_text("a \u2014 b\nfine\n")
             assert dashes(root) == ["lint: dashes: docs/x.md:1: em or en dash"]
-            (root / "vendor").mkdir()
-            (root / "vendor/x.md").write_text("upstream \u2014 text\n")
-            assert dashes(root) == ["lint: dashes: docs/x.md:1: em or en dash"]  # vendor/ is not ours
+            (root / "vendor/crate").mkdir(parents=True)
+            (root / "vendor/crate/x.md").write_text("upstream \u2014 text\n")
+            assert dashes(root) == ["lint: dashes: docs/x.md:1: em or en dash"]  # vendor/<crate>/ is not ours
+            (root / "vendor/PATCHES.md").write_text("ours \u2014 text\n")
+            assert dashes(root) == ["lint: dashes: docs/x.md:1: em or en dash",
+                                    "lint: dashes: vendor/PATCHES.md:1: em or en dash"], dashes(root)
             (root / "tools/t.py").write_text("def dead():\n    pass\n\ndef live():\n    pass\nlive()\n\ndef main():\n    pass\n")
             assert tools_dead(root) == ["lint: tools-dead: tools/t.py:1: `dead` is named nowhere else"], tools_dead(root)
             ALLOW_DEAD = {"dead": "x"}

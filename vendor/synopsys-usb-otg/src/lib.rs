@@ -1,6 +1,7 @@
 //! USB peripheral driver for Synopsys USB OTG peripherals.
 
 #![no_std]
+#![allow(warnings)] // patched (vendor/PATCHES.md): upstream's warnings, not ours; a path dependency is not capped
 
 #[cfg(all(feature = "fs", feature = "hs"))]
 compile_error!("choose only one USB mode");
