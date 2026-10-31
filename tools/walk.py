@@ -14,7 +14,8 @@ fault marker, must be 0, also checked every 10 paths) and a 20 s `prof` window o
 fault, a ride left running or an unexpected answer. Needs Pillow (plain python3, not -I).
 
 Output goes under DIR only (default target/walk/, gitignored): NNN-<name>.png (unit | sim side by side) and
-sheet-N.png (six pairs a sheet, labelled). The shots can show the owner's position or map: never copy them into the
+sheet-N.png (six pairs a sheet, labelled), summary.txt and summary.json (every path once: walked, refused, drift-abort
+or failed, with the reason). The shots can show the owner's position or map: never copy them into the
 repository.
 
 Safety, enforced here (refuse). Replay is positional and the unit's data-dependent menus (sensors, places, bikes,
@@ -135,6 +136,28 @@ def discard(s):
     return ride_state(dev.command(s, 'info')) == 'idle'
 
 
+OUTCOMES = ('walked', 'refused', 'drift-abort', 'failed')
+
+
+def tally(rows):
+    """Counts per outcome and per reason (a walked path has reason 'none'): each sums to len(rows)."""
+    outcomes = {o: 0 for o in OUTCOMES}
+    reasons = {}
+    for _, _, outcome, reason in rows:
+        outcomes[outcome] += 1
+        reasons[reason or 'none'] = reasons.get(reason or 'none', 0) + 1
+    return outcomes, reasons
+
+
+def write_summary(rows, outdir):
+    """DIR/summary.txt (one line per path) and DIR/summary.json (the same rows and the counts)."""
+    outcomes, reasons = tally(rows)
+    (outdir / 'summary.txt').write_text(''.join(f'{n:03}\t{o}\t{name}\t{r}\n' for n, name, o, r in rows))
+    doc = {'total': len(rows), 'outcomes': outcomes, 'reasons': reasons,
+           'paths': [{'n': n, 'name': name, 'outcome': o, 'reason': r} for n, name, o, r in rows]}
+    (outdir / 'summary.json').write_text(json.dumps(doc, indent=1))
+
+
 def sim_bmp(n):
     got = sorted(SIM.glob(f'{n:03}-*.bmp'))
     return got[0] if got else None
@@ -229,7 +252,7 @@ def main():
     if a.build:
         dev.run(a.build)
         time.sleep(3.0)
-    walked, skipped, drifts, pairs = 0, [], [], []
+    rows, pairs = [], []
     by_name = {}
     for e in entries:
         by_name.setdefault(e['name'], e)
@@ -242,13 +265,17 @@ def main():
         last_up, nth = uptime_ms(before), 0
         for e in entries:
             if a.only and not re.search(a.only, e['name']):
+                rows.append((e['n'], e['name'], 'refused', 'not selected by --only'))
+                continue
+            if problem:
+                rows.append((e['n'], e['name'], 'failed', 'not reached: the walk stopped'))
                 continue
             why = refuse(e)
             ride = is_ride(e)
             if not why and ride and not a.rides:
                 why = 'ride path (needs --rides)'
             if why:
-                skipped.append((e['name'], why))
+                rows.append((e['n'], e['name'], 'refused', why))
                 continue
             home(s)
             aborted = None
@@ -261,8 +288,8 @@ def main():
                         aborted = f'after key {i} ({k}) the screen is not {checks[i]}'
                         break
             if aborted:
-                drifts.append((e['name'], aborted))
                 home(s)
+                outcome = ('drift-abort', aborted)
             else:
                 time.sleep(0.5)
                 png = dev.shot(s)
@@ -270,7 +297,7 @@ def main():
                 p = pair(png, sim_bmp(e['n']), f'{e["n"]:03} {e["name"]}')
                 p.save(fname)
                 pairs.append(p)
-                walked += 1
+                outcome = ('walked', '')
             if ride and not discard(s):
                 problem = f'ride not idle after {e["name"]}: stopped'
             info = dev.command(s, 'info')
@@ -283,7 +310,9 @@ def main():
                 if m != 0:
                     problem = problem or f'fault marker {m} after {e["name"]}'
             if problem:
-                break
+                rows.append((e['n'], e['name'], 'failed', problem))
+            else:
+                rows.append((e['n'], e['name'], *outcome))
         home(s)
         after = dev.command(s, 'info')
         print(after)
@@ -300,14 +329,18 @@ def main():
     st = prof['sections']
     awake = sum(t for n, c, t, m in st if n == 'step' or n in dev.OUTSIDE)
     awake_pct = 100 * awake / dev.CPU_HZ / wall
-    print(f'walked {walked}, skipped {len(skipped)}, drift aborts {len(drifts)}')
-    for n, w in skipped:
-        print(f'  skipped {n}: {w}')
-    for n, w in drifts:
-        print(f'  drift {n}: {w}')
+    assert len(rows) == len(entries), f'{len(rows)} outcomes for {len(entries)} paths'
+    outcomes, reasons = tally(rows)
+    assert sum(outcomes.values()) == len(entries)
+    write_summary(rows, out)
+    for n, name, o, r in rows:
+        print(f'  {n:03} {o} {name}' + (f': {r}' if r else ''))
+    print(f'total {len(rows)} paths: ' + ', '.join(f'{k} {v}' for k, v in outcomes.items()))
+    for r, v in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f'  reason {r}: {v}')
     print(f'problem: {problem or "none"}; awake {awake_pct:.2f} % idle on the overview; '
           f'{time.monotonic() - t0:.0f} s')
-    for p in paths:
+    for p in paths + [out / 'summary.txt', out / 'summary.json']:
         print(p)
     sys.exit(1 if problem else 0)
 
@@ -349,6 +382,14 @@ def selftest():
     assert not same_title(band(80, (255, 255, 255), (0, 0, 0)), Image.new('RGB', (240, 320)))
     assert uptime_ms('bryton-rustfw 1 x up 1234 ms, awake 3') == 1234
     d = Path(tempfile.mkdtemp())
+    rows = [(1, 'A', 'walked', ''), (2, 'B', 'refused', 'name has SAVE'), (3, 'C', 'drift-abort', 'after key 1'),
+            (4, 'D', 'failed', 'ride not idle'), (5, 'E', 'refused', 'name has SAVE')]
+    outcomes, reasons = tally(rows)
+    assert outcomes == {'walked': 1, 'refused': 2, 'drift-abort': 1, 'failed': 1}
+    assert sum(outcomes.values()) == sum(reasons.values()) == len(rows) and reasons['name has SAVE'] == 2
+    write_summary(rows, d)
+    assert len((d / 'summary.txt').read_text().splitlines()) == len(rows)
+    assert json.loads((d / 'summary.json').read_text())['total'] == len(rows)
     Image.new('RGB', (240, 320), (0, 255, 0)).save(d / 'u.png')
     Image.new('RGB', (240, 320), (0, 0, 255)).save(d / 's.bmp')
     ps = [pair(d / 'u.png', d / 's.bmp', f'{i:03} a') for i in range(7)]
