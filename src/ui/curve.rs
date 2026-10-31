@@ -110,10 +110,12 @@ pub fn draw_plot(c: &mut impl Canvas, best: &[u16; N], ride: &[u16; N]) {
         }
     });
     let grey = Style { fg: GREY, ..LABEL };
-    for (v, y) in [(ymax, PLOT.1), (ymax / 2, PLOT.1 + PLOT.3 / 2 - 7)] {
+    // half size: four digits ("1400") fit the 38 px left of the plot where 2x text keeps three
+    let small = Style { scale: 1, ..grey };
+    for (v, y) in [(ymax, PLOT.1), (ymax / 2, PLOT.1 + PLOT.3 / 2 - 4)] {
         let mut l = Line::<12>::new();
         l.push_u32(u32::from(v));
-        draw_in(c, &grey, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
+        draw_in(c, &small, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
     }
 }
 
@@ -192,6 +194,23 @@ mod tests {
         }
         assert_eq!(scale(&[0; N], &[0; N]), 100);
         assert_eq!(scale(&curve(|_| 301), &[0; N]), 350);
+    }
+
+    /// A four digit watt label ("1400") is drawn whole beside the plot (it was cut to "140").
+    #[test]
+    fn four_digit_axis_labels_fit() {
+        let mut f = Frame::new();
+        let best = curve(|_| 1400);
+        draw_screen(&mut f, "", &best, &best, 0);
+        let mut g = Frame::new();
+        draw_in(&mut g, &Style { fg: GREY, scale: 1, ..LABEL }, 0, PLOT.1, PLOT.0 - 2, Align::Right, "1400");
+        let w = Style { scale: 1, ..LABEL }.width("1400");
+        for y in PLOT.1..PLOT.1 + 7 {
+            for x in PLOT.0 - 2 - w..PLOT.0 - 2 {
+                assert_eq!(f.at(x, y), g.at(x, y));
+            }
+        }
+        assert!(w <= PLOT.0 - 2);
     }
 
     /// Both curves and the cursor draw at both ends of the theme metrics without leaving the screen, and the cursor

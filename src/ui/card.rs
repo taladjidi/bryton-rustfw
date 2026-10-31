@@ -13,6 +13,8 @@ pub const ELEV: (u32, u32, u32, u32) = (4, MAP.1 + MAP.3 + 2, W - 8, 34);
 /// The numbers: [`STATS`] in two columns of rows this high, under the profile.
 const STATS_Y: u32 = ELEV.1 + ELEV.3 + 4;
 const STAT_H: u32 = 20;
+/// A stat value's box: five characters at 2x ("109.3", "9999.").
+const VALUE_W: u32 = 60;
 /// Numbers on a card.
 pub const STATS: usize = 10;
 
@@ -67,7 +69,8 @@ pub const LAPS_TAP: (u32, u32, u32, u32) = (0, PAGE_Y, 64, 44);
 /// "LAPS" at the left end of a past ride's title line; a tap in [`LAPS_TAP`] (or Page) opens the list of its laps.
 pub fn draw_laps_label(c: &mut impl Canvas) {
     let white = Style { scale: 1, ..LABEL };
-    text::draw_in(c, &white, 4, PAGE_Y + 8, 56, Align::Left, "LAPS");
+    // its own width: a wider box cleared the title's first digit
+    text::draw_in(c, &white, 4, PAGE_Y + 8, white.width("LAPS"), Align::Left, "LAPS");
 }
 
 /// Laps a list screen shows at once: rows of 20 px under the title and a column header.
@@ -301,10 +304,10 @@ pub fn draw(
     let small = Style { scale: 1, ..grey };
     for (i, (label, value)) in card.stats.iter().enumerate() {
         let (col, row) = ((i % 2) as u32, (i / 2) as u32);
-        let (cx, cy) = (col * W / 2 + 6, STATS_Y + row * STAT_H);
-        let cw = W / 2 - 12;
-        text::draw_in(c, &small, cx, cy + 6, cw / 2, Align::Left, label);
-        text::draw_in(c, &LABEL, cx + cw / 2, cy, cw - cw / 2, Align::Right, value.as_str());
+        let (cx, cy) = (col * W / 2 + 2, STATS_Y + row * STAT_H);
+        let cw = W / 2 - 4;
+        text::draw_in(c, &small, cx, cy + 6, cw - VALUE_W, Align::Left, label);
+        text::draw_in(c, &LABEL, cx + cw - VALUE_W, cy, VALUE_W, Align::Right, value.as_str());
     }
 }
 
@@ -312,6 +315,46 @@ pub fn draw(
 mod tests {
     use super::super::H;
     use super::*;
+
+    /// The widest realistic values and labels fit their cells whole, and LAPS leaves the title alone.
+    #[test]
+    fn stat_cells_and_title_are_whole() {
+        let (cw, small) = (W / 2 - 4, Style { scale: 1, ..LABEL });
+        for v in ["109.3", "999.9", "9999", "1234.", "99:59", "187"] {
+            assert!(LABEL.width(v) <= VALUE_W, "{v}");
+        }
+        for l in [
+            "TIME",
+            "KM",
+            "MI",
+            "AVG KM/H",
+            "AVG MPH",
+            "ASCENT FT",
+            "ASCENT M",
+            "NP",
+            "AVG W",
+            "AVG HR",
+            "MAX HR",
+            "TSS",
+            "KJ",
+        ] {
+            assert!(small.width(l) <= cw - VALUE_W, "{l}");
+        }
+        let mut card = Card::default();
+        card.title.push_str("30 OCT 10:17");
+        let (mut a, mut b) = (super::super::tests::Frame::new(), super::super::tests::Frame::new());
+        for f in [&mut a, &mut b] {
+            draw(f, &card, (&map::Track::new(), None, None), &|_| (0, super::super::GREY));
+        }
+        draw_laps_label(&mut b);
+        draw_delete(&mut b);
+        let tw = LABEL.width("30 OCT 10:17");
+        for y in PAGE_Y + 2..PAGE_Y + 2 + LABEL.height() {
+            for x in (W - tw) / 2..(W + tw) / 2 {
+                assert_eq!(a.at(x, y), b.at(x, y), "{x},{y}");
+            }
+        }
+    }
 
     #[test]
     fn fits_the_screen() {

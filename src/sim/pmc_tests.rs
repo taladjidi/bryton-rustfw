@@ -91,6 +91,19 @@ fn the_load_from_stocks_rides() {
     assert_consistent(&sim, &app);
 }
 
+/// The TRAINING LOAD row reads ">" when the load is built and "--" until it is.
+#[test]
+fn load_row_says_built() {
+    let (mut sim, mut app) = unit();
+    let i = crate::menu::FITNESS.iter().position(|&r| r == StockRow::Load).unwrap();
+    let value = |app: &App| std::string::String::from(app.menu_row(Menu::Stock, i).unwrap().1.as_str());
+    assert_eq!(value(&app), ">");
+    app.pmc.load = load::Load::default();
+    assert_eq!(value(&app), "--");
+    run(&mut sim, &mut app, 1000);
+    assert_consistent(&sim, &app);
+}
+
 /// FITNESS > TRAINING LOAD: both lines and the bars draw, the cursor reads a day, a tap picks one, Back leaves.
 #[test]
 fn the_chart() {

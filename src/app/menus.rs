@@ -547,7 +547,7 @@ impl App {
             }
             Row::Workout(k) => {
                 let p = self.plan.calendar.get(k)?;
-                label.push_str(date_numbers(p.day, self.settings.date_fmt).as_str());
+                label.push_str(date_short(p.day, self.settings.date_fmt).as_str());
                 push_hm(&mut value, p.total_s);
                 if self.workout_done(k) {
                     color = ui::GREEN;
