@@ -342,13 +342,14 @@ impl App {
     pub(crate) fn dial_now(&self, f: Field, bx: (u32, u32, u32, u32)) -> Drawn {
         let Some((base, ring)) = f.dial() else { return Drawn::Fixed };
         let (reading, full) = match base {
-            Field::Power => (self.power_now().map(u32::from), u32::from(self.settings.ftp) * 3 / 2),
+            // the 3 s power, as the POWER 3S field: the ring and its digits move gently
+            Field::Power => (self.power.average(3).map(u32::from), u32::from(self.settings.ftp) * 3 / 2),
             Field::Hr => (self.live.shown(Metric::Hr).map(u32::from), u32::from(self.settings.max_hr)),
             _ => (self.live.shown(Metric::Cadence).map(u32::from), 120),
         };
         let level = reading.map_or(0, |v| v.min(full) * ui::dial_steps(bx, ring) / full.max(1));
         let fg = self.field_color(f); // white: a zone's colour on the digits would repaint them whole at each zone change
-        Drawn::Dial(self.field_text(f), fg, level)
+        Drawn::Dial(self.field_text(if base == Field::Power { Field::Power3s } else { f }), fg, level)
     }
 
     /// The text of ride field `f` now ("--" without a value).

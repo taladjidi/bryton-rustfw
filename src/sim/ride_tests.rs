@@ -895,10 +895,10 @@ fn gauge_fields() {
     run(&mut sim, &mut app, 60_000);
     let px_s = (sim.pixels - px0) * 1000 / (sim.ms - ms0);
     std::println!("power ring, 1-field page: {px_s} panel px/s, the plain value {plain} (the box whole is 50 000 px)");
-    // measured about 4 980 px/s with 0 to 60 W of noise a second (each step has its own zone colour and the digits stay
+    // measured about 2 810 px/s (the 3 s power drives the ring and its digits; 4 980 with the 1 s power) with 0 to 60 W of noise a second (each step has its own zone colour and the digits stay
     // white, so a zone change repaints nothing: first 12 269 with the lit arc repainted, 10 134 with zone-coloured
     // digits), against 1 190 for the plain value and 50 000 for the box whole; 410 px for a 2-step move (dial.rs)
-    assert!(px_s < 6_000, "{px_s} px/s: only the arc that moved and the digits");
+    assert!(px_s < 3_500, "{px_s} px/s: only the arc that moved and the digits");
     assert_consistent(&sim, &app);
 
     app.press(&mut sim, Press::Short(Key::Page));
