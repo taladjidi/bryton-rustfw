@@ -280,6 +280,14 @@ libraries that already do it; use or adapt them when they fit (no_std, no heap, 
   - Each new one needs a reason and must be a well-known embedded crate (embassy, heapless, embedded-hal).
   - Its own `unsafe` is part of what we trust.
   - `cargo deny check` in check.sh (when installed) checks advisories and licences, and warns on duplicate crate versions (deny.toml).
+  - **The three USB crates are patched copies** (`vendor/`, Cargo.toml `[patch.crates-io]`): their 47 panic sites
+    (indexing, `expect`, `assert!`, `RefCell` borrows) reset the unit when reached with a cable in, so each became an
+    `Err` or a harmless clamp, the behaviour on well-formed traffic unchanged. `vendor/PATCHES.md` lists every site and
+    how to refresh a copy when a version changes (copy the registry's folder whole, apply the sites again,
+    `tools/panics.py` must name none of them). Upstream's text, not ours: lint.py's dashes check skips `vendor/`, the
+    layout guard greps `src` only, and their `unsafe` stays part of what we trust. `cargo deny` no longer matches
+    RustSec advisories against them (path crates): at each toolchain or dependency bump, run `cargo deny check
+    advisories` with the patch lines commented out, or look the three names up on RustSec by hand.
   - **gzip is our own** (`src/storage/inflate.rs`): `miniz_oxide` was not taken (its Zlib licence is not in
     `deny.toml`, it needs `adler2`, its decoder wants the whole compressed tile in RAM). The need is one small reader,
     tested against Python's gzip and fuzzed, that pulls bytes from the card as `ign::lz4` does.

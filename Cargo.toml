@@ -28,6 +28,13 @@ synopsys-usb-otg = { version = "0.5.0", features = ["hs"] }       # the STM32 OT
 static_cell = "2.1.1"                                             # 'static USB buffers without static mut
 critical-section = "1.2"                                          # implemented in hw.rs (interrupts always off)
 
+# The three USB crates, patched to remove their panic sites (a panic resets the unit): vendor/PATCHES.md lists every
+# rewritten site, AGENTS.md "Toolchain and dependencies" how to refresh them when a version changes.
+[patch.crates-io]
+usb-device = { path = "vendor/usb-device" }
+usbd-serial = { path = "vendor/usbd-serial" }
+synopsys-usb-otg = { path = "vendor/synopsys-usb-otg" }
+
 [profile.release]
 opt-level = "s"
 lto = true

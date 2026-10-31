@@ -3371,3 +3371,10 @@ fn the_rescue_keeps_the_next_rides_reserve() {
         fsck(&d.card.img).unwrap();
     }
 }
+
+#[test]
+fn clusters_for_a_size() {
+    assert_eq!(clusters_for(0, 16_384), 1, "an empty file still has its cluster");
+    assert_eq!((clusters_for(16_384, 16_384), clusters_for(16_385, 16_384)), (1, 2));
+    assert_eq!(clusters_for(100, 0), 100, "no division by zero");
+}

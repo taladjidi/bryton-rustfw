@@ -361,7 +361,7 @@ impl Recent {
             }
         }
         let Some(s) = s.get_mut(..k) else { return (None, 0) };
-        s.sort_unstable();
+        crate::storage::bytes::sort_by_key(s, |&v| v);
         let mid = |i: usize| s.get(i).copied().map(u32::from);
         let m = match k {
             0 => None,

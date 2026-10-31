@@ -25,6 +25,7 @@ use board::{hw, usb};
 use bryton_rustfw::dev::{Effect, Session, UsbWatch};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
+use bryton_rustfw::storage::faultlog::Kind;
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, Cable, LoopPolicy, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, Woke, standby_flags_word};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -1705,6 +1706,17 @@ fn checkpoint(n: u32) {
     }
 }
 
+/// A static cell's value, or, for a second init or take (impossible by construction: each `make_*` runs once, from
+/// main), a fault marked as a cell built twice at the caller's line ([`Kind::Cell`]) and a reset (hw.rs `fault`), so
+/// no `core::panicking` call is linked as `init_with` / `take` would.
+#[track_caller]
+fn once<T>(cell: Option<&'static mut T>) -> &'static mut T {
+    match cell {
+        Some(v) => v,
+        None => hw::fault(Kind::Cell, core::panic::Location::caller().line()), // not in a closure: the caller's line
+    }
+}
+
 /// The app, kept in `.bss` (a static cell), not on main's stack: as a local, `App` (tens of KB) was held in main's
 /// frame several times over (its construction, the move), which made main's frame 111 KB of the 123 KB of stack, and
 /// opening a workout (a 17 KB frame more) overflowed into `.bss` (2026-10-24). Not inlined, so the one temporary
@@ -1719,7 +1731,7 @@ fn make_app(
     past: &'static mut bryton_rustfw::history::Past,
 ) -> &'static mut App {
     static APP: static_cell::StaticCell<App> = static_cell::StaticCell::new();
-    let app = APP.init_with(|| App::new_with(board, ANT_KEY, DI2_KEY, stock, past));
+    let app = once(APP.try_init_with(|| App::new_with(board, ANT_KEY, DI2_KEY, stock, past)));
     app.begin(board);
     app
 }
@@ -1729,7 +1741,7 @@ fn make_app(
 #[inline(never)]
 fn make_stock_scan() -> &'static mut bryton_rustfw::stock::Scan {
     static SCAN: static_cell::StaticCell<bryton_rustfw::stock::Scan> = static_cell::StaticCell::new();
-    SCAN.init_with(bryton_rustfw::stock::Scan::new)
+    once(SCAN.try_init_with(bryton_rustfw::stock::Scan::new))
 }
 
 /// The card of the past ride shown (storage/history.rs `Past`, about 11 KB), beside the app in AXI SRAM (link.x
@@ -1737,7 +1749,7 @@ fn make_stock_scan() -> &'static mut bryton_rustfw::stock::Scan {
 #[inline(never)]
 fn make_past() -> &'static mut bryton_rustfw::history::Past {
     static PAST: static_cell::StaticCell<bryton_rustfw::history::Past> = static_cell::StaticCell::new();
-    PAST.init_with(bryton_rustfw::history::Past::new)
+    once(PAST.try_init_with(bryton_rustfw::history::Past::new))
 }
 
 /// The course memory (about 70 KB: the course followed, its list), beside the app in AXI SRAM (link.x `.axibss`).
@@ -1747,7 +1759,7 @@ fn make_past() -> &'static mut bryton_rustfw::history::Past {
 fn make_courses() -> &'static mut bryton_rustfw::storage::course_file::Courses {
     static COURSES: static_cell::StaticCell<bryton_rustfw::storage::course_file::Courses> =
         static_cell::StaticCell::new();
-    COURSES.init_with(bryton_rustfw::storage::course_file::Courses::new)
+    once(COURSES.try_init_with(bryton_rustfw::storage::course_file::Courses::new))
 }
 
 /// The named points along a course (storage/named.rs: about 2 KB), a const cell of all zeros in AXI SRAM, never built
@@ -1755,7 +1767,7 @@ fn make_courses() -> &'static mut bryton_rustfw::storage::course_file::Courses {
 fn make_pois() -> &'static mut bryton_rustfw::named::Pois {
     static POIS: static_cell::ConstStaticCell<bryton_rustfw::named::Pois> =
         static_cell::ConstStaticCell::new(bryton_rustfw::named::Pois::new());
-    POIS.take()
+    once(POIS.try_take())
 }
 
 /// The road ahead (climbs_ahead.rs `Ahead`: the routing graph, the trace, about 110 KB), in AXI SRAM (link.x
@@ -1764,7 +1776,7 @@ fn make_pois() -> &'static mut bryton_rustfw::named::Pois {
 fn make_ahead() -> &'static mut bryton_rustfw::climbs_ahead::Ahead {
     static AHEAD: static_cell::ConstStaticCell<bryton_rustfw::climbs_ahead::Ahead> =
         static_cell::ConstStaticCell::new(bryton_rustfw::climbs_ahead::Ahead::new());
-    AHEAD.take()
+    once(AHEAD.try_take())
 }
 
 /// The live segments (app/segments.rs `Segments`: index and active segment, about 13 KB). Must start as zeros to stay
@@ -1772,7 +1784,7 @@ fn make_ahead() -> &'static mut bryton_rustfw::climbs_ahead::Ahead {
 fn make_segments() -> &'static mut bryton_rustfw::Segments {
     static SEGMENTS: static_cell::ConstStaticCell<bryton_rustfw::Segments> =
         static_cell::ConstStaticCell::new(bryton_rustfw::Segments::new());
-    SEGMENTS.take()
+    once(SEGMENTS.try_take())
 }
 
 /// The scan's cache of stock's rides (storage/stock.rs `Cache`, 192 KB), in AXI SRAM (link.x `.axibss`). A const
@@ -1780,7 +1792,7 @@ fn make_segments() -> &'static mut bryton_rustfw::Segments {
 fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
     static CACHE: static_cell::ConstStaticCell<bryton_rustfw::stock::Cache> =
         static_cell::ConstStaticCell::new(bryton_rustfw::stock::Cache::new());
-    CACHE.take()
+    once(CACHE.try_take())
 }
 
 /// This ride's power curve (training/power_curve.rs `Rolling`, 3.3 KB), beside the app in AXI SRAM (link.x `.axibss`): a
@@ -1788,7 +1800,7 @@ fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
 fn make_ride_curve() -> &'static mut bryton_rustfw::power_curve::Rolling {
     static CURVE: static_cell::ConstStaticCell<bryton_rustfw::power_curve::Rolling> =
         static_cell::ConstStaticCell::new(bryton_rustfw::power_curve::Rolling::new());
-    CURVE.take()
+    once(CURVE.try_take())
 }
 
 /// The reading of the recent rides for FITNESS's heart rate variability thresholds (storage/thresholds.rs `Scan`,
@@ -1796,7 +1808,7 @@ fn make_ride_curve() -> &'static mut bryton_rustfw::power_curve::Rolling {
 #[inline(never)]
 fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
     static SCAN: static_cell::StaticCell<bryton_rustfw::thresholds::Scan> = static_cell::StaticCell::new();
-    SCAN.init_with(bryton_rustfw::thresholds::Scan::new)
+    once(SCAN.try_init_with(bryton_rustfw::thresholds::Scan::new))
 }
 
 /// The three bikes and their file (app/bikes.rs `BikeStore`, under 200 bytes the app has no room for), beside the app
@@ -1804,7 +1816,7 @@ fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
 #[inline(never)]
 fn make_bikes() -> &'static mut bryton_rustfw::BikeStore {
     static BIKES: static_cell::StaticCell<bryton_rustfw::BikeStore> = static_cell::StaticCell::new();
-    BIKES.init_with(bryton_rustfw::BikeStore::new)
+    once(BIKES.try_init_with(bryton_rustfw::BikeStore::new))
 }
 
 /// The stack canary still holds its pattern, or a fault (hw.rs `fault`: the marker, a reset, the ride resumes from its
@@ -1814,7 +1826,7 @@ fn make_bikes() -> &'static mut bryton_rustfw::BikeStore {
 #[inline(always)]
 fn stack_check() {
     if !bryton_rustfw::stack_intact(rd(hw::stack_canary())) {
-        hw::fault();
+        hw::fault(Kind::Stack, 0);
     }
 }
 

@@ -22,7 +22,7 @@ use usb_device::bus::{InterfaceNumber, UsbBusAllocator};
 use usb_device::class::{ControlIn, ControlOut, UsbClass};
 use usb_device::control::{Recipient, RequestType};
 use usb_device::descriptor::DescriptorWriter;
-use usb_device::endpoint::{EndpointIn, EndpointOut};
+use usb_device::endpoint::{EndpointIn, EndpointOut, EndpointType};
 use usb_device::prelude::*;
 use usbd_serial::CdcAcmClass;
 
@@ -313,11 +313,12 @@ pub fn start() -> Option<Link> {
         return None;
     }
     let alloc: &'static UsbBusAllocator<Bus> = ALLOC.try_init(UsbBus::new(OtgHs, EP_MEMORY.try_init([0; 1024])?))?;
-    let cdc = CdcAcmClass::new(alloc, MPS as u16);
+    // the patched crates' fallible allocations (vendor/PATCHES.md): no USB rather than a panic
+    let cdc = CdcAcmClass::try_new(alloc, MPS as u16).ok()?;
     let msc = Msc {
         iface: alloc.interface(),
-        inp: alloc.bulk(MPS as u16),
-        out: alloc.bulk(MPS as u16),
+        inp: alloc.alloc(None, EndpointType::Bulk, MPS as u16, 0).ok()?,
+        out: alloc.alloc(None, EndpointType::Bulk, MPS as u16, 0).ok()?,
         reset: false,
         bus_reset: false,
         snap: Keeper::default(),
@@ -332,7 +333,8 @@ pub fn start() -> Option<Link> {
         .composite_with_iads()
         .max_packet_size_0(64)
         .ok()?
-        .build();
+        .try_build()
+        .ok()?;
     if FULL_SPEED {
         // DCFG.DSPD 01: full speed over the ULPI PHY (RM0399 OTG_DCFG); the crate set high speed, so off the bus,
         // the speed changed, back on

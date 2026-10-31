@@ -828,7 +828,7 @@ impl App {
         match (p.disc, e) {
             (Disc::Mtu, Event::MtuRsp { status, mtu, .. }) => {
                 // the link uses the smaller of the two Rx MTUs (Core spec Vol 3 Part F 3.4.2.2); a refusal stays 23
-                p.mtu = if status == 0 { mtu.clamp(23, self.ble.map_or(23, |v| v.mtu)) } else { 23 };
+                p.mtu = if status == 0 { mtu.min(self.ble.map_or(23, |v| v.mtu)).max(23) } else { 23 };
                 p.disc = Disc::Service(0);
             }
             (Disc::Service(n), Event::Services { status: 0, list, .. }) => {

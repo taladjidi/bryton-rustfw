@@ -1,0 +1,33 @@
+on:
+  push:
+    branches: [ staging, trying, master ]
+  pull_request:
+
+name: CI
+
+jobs:
+  ci-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      matrix:
+        rust: [stable, nightly]
+        include:
+          # Nightly is only for reference and allowed to fail
+          - rust: nightly
+            experimental: true
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Check code (fs)
+        run: cargo check --features fs
+
+      - name: Check code (hs)
+        run: cargo check --features hs
+
+      - name: Check code (hs xcvrdly)
+        run: cargo check --features "hs xcvrdly"

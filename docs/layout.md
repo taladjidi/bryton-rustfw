@@ -364,8 +364,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   SHA256SUMS.
 - `tools/stack_check.py`: the firmware's stack frames against their budgets, the stack's size (from the canary
   to the top; check.sh, after the build).
-- `tools/panics.py`: every panic site of the release ELF (bounds, unwrap, overflow, explicit) with its source line, per file and
-  folder, and the bounds sites in files that deny `clippy::indexing_slicing` (a report, exit 0; `selftest`).
+- `tools/panics.py`: every panic site of the release ELF (bounds, unwrap, overflow, explicit) with its source line (src/ or a
+  patched crate's vendor/), per file and folder, and the bounds sites in files that deny `clippy::indexing_slicing`; the
+  panic handler's own sites (hw.rs's reset loop) are left out and counted on their own line (a report, exit 0; `selftest`).
 - `tools/numbers.py`: the live numbers of the docs (image, AXI SRAM free, the cells' sizes, the tests, lines of Rust): `--write`
   rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after tools/pack.py), `--check` lists the stale ones, `selftest`.
 - `tools/lint.py`: the checks reviewers did by hand (pub items only tests use, dashes, licensed keys in tracked files, dead
@@ -379,4 +380,6 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   key (the Di2 channel) is handled the same way: `di2_key.bin`, `DI2_KEY`, never printed, no hash of it kept.
   Tests use stand-in keys. `tools/font.py`, `tools/pixel_font.py`: the fonts.
 - `deny.toml`: cargo deny's policy (advisories, licences, duplicate crates), run by check.sh.
+- `vendor/`: usb-device, synopsys-usb-otg and usbd-serial, patched to remove their panic sites (Cargo.toml
+  `[patch.crates-io]`); `vendor/PATCHES.md` lists every rewritten site and how to refresh a copy.
 - `link.x`, `tools/pack.py`: memory map and the update file. `tools/pack.py` re-checks what the stock updater checks.

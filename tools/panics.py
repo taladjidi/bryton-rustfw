@@ -5,12 +5,15 @@ A panic marks the fault and resets the unit (hw.rs `default_handler`), so AGENTS
 that can fail on the firmware path. This reads the release ELF with `llvm-objdump -d -C -l` from the toolchain (which
 ships no llvm-symbolizer): each call or branch to a panic entry (core::panicking, the slice index fails, unwrap /
 expect, the panic handler) is a site. Its line is the `core::panic::Location` the call passes (a movw / movt pair
-a few instructions before, pointing at a static in .rodata: file, line); with none, the line-table entry the objdump
+a few instructions before, pointing at a static in .rodata: file, line; src/ or a patched crate's vendor/<crate>/src/,
+which the Location names by its absolute path); with none, the line-table entry the objdump
 prints before it (the innermost frame), or `?` when that is in core (no llvm-symbolizer is shipped to walk the
 inlined frames).
 Kinds: bounds, unwrap, overflow, explicit, trap (a `udf`). The summary lists the sites per folder and the sites in
 files that deny clippy::indexing_slicing outside tests (there should be no bounds site). LTO can merge identical
-panic calls into one site, so a line may stand for several.
+panic calls into one site, so a line may stand for several. Sites inside the panic handler or hw.rs's fault path
+(HANDLER: its own reset loop, which branches to itself) are the handler, not a way into it: left out of the count
+and the tables, and named on their own line ("panic handler: N sites, excluded").
 
     panics.py [ELF]            the report (default: the release ELF); exit 0 always
     panics.py [ELF] --json F   also write it as JSON to F
@@ -31,16 +34,20 @@ KINDS = [('panic_bounds_check', 'bounds'), ('core::slice::index::slice_', 'bound
          ('unwrap_failed', 'unwrap'), ('expect_failed', 'unwrap'),
          ('div_by_zero', 'overflow'), ('rem_by_zero', 'overflow'), ('_overflow', 'overflow'),
          ('core::panicking::', 'explicit'), ('rust_begin_unwind', 'explicit'), ('board::hw::panic', 'explicit')]
+# the panic handler itself (hw.rs: `panic`, `default_handler`, `fault`, `mark`): the enclosing function's last path
+# segment, its hash dropped, in hw.rs or the unwind symbol
+HANDLER = {'rust_begin_unwind', 'panic', 'default_handler', 'fault', 'mark'}
 BRANCH = re.compile(r'b(?:lx?)?(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)?(?:\.[wn])?')
 
 
 def location(rd, recent):
-    """'src/x.rs:LINE' from the first Location static that a movw / movt pair in `recent` (reg -> [lo, hi]) points to;
+    """'src/x.rs:LINE' (or 'vendor/<crate>/src/x.rs:LINE') from the first Location static that a movw / movt pair in `recent` (reg -> [lo, hi]) points to;
     rd(addr, n) reads the image. A Location is {file ptr, file len, line, column}, 4 bytes each."""
     for lo, hi in recent.values():
         if lo is not None and hi is not None:
             ptr, n, line, _ = struct.unpack('<4I', rd((hi << 16) | lo, 16) or bytes(16))
-            m = re.fullmatch(rb'(src/[\w/.-]+\.rs)', (rd(ptr, n) or b'') if n < 200 else b'')
+            name = ((rd(ptr, n) or b'') if n < 300 else b'').removeprefix(str(ROOT).encode() + b'/')
+            m = re.fullmatch(rb'((?:vendor/[\w.-]+/)?src/[\w/.-]+\.rs)', name)
             if m:
                 return f'{m.group(1).decode()}:{line}'
     return None
@@ -53,7 +60,7 @@ def sites(text, rd=lambda a, n: None):
     out, fn, loc, recent = [], '', '?', {}
     for line in text.splitlines():
         if line.startswith('; '):
-            m = re.match(rf'^; {re.escape(str(ROOT))}/(src/[^:]+):(\d+)', line)
+            m = re.match(rf'^; {re.escape(str(ROOT))}/((?:vendor/[^/:]+/)?src/[^:]+):(\d+)', line)
             loc = f'{m.group(1)}:{m.group(2)}' if m else '?'
             continue
         m = re.match(r'^[0-9a-f]+ <(.*)>:$', line)
@@ -105,8 +112,17 @@ def denied():
     return out
 
 
+def handler(fn):
+    """True when demangled function `fn` is one of HANDLER: `__rustc::rust_begin_unwind`, or hw.rs's own."""
+    path = re.sub(r'::h[0-9a-f]{16}$', '', fn).split('::')
+    return path[-1] in HANDLER and (path[-1] == 'rust_begin_unwind' or path[-3:-1] == ['board', 'hw'])
+
+
 def report(found, deny):
-    """Text report: by file, every site, the summary; and the same as a dict."""
+    """Text report: by file, every site, the summary; and the same as a dict. The panic handler's own sites
+    (HANDLER) are only counted, on their own line."""
+    own = [s for s in found if handler(s[1])]
+    found = [s for s in found if s not in own]
     rows = sorted((loc.rsplit(':', 1)[0], int(loc.rsplit(':', 1)[1]) if ':' in loc else 0, k, fn) for k, fn, loc in found)
     by = collections.defaultdict(collections.Counter)
     for f, _, k, _ in rows:
@@ -116,12 +132,13 @@ def report(found, deny):
         out.append(f'{sum(c.values()):5}  ' + ' '.join(f'{k}={n}' for k, n in sorted(c.items())) + f'  {f}')
     out.append('')
     out += [f'{f}:{n}  {k}  in {fn}' for f, n, k, fn in rows]
-    folders = collections.Counter(re.sub(r'^(src/\w+)/.*', r'\1', f) for f, *_ in rows)
+    folders = collections.Counter(re.sub(r'^(src/\w+|vendor/[\w.-]+)/.*', r'\1', f) for f, *_ in rows)
     out += ['', f'total sites: {len(rows)}'] + [f'  {f}: {n}' for f, n in sorted(folders.items())]
+    out.append(f'panic handler: {len(own)} sites, excluded')
     bad = [(f, n, k, fn) for f, n, k, fn in rows if k == 'bounds' and any(f.startswith(d) for d in deny)]
     out.append(f'bounds sites in indexing_slicing-denied files: {len(bad)}')
     out += [f'  {f}:{n} in {fn}' for f, n, _, fn in bad]
-    return '\n'.join(out), {'total': len(rows), 'files': {f: dict(c) for f, c in by.items()}, 'folders': dict(folders),
+    return '\n'.join(out), {'total': len(rows), 'handler': len(own), 'files': {f: dict(c) for f, c in by.items()}, 'folders': dict(folders),
                             'sites': [dict(file=f, line=n, kind=k, function=fn) for f, n, k, fn in rows],
                             'denied_bounds': [dict(file=f, line=n) for f, n, *_ in bad]}
 
@@ -134,16 +151,31 @@ def selftest():
         'd0000004: \tbhi.w\t0xd0009010 <core::option::unwrap_failed::h01>', f'; {ROOT}/src/storage/fit.rs:9',
         'd0000008: \tbl\t0xd0009020 <core::panicking::panic_const::panic_const_add_overflow>',
         'd000000c: \tbl\t0xd0009030 <core::fmt::write>', 'd0000010: \tbic\tr0, r1', 'd0000012: \tudf\t#254',
-        'd0000014: \tb\t0xd0009040 <core::slice::index::slice_end_index_len_fail>'])
-    mem = {0xd0000100: struct.pack('<4I', 0xd0000200, 11, 77, 5), 0xd0000200: b'src/ui/t.rs'}
+        'd0000014: \tb\t0xd0009040 <core::slice::index::slice_end_index_len_fail>',
+        'd0000016: \tmovw\tr3, #0x300', 'd0000018: \tmovt\tr3, #0xd000',
+        'd000001a: \tbl\t0xd0009000 <core::panicking::panic_bounds_check::h7761f4e897d698b2>',
+        'd000001c: \tmovw\tr3, #0x400', 'd000001e: \tmovt\tr3, #0xd000',
+        'd0000020: \tbl\t0xd0009000 <core::panicking::panic_bounds_check::h7761f4e897d698b2>'])
+    vend, reg = f'{ROOT}/vendor/usb-device/src/bus.rs'.encode(), b'/r/registry/src/i/usb-device-0.3.2/src/bus.rs'
+    mem = {0xd0000100: struct.pack('<4I', 0xd0000200, 11, 77, 5), 0xd0000200: b'src/ui/t.rs',
+           0xd0000300: struct.pack('<4I', 0xd0000500, len(vend), 198, 1), 0xd0000500: vend,
+           0xd0000400: struct.pack('<4I', 0xd0000600, len(reg), 3, 1), 0xd0000600: reg}
     got = sites(text, lambda a, n: mem.get(a))
     assert got == [('bounds', 'app::step', 'src/ui/t.rs:77'), ('unwrap', 'app::step', '?'),
                    ('overflow', 'app::step', 'src/storage/fit.rs:9'), ('trap', 'app::step', 'src/storage/fit.rs:9'),
+                   ('bounds', 'app::step', 'src/storage/fit.rs:9'),
+                   ('bounds', 'app::step', 'vendor/usb-device/src/bus.rs:198'),
                    ('bounds', 'app::step', 'src/storage/fit.rs:9')], got
+    assert report(got[5:6], [])[1]['folders'] == {'vendor/usb-device': 1}
     txt, js = report(got[:2], ['src/storage/fit.rs'])
     assert js['total'] == 2 and js['denied_bounds'] == [] and 'bounds=1' in txt, txt
-    txt, js = report(got[3:], ['src/storage/'])
+    txt, js = report(got[3:5], ['src/storage/'])
     assert js['denied_bounds'] == [{'file': 'src/storage/fit.rs', 'line': 9}], js
+    txt, js = report(got[:2] + [('explicit', '__rustc::rust_begin_unwind', 'src/board/hw.rs:74')], [])
+    assert js['total'] == 2 and js['handler'] == 1 and 'hw.rs' not in txt, txt
+    assert 'panic handler: 1 sites, excluded' in txt, txt
+    assert handler('bryton_rustfw::board::hw::fault::h818e159d6185cfe3') and not handler('core::panicking::panic::h0')
+    assert not handler('bryton_rustfw::app::faultlog::mark_fault') and not handler('x::board::hw::faultish::h1')
     print('panics.py selftest ok')
 
 
