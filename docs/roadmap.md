@@ -116,7 +116,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - courses: ~~reverse, navigate to the start (straight line), retrace along the ride's own track~~ done, sim (features.md, ride menu: REVERSE COURSE, BACK TO START); the way back drawn differently from the course, routed navigation (3d), turn cues from
   stock's `voiceTrip.fit`, POIs and peaks along a course where the map has them;
 - the map: ~~north up or heading up, pinch to zoom~~ done, sim (features.md, Map); our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
-- field sizes that follow the box, ring and bar gauges;
+- ~~field sizes that follow the box, ring and bar gauges~~ done, sim (features.md "Gauge fields"; a value's scale already followed its box's width and height, `box_scale`); more gauged fields and a per-field style in the editor are open;
 - ride profiles: gravel, cyclocross, commute, three bikes, auto features per profile, component wear;
 - torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: ~~completed climbs listed with their
   times~~ done, sim (features.md, ride menu CLIMBS DONE), detection on or off per profile, descents;

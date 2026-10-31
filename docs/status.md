@@ -10,6 +10,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   listed at its top with a plausible time and VAM, the banner, the average power and heart rate, the list empty after
   a reset-resume.
 
+- **Gauge fields (ui/dial.rs: POWER RING, HR RING, CAD BAR)**: sim only. Still to see: the time awake per loop with a power
+  ring on a 1-field page against the plain value (the sim sends 2 800 px/s against 1 200 with 0 to 60 W of noise a
+  second; the box whole is 50 000 px), the ring's look in the sun (LIGHT, OUTDOOR), the digits inside it at the 2 x 2 size.
+
 A feature not listed here was seen on the unit.
 
 - **The power curve screen (app/curve.rs, ui/curve.rs, HISTORY > FITNESS > POWER CURVE and the ride menu)**: sim only.

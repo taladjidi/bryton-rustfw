@@ -857,3 +857,83 @@ fn imperial_units_on_a_ride_page() {
     run(&mut sim, &mut app, 1000);
     sim.save("imperial_page");
 }
+
+/// The gauge fields (dial.rs): a 1-field page draws big digits inside a power ring that moves with the power, a
+/// 2 x 2 page a heart rate ring and a cadence bar beside two plain values. A second sends the arc that moved and the
+/// digits that changed, and what is sent equals the page drawn whole. Screenshots: `gauge_ring_full`, `gauge_rings_quad`.
+#[test]
+fn gauge_fields() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fast, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.settings.ftp = 200;
+    app.pages[0] = PageCfg { layout: 1, fields: [PowerRing, Time, Time, Time, Time, Time] }.into();
+    app.pages[1] = PageCfg { layout: 2, fields: [HrRing, CadBar, Power, Speed, Time, Time] }.into();
+    app.pages[2] = PageCfg { layout: 1, fields: [Power, Time, Time, Time, Time, Time] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 30_000);
+    let (px0, ms0) = (sim.pixels, sim.ms);
+    run(&mut sim, &mut app, 60_000);
+    let plain = (sim.pixels - px0) * 1000 / (sim.ms - ms0);
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 30_000);
+    assert_consistent(&sim, &app);
+    let bx = crate::ui::field_box(1, crate::ui::RIDE_H, 0).unwrap();
+    let vb = crate::ui::value_box(bx, true);
+    assert!(crate::ui::box_scale(vb.2, vb.3) >= 5, "a 1-field page draws big digits in its ring");
+    let Some(Drawn::Dial(_, _, level)) = app.drawn.first().copied() else { panic!("the ring first") };
+    assert!(level > 0, "the power moves the ring");
+    sim.save("gauge_ring_full");
+    let (px0, ms0) = (sim.pixels, sim.ms);
+    run(&mut sim, &mut app, 60_000);
+    let px_s = (sim.pixels - px0) * 1000 / (sim.ms - ms0);
+    std::println!("power ring, 1-field page: {px_s} panel px/s, the plain value {plain} (the box whole is 50 000 px)");
+    // measured about 2 810 px/s (the 3 s power, the default window, drives the ring and its digits; 4 980 with the 1 s power) with 0 to 60 W of noise a second (each step has its own zone colour and the digits stay
+    // white, so a zone change repaints nothing: first 12 269 with the lit arc repainted, 10 134 with zone-coloured
+    // digits), against 1 190 for the plain value and 50 000 for the box whole; 410 px for a 2-step move (dial.rs)
+    assert!(px_s < 3_500, "{px_s} px/s: only the arc that moved and the digits");
+    assert_consistent(&sim, &app);
+
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 30_000);
+    assert_consistent(&sim, &app);
+    let (px0, ms0) = (sim.pixels, sim.ms);
+    run(&mut sim, &mut app, 60_000);
+    let px_s = (sim.pixels - px0) * 1000 / (sim.ms - ms0);
+    std::println!("HR ring, cadence bar, power, speed (2 x 2): {px_s} panel px/s");
+    assert_consistent(&sim, &app);
+    sim.save("gauge_rings_quad");
+    app.theme = crate::ui::Theme::LIGHT;
+    app.repaint(&mut sim);
+    run(&mut sim, &mut app, 2000);
+    assert_consistent(&sim, &app);
+    sim.save("gauge_rings_quad_light");
+
+    // no maximum heart rate set: the ring stays empty, nothing divides by it
+    app.settings.max_hr = 0;
+    app.settings.ftp = 0;
+    run(&mut sim, &mut app, 3000);
+    assert!(matches!(app.drawn.first(), Some(Drawn::Dial(_, _, 0))), "empty without a maximum heart rate");
+    assert_consistent(&sim, &app);
+    // the strap drops out: "--" and an empty ring, sent once
+    app.settings.max_hr = 190;
+    run(&mut sim, &mut app, 3000);
+    assert!(matches!(app.drawn.first(), Some(Drawn::Dial(_, _, l)) if *l > 0), "the strap's heart rate fills the ring");
+    sim.nordic.sensors.clear();
+    run(&mut sim, &mut app, 40_000);
+    assert!(
+        matches!(app.drawn.first(), Some(Drawn::Dial(t, _, 0)) if t.as_str() == "--"),
+        "a lost strap clears the ring"
+    );
+    assert_consistent(&sim, &app);
+    let px = sim.pixels;
+    run(&mut sim, &mut app, 5000);
+    assert!(sim.pixels - px < 3000, "a lost strap costs nothing more: {} px", sim.pixels - px);
+}

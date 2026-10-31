@@ -70,7 +70,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `Rect` (`contains`, `grown`) is the one hit-test: a touch is tested against a `Rect`, never with its own range checks.
   Its parts are re-exported whole, so paths stay `ui::X`: `src/ui/strip.rs` (the status strip, whole and as changes),
   `ui/fields.rs` (a ride field's box, value, layouts, frames, zone bars, the graphs' axes and columns), `src/ui/gauge.rs`
-  (the workout gauge field) and `src/ui/overview.rs` (the overview: date, TODAY card, cog, notices, workout list rows).
+  (the workout gauge field), `src/ui/dial.rs` (the ring and bar gauge fields: drawn with the box, then only the arc or columns that moved) and `src/ui/overview.rs` (the overview: date, TODAY card, cog, notices, workout list rows).
 - `src/ui/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
   `Row` (what a menu row is: a submenu, a setting, a sensor, a reading, a page field) and each menu's table,
   `Setting` (label, choice or number with range and step). A new setting is a `Setting` variant, its row in a table,

@@ -22,13 +22,13 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [x] Edit a page's fields on the unit (stock, Garmin, Wahoo): sim
 - [~] More than three pages, pages turned on and off (Garmin, Karoo): sim; pages added, deleted, switched off and moved
 - [~] Rename pages (Garmin): sim, four characters
-- [ ] Field size follows the box, wide boxes show more (Garmin, Karoo)
+- [x] Field size follows the box: a value's scale is the largest its box's width (five characters) and height allow, 8x in a 1-field page, and a ring sizes it to its hole (Garmin, Karoo): sim; wide boxes showing more (units, a second value) are not done
 - [x] Banners over any page for a few seconds (stock, Garmin): sim
 - [~] Quick Status panel (stock): sim; a swipe-down panel, and a tap on a field opens six chosen fields
 - [x] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim
 - [x] Lap summary banner (Garmin, Wahoo): sim
 - [x] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours), and THEME AUTO switches them from the light: sim
-- [ ] Ring and bar gauges for speed, cadence, heart rate, power (stock)
+- [~] Ring and bar gauges for speed, cadence, heart rate, power (stock): sim; POWER RING, HR RING and CAD BAR fields (ring and bar drawn once, then only the arc or columns that moved); speed has none; not seen on the unit
 - [x] Graphs on a page: power, heart rate, W' balance, DFA a1, elevation (stock, ours): sim
 - [x] Values in zone colours (stock): unit
 - [x] Font choice for every text, PIXEL or SMOOTH (ours): unit
