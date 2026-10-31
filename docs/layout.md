@@ -131,6 +131,11 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   (magic, version, length, sequence, CRC-32), the distance and bearing, the nearest with an altitude. Pure logic.
   `src/app/places.rs`: SAVE PLACE, the PLACES menu rows, the barometer calibrated at a place, the file read and written
   between rides.
+- `src/storage/bikes.rs`: the three bikes: each one's wheel, weight, gears, odometer and five parts (km since RESET,
+  SERVICE EVERY), `\Rustfw\bikes.bin`'s two copies (magic, version, length, sequence, CRC-32), the rides counted once
+  by a mark of the newest counted. Pure logic. `src/app/bikes.rs`: BIKES' menu rows, ACTIVE BIKE (its gear into the
+  settings), the migration from the settings' single bike, the count at a ride scan's end, the part notice, the file
+  read and written between rides (before settings.bin; the store in AXI SRAM, main.rs `make_bikes`).
 - `src/training/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
   rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
   rides at one speed, so a plan is one bisection on it). Pure logic;
@@ -294,7 +299,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `status_tests.rs` (QUICK STATUS), `switch_tests.rs` (page switches, names, moves, the auto scroll, swipe up),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
   `places_tests.rs` (`places.bin`: a place listed after a restart, a ride's start calibrated at a place, cut at every
-  sector, damaged copies),
+  sector, damaged copies), `bikes_tests.rs` (`bikes.bin`: the migration, a saved ride counted once with a cut between the
+  save and the write and at every sector of it, ACTIVE BIKE's wheel and weight, a part's notice and RESET),
   `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
   `diag_tests.rs` (SCREENSHOT and the fault log: the file equals the panel, a full card, cut at every sector),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's

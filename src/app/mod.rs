@@ -4,6 +4,7 @@
 
 mod ahead;
 mod barometer;
+mod bikes;
 mod climbs_done;
 mod clock;
 mod courses;
@@ -53,6 +54,8 @@ mod trainer;
 mod workouts;
 
 pub use barometer::*;
+pub(crate) use bikes::bike_name;
+pub use bikes::{BIKES_FILE, BikeStore};
 pub(crate) use climbs_done::ClimbsDone;
 #[cfg(test)]
 pub(crate) use climbs_done::MAX as CLIMBS_MAX;

@@ -530,6 +530,16 @@ pub enum Row {
     Place(usize),
     /// DELETE in place `n`'s menu (confirmed).
     DeletePlace(usize),
+    /// ACTIVE BIKE (BIKES): Select makes the next bike the active one (app/bikes.rs).
+    ActiveBike,
+    /// Bike `k`'s odometer (no action).
+    BikeOdo(usize),
+    /// Part `p` of bike `k`: its distance since RESET; Select opens its menu.
+    Part(usize, usize),
+    /// SERVICE EVERY of part `p` of bike `k`: Select steps the interval ([`crate::bikes::EVERY_KM`]).
+    PartEvery(usize, usize),
+    /// RESET of part `p` of bike `k` (confirmed): back to 0.
+    PartReset(usize, usize),
     /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
     Drive,
     /// GIVE UP SAVE, first in SYSTEM only while a save is stuck (app/riding.rs, `give_up_save`).
@@ -617,6 +627,11 @@ impl Row {
             Row::AltGps => "FROM GPS",
             Row::SavePlace => "SAVE PLACE",
             Row::DeletePlace(_) => "DELETE",
+            Row::ActiveBike => "ACTIVE BIKE",
+            Row::BikeOdo(_) => "ODOMETER",
+            Row::Part(_, p) => crate::bikes::PART_NAMES.get(p).copied().unwrap_or("PART"),
+            Row::PartEvery(..) => "SERVICE EVERY",
+            Row::PartReset(..) => "RESET",
             Row::Drive => "USB DRIVE",
             Row::GiveUpSave => "GIVE UP SAVE",
             Row::Screenshot => "SCREENSHOT",
@@ -940,8 +955,9 @@ pub const DISPLAY: [Row; 14] = [
 ];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
-/// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 23] = [
+/// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH, the trips, and
+/// BIKES (the active bike, each bike's odometer and parts: app/bikes.rs).
+pub const BIKE: [Row; 24] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -965,6 +981,7 @@ pub const BIKE: [Row; 23] = [
     Row::Set(Setting::Trip(0)),
     Row::Set(Setting::Trip(1)),
     Row::Set(Setting::Odometer),
+    Row::Open(Menu::Bikes),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

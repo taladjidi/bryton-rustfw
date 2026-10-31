@@ -6,6 +6,12 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **Three bikes and part wear (src/storage/bikes.rs, src/app/bikes.rs)**: sim only. Still to see: the first start making
+  BIKE 1 from the settings' wheel and ODOMETER (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
+  switching the wheel and weight (the speed from a wheel sensor follows); a ride saved, then within a minute its distance
+  on the active bike and its parts; a power cut right after "RIDE SAVED" counting the ride once at the next start; a
+  part's SERVICE EVERY passed and its notice at the start; the scan's time to count on the unit's card (70 rides).
+
 - **GRAVEL, CX and COMMUTE profiles**: sim only. Still to see: BIKE > PROFILE cycling to them and back to AUTO; a GRAVEL ride
   (file as gravel_cycling, auto-pause at 3 km/h, continuous tracking), a CX one (cyclocross, never pauses, laps by hand), a
   COMMUTE one (commuting, no climb warnings, the sunset alert at 30 min with a fix); the unit restarted mid-ride coming back
