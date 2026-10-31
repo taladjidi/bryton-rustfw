@@ -383,9 +383,13 @@ pub(crate) fn path_to(app: &App, from: Menu, row: menu::Row) -> Option<Vec<(Menu
     walk(app, from, row, 1)
 }
 
-/// From the first row of the menu shown, down to `row`, each menu on the way opened by Page and Start.
+/// From the first row of the menu shown (Lap up to it first), down to `row`, each menu on the way opened by Page and
+/// Start.
 pub(crate) fn to_row(sim: &mut Sim, app: &mut App, row: menu::Row) {
-    let Screen::Menu(from, _) = app.screen() else { panic!("not a menu: {:?}", app.screen()) };
+    let Screen::Menu(from, sel) = app.screen() else { panic!("not a menu: {:?}", app.screen()) };
+    for _ in 0..sel {
+        app.press(sim, Press::Short(Key::Lap)); // from the first row (a menu reopened keeps its row)
+    }
     let path = path_to(app, from, row).unwrap_or_else(|| panic!("{row:?} not in {from:?}"));
     for (k, &(_, i)) in path.iter().enumerate() {
         for _ in 0..i {
@@ -474,7 +478,7 @@ fn menu_tree_reaches_everything() {
     for m in [Menu::Workouts, Menu::Courses, Menu::History, Menu::Stock] {
         assert!(menus.iter().any(|&(x, _)| x == m), "{m:?} reached");
     }
-    assert_eq!(menu::MAIN.len(), ui::MENU_ROWS + 1, "the main menu: a screen and the SEGMENTS row, which scrolls in");
+    assert_eq!(menu::MAIN.len(), ui::MENU_ROWS + 2, "the main menu: a screen, then SETTINGS and PLACES scroll in");
     // whole on the row: label and value side by side, numbers at the end of their range, and edited
     let whole = |label: &str, value: &str| {
         assert!(ui::LABEL.width(label) <= ui::menu_label_w(label, value), "{label} {value}: the label cut");
@@ -510,8 +514,9 @@ fn menu_tree_reaches_everything() {
             app.press(&mut sim, Press::Short(Key::Start));
         }
         if app.screen() != Screen::Menu(m, 0) {
-            // COURSES without a card: said, not opened
-            assert_eq!((m, app.notes.text.as_str()), (Menu::Courses, "NO COURSE"));
+            // COURSES and PLACES without a card: said, not opened
+            let said = (m, app.notes.text.as_str());
+            assert!(matches!(said, (Menu::Courses, "NO COURSE") | (Menu::Places, "PLACES NOT READ")), "{said:?}");
             while app.screen() != Screen::Main {
                 app.press(&mut sim, Press::Short(Key::Back));
             }

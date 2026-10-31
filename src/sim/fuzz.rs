@@ -1852,6 +1852,7 @@ fn menu_tree_by_chance() {
         "Workouts",
         "Steps",
         "Courses",
+        "Places",
         "Ride",
         "WorkoutNow",
         "CourseNow",
@@ -5478,4 +5479,92 @@ fn climbs_done_views() {
         }
     }
     assert!(completed > 0, "the fuzz never completed a climb");
+}
+
+/// `\Rustfw\places.bin` (places.rs): copies built from their structure (the magic, version, length, a sequence
+/// number, places with latitudes, longitudes, altitudes and numbers in range and out of it, a number used twice, the
+/// zero byte), most with a good CRC, some with a bit flipped after it, paired into files; and the distance, bearing
+/// and nearest place over positions anywhere on the globe. No panic; a copy read is one a write gives back the same;
+/// the newest of two is the higher sequence. Reach counts: copies read, refused by a field, by the CRC, files whose
+/// second copy won, places near.
+#[test]
+fn places_files() {
+    use crate::places::{ENTRY, MAX, Places, dist_bearing};
+    let mut reach = [0usize; 5];
+    for seed in 1..=4000u32 {
+        let mut r = xorshift(seed);
+        let mut copy = || {
+            let mut s = [0u8; 512];
+            s[..4].copy_from_slice(if r().is_multiple_of(16) { b"RPLD" } else { b"RPLC" });
+            s[4..6].copy_from_slice(&(if r().is_multiple_of(16) { 2u16 } else { 1 }).to_le_bytes());
+            let n = (r() % (MAX as u32 + 2)) as usize;
+            let len = if r().is_multiple_of(16) { r() % 600 } else { (n * ENTRY) as u32 };
+            s[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+            s[8..12].copy_from_slice(&(r() % 8).to_le_bytes());
+            for k in 0..n.min(MAX) {
+                let e = &mut s[12 + k * ENTRY..12 + (k + 1) * ENTRY];
+                let lat = if r().is_multiple_of(40) { r() as i32 } else { (r() % 1_800_000_001) as i32 - 900_000_000 };
+                let lon = if r().is_multiple_of(40) {
+                    r() as i32
+                } else {
+                    (i64::from(r() % 3_600_000_001) - 1_800_000_000) as i32
+                };
+                let alt: i16 = match r() % 8 {
+                    0 => i16::MIN,
+                    1 => r() as i16,
+                    _ => (r() % 9000) as i16 - 400,
+                };
+                e[..4].copy_from_slice(&lat.to_le_bytes());
+                e[4..8].copy_from_slice(&lon.to_le_bytes());
+                e[8..10].copy_from_slice(&alt.to_le_bytes());
+                e[10] = if r().is_multiple_of(30) { (r() % 20) as u8 } else { k as u8 + 1 };
+                e[11] = u8::from(r().is_multiple_of(60));
+            }
+            let crc = crate::inflate::crc32(s[..508].iter().copied());
+            s[508..].copy_from_slice(&crc.to_le_bytes());
+            let flipped = r().is_multiple_of(10);
+            if flipped {
+                let at = (r() % 512) as usize;
+                s[at] ^= 1 << (r() % 8);
+            }
+            (s, flipped)
+        };
+        let (a, fa) = copy();
+        let (b, fb) = copy();
+        for (s, flipped) in [(a, fa), (b, fb)] {
+            match Places::from_sector(&s) {
+                Some((seq, p)) => {
+                    reach[0] += 1;
+                    assert_eq!(Places::from_sector(&p.to_sector(seq)), Some((seq, p)), "seed {seed}");
+                    assert!(p.len() <= MAX);
+                }
+                None if flipped => reach[2] += 1,
+                None => reach[1] += 1,
+            }
+        }
+        let mut file = [0u8; 1024];
+        file[..512].copy_from_slice(&a);
+        file[512..].copy_from_slice(&b);
+        let (pa, pb) = (Places::from_sector(&a), Places::from_sector(&b));
+        let newest = Places::newest(&file);
+        if let (Some(x), Some(y)) = (pa, pb) {
+            assert_eq!(newest, Some(if y.0 > x.0 { y } else { x }));
+            reach[3] += usize::from(y.0 > x.0);
+        } else {
+            assert_eq!(newest, pa.or(pb));
+        }
+        // anywhere to anywhere: no overflow, a bearing on the compass
+        let at = ((r() % 1_800_000_001) as i32 - 900_000_000, r() as i32);
+        let to = ((r() % 1_800_000_001) as i32 - 900_000_000, r() as i32);
+        assert!(dist_bearing(at, to).1 < 360);
+        if let Some((_, p)) = newest {
+            let near = p.get(0).map_or(at, |q| (q.lat.saturating_add((r() % 400) as i32), q.lon));
+            if let Some((k, d)) = p.nearest_with_alt(near.0, near.1) {
+                assert!(k < p.len());
+                reach[4] += usize::from(d <= crate::places::NEAR_M);
+            }
+        }
+    }
+    std::println!("places files reached: {reach:?}");
+    assert!(reach.iter().all(|&n| n > 20), "{reach:?}");
 }

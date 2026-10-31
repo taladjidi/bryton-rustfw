@@ -585,6 +585,7 @@ impl App {
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
         self.alt_second();
+        self.places_second();
         self.profile_second();
         self.start_reminder_second();
         if self.ride.state() != ride::State::Idle {
