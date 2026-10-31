@@ -893,11 +893,11 @@ impl App {
             }
             // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
             Menu::Page(n) if matches!(menu, Menu::Ride(_)) && n < PAGES => {
-                self.pages_set = self.ride_profile(); // the set on screen
+                self.pages_set = self.ride_profile().page_set(); // the set on screen
                 self.edit_page(b, n, 0)
             }
             // a set's page list: the editor works on that set (while a ride is open, on the ride's own only)
-            Menu::PageList(set) if self.ride.state() != ride::State::Idle && set != self.ride_profile() => {
+            Menu::PageList(set) if self.ride.state() != ride::State::Idle && set != self.ride_profile().page_set() => {
                 self.say("THE RIDE'S SET")
             }
             m => {

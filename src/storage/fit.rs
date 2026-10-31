@@ -708,7 +708,7 @@ impl Writer {
                 ride::Profile::Road => 7,
                 ride::Profile::Indoor => 6,
                 ride::Profile::Mtb => 8,
-                // FIT SDK profile, sub_sport: cyclocross 11, gravel_cycling 46, commuting 48
+                // garmin fit-python-sdk garmin_fit_sdk/profile.py types["sub_sport"]: cyclocross 11, gravel_cycling 46, commuting 48
                 ride::Profile::Gravel => 46,
                 ride::Profile::Cx => 11,
                 ride::Profile::Commute => 48,

@@ -37,7 +37,7 @@ pub struct ClimbNow {
 impl App {
     /// The set PAGES and the editor show: the profile's while a ride is open, else the one chosen in PAGES.
     pub(crate) fn view_set(&self) -> ride::Profile {
-        if self.ride.state() == ride::State::Idle { self.pages_set } else { self.profile.page_set() }
+        if self.ride.state() == ride::State::Idle { self.pages_set.page_set() } else { self.profile.page_set() }
     }
 
     /// A set's pages, how many are used, and their MORE variants: the profile's (ROAD, INDOOR or MTB).

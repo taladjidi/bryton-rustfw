@@ -2257,6 +2257,9 @@ fn page_editor_inputs() {
                 app.leave_menus();
                 app.pages_set =
                     [ride::Profile::Indoor, ride::Profile::Road, ride::Profile::Mtb][usize::from(a / 3) % 3]; // the indoor set now and then (a ride's own while it is open)
+                if app.pages_set == ride::Profile::Road && b % 8 == 0 {
+                    app.pages_set = ride::Profile::Gravel; // rides the road set (view_set)
+                }
                 let n = app.view_count();
                 app.screen = Screen::Ride(usize::from(b) % n);
                 app.edit_page(&mut sim, usize::from(b) % n, usize::from(next()) % 8);

@@ -336,6 +336,14 @@ impl SettingsCopy {
     }
 }
 
+/// The profile after a register change: a register that says ROAD does not undo GRAVEL, CX or COMMUTE from the file
+/// (the register holds ROAD for them). shortcut: an explicit GRAVEL to ROAD change before a reset is lost, until the
+/// register gets a bit.
+fn keep_new_profile(file: Option<ride::Profile>, reg: Option<ride::Profile>) -> Option<ride::Profile> {
+    use ride::Profile::{Commute, Cx, Gravel, Road};
+    if reg == Some(Road) && matches!(file, Some(Gravel | Cx | Commute)) { file } else { reg }
+}
+
 /// A theme name is letters, digits, - and _, then NUL padding (an empty name is DARK).
 fn theme_name_ok(name: &[u8; 12]) -> bool {
     let n = name.iter().position(|&b| b == 0).unwrap_or(name.len());
@@ -474,14 +482,16 @@ impl Settings {
                 (s.max_hr, s.ftp) = (r.max_hr, r.ftp);
             }
             if tag(0) >= 0xa7 {
-                (s.touch, s.ahead, s.profile) = (r.touch, r.ahead, r.profile);
+                (s.touch, s.ahead) = (r.touch, r.ahead);
+                s.profile = keep_new_profile(s.profile, r.profile);
             }
         }
         if changed(1) && matches!(tag(1), 0xa0..=0xbf | 0xc1) {
             took[1] = true;
             (s.weight_kg, s.wprime_j, s.wkt_avg, s.bike_hg) = (r.weight_kg, r.wprime_j, r.wkt_avg, r.bike_hg);
             if tag(1) <= 0xaf {
-                (s.face, s.gps_power, s.profile) = (r.face, r.gps_power, r.profile);
+                (s.face, s.gps_power) = (r.face, r.gps_power);
+                s.profile = keep_new_profile(s.profile, r.profile);
             } else {
                 (s.remote[0], s.remote[1]) = (r.remote[0], r.remote[1]); // earlier builds' single presses
             }
@@ -550,7 +560,7 @@ impl App {
 
     /// Reads `\Rustfw\settings.bin` (module doc: which wins).
     #[inline(never)] // its 1 KB buffer in its own frame
-    fn load_settings(&mut self, b: &mut impl Board) {
+    pub(crate) fn load_settings(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
         let read = self.read_copies(b, SETTINGS_FILE, &mut file);
         let regs = registers(b);
@@ -854,6 +864,19 @@ mod day_night_file_tests {
         }
         assert!(SettingsCopy::from_sector(&sec).unwrap().settings.zone_custom, "the good ones are read");
         assert!(o.zones_lthr && o.female, "the rest kept");
+    }
+
+    /// A register that changed alone (the light) says ROAD for a GRAVEL file: the file's profile stays.
+    #[test]
+    fn a_register_change_keeps_a_gravel_profile_from_the_file() {
+        let file = Settings { profile: Some(ride::Profile::Gravel), light_level: 1, ..Settings::from_word(0) };
+        let words = file.register_words();
+        let now = Settings { light_level: 3, ..file };
+        let mut regs = words;
+        regs[0] = Settings { profile: Some(ride::Profile::Road), ..now }.to_word();
+        let (s, took) = file.with_registers(words, regs);
+        assert!(took[0]);
+        assert_eq!((s.light_level, s.profile), (3, Some(ride::Profile::Gravel)));
     }
 
     /// The profile byte (data 27) is the index in [`PROFILES`]: the first four keep their numbers (a file written before

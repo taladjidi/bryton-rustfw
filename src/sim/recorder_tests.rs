@@ -982,3 +982,42 @@ fn a_ride_across_the_dst_change_keeps_its_name_and_times() {
     assert!(times.last().is_some_and(|&t| t >= crate::fit::fit_time((2026, 10, 25, 1, 2, 30))), "the resumed part");
     assert_eq!(crate::fat::write::tests::fsck(&sim2.emmc.image), Ok(0));
 }
+
+/// GRAVEL, CX and COMMUTE are kept as ROAD in the recovery record: after a reset the resume reads settings.bin and
+/// takes the profile back, so the rules and the file's sub_sport (46, 11, 48) are the profile's.
+#[test]
+fn a_resumed_gravel_cx_or_commute_ride_keeps_its_profile() {
+    use crate::ride::Profile::{Commute, Cx, Gravel};
+    for (p, sub) in [(Gravel, 46), (Cx, 11), (Commute, 48)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 2000);
+        app.settings.profile = Some(p);
+        app.settings_store.dirty = true; // as the menu does: into the file before the ride
+        sim.backup[crate::WHEEL_BKP] = app.settings.to_word(); // and into register 11: ROAD for these
+        run(&mut sim, &mut app, 5000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.ride_profile(), p);
+        run(&mut sim, &mut app, 150_000);
+        let (mut sim2, mut app) = reboot(&mut sim, 3);
+        run(&mut sim2, &mut app, 1000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+        assert_eq!(app.ride_profile(), p, "from settings.bin, the record says ROAD");
+        assert_eq!((app.ride_profile().pause_kmh(), app.ride_profile().auto_lap()), (p.pause_kmh(), p.auto_lap()));
+        app.press(&mut sim2, Press::Short(Key::Start)); // resume
+        run(&mut sim2, &mut app, 5000);
+        app.press(&mut sim2, Press::Short(Key::Start));
+        save_ride(&mut sim2, &mut app);
+        run(&mut sim2, &mut app, 2000);
+        let name = std::string::String::from_utf8(app.rec.clean.name().to_vec()).unwrap();
+        let mut d = crate::fat::tests::Ram(sim2.emmc.image.clone(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, &std::format!("Activities/{name}.fit")).unwrap();
+        let mut v = std::vec![0u8; f.size as usize];
+        fat.read_at(&mut d, &f, 0, &mut v).unwrap();
+        let m = crate::fit::tests::decode(&v).unwrap();
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert_eq!(crate::fit::tests::field(session, 6), Some(sub), "{p:?}: sub_sport");
+    }
+}

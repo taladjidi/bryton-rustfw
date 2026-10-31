@@ -57,7 +57,7 @@ impl App {
 
     /// The road page shown ON? (The indoor and MTB sets have no switches: every page is.)
     pub(crate) fn switched_on(&self, n: usize) -> bool {
-        self.ride_profile() != ride::Profile::Road || self.sw.meta.on(n)
+        self.ride_profile().page_set() != ride::Profile::Road || self.sw.meta.on(n)
     }
 
     /// A switch, name or order changed: written with the pages.
