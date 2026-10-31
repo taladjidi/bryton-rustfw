@@ -164,6 +164,8 @@ It runs, in order:
 - the merge guard: no conflict marker in a tracked text file;
 - the docs guard: every file of `src` and `tools` is named in docs/layout.md, and no doc names a retired flat file
   (the list is in check.sh);
+- `tools/lint.py` and `tools/lint.py selftest`: pub items only tests use (`#[cfg(test)]` them, or its ALLOW), dashes, licensed keys in
+  tracked files, dead functions in `tools/`, and ruff's pyflakes checks when ruff is installed;
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - `cargo clippy --release -- -D warnings`, and on the tests and the simulator;
 - `cargo test-host` (unit tests, simulator tests and doc tests on the Mac; writes `target/sim/preview.bmp`);

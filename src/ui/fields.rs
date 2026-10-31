@@ -753,6 +753,7 @@ pub const LAYOUTS: [Layout; 17] = [
 
 /// The layouts below this id are the rider's (the page menu, the editor, the readability rules: a picture 118 px
 /// high); the ones from it on are fixed pages (id 16, the CLIMB page: four boxes the rules would refuse).
+#[cfg(test)]
 pub const USER_LAYOUTS: u8 = 16;
 
 /// The order the page menu goes through the layouts: by field count (none is off: a page is deleted instead).
@@ -908,6 +909,7 @@ fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s:
 
 /// Height of a zone bar along the top of a box (above the label, a pixel apart from it: the labels of the value fields
 /// start 9 px down). 8 px: 4 was too thin to see on the bike (owner, 2026-10-26).
+#[cfg(test)]
 pub const ZONE_BAR_H: u32 = theme::ZONE_BAR.1;
 
 /// The zone bar of box `bx` in `color` (BLACK clears it): the box's full width less its right rule.

@@ -28,6 +28,10 @@ for f in $(git ls-files -co --exclude-standard src tools); do
 done
 [ -z "$miss" ] || { echo "docs: not in docs/layout.md:$miss"; exit 1; }
 if git grep -nE '(^|[^A-Za-z0-9_])(src/)?(sim|ui)\.rs' -- '*.md'; then echo "docs: a doc names src/sim.rs or src/ui.rs (src/sim/, src/ui/)"; exit 1; fi
+# tools/lint.py: pub items only tests use, dashes, licensed keys in tracked files, dead tool functions, ruff (pyflakes)
+python3 -I tools/lint.py
+python3 -I tools/lint.py selftest
+command -v ruff >/dev/null 2>&1 || skipped="${skipped:+$skipped }ruff"
 cargo fmt --check
 cargo clippy --release -- -D warnings
 cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings  # the tests and the simulator too

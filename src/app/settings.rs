@@ -518,6 +518,7 @@ impl Settings {
     }
 
     /// Sets THEME by name (up to 12 characters; DARK is the empty name).
+    #[cfg(test)]
     pub fn set_theme_name(&mut self, name: &str) {
         self.theme = Self::name_bytes(name);
     }
