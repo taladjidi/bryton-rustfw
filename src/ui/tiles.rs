@@ -51,7 +51,8 @@
 use crate::fat::{self, Disk, Fat, File, Seek};
 use crate::fonts::PIXEL;
 use crate::ign;
-use crate::map::{Rect, View, cos_q16, rot_cs};
+use crate::map::{Rect, View, rot_cs};
+use crate::math::{atanh, cos, cos_q16, sin};
 use crate::osm;
 use crate::text::{self, Align, Line};
 use crate::ui::{self, Canvas};
@@ -1140,48 +1141,6 @@ impl Frame {
     }
 }
 
-/// Floating point without libm: series accurate to about 1e-13 in the ranges used here (|x| <= pi/2).
-pub(crate) fn sin(x: f64) -> f64 {
-    let (mut term, mut sum) = (x, x);
-    for k in 1..10 {
-        term *= -x * x / f64::from((2 * k) * (2 * k + 1));
-        sum += term;
-    }
-    sum
-}
-
-fn cos(x: f64) -> f64 {
-    let (mut term, mut sum) = (1.0, 1.0);
-    for k in 1..10 {
-        term *= -x * x / f64::from((2 * k - 1) * (2 * k));
-        sum += term;
-    }
-    sum
-}
-
-/// Natural logarithm: the exponent from the bits, then 2 atanh((m - 1) / (m + 1)) for the mantissa.
-pub(crate) fn ln(x: f64) -> f64 {
-    let bits = x.to_bits();
-    let mut e = ((bits >> 52) & 0x7ff) as i64 - 1023;
-    let mut m = f64::from_bits((bits & ((1 << 52) - 1)) | (1023 << 52));
-    if m > core::f64::consts::SQRT_2 {
-        m /= 2.0;
-        e += 1;
-    }
-    let t = (m - 1.0) / (m + 1.0);
-    let (mut term, mut sum) = (t, t);
-    for k in 1..12 {
-        term *= t * t;
-        sum += term / f64::from(2 * k + 1);
-    }
-    e as f64 * core::f64::consts::LN_2 + 2.0 * sum
-}
-
-/// The Mercator ordinate of a latitude whose sine is `s`.
-pub(crate) fn atanh(s: f64) -> f64 {
-    0.5 * ln((1.0 + s) / (1.0 - s))
-}
-
 // ---------------------------------------------------------------------------------------------------------------
 // Drawing into the buffer
 // ---------------------------------------------------------------------------------------------------------------
@@ -1548,13 +1507,6 @@ pub(crate) mod tests {
 
     #[test]
     fn floating_point_without_libm() {
-        for x in [-1.5, -0.7, 0.0, 0.3, 0.785, 1.2, core::f64::consts::FRAC_PI_2] {
-            assert!((sin(x) - std::primitive::f64::sin(x)).abs() < 1e-12, "sin {x}");
-            assert!((cos(x) - std::primitive::f64::cos(x)).abs() < 1e-12, "cos {x}");
-        }
-        for x in [1e-9, 0.01, 0.5, 1.0, 1.5, 2.0, 10.0, 12345.678] {
-            assert!((ln(x) - std::primitive::f64::ln(x)).abs() < 1e-12, "ln {x}");
-        }
         // the tile under a position, as the OSM wiki's formula (made-up places)
         for (lat, lon) in [(-0.0001, 0.0001), (33.3, -100.0), (60.0, 25.5), (-45.1, 170.2)] {
             let f = Frame::new(

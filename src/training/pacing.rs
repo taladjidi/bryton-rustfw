@@ -101,13 +101,9 @@ impl Plan {
     pub const EMPTY: Plan = Plan { watts: [0; MAX], n: 0, total_s: 0 };
 }
 
-/// The square root (Newton from 32, above every root asked; `core` has none).
+/// The square root (`core` has none).
 fn sqrt(s: f32) -> f32 {
-    let mut x = 32.0;
-    for _ in 0..12 {
-        x = (x + s / x) * 0.5;
-    }
-    x
+    crate::math::sqrt(f64::from(s)) as f32
 }
 
 /// The power equation's two terms for a section: `k` (gravity and rolling, N) and `a` (drag, N s^2/m^2).

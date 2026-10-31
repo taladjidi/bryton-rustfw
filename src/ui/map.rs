@@ -36,6 +36,7 @@
 //!   cached tiles cover the view; black as before when the basemap has no memory. IGN's raster tiles, when packs
 //!   cover the view ([`crate::ign`]), come through the same buffer, their "(c) IGN" drawn into it.
 
+use crate::math::{cos_q16, isqrt, project};
 use crate::text::Face;
 use crate::text::{self, Align, Line, Style};
 use crate::tiles::{Basemap, Layer};
@@ -125,34 +126,6 @@ pub fn rot_cs(rot: u8) -> (i32, i32) {
 
 /// A rectangle in screen pixels, signed so shapes may start off it: x, y, width, height.
 pub type Rect = (i32, i32, i32, i32);
-
-/// cos(latitude) x 65536, latitude in degrees x 1e-7 (Bhaskara I's approximation, within 0.2 %).
-///
-/// ```
-/// use bryton_rustfw::map::cos_q16;
-/// assert_eq!(cos_q16(0), 65536);
-/// assert!((cos_q16(600_000_000) - 32768).abs() < 100); // cos 60 = 0.5
-/// assert_eq!(cos_q16(-900_000_000), 0);
-/// ```
-pub fn cos_q16(lat: i32) -> i64 {
-    let t = i64::from(lat / 10_000); // 1e-3 degrees
-    let t2 = t * t;
-    ((32_400_000_000 - 4 * t2) << 16) / (32_400_000_000 + t2)
-}
-
-/// Where (`lat`, `lon`) (degrees x 1e-7) is on the plane of `origin` (its latitude, longitude and [`cos_q16`] of its
-/// latitude): metres east and north.
-///
-/// ```
-/// use bryton_rustfw::map::{cos_q16, project};
-/// assert_eq!(project((0, 0, cos_q16(0)), 8983, 0), (0, 99)); // 8983e-7 degrees of latitude: 100 m
-/// ```
-pub fn project((lat0, lon0, cos): (i32, i32, i64), lat: i32, lon: i32) -> (i32, i32) {
-    // 1e-7 degrees of a great circle is 0.011132 m (WGS84 equator; inferred close enough for a drawing)
-    let x = (i64::from(lon) - i64::from(lon0)) * 11_132 * cos / 65_536 / 1_000_000;
-    let y = (i64::from(lat) - i64::from(lat0)) * 11_132 / 1_000_000;
-    (x as i32, y as i32)
-}
 
 /// A course drawn under the track ([`crate::course`]): its points in its own plane, the bounding box of each
 /// [`Route::CHUNK`] of them (so a dirty box draws only the chunks it touches), where its plane's origin is on the
@@ -927,11 +900,6 @@ pub fn draw(
             run(&mut c, k, x + s / 2 - 2, y + 10, 4, s - 20, ui::WHITE);
         }
     }
-}
-
-/// The integer square root of `n` (0 for less than 1), for the crosshair's ring.
-fn isqrt(n: i32) -> i32 {
-    (0..=n.max(0)).take_while(|r| r * r <= n).last().unwrap_or(0)
 }
 
 /// The view must change: the first position, the position near the edge, the track thinned, another course, the

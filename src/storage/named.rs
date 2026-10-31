@@ -20,9 +20,9 @@
 
 use crate::course::Course;
 use crate::fat::{self, Disk, Fat};
+use crate::math::{atanh, sin};
 use crate::route::tile_of;
 use crate::text::Line;
-use crate::tiles::{atanh, sin};
 
 /// Points kept at most.
 pub const MAX: usize = 32;

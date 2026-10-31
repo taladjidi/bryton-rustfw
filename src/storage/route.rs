@@ -715,7 +715,7 @@ const Z14_BITS: u32 = 14;
 /// assert_eq!(tile_of(-520_000_000, -1_450_000_000), (1592, 10972));
 /// ```
 pub fn tile_of(lat: i32, lon: i32) -> (u32, u32) {
-    use crate::tiles::{atanh, sin};
+    use crate::math::{atanh, sin};
     let n = f64::from(1u32 << Z14_BITS);
     let phi = f64::from(lat.clamp(-850_000_000, 850_000_000)) / 1e7 * core::f64::consts::PI / 180.0;
     let x = (f64::from(lon) + 1.8e9) / 3.6e9 * n;
