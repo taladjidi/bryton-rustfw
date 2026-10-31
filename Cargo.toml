@@ -3,7 +3,7 @@ name = "bryton-rustfw"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-license = "MIT AND OFL-1.1"
+license = "GPL-3.0-or-later AND OFL-1.1"
 publish = false
 description = "Firmware in safe Rust for the Bryton Rider S510 bike computer: rides, sensors, maps, workouts, courses, a phone link"
 

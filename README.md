@@ -78,3 +78,10 @@ Measured on the unit (2026-10-29 evening, build 13fec4c, `tools/profile.py` from
 | [AGENTS.md](AGENTS.md) | how to work on it: rules, tests, the dev loop |
 
 Way back to stock: [docs/install.md](docs/install.md).
+
+## Licence
+
+Copyright (c) 2026 Tangui Aladjidi. This firmware is free software under the GNU General Public License, version 3 or
+any later version ([LICENSE](LICENSE)). Exceptions: the SMOOTH font data (`src/ui/fonts.rs`, SMOOTH2 to SMOOTH8) and
+`tools/fonts/` are Barlow Semi Condensed Bold, copyright 2017 The Barlow Project Authors, under the SIL Open Font
+License 1.1 (`tools/fonts/OFL.txt`); the three patched USB crates under `vendor/` keep their upstream MIT licence.

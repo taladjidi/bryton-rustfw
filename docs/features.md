@@ -327,7 +327,7 @@ quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent o
 era, the default) or BARLOW (Barlow Semi Condensed Bold, anti-aliased). The cells are the same size, so no page or menu
 moves; the screen is redrawn at once and the choice is kept in the settings file (T0), and register 16 (bit 24) mirrors it until the file is read. A theme file's `font = pixel | barlow` key is the FONT default when that theme is picked (docs/theming.md). Scale 1 (small
 text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
-Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
+Font Licence 1.1 (`tools/fonts/OFL.txt`; README, Licence); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
 **Theme AUTO.** THEME's list starts with AUTO: the day theme (DAY, OUTDOOR at first) and the night one (NIGHT,
 DARK at first) then follow the ambient light: night under 20 lux, day again over 50 lux, each held 30 s, at most one
