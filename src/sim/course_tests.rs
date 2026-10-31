@@ -752,7 +752,9 @@ fn climb_page_opens_at_the_start() {
             continue;
         }
         assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
-        assert_eq!(app.head_text().unwrap().head().sub, "GAIN LEFT");
+        let h = app.head_text().unwrap();
+        let sub = h.head().sub;
+        assert!(sub.starts_with("GAIN LEFT ") && sub.ends_with('%'), "the current grade after it: {sub}");
         let n = app.climb_now().unwrap();
         check_progress(&app, &n);
         app.press(&mut sim, Press::Short(Key::Page));
@@ -1117,7 +1119,7 @@ mod segment_on_climb {
         assert!(app.segment_now().is_none());
         assert_eq!(app.pace.key.map(|k| k.0), Some(start), "keyed by the climb");
         let (top, sub) = head(&app);
-        assert!(top.starts_with("CLIMB ") && sub == "GAIN LEFT", "{top} {sub}");
+        assert!(top.starts_with("CLIMB ") && sub.starts_with("GAIN LEFT"), "{top} {sub}");
         // inside the segment: its name, a delta, its key and target, its profile
         run_to(&mut sim, &mut app, 2000.0);
         let n = app.segment_now().expect("in the segment");

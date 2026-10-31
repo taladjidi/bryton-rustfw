@@ -727,12 +727,29 @@ impl App {
             b.backup_write(FAULT_BKP, if self.fault_due.is_some() { w & !0xff } else { 0 });
         }
         self.gps.note_fix();
+        let was = self.strip.rec;
         self.strip.rec = self.rec.mark(&self.ride, self.card_writable);
+        if self.strip.rec == Rec::NotSaving && matches!(was, Rec::Running | Rec::Paused) {
+            self.alarm("NOT SAVING"); // a ride that stops being recorded must be seen, once
+        }
         self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
         t = self.timed(b, Sec::Strip, t);
         self.pair_asked(b);
         self.live.tick(pass_ms);
         self.radio.tick(pass_ms);
+        let (lost, back) = self.radio.lost_event(self.ride.state() != ride::State::Idle);
+        for (mask, word, kind) in [(lost, " LOST", Banner::Alarm), (back, " BACK", Banner::Info)] {
+            let mut l = Line::<32>::new();
+            for k in Kind::ALL.into_iter().filter(|&k| mask & 1 << k as u8 != 0) {
+                l.push_str(if l.as_str().is_empty() { "" } else { ", " });
+                l.push_str(k.short());
+            }
+            if !l.as_str().is_empty() {
+                l.push_str(word);
+                self.say_as(l.as_str(), kind);
+            }
+        }
+        self.strip.lost = self.radio.lost != 0;
         self.reopen_rested(b, pass_ms);
         t = self.timed(b, Sec::Radio, t);
         if !self.emmc.lent() {

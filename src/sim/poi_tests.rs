@@ -110,12 +110,12 @@ fn names_along_the_hill() {
     };
     assert_eq!(names, [("COL DE TEST", 1333, true, 2, 2), ("PIC D'ESSAI", 1777, false, 5, 1)], "{names:?}");
     // before a fix: from the start
-    assert!(["1.0K", "0.9K"].contains(&text(&app).as_str()), "{}", text(&app));
+    assert!(["1 KM", "950 M", "900 M"].contains(&text(&app).as_str()), "{}", text(&app));
     sim.gnss.fix = Some(8000);
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // the ride
     run(&mut sim, &mut app, 150_000);
-    assert!(["1.7K", "1.8K", "1.9K"].contains(&text(&app).as_str()), "past the col: {}", text(&app));
+    assert!(["1.7 KM", "1.8 KM", "1.9 KM"].contains(&text(&app).as_str()), "past the col: {}", text(&app));
     run(&mut sim, &mut app, 3000);
     assert_consistent(&sim, &app);
     let cyan = sim.screen.iter().filter(|&&p| p == ui::CYAN).count();
