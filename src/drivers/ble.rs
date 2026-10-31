@@ -34,6 +34,8 @@
 //! BOARD.md 11). The GATT client's events carry the connection they belong to, so the phone's and the trainer's
 //! are told apart.
 
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
+
 use crate::Board;
 use crate::nrf::{self, CMD, Error, Rx};
 
@@ -145,7 +147,7 @@ impl Cmd {
 
     /// `len16data`: the length, a presence byte, the bytes.
     pub fn data16(&mut self, v: &[u8]) -> &mut Self {
-        self.u16(v.len() as u16).u8(1).bytes(v)
+        self.u16(len16(v.len())).u8(1).bytes(v)
     }
 
     /// The payload; None if it did not fit.
@@ -190,7 +192,12 @@ pub fn ppcp_set(b: &mut impl Board, rx: &mut Rx, (min, max, lat, sup): ConnParam
 /// The advertising data and the scan response (each 31 bytes at most).
 pub fn adv_data_set(b: &mut impl Board, rx: &mut Rx, adv: &[u8], sr: &[u8]) -> Result<(), Error> {
     let mut c = Cmd::new(GAP_ADV_DATA_SET);
-    c.u8(adv.len() as u8).u8(1).bytes(adv).u8(sr.len() as u8).u8(u8::from(!sr.is_empty())).bytes(sr);
+    c.u8(u8::try_from(adv.len()).unwrap_or(u8::MAX))
+        .u8(1)
+        .bytes(adv)
+        .u8(u8::try_from(sr.len()).unwrap_or(u8::MAX))
+        .u8(u8::from(!sr.is_empty()))
+        .bytes(sr);
     c.run(b, rx)
 }
 
@@ -384,7 +391,7 @@ pub fn descriptor_add(
     let mut c = Cmd::new(GATTS_DESCRIPTOR_ADD);
     c.u16(ch).u8(1).u8(1).u16(uuid).u8(UUID_BLE).u8(1);
     attr_md(&mut c, read, NO_ACCESS, false);
-    c.u16(0).u16(value.len() as u16).data16(value).u8(1);
+    c.u16(0).u16(len16(value.len())).data16(value).u8(1);
     let mut out = [0; 3];
     match (c.call(b, rx, &mut out)?, out) {
         (3, [1, h0, h1]) => Ok(u16::from_le_bytes([h0, h1])),
@@ -401,7 +408,7 @@ pub fn value_set(b: &mut impl Board, rx: &mut Rx, handle: u16, value: &[u8]) -> 
 /// Notifies `value` on `handle` (the value is set too).
 pub fn notify(b: &mut impl Board, rx: &mut Rx, conn: u16, handle: u16, value: &[u8]) -> Result<(), Error> {
     let mut c = Cmd::new(GATTS_HVX);
-    c.u16(conn).u8(1).u16(handle).u8(1).u16(0).u8(1).u16(value.len() as u16).u8(1).bytes(value);
+    c.u16(conn).u8(1).u16(handle).u8(1).u16(0).u8(1).u16(len16(value.len())).u8(1).bytes(value);
     let mut out = [0; 3];
     c.call(b, rx, &mut out).map(|_| ())
 }
@@ -420,13 +427,16 @@ pub fn sys_attr_set(b: &mut impl Board, rx: &mut Rx, conn: u16, data: Option<&[u
 /// Reads `conn`'s system attributes into `out`; returns their length.
 pub fn sys_attr_get(b: &mut impl Board, rx: &mut Rx, conn: u16, out: &mut [u8]) -> Result<usize, Error> {
     let mut c = Cmd::new(GATTS_SYS_ATTR_GET);
-    c.u16(conn).u8(1).u16(out.len() as u16).u8(1).bytes(&[0; 4]);
+    c.u16(conn).u8(1).u16(len16(out.len())).u8(1).bytes(&[0; 4]);
     let mut got = [0; 80];
     let n = c.call(b, rx, &mut got)?;
     match got.get(..n) {
         Some([1, l0, l1, 1, data @ ..]) => {
             let len = usize::from(u16::from_le_bytes([*l0, *l1])).min(data.len()).min(out.len());
-            out[..len].copy_from_slice(&data[..len]);
+            let (Some(dst), Some(src)) = (out.get_mut(..len), data.get(..len)) else {
+                return Err(Error::Code(u32::MAX));
+            };
+            dst.copy_from_slice(src);
             Ok(len)
         }
         _ => Err(Error::Code(u32::MAX)),
@@ -825,32 +835,47 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
 
 /// The services of an [`Event::Services`] list: (UUID, start handle, end handle).
 pub fn services(list: &[u8]) -> impl Iterator<Item = (Uuid, u16, u16)> + '_ {
-    list.chunks_exact(7).map(|e| {
-        let h = |i: usize| u16::from_le_bytes([e[i], e[i + 1]]);
-        ((h(0), e[2]), h(3), h(5))
+    list.as_chunks::<7>().0.iter().map(|e| {
+        ((u16::from_le_bytes([e[0], e[1]]), e[2]), u16::from_le_bytes([e[3], e[4]]), u16::from_le_bytes([e[5], e[6]]))
     })
 }
 
 /// The characteristics of an [`Event::Chars`] list: (UUID, properties, declaration handle, value handle).
 pub fn chars(list: &[u8]) -> impl Iterator<Item = (Uuid, u8, u16, u16)> + '_ {
-    list.chunks_exact(9).map(|e| {
-        let h = |i: usize| u16::from_le_bytes([e[i], e[i + 1]]);
-        ((h(0), e[2]), e[3], h(5), h(7))
+    list.as_chunks::<9>().0.iter().map(|e| {
+        (
+            (u16::from_le_bytes([e[0], e[1]]), e[2]),
+            e[3],
+            u16::from_le_bytes([e[5], e[6]]),
+            u16::from_le_bytes([e[7], e[8]]),
+        )
     })
 }
 
 /// The descriptors of an [`Event::Descs`] list: (handle, UUID).
 pub fn descs(list: &[u8]) -> impl Iterator<Item = (u16, Uuid)> + '_ {
-    list.chunks_exact(5).map(|e| {
-        let h = |i: usize| u16::from_le_bytes([e[i], e[i + 1]]);
-        (h(0), (h(2), e[4]))
-    })
+    list.as_chunks::<5>().0.iter().map(|e| (u16::from_le_bytes([e[0], e[1]]), (u16::from_le_bytes([e[2], e[3]]), e[4])))
+}
+
+/// A length for a 16-bit field (saturating: every caller's data is far shorter).
+fn len16(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn short_gatt_lists_drop_the_partial_entry() {
+        let l: std::vec::Vec<u8> = (0..20).collect();
+        assert_eq!(services(&l).count(), 2);
+        assert_eq!(chars(&l).count(), 2);
+        assert_eq!(descs(&l).count(), 4);
+        assert_eq!(services(&l[..6]).count() + chars(&l[..8]).count() + descs(&l[..4]).count(), 0);
+        assert_eq!(services(&l).next(), Some(((0x0100, 2), 0x0403, 0x0605)));
+    }
 
     #[test]
     fn the_mtu_exchange_pdus() {
