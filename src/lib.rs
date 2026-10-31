@@ -26,7 +26,9 @@ pub mod ui;
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
 pub use link::{dev, msc, phone, prof};
 pub use nav::{altitude, climbs_ahead, course, segment, segment_match, sun};
-pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash, volume};
+pub use storage::{
+    fat, fit, fitread, history, ign, inflate, ini, named, recorder, route, stock, thresholds, trash, volume,
+};
 pub use training::{
     alerts, hrtss, hrv, hrvt, load, pacing, power, power_curve, power_match, ramp, ride, trainer, workout,
 };
@@ -393,6 +395,8 @@ pub struct App {
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course_file::Courses>,
+    /// The named points along the course followed (its own cell: main.rs `make_pois`), and its scan.
+    pois: Option<&'static mut named::Pois>,
     /// The live segments: index, active segment, matcher (memory from main.rs: [`App::set_segment_memory`]).
     segments: Option<&'static mut Segments>,
     /// The live segment screens' state (app/segment_ui.rs).
@@ -560,6 +564,7 @@ impl App {
             rec: Recording::new(),
             card_writable: false,
             courses: None,
+            pois: None,
             segments: None,
             seg_ui: SegUi::new(),
             pace: PaceState::new(),

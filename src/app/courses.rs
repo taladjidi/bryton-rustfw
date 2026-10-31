@@ -124,6 +124,38 @@ impl App {
             storage::course_file::Progress::Loaded(false) => self.say("NOT A COURSE"),
             _ => {}
         }
+        // the named points along the course: a bounded step of a scan, once the course is on (an extra)
+        // never while the recorder has card work (a start, a checkpoint, a save)
+        let rec = &self.rec;
+        let writing = [&rec.full, &rec.clean].iter().any(|r| r.due() || r.pending());
+        if !self.emmc.lent()
+            && !writing
+            && let (Some(c), Some(p)) = (self.courses.as_deref(), self.pois.as_deref_mut())
+            && c.on.is_some()
+            && !p.done()
+        {
+            p.step(&c.course, &mut emmc::Volume(&mut self.emmc, b));
+        }
+    }
+
+    /// Memory for the named points along a course (main.rs: its own cell, so the course memory's frame stays small);
+    /// without it there are none.
+    pub fn set_poi_memory(&mut self, mem: &'static mut named::Pois) {
+        self.pois = Some(mem);
+    }
+
+    /// The named points found along the course followed.
+    pub(crate) fn poi_list(&self) -> &[named::Poi] {
+        self.pois.as_deref().map_or(&[], |p| p.list())
+    }
+
+    /// The next named point of the course followed (a peak or a col) and the distance to it, m: where the rider is
+    /// on the course, else from its start.
+    pub(crate) fn next_poi(&self) -> Option<(&named::Poi, u32)> {
+        let c = self.courses.as_deref().filter(|c| c.on.is_some())?;
+        let along = c.at.off_m.map_or(0, |_| c.at.along_m);
+        let (_, p) = self.pois.as_deref()?.next(along)?;
+        Some((p, p.along_m.saturating_sub(along)))
     }
 
     /// The beeps of a climb starting.
@@ -178,6 +210,13 @@ impl App {
     /// The course fields' text: "--" without a course followed and a fix on it.
     pub(crate) fn course_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
+        if f == Field::NextPoi {
+            match self.next_poi() {
+                Some((_, m)) => push_dist(&mut l, m),
+                None => l.push_str("--"),
+            }
+            return l;
+        }
         let Some((c, at)) = self.on_course() else { return self.ahead_text(f) };
         let d = at.along_m;
         let climb = c.climb_at(d).and_then(|(k, on)| Some((*c.climbs().get(k)?, on)));

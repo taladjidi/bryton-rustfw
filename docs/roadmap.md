@@ -114,7 +114,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
   the date of each best are not), personal records and best efforts, ~~training load (CTL, ATL, TSB) with its chart and fields, month totals~~ done, sim (features.md "TRAINING LOAD": TSS per ride from power or the average heart rate, CTL / ATL / TSB fields, the chart, MONTHS; the per-ride TSS is not in the scan's cache or shown in the history list, no per-second heart rate for hrTSS, the newest 128 rides only), each ride matched to
   the planned workout; the scan's results written by critical;
 - courses: ~~reverse, navigate to the start (straight line), retrace along the ride's own track~~ done, sim (features.md, ride menu: REVERSE COURSE, BACK TO START); the way back drawn differently from the course, routed navigation (3d), turn cues from
-  stock's `voiceTrip.fit`, POIs and peaks along a course where the map has them;
+  stock's `voiceTrip.fit`, ~~peaks and cols along a course (NEXT POI, the profile's marks, from stock's cached tiles)~~ done, sim (features.md; water points and shops need our own map packs, status.md);
 - the map: ~~north up or heading up, pinch to zoom~~ done, sim (features.md, Map); our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
 - ~~field sizes that follow the box, ring and bar gauges~~ done, sim (features.md "Gauge fields"; a value's scale already followed its box's width and height, `box_scale`); more gauged fields and a per-field style in the editor are open;
 - ride profiles: gravel, cyclocross, commute, three bikes, auto features per profile, component wear;
