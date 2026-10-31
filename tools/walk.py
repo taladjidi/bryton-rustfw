@@ -10,7 +10,8 @@ the simulator's own for a human to compare in a few contact sheets. The standard
 walk only a build WITHOUT EMMC_WRITE: what check.sh builds). Build it from the main checkout: a worktree lacks the
 gitignored ant_key.bin / di2_key.bin and the sensor screens then show NO KEY. Then `info` (must say `ride idle`), every
 path, `info` again (idle again; uptime must have grown after every path, else the unit reset), `peek 0x580040c4` (the
-fault marker, must be 0, also checked every 10 paths) and a 20 s `prof` window on the overview. Exit 1 on a reset, a
+fault marker, must be 0, also checked every 10 paths) and a 20 s `prof` window on the overview, whose awake share is printed and must stay under the idle bound sentence of
+docs/power.md (--no-bound skips). A new ride's READY CHECK card is waited out. Exit 1 on a reset, a
 fault, a ride left running or an unexpected answer. Needs Pillow (plain python3, not -I).
 
 Output goes under DIR only (default target/walk/, gitignored): NNN-<name>.png (unit | sim side by side) and
@@ -49,12 +50,14 @@ DENY = ('SAVE', 'SCREENSHOT', 'FORMAT', 'RESET', 'DELETE', 'FORGET', 'UPDATE', '
         'INDOOR', 'LIGHT', 'CAL', 'MOVE', 'SHOW', 'RENAME', 'END', 'DISCARD', 'FROM GPS', 'AUTO SCROLL', 'LAYOUT', 'UP',
         'DOWN', 'NOTIFY', 'KEYS', 'NEARBY', 'PAUSE', 'NEXT STEP', 'STOP', 'REVERSE', 'BACK TO START')
 # Allowlist (the DENY words are a second layer). The simulator tags each Start with the row's kind (src/sim/walk_tests.rs
-# `Target`): a "fixed" row (const table) is pressed only where the sim had it (same index, same row count); a "data" row
+# `Target`): a "fixed" row (const table) is pressed where the title and label match (the counts may differ); a "data" row
 # (a workout, past ride, month, notification, place or course) only in these lists, which just open what they hold; a
 # "set" row (Start cycles and saves a setting) or an "other" row never.
 READ_ONLY = ('WORKOUTS', 'HISTORY', 'PLACES', 'COURSES', 'MONTHS', 'NOTIFICATIONS')
 CONFIRM = 0.3                  # s between the cursor reaching its row and the check that it is still there
 SETTLE = 0.5
+READY_CARD = 3.5               # s: the ready card stays 3 s (READY_BANNER_MS)
+BOUND_RE = r"walk's idle bound is ([0-9.]+) %"  # the sentence in docs/power.md
 BAND = (20, 24, 220, 50)       # the title band under the status strip (x0, y0, x1, y1), static text
 DRIFT = 0.25                   # fraction of the lit pixels that may differ (antialias, colours)
 FAULT = '0x580040c4'
@@ -119,6 +122,12 @@ def png_image(png):
     return Image.open(io.BytesIO(png)) if isinstance(png, bytes) else Image.open(png)
 
 
+def idle_bound(text):
+    """The walk's idle awake bound (percent) from the sentence in docs/power.md, or None."""
+    m = re.search(BOUND_RE, text)
+    return float(m.group(1)) if m else None
+
+
 def parse_where(answer):
     """`where T|i/n|L` -> (title, index, rows, label); `where OVERVIEW` -> ('OVERVIEW', 0, 0, ''); None if odd."""
     if not answer.startswith('where '):
@@ -158,8 +167,6 @@ def navigate(ask, press_key, step, sleep=time.sleep):
             break
     if w[3] != row:
         return 'refused', 'row not on the unit'
-    if kind == 'fixed' and (w[1], w[2]) != (step['idx'], step['rows']):
-        return 'refused', f'row {row} is {w[1]}/{w[2]} on the unit, {step["idx"]}/{step["rows"]} in the sim'
     for _ in range(2):  # still there after a pause: the list did not move under the cursor
         sleep(CONFIRM)
         again = parse_where(ask())
@@ -167,7 +174,7 @@ def navigate(ask, press_key, step, sleep=time.sleep):
             d = denied(w[3])
             return ('refused', f'row {w[3]} has {d}') if d else None
         w = again
-        if w is None or w[3] != row or (kind == 'fixed' and (w[1], w[2]) != (step['idx'], step['rows'])):
+        if w is None or w[3] != row:
             break
     return 'drift-abort', 'the cursor row kept changing'
 
@@ -271,7 +278,9 @@ def drift_checks(e):
     keys, parts = e['keys'], e['name'].split('/')
     out, lvl = [], 0
     for i, k in enumerate(keys):
-        if k == 'page --long' and re.match(r'(MET|IMP) MAIN$', parts[0]) and lvl == 0:
+        if k == 'start' and i == 0 and parts[0].endswith('RIDE MENU'):
+            continue  # on the overview Start begins the ride (and shows the READY CHECK card); the menu opens at the long Page
+        if k == 'page --long' and re.match(r'(MET|IMP) (MAIN|RIDE MENU)$', parts[0]) and lvl == 0:
             lvl = 1
         elif k == 'start':
             lvl += 1
@@ -303,6 +312,7 @@ def main():
     ap.add_argument('--build', help='run this image from RAM first')
     ap.add_argument('--only', help='regex on the path names')
     ap.add_argument('--rides', action='store_true', help='also walk the ride paths (a build without EMMC_WRITE only)')
+    ap.add_argument('--no-bound', action='store_true', help='skip the idle awake-share check (docs/power.md)')
     ap.add_argument('-o', default=str(ROOT / 'target' / 'walk'))
     a = ap.parse_args()
     out = check_out(a.o)
@@ -350,7 +360,13 @@ def main():
                 press(s, k)
                 if i in checks:
                     sim = sim_bmp(by_name[checks[i]]['n']) if checks[i] in by_name else None
-                    if sim is None or not same_title(png_image(dev.shot(s)), sim):
+                    ok = sim is not None and same_title(png_image(dev.shot(s)), sim)
+                    if not ok and sim is not None and READY_CARD:
+                        # a new ride's READY CHECK / START REMINDER card (app/start_cues.rs) covers the title for 3 s
+                        # and no sensor answers at the desk; Start on it would only skip it, so wait it out
+                        time.sleep(READY_CARD)
+                        ok = same_title(png_image(dev.shot(s)), sim)
+                    if not ok:
                         aborted = f'after key {i} ({k}) the screen is not {checks[i]}'
                         break
             if refused:
@@ -402,6 +418,12 @@ def main():
     outcomes, reasons = tally(rows)
     assert sum(outcomes.values()) == len(entries)
     write_summary(rows, out)
+    bound = idle_bound((ROOT / 'docs' / 'power.md').read_text())
+    over = bound is not None and awake_pct > bound and not a.no_bound
+    if over:
+        problem = problem or f'idle awake share {awake_pct:.2f} % is over the bound {bound} % (docs/power.md)'
+    with open(out / 'summary.txt', 'a') as f:
+        f.write(f'idle awake {awake_pct:.2f} % (bound {bound} %)\n')
     for n, name, o, r in rows:
         print(f'  {n:03} {o} {name}' + (f': {r}' if r else ''))
     print(f'total {len(rows)} paths: ' + ', '.join(f'{k} {v}' for k, v in outcomes.items()))
@@ -444,7 +466,8 @@ def selftest():
     f = Fake(['A', 'B', 'C', 'D'])
     assert nav(f, st('Z')) == ('refused', 'row not on the unit') and len(f.keys) <= 8
     f = Fake(['A', 'B', 'C', 'D'])
-    assert nav(f, st('C', 1))[1].startswith('row C is 2/4 on the unit')  # not where the sim had it
+    assert nav(f, st('C', 1)) is None  # counts and index may differ from the sim's: the label decides
+    assert idle_bound("x. The walk's idle bound is 1.7 % of 20 s.") == 1.7 and idle_bound('none') is None
     f = Fake(['A', 'B', 'FORGET SENSOR'])
     assert nav(f, st('FORGET SENSOR', 2, 3)) == ('refused', 'row FORGET SENSOR has FORGET')
     f = Fake(['A'], title='MENU')
@@ -471,6 +494,8 @@ def selftest():
     assert drift_checks(ok('MET MAIN/SETTINGS/ME/LEAF', k)) == [(0, 'MET MAIN'), (2, 'MET MAIN/SETTINGS'),
                                                                 (4, 'MET MAIN/SETTINGS/ME')]
     assert drift_checks(ok('MET MAIN/SETTINGS', ('page --long', 'start'))) == [(0, 'MET MAIN')]
+    assert drift_checks(ok('MET RIDE MENU/SENSORS', ('start', 'page', 'page --long', 'page', 'start'))) == [
+        (2, 'MET RIDE MENU')]
     assert refuse(ok('MET MAIN/WORKOUTS')) is None
     assert refuse(ok('MET MAIN/SETTINGS/SYSTEM/FORMAT')) == 'name has FORMAT'
     assert refuse(ok('MET MAIN/PLACES/SAVE PLACE')) == 'name has SAVE'
