@@ -278,6 +278,7 @@ fn start_ms(e: &Entry, a: (i32, i32, u32), b: (i32, i32, u32)) -> Option<u64> {
     if c.0 * c.0 + c.1 * c.1 > i128::from(START_M * 1000).pow(2) {
         return None;
     }
+    const _: () = assert!(HEADING_DEG == 60); // the test below is cos 60 = 1/2, so it holds for 60 only
     // cos 60 = 1/2: dot > 0 and 4 dot^2 >= |m|^2 |v|^2
     let dot = i128::from(m.0) * i128::from(v.0) + i128::from(m.1) * i128::from(v.1);
     let lv2 = i128::from(v.0) * i128::from(v.0) + i128::from(v.1) * i128::from(v.1);

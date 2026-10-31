@@ -727,13 +727,9 @@ impl Event<'_> {
     }
 }
 
-fn u16_at(p: &[u8], i: usize) -> Option<u16> {
-    Some(u16::from_le_bytes([*p.get(i)?, *p.get(i + 1)?]))
-}
-
 /// A `count u16` then `count` entries of `size` bytes: the entries (as many as there are whole).
 fn entries(p: &[u8], size: usize) -> Option<&[u8]> {
-    let n = usize::from(u16_at(p, 0)?);
+    let n = usize::from(crate::storage::bytes::le16(p, 0)?);
     let list = p.get(2..)?;
     list.get(..(n * size).min(list.len() / size * size))
 }
@@ -742,7 +738,7 @@ fn entries(p: &[u8], size: usize) -> Option<&[u8]> {
 pub fn event(p: &[u8]) -> Option<Event<'_>> {
     let id = nrf::event_id(p)?;
     let f = p.get(3..)?;
-    let conn = u16_at(f, 0);
+    let conn = crate::storage::bytes::le16(f, 0);
     Some(match id {
         0x10 => {
             let mut peer = [0; 7];
@@ -751,7 +747,7 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
         }
         0x11 => Event::Disconnected { conn: conn?, reason: *f.get(2)? },
         0x13 => Event::SecParamsRequest { conn: conn? },
-        0x14 => Event::SecInfoRequest { conn: conn?, ediv: u16_at(f, 9)? },
+        0x14 => Event::SecInfoRequest { conn: conn?, ediv: crate::storage::bytes::le16(f, 9)? },
         0x19 => {
             // status, flags (bit 2 bonded), two levels bytes, the two kdist bytes, then the keyset when the
             // reply gave one: own enc, id, sign, pk keys, then the peer's, each a presence byte and its bytes
@@ -778,33 +774,48 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
         0x1a => Event::ConnSecUpdate { conn: conn?, level: *f.get(2)? >> 4 },
         0x1b => Event::Timeout { src: *f.get(2)? },
         0x1f => {
-            let p = |i| u16_at(f, i);
+            let p = |i| crate::storage::bytes::le16(f, i);
             Event::ConnParamRequest { conn: conn?, params: (p(2)?, p(4)?, p(6)?, p(8)?) }
         }
         0x21 | 0x23 => Event::ParamRequest { conn: conn?, id },
         0x01 => Event::UserMemRequest { conn: conn? },
         0x50 => {
-            let len = usize::from(u16_at(f, 11)?);
-            Event::Write { conn: conn?, handle: u16_at(f, 2)?, uuid: u16_at(f, 4)?, data: f.get(13..13 + len)? }
+            let len = usize::from(crate::storage::bytes::le16(f, 11)?);
+            Event::Write {
+                conn: conn?,
+                handle: crate::storage::bytes::le16(f, 2)?,
+                uuid: crate::storage::bytes::le16(f, 4)?,
+                data: f.get(13..13 + len)?,
+            }
         }
         0x52 => Event::SysAttrMissing { conn: conn? },
         0x55 => Event::MtuRequest { conn: conn? },
         0x56 | 0x3b => Event::GattTimeout { conn: conn? },
         0x30 | 0x32 | 0x33 | 0x36 | 0x38 | 0x39 | 0x3a => {
-            let (conn, status, rest) = (conn?, u16_at(f, 2)?, f.get(6..)?);
+            let (conn, status, rest) = (conn?, crate::storage::bytes::le16(f, 2)?, f.get(6..)?);
             match id {
                 0x30 => Event::Services { conn, status, list: entries(rest, 7)? },
                 0x32 => Event::Chars { conn, status, list: entries(rest, 9)? },
                 0x33 => Event::Descs { conn, status, list: entries(rest, 5)? },
                 0x36 => {
-                    let len = usize::from(u16_at(rest, 4)?);
-                    Event::Read { conn, status, handle: u16_at(rest, 0)?, data: rest.get(6..6 + len)? }
+                    let len = usize::from(crate::storage::bytes::le16(rest, 4)?);
+                    Event::Read {
+                        conn,
+                        status,
+                        handle: crate::storage::bytes::le16(rest, 0)?,
+                        data: rest.get(6..6 + len)?,
+                    }
                 }
-                0x38 => Event::Written { conn, status, handle: u16_at(rest, 0)? },
-                0x3a => Event::MtuRsp { conn, status, mtu: u16_at(rest, 0)? },
+                0x38 => Event::Written { conn, status, handle: crate::storage::bytes::le16(rest, 0)? },
+                0x3a => Event::MtuRsp { conn, status, mtu: crate::storage::bytes::le16(rest, 0)? },
                 _ => {
-                    let len = usize::from(u16_at(rest, 3)?);
-                    Event::Hvx { conn, handle: u16_at(rest, 0)?, kind: *rest.get(2)?, data: rest.get(5..5 + len)? }
+                    let len = usize::from(crate::storage::bytes::le16(rest, 3)?);
+                    Event::Hvx {
+                        conn,
+                        handle: crate::storage::bytes::le16(rest, 0)?,
+                        kind: *rest.get(2)?,
+                        data: rest.get(5..5 + len)?,
+                    }
                 }
             }
         }

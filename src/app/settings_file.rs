@@ -179,8 +179,8 @@ impl SettingsCopy {
     /// version). A short one (an earlier build's) gives the defaults for the settings past its end, one out of its
     /// range the default for that setting.
     pub fn from_sector(sec: &[u8; 512]) -> Option<SettingsCopy> {
-        let le16 = |at: usize| Some(u16::from_le_bytes([*sec.get(at)?, *sec.get(at + 1)?]));
-        let le32 = |at: usize| Some(u32::from_le_bytes(sec.get(at..at + 4)?.try_into().ok()?));
+        let le16 = |at: usize| crate::storage::bytes::le16(sec, at);
+        let le32 = |at: usize| crate::storage::bytes::le32(sec, at);
         let len = usize::from(le16(6)?);
         if sec.get(..4)? != MAGIC
             || le16(4)? != VERSION

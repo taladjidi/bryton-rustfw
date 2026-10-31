@@ -633,10 +633,6 @@ impl Dat {
         Dat { file: File { cluster: 0, size: 0, dir: false }, zb: 0, range: [0; 4], idx: 0, len: 0, data: 0 };
 }
 
-fn u32_le(b: &[u8], i: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
-}
-
 impl Dat {
     /// The routing section of `file`; None when it has none (no section 1, no zoom 14, not "BRYTON", ranges that
     /// cannot be: this file is not used).
@@ -645,16 +641,16 @@ impl Dat {
         if fat.read_at(d, &file, 0, &mut head)? != head.len() {
             return Ok(None);
         }
-        let sec = u32_le(&head, 0x0e).unwrap_or(0);
+        let sec = crate::storage::bytes::le32(&head, 0x0e).unwrap_or(0);
         let mut ztab = [0u8; 80];
         if sec == 0 || fat.read_at(d, &file, sec, &mut ztab)? != ztab.len() {
             return Ok(None);
         }
-        let z = u32_le(&ztab, 14 * 4).unwrap_or(0);
+        let z = crate::storage::bytes::le32(&ztab, 14 * 4).unwrap_or(0);
         let zb = sec.checked_add(z).filter(|_| z != 0);
         let mut h = [0u8; 100];
         let Some(zb) = zb.filter(|&zb| fat.read_at(d, &file, zb, &mut h) == Ok(h.len())) else { return Ok(None) };
-        let g = |i| u32_le(&h, i).unwrap_or(0);
+        let g = |i| crate::storage::bytes::le32(&h, i).unwrap_or(0);
         let range = [g(0x10), g(0x14), g(0x18), g(0x1c)];
         let (idx, len, data) = (h[0x20], h[0x21], g(0x22));
         let side = |a: u32, b: u32| u64::from(b.saturating_sub(a)) + 1;

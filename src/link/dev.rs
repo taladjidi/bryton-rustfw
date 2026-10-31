@@ -284,27 +284,27 @@ impl Session {
                 h.send(
                     concat!("bryton-rustfw ", env!("CARGO_PKG_VERSION"), " ", env!("GIT_DESCRIBE"), " up ").as_bytes(),
                 );
-                h.send(decimal(stats.uptime_ms, &mut [0; 10]));
+                h.send(decimal(u64::from(stats.uptime_ms), &mut [0; 20]));
                 h.send(b" ms, awake ");
-                h.send(decimal(stats.awake_permille, &mut [0; 10]));
+                h.send(decimal(u64::from(stats.awake_permille), &mut [0; 20]));
                 h.send(b" permille, cpu ");
-                h.send(decimal(stats.cpu_permille, &mut [0; 10]));
+                h.send(decimal(u64::from(stats.cpu_permille), &mut [0; 20]));
                 h.send(b" permille, radio resets ");
-                h.send(decimal(u32::from(app.radio_resets()), &mut [0; 10]));
+                h.send(decimal(u64::from(app.radio_resets()), &mut [0; 20]));
                 h.send(b", climb tile us last ");
-                h.send(decimal(app.ahead_tile_us().0, &mut [0; 10]));
+                h.send(decimal(u64::from(app.ahead_tile_us().0), &mut [0; 20]));
                 h.send(b" max ");
-                h.send(decimal(app.ahead_tile_us().1, &mut [0; 10]));
+                h.send(decimal(u64::from(app.ahead_tile_us().1), &mut [0; 20]));
                 h.send(b" slice max ");
-                h.send(decimal(app.ahead_tile_us().2, &mut [0; 10]));
+                h.send(decimal(u64::from(app.ahead_tile_us().2), &mut [0; 20]));
                 h.send(b", auto off held ");
-                h.send(decimal(app.auto_off_held(), &mut [0; 10]));
+                h.send(decimal(u64::from(app.auto_off_held()), &mut [0; 20]));
                 h.send(b"\n");
             }
             Some(b"bat") => {
                 // the battery history: one line a minute, oldest first, "mV" or "mV c" while charging; then "end"
                 for (mv, charging) in app.battery_history() {
-                    h.send(decimal(u32::from(mv), &mut [0; 10]));
+                    h.send(decimal(u64::from(mv), &mut [0; 20]));
                     h.send(if charging { b" c\n" } else { b"\n" });
                 }
                 h.send(b"end\n");
@@ -714,7 +714,7 @@ fn send_error(h: &mut impl Host, e: emmc::Error) {
     match e {
         Error::Bus(c, why) => {
             h.send(b"err cmd ");
-            h.send(decimal(u32::from(c), &mut [0; 10]));
+            h.send(decimal(u64::from(c), &mut [0; 20]));
             h.send(match why {
                 BusError::Timeout => b" timeout\n",
                 BusError::Crc => b" crc\n",
@@ -724,7 +724,7 @@ fn send_error(h: &mut impl Host, e: emmc::Error) {
         Error::Busy => h.send(b"err busy\n"),
         Error::Status(c, s) => {
             h.send(b"err status cmd ");
-            h.send(decimal(u32::from(c), &mut [0; 10]));
+            h.send(decimal(u64::from(c), &mut [0; 20]));
             h.send(b" ");
             h.send(&hex(s));
         }
@@ -741,7 +741,7 @@ fn send_prof(h: &mut impl Host, p: &crate::prof::Prof) {
     let nums = |h: &mut dyn Host, vs: &[u64]| {
         for &v in vs {
             h.send(b" ");
-            h.send(decimal64(v, &mut [0; 20]));
+            h.send(decimal(v, &mut [0; 20]));
         }
         h.send(b"\n");
     };
@@ -776,19 +776,7 @@ fn hex(v: u32) -> [u8; 9] {
     out
 }
 
-fn decimal64(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
-    let mut i = buf.len();
-    loop {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-        if v == 0 {
-            return &buf[i..];
-        }
-    }
-}
-
-fn decimal(mut v: u32, buf: &mut [u8; 10]) -> &[u8] {
+fn decimal(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
     let mut i = buf.len();
     loop {
         i -= 1;

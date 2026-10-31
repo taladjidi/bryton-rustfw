@@ -519,7 +519,7 @@ fn lcd_ram(count: u32, dma: &mut Option<hw::PanelDma>, mut run: Run<'_>) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
     spi_begin(1);
-    spi_byte(0x2c); // RAMWR
+    spi_byte(bryton_rustfw::panel::RAMWR);
     spi_end();
     pin_set(LCD_DC.0, LCD_DC.1, true);
     let min = if matches!(run, Run::Fill(_)) { DMA_MIN_FILL } else { DMA_MIN_BLIT };

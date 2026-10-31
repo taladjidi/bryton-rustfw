@@ -186,6 +186,7 @@ impl Pois {
     }
 
     /// Course points looked at so far.
+    #[cfg(test)]
     pub fn collected(&self) -> usize {
         usize::from(self.scan.pt)
     }
