@@ -457,6 +457,8 @@ const POWER_ZONES: [u16; 8] = zone_table([0, 0, 0, 0, 0, 0, 0, 200], &crate::rid
 const HR_ZONES: [u16; 6] = zone_table([50, 0, 0, 0, 0, 100], &crate::ride::HR_ZONE_PCT);
 
 /// `ends` with the zone edges `pct` written between its first and last entries.
+// Evaluated at compile time only: an index out of range is a build error, never a panic on the unit.
+#[allow(clippy::indexing_slicing)]
 const fn zone_table<const N: usize>(mut ends: [u16; N], pct: &[u32]) -> [u16; N] {
     let mut i = 0;
     while i < pct.len() {
@@ -565,9 +567,13 @@ impl Calendar {
     /// Adds `p` in day order (after those of its day), dropping the latest when full.
     pub(crate) fn add(&mut self, p: Planned) {
         let at = self.days.iter().position(|d| d.is_none_or(|d| d.day > p.day)).unwrap_or(DAYS);
-        if at < DAYS {
-            self.days[at..].rotate_right(1);
-            self.days[at] = Some(p);
+        if at < DAYS
+            && let Some(tail) = self.days.get_mut(at..)
+        {
+            tail.rotate_right(1);
+            if let Some(first) = tail.first_mut() {
+                *first = Some(p);
+            }
         }
     }
 }

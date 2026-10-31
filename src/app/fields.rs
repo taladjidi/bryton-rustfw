@@ -3,6 +3,11 @@
 
 use crate::*;
 
+/// The decimal digit `n % 10` as text.
+pub(crate) fn digit(n: impl Into<u64>) -> &'static str {
+    ui::DIGITS.get((n.into() % 10) as usize).copied().unwrap_or("0")
+}
+
 /// Cadence under this, rpm, in ERG turns the cadence box's edge bar red.
 pub(crate) const ERG_LOW_RPM: u16 = 60;
 
@@ -13,14 +18,14 @@ pub(crate) fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
     }
     let v = v.unsigned_abs();
     let unit = 10u32.pow(shift);
-    l.push_u32(v / unit);
+    l.push_u32(v.checked_div(unit).unwrap_or(0));
     if decimals > 0 {
         l.push_str(".");
-        let frac = v % unit / 10u32.pow(shift - decimals);
+        let frac = v.checked_rem(unit).unwrap_or(0).checked_div(10u32.pow(shift.saturating_sub(decimals))).unwrap_or(0);
         let digits = 10u32.pow(decimals - 1);
         let mut d = digits;
         while d > 0 {
-            l.push_str(ui::DIGITS[(frac / d % 10) as usize]);
+            l.push_str(digit(frac / d));
             d /= 10;
         }
     }
@@ -48,12 +53,12 @@ pub(crate) fn left_text(l: &mut Line<8>, minutes: Option<u32>) {
 /// `v / 10^decimals` with its decimals ("0.75").
 pub(crate) fn push_fixed_u(l: &mut Line<8>, v: u32, decimals: u32) {
     let unit = 10u32.pow(decimals);
-    l.push_u32(v / unit);
+    l.push_u32(v.checked_div(unit).unwrap_or(0));
     if !v.is_multiple_of(unit) {
         l.push_str(".");
         let mut d = unit / 10;
         while d > 0 {
-            l.push_str(ui::DIGITS[(v / d % 10) as usize]);
+            l.push_str(digit(v / d));
             d /= 10;
         }
     }
@@ -70,7 +75,7 @@ pub(crate) fn push_hm<const N: usize>(l: &mut Line<N>, s: u32) {
 pub(crate) fn hm_text((h, m): (u8, u8)) -> Line<6> {
     let mut l = Line::new();
     for d in [h / 10, h % 10, 10, m / 10, m % 10] {
-        l.push_str(if d == 10 { ":" } else { ui::DIGITS[usize::from(d % 10)] });
+        l.push_str(if d == 10 { ":" } else { digit(d) });
     }
     l
 }
@@ -111,8 +116,8 @@ pub(crate) fn push_duration<const N: usize>(l: &mut Line<N>, s: u32, pad: bool) 
 pub(crate) fn push_km<const N: usize>(l: &mut Line<N>, m: u32) {
     l.push_u32(m / 1000);
     l.push_str(".");
-    l.push_str(ui::DIGITS[(m / 100 % 10) as usize]);
-    l.push_str(ui::DIGITS[(m / 10 % 10) as usize]);
+    l.push_str(digit(m / 100));
+    l.push_str(digit(m / 10));
 }
 
 /// Metres as km (or miles) times 100, truncated as stock's distance is.
@@ -126,10 +131,10 @@ pub(crate) fn push_dist<const N: usize>(l: &mut Line<N>, m: u32, imperial: bool)
     l.push_u32(v / 100);
     l.push_str(".");
     if v < 10_000 {
-        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
-        l.push_str(ui::DIGITS[(v % 10) as usize]);
+        l.push_str(digit(v / 10));
+        l.push_str(digit(v));
     } else {
-        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
+        l.push_str(digit(v / 10));
     }
 }
 
@@ -138,7 +143,7 @@ pub(crate) fn push_trip<const N: usize>(l: &mut Line<N>, m: u32, imperial: bool)
     let v = dist_x100(m, imperial) / 10;
     l.push_u32(v / 10);
     l.push_str(".");
-    l.push_str(ui::DIGITS[(v % 10) as usize]);
+    l.push_str(digit(v));
 }
 
 /// km/h x 10 as mph x 10, rounded.
@@ -197,7 +202,7 @@ pub(crate) fn time_to_dest_s(left_m: u32, avg_x10: Option<u16>) -> Option<u32> {
 pub(crate) fn push_day_time<const N: usize>(l: &mut Line<N>, mins: u32) {
     let (h, m) = (mins / 60 % 24, mins % 60);
     for d in [h / 10, h % 10, 10, m / 10, m % 10] {
-        l.push_str(if d == 10 { ":" } else { ui::DIGITS[(d % 10) as usize] });
+        l.push_str(if d == 10 { ":" } else { digit(d) });
     }
 }
 
@@ -224,7 +229,7 @@ pub(crate) const MONTHS: [&str; 12] =
 pub(crate) fn date_text((y, m, d): (u16, u8, u8)) -> Line<12> {
     const DAYS: [&str; 7] = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"]; // 1970-01-01 was a Thursday
     let mut l = Line::new();
-    l.push_str(DAYS[days_from_civil(y, m, d).rem_euclid(7) as usize]);
+    l.push_str(DAYS.get(days_from_civil(y, m, d).rem_euclid(7) as usize).copied().unwrap_or(""));
     l.push_str(" ");
     l.push_u32(u32::from(d));
     l.push_str(" ");
@@ -382,7 +387,7 @@ impl App {
             Field::Time => {
                 let (h, m) = self.strip.time;
                 for d in [h / 10, h % 10, 10, m / 10, m % 10] {
-                    l.push_str(if d == 10 { ":" } else { ui::DIGITS[usize::from(d % 10)] });
+                    l.push_str(if d == 10 { ":" } else { digit(d) });
                 }
                 return l;
             }
@@ -649,8 +654,8 @@ impl App {
                     let v = (a * 100.0 + 0.5).clamp(0.0, 999.0) as u32;
                     l.push_u32(v / 100);
                     l.push_str(".");
-                    l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
-                    l.push_str(ui::DIGITS[(v % 10) as usize]);
+                    l.push_str(digit(v / 10));
+                    l.push_str(digit(v));
                     return l;
                 }
                 None => (None, false),
@@ -667,8 +672,8 @@ impl App {
                     Some(v) => {
                         l.push_u32(v / 100);
                         l.push_str(".");
-                        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
-                        l.push_str(ui::DIGITS[(v % 10) as usize]);
+                        l.push_str(digit(v / 10));
+                        l.push_str(digit(v));
                     }
                     None => l.push_str("--"),
                 }

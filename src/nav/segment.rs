@@ -369,7 +369,7 @@ impl Segment {
                     continue;
                 }
                 (have, k) = (0, k + 1);
-                let (i, t) = ((k - 1) / n, (k - 1) % n);
+                let (i, t) = ((k - 1).checked_div(n).unwrap_or(0), (k - 1).checked_rem(n).unwrap_or(0));
                 let v = u32::from_le_bytes(word);
                 let last = prev.get_mut(t).ok_or(Error::Times)?;
                 if v < *last {

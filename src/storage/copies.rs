@@ -85,12 +85,15 @@ pub struct Copies {
     pub sync: u32,
     /// The newest copy's sequence number.
     pub seq: u32,
+    /// Not on the card whole, and its writer never makes it (bikes.bin, places.bin: a ride's start does, the
+    /// recorder's `make_kept`): a change waits until a ride has started.
+    pub no_file: bool,
 }
 
 impl Copies {
     /// Nothing read.
     pub const fn new() -> Self {
-        Copies { loaded: false, tries: 0, dirty: false, sound: false, sync: 0, seq: 0 }
+        Copies { loaded: false, tries: 0, dirty: false, sound: false, sync: 0, seq: 0, no_file: false }
     }
 
     /// A read of the file ended as `read` (its bytes, or why not), the FAT copies `suspect` or not: Some(whole) once

@@ -377,7 +377,8 @@ impl Ride {
     /// A ride from [`Ride::to_words`], paused (a ride resumed after a reset: Start goes on, a long Start ends it).
     /// The climbing window starts again.
     pub fn resumed(w: &[u32; RIDE_WORDS]) -> Ride {
-        let avg = |i: usize| Avg { sum: w[i], n: w[i + 1] };
+        let at = |i: usize| w.get(i).copied().unwrap_or(0);
+        let avg = |i: usize| Avg { sum: at(i), n: at(i + 1) };
         let dist9 = u64::from(w[1]) | u64::from(w[2]) << 32;
         let lap_dist9 = (u64::from(w[12]) | u64::from(w[13]) << 32).min(dist9);
         Ride {
@@ -872,7 +873,7 @@ impl Zones {
     /// starts one over. None unless each list rises strictly from 1 ([`Zones::upper`] of a table is always valid).
     pub fn custom(ftp: u16, max_hr: u16, upper: [u16; 10]) -> Option<Zones> {
         let [h0, h1, h2, h3, p0, p1, p2, p3, p4, p5] = upper;
-        let rises = |l: &[u16]| l.first().is_some_and(|&v| v > 0) && l.windows(2).all(|w| w[0] < w[1]);
+        let rises = |l: &[u16]| l.first().is_some_and(|&v| v > 0) && l.windows(2).all(|w| matches!(w, [a, b] if a < b));
         (rises(&[h0, h1, h2, h3]) && rises(&[p0, p1, p2, p3, p4, p5]) && h3 < u16::MAX && p5 < u16::MAX).then(|| {
             Zones { ftp, max_hr, hr: [h0, h1, h2, h3].map(|v| v + 1), power: [p0, p1, p2, p3, p4, p5].map(|v| v + 1) }
         })
@@ -940,23 +941,28 @@ pub fn power_zone(w: u16, ftp: u16) -> u8 {
 /// The colour of a DFA alpha1 reading (x 100): above the aerobic threshold's 0.75 green, between it and 0.5 olive,
 /// below brown (Rogers et al.), from the zone palette.
 pub fn dfa_color(v: u16) -> u16 {
-    ZONE_COLORS[if v >= 75 {
+    palette(if v >= 75 {
         1
     } else if v >= 50 {
         2
     } else {
         3
-    }]
+    })
+}
+
+/// Colour `i` of [`ZONE_COLORS`]; black past the end.
+pub(crate) fn palette(i: usize) -> u16 {
+    ZONE_COLORS.get(i).copied().unwrap_or(0)
 }
 
 /// The colour of heart-rate zone `z` (1 to 5): teal, green, olive, brown, wine, as power's first five.
 pub fn hr_color(z: u8) -> u16 {
-    ZONE_COLORS[usize::from(z.clamp(1, 5) - 1)]
+    palette(usize::from(z.clamp(1, 5) - 1))
 }
 
 /// The colour of power zone `z` (1 to 7): teal, green, olive, brown, wine, purple, slate (Intervals.icu's).
 pub fn power_color(z: u8) -> u16 {
-    ZONE_COLORS[usize::from(z.clamp(1, 7) - 1)]
+    palette(usize::from(z.clamp(1, 7) - 1))
 }
 
 /// The seconds the ride spent in each heart-rate zone and each power zone: the moving seconds with a reading. The app
@@ -1124,6 +1130,8 @@ impl History {
     /// h.second([Some(300), None, None, None, None]); // one second at 300 W moves the bar an eighth of the way
     /// assert_eq!(h.bar(0, Plot::Power), 125);
     /// ```
+    // Indexing: every array here is PLOTS long and k < PLOTS; i = n % BARS < BARS.
+    #[allow(clippy::indexing_slicing)]
     pub fn second(&mut self, v: [Option<u16>; PLOTS]) -> bool {
         for (k, v) in v.into_iter().enumerate() {
             let (Some(v), Some(a)) = (v, self.avg.get_mut(k)) else { continue };
@@ -1167,9 +1175,7 @@ impl History {
     fn push_whole(&mut self) {
         if self.whole_n as usize >= WHOLE {
             for series in &mut self.whole {
-                for j in 0..WHOLE / 2 {
-                    series[j] = mean(series[2 * j], series[2 * j + 1]);
-                }
+                halve_in_place(series);
             }
             self.whole_n = (WHOLE / 2) as u32;
             self.per *= 2;
@@ -1190,15 +1196,15 @@ impl History {
     /// second is longer than a column) take the same altitude; standing still rewrites the same column.
     pub fn dist_second(&mut self, dist_m: u32, alt: Option<u16>) {
         let Some(alt) = alt else { return };
-        while (dist_m / self.dist_step) as usize >= DIST_COLS {
-            for j in 0..DIST_COLS / 2 {
-                self.by_dist[j] = mean(self.by_dist[2 * j], self.by_dist[2 * j + 1]);
+        while dist_m.checked_div(self.dist_step).unwrap_or(0) as usize >= DIST_COLS {
+            halve_in_place(&mut self.by_dist);
+            if let Some(tail) = self.by_dist.get_mut(DIST_COLS / 2..) {
+                tail.fill(0);
             }
-            self.by_dist[DIST_COLS / 2..].fill(0);
             self.dist_n = self.dist_n.div_ceil(2);
             self.dist_step *= 2;
         }
-        let i = (dist_m / self.dist_step) as usize;
+        let i = dist_m.checked_div(self.dist_step).unwrap_or(0) as usize;
         // only a small gap is bridged: nothing filled yet (the first reading, or after a resume emptied the history)
         // or a jump (a GPS glitch) starts at `i`, the columns before stay empty (0)
         let gap = i.saturating_sub(self.dist_n as usize);
@@ -1234,7 +1240,7 @@ impl History {
         if k >= self.n || self.n - k > BARS as u32 {
             return 0;
         }
-        self.bars[plot as usize][k as usize % BARS]
+        self.bars.get(plot as usize).and_then(|b| b.get(k as usize % BARS)).copied().unwrap_or(0)
     }
 
     /// The whole ride: bars kept, how many times it was halved (each time, every bar changes), and bar `k`.
@@ -1255,7 +1261,20 @@ impl History {
 
     /// See [`History::whole_len`].
     pub fn whole_bar(&self, k: u32, plot: Plot) -> u16 {
-        self.whole[plot as usize].get(k as usize).copied().unwrap_or(0)
+        self.whole.get(plot as usize).and_then(|s| s.get(k as usize)).copied().unwrap_or(0)
+    }
+}
+
+/// The first half of `a` made of the means of its pairs ([`mean`]).
+// Indexing: j < len / 2, so 2 * j + 1 < len.
+#[allow(clippy::indexing_slicing)]
+fn halve_in_place(a: &mut [u16]) {
+    for j in 0..a.len() / 2 {
+        if let (Some(&x), Some(&y)) = (a.get(2 * j), a.get(2 * j + 1))
+            && let Some(o) = a.get_mut(j)
+        {
+            *o = mean(x, y);
+        }
     }
 }
 

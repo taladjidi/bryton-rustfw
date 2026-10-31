@@ -34,6 +34,9 @@ pub struct Font {
     pub alpha: &'static [u8],
 }
 
+/// The glyph of a character the font lacks, when even `?` is missing: nothing.
+const BLANK: Glyph = Glyph { advance: 0, x: 0, y: 0, w: 0, h: 0, at: 0 };
+
 impl Font {
     fn glyph(&self, c: char) -> &Glyph {
         // control codes 1 to 31 after the printable ones (the pixel font's cue arrows, tools/pixel_font.py)
@@ -43,7 +46,7 @@ impl Font {
         };
         match self.glyphs.get(i) {
             Some(g) => g,
-            None => &self.glyphs[usize::from(b'?' - 0x20)],
+            None => self.glyphs.get(usize::from(b'?' - 0x20)).unwrap_or(&BLANK),
         }
     }
 
@@ -201,7 +204,12 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
         let (font, g, k) = pick(style, face, ch);
         let g = &g;
         let w = u32::from(g.advance) * k;
-        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / k, py / k))]);
+        c.blit(x, y, w, style.height(), &mut |px, py| {
+            palette
+                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
+                .copied()
+                .unwrap_or(0)
+        });
         x += w;
     }
     width
@@ -228,7 +236,12 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
         if w == 0 {
             break;
         }
-        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / k, py / k))]);
+        c.blit(x, y, w, style.height(), &mut |px, py| {
+            palette
+                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
+                .copied()
+                .unwrap_or(0)
+        });
         x += w;
     }
     x
@@ -261,7 +274,14 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     }
     let g = &g;
     c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
-        palette[usize::from(font.coverage(g, (px + x0) / k, (py + y0) / k))]
+        palette
+            .get(usize::from(font.coverage(
+                g,
+                (px + x0).checked_div(k).unwrap_or(0),
+                (py + y0).checked_div(k).unwrap_or(0),
+            )))
+            .copied()
+            .unwrap_or(0)
     });
 }
 
@@ -331,7 +351,7 @@ impl<const N: usize> Line<N> {
     /// The text so far.
     pub fn as_str(&self) -> &str {
         // Only whole characters are ever stored (write_str), so this never fails.
-        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+        self.buf.get(..self.len).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("")
     }
 
     /// Empties it.
@@ -355,24 +375,23 @@ impl<const N: usize> Line<N> {
     /// ```
     pub fn push_u32(&mut self, v: u32) {
         let mut digits = [0u8; 10];
-        let mut i = digits.len();
-        let mut v = v;
-        loop {
-            i -= 1;
-            digits[i] = b'0' + (v % 10) as u8;
-            v /= 10;
+        let (mut v, mut n) = (v, 0);
+        for d in digits.iter_mut().rev() {
+            *d = b'0' + (v % 10) as u8;
+            (v, n) = (v / 10, n + 1);
             if v == 0 {
                 break;
             }
         }
-        self.push_str(core::str::from_utf8(&digits[i..]).unwrap_or(""));
+        let text = digits.get(digits.len() - n..).and_then(|d| core::str::from_utf8(d).ok());
+        self.push_str(text.unwrap_or(""));
     }
 
     /// Appends `v` mod 100 as two digits ("07", "42"): clocks, dates and the menus' values. It prints the value mod 100,
     /// so a two-digit field such as a valid day, month, hour or minute is never wider than two characters.
     pub fn push_2d(&mut self, v: u32) {
-        self.push_str(super::DIGITS[(v / 10 % 10) as usize]);
-        self.push_str(super::DIGITS[(v % 10) as usize]);
+        self.push_str(super::digit(v / 10));
+        self.push_str(super::digit(v));
     }
 }
 

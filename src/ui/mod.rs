@@ -76,13 +76,12 @@ pub const COG_COLOR: u16 = 0xc618;
 /// assert_eq!([grade_color(45), grade_color(150)], [ZONE_COLORS[1], ZONE_COLORS[4]]);
 /// ```
 pub fn grade_color(x10: i32) -> u16 {
-    use crate::ride::ZONE_COLORS;
-    ZONE_COLORS[match x10 {
+    crate::ride::palette(match x10 {
         ..60 => 1,
         60..90 => 2,
         90..120 => 3,
         _ => 4,
-    }]
+    })
 }
 
 /// Small text: labels. The pixel font at 2x, so its dots match Ferris' look.
@@ -216,6 +215,11 @@ pub fn draw_changed_chars(c: &mut impl Canvas, style: &Style, x: u32, y: u32, ol
 
 /// One-digit strings, to build numbers without core::fmt.
 pub const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+/// The decimal digit `d % 10` as text.
+pub fn digit(d: u32) -> &'static str {
+    DIGITS.get((d % 10) as usize).copied().unwrap_or("0")
+}
 
 /// A canvas that draws nothing: a screen's fingerprints (what it shows) without a panel.
 pub(crate) struct NullCanvas;
@@ -357,7 +361,7 @@ impl Canvas for Row {
     fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
         if y <= self.y && self.y < y + h {
             let end = (x + w).min(W) as usize;
-            for (i, p) in self.px[(x as usize).min(end)..end].iter_mut().enumerate() {
+            for (i, p) in self.px.get_mut((x as usize).min(end)..end).into_iter().flatten().enumerate() {
                 *p = px(i as u32, self.y - y);
             }
         }
@@ -569,7 +573,10 @@ pub const MENU_ROWS: usize = menu_rows(MENU_ROW);
 
 /// Rows a menu shows at row pitch `row` (6 at 44, 4 at 56).
 pub const fn menu_rows(row: u32) -> usize {
-    ((H - LIST_Y) / row) as usize
+    match (H - LIST_Y).checked_div(row) {
+        Some(n) => n as usize,
+        None => 0,
+    }
 }
 
 /// Where a tap goes back (as Back): the "<" at the left of a menu's title, a finger wide, from the strip's line to

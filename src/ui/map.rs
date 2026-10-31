@@ -107,6 +107,11 @@ const ARROW: i32 = 9;
 /// sin of the 16 compass directions (22.5 degrees apart, clockwise from north), x 256.
 const SIN16: [i32; 16] = [0, 98, 181, 237, 256, 237, 181, 98, 0, -98, -181, -237, -256, -237, -181, -98];
 
+/// `SIN16[i % 16]`.
+fn sin16(i: usize) -> i32 {
+    SIN16.get(i % 16).copied().unwrap_or(0)
+}
+
 /// cos and sin x 256 of map step `rot` (22.5 degrees clockwise from north, `View::rot`), exact at 0, 90, 180 and 270.
 ///
 /// ```
@@ -115,7 +120,7 @@ const SIN16: [i32; 16] = [0, 98, 181, 237, 256, 237, 181, 98, 0, -98, -181, -237
 /// ```
 pub fn rot_cs(rot: u8) -> (i32, i32) {
     let r = usize::from(rot % 16);
-    (SIN16[(r + 4) % 16], SIN16[r])
+    (sin16((r + 4) % 16), sin16(r))
 }
 
 /// A rectangle in screen pixels, signed so shapes may start off it: x, y, width, height.
@@ -272,7 +277,11 @@ impl Track {
         }
         if self.len == POINTS {
             for i in 0..POINTS / 2 {
-                self.pts[i] = self.pts[2 * i];
+                if let Some(&q) = self.pts.get(2 * i)
+                    && let Some(slot) = self.pts.get_mut(i)
+                {
+                    *slot = q;
+                }
             }
             self.len = POINTS / 2;
             self.step_m = self.step_m.saturating_mul(2);
@@ -388,7 +397,9 @@ impl View {
     fn fit_box(track: &Track, min: (i32, i32), max: (i32, i32), fw: i64, fh: i64) -> Option<View> {
         track.pos?;
         let (sx, sy) = (i64::from(max.0) - i64::from(min.0), i64::from(max.1) - i64::from(min.1));
-        let fits = |m: i64| sx * 16 / m <= fw && sy * 16 / m <= fh;
+        let fits = |m: i64| {
+            (sx * 16).checked_div(m).is_some_and(|v| v <= fw) && (sy * 16).checked_div(m).is_some_and(|v| v <= fh)
+        };
         let mpp16 = (FIT_LEVEL..MAX_LEVEL).map(mpp16).find(|&m| fits(m)).unwrap_or(mpp16(MAX_LEVEL));
         Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16, rot: 0 })
     }
@@ -402,7 +413,7 @@ impl View {
         // heading up, "ahead" is the top of the map, which may lag the heading by a step
         let dir = if track.up { usize::from(track.rot) } else { Arrow::dir(track.heading) };
         let at = |s: i32| (i64::from(s) * ahead / 256) as i32;
-        Some(View { cx: p.0 + at(SIN16[dir]), cy: p.1 + at(SIN16[(dir + 4) % 16]), mpp16, rot: track.rot })
+        Some(View { cx: p.0 + at(sin16(dir)), cy: p.1 + at(sin16((dir + 4) % 16)), mpp16, rot: track.rot })
     }
 
     /// Where point `p` (metres) falls on screen.
@@ -411,7 +422,7 @@ impl View {
         let (c, s) = rot_cs(self.rot);
         let (dx, dy) = (i64::from(p.0) - i64::from(self.cx), i64::from(p.1) - i64::from(self.cy));
         let (c, s) = (i64::from(c), i64::from(s));
-        let px = |m256: i64| (m256 * 16).div_euclid(self.mpp16 * 256) as i32;
+        let px = |m256: i64| (m256 * 16).checked_div_euclid(self.mpp16 * 256).unwrap_or(0) as i32;
         (area.0 + area.2 / 2 + px(dx * c - dy * s), area.1 + area.3 / 2 - px(dx * s + dy * c))
     }
 
@@ -467,7 +478,7 @@ impl Arrow {
     /// Its corners at `size` pixels from the centre: the tip ahead, the two others behind at +-135 degrees.
     fn corners(&self, size: i32) -> [(i32, i32); 3] {
         let at = |d: usize, len: i32| {
-            let (s, c) = (SIN16[d % 16], SIN16[(d + 4) % 16]);
+            let (s, c) = (sin16(d % 16), sin16((d + 4) % 16));
             (self.x + s * len / 256, self.y - c * len / 256) // screen y points south
         };
         [at(self.dir, size), at(self.dir + 6, size * 3 / 4), at(self.dir + 10, size * 3 / 4)]
@@ -599,7 +610,7 @@ pub fn pan(
     // clamped, but never moved against the drag: after "+" the range is smaller and a centre at its old edge is
     // outside it, where a small drag would have jumped back across (review of 6de15ed)
     let go = |old: i32, new: i32, lo: i32, hi: i32| {
-        let c = new.clamp(lo, hi);
+        let c = new.max(lo).min(hi);
         if (c - old).signum() * (new - old).signum() < 0 { old } else { c }
     };
     let cx = go(v.cx, v.cx.saturating_sub(m(dx)), min.0.saturating_sub(rx), max.0.saturating_add(rx));
@@ -724,7 +735,7 @@ fn triangle(c: &mut impl Canvas, k: Rect, v: [(i32, i32); 3], color: u16) {
         let (mut lo, mut hi) = (i32::MAX, i32::MIN);
         for (a, b) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])] {
             if a.1 != b.1 && a.1.min(b.1) <= y && y <= a.1.max(b.1) {
-                let x = a.0 + (b.0 - a.0) * (y - a.1) / (b.1 - a.1);
+                let x = a.0 + ((b.0 - a.0) * (y - a.1)).checked_div(b.1 - a.1).unwrap_or(0);
                 (lo, hi) = (lo.min(x), hi.max(x));
             }
         }

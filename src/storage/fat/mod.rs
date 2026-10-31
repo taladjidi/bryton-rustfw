@@ -167,7 +167,10 @@ impl Fat {
             return Err(Error::NotFat32);
         }
         // the FAT must hold an entry for every cluster
-        let clusters = ((total - data_start) / spc).min(fat_size.saturating_mul(SECTOR_U32 / 4).saturating_sub(2));
+        let clusters = (total - data_start)
+            .checked_div(spc)
+            .unwrap_or(0)
+            .min(fat_size.saturating_mul(SECTOR_U32 / 4).saturating_sub(2));
         let fsinfo = u32::from(u16_at(&s, 48)).min(reserved.saturating_sub(1));
         let fat = Fat {
             fat_start: reserved,
@@ -450,7 +453,7 @@ impl Fat {
         let n = f.size.saturating_sub(offset).min(u32::try_from(buf.len()).unwrap_or(u32::MAX));
         let cluster_bytes = self.spc * SECTOR_U32;
         let mut done = 0u32;
-        let mut index = offset / cluster_bytes;
+        let mut index = offset.checked_div(cluster_bytes).unwrap_or(0);
         let mut cluster = match (n, *seek) {
             (0, _) => 0,
             (_, Seek { index: at, cluster }) if cluster != 0 && at <= index => self.nth(d, cluster, index - at)?,
@@ -463,7 +466,7 @@ impl Fat {
                 index += 1;
             }
             *seek = Seek { index, cluster };
-            let in_cluster = pos % cluster_bytes;
+            let in_cluster = pos.checked_rem(cluster_bytes).unwrap_or(0);
             let lba = self.lba(cluster) + in_cluster / SECTOR_U32;
             let left = n - done;
             let rest = buf.get_mut(done as usize..n as usize).ok_or(Error::Corrupt)?;

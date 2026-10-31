@@ -306,15 +306,16 @@ impl Session {
         while !data.is_empty() {
             if let Some(l) = &mut self.load {
                 let n = data.len().min((l.size - l.got) as usize);
-                h.stage(l.got, &data[..n]);
-                for (i, &b) in data[..n].iter().enumerate() {
+                let (chunk, rest) = data.split_at_checked(n).unwrap_or((data, &[]));
+                h.stage(l.got, chunk);
+                for (i, &b) in chunk.iter().enumerate() {
                     if let Some(slot) = l.head.get_mut(l.got as usize + i) {
                         *slot = b;
                     }
                     l.acc = l.acc.wrapping_add(u32::from(b));
                 }
                 l.got += n as u32;
-                data = &data[n..];
+                data = rest;
                 if let Some(l) = self.load.take_if(|l| l.got == l.size) {
                     match check_image(&l.head, l.size) {
                         _ if l.acc != l.sum => h.send(b"err checksum\n"),
@@ -331,16 +332,16 @@ impl Session {
                 }
                 continue;
             }
-            let b = data[0];
-            data = &data[1..];
+            let Some((&b, rest)) = data.split_first() else { break };
+            data = rest;
             if b == b'\n' || b == b'\r' {
                 let effect = self.command(app, stats, h);
                 self.len = 0;
                 if effect != Effect::None {
                     return effect;
                 }
-            } else if self.len < self.line.len() {
-                self.line[self.len] = b;
+            } else if let Some(slot) = self.line.get_mut(self.len) {
+                *slot = b;
                 self.len += 1;
             }
         }
@@ -348,7 +349,7 @@ impl Session {
     }
 
     fn command(&mut self, app: &App, stats: Stats, h: &mut impl Host) -> Effect {
-        let line = &self.line[..self.len];
+        let line = self.line.get(..self.len).unwrap_or(&[]);
         let mut words = line.split(|&c| c == b' ').filter(|w| !w.is_empty());
         match words.next() {
             None => {}
@@ -488,7 +489,7 @@ impl Session {
                 let get = cmd == b"get";
                 let path = words.next().unwrap_or(b"/");
                 let n = path.len().min(self.path.len());
-                self.path[..n].copy_from_slice(&path[..n]);
+                self.path.iter_mut().zip(path).for_each(|(o, &c)| *o = c);
                 self.path_len = n;
                 if !get {
                     return Effect::Ls;
@@ -545,11 +546,11 @@ impl Session {
 /// The checks tools/pack.py makes, so a bad upload never runs: tag "R" + 3 digits at 0x94, size word at 0x98, initial
 /// SP in DTCM, Thumb reset vector inside the image.
 pub fn check_image(head: &[u8], size: u32) -> Result<(), &'static str> {
-    let word = |o: usize| head.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let word = |o: usize| head.get(o..o + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
     let (Some(sp), Some(reset), Some(size_word)) = (word(0), word(4), word(0x98)) else {
         return Err("short image");
     };
-    if !(head[0x94] == b'R' && head[0x95..0x98].iter().all(u8::is_ascii_digit)) {
+    if !matches!(head.get(0x94..0x98), Some([b'R', d @ ..]) if d.iter().all(u8::is_ascii_digit)) {
         return Err("no R### tag at 0x94");
     }
     if size_word != size {
@@ -572,7 +573,7 @@ fn bench_reads(app: &mut App, b: &mut impl crate::Board, lba: u32, n: u32, count
     let len = (n as usize * emmc::SECTOR).min(buf.len());
     let t = b.awake_us();
     for k in 0..count {
-        app.emmc().read(b, lba + k * n, &mut buf[..len])?;
+        app.emmc().read(b, lba + k * n, buf.get_mut(..len).unwrap_or_default())?;
     }
     Ok(b.awake_us().wrapping_sub(t))
 }
@@ -636,8 +637,8 @@ impl App {
 pub fn send_sector(h: &mut impl Host, r: Result<&[u8; emmc::SECTOR], emmc::Error>) {
     match r {
         Ok(data) => {
-            for chunk in data.chunks_exact(4) {
-                let w = hex(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            for &chunk in data.as_chunks::<4>().0 {
+                let w = hex(u32::from_be_bytes(chunk));
                 h.send(&w[..8]);
             }
             h.send(b"\n");
@@ -687,14 +688,15 @@ pub fn find_sectors(
     let end = lba.saturating_add(count);
     while at < end && lines < 512 {
         let n = (end - at).min(16);
-        let chunk = &mut buf[..n as usize * emmc::SECTOR];
+        let chunk = buf.get_mut(..n as usize * emmc::SECTOR).unwrap_or_default();
         if let Err(e) = read(at, chunk) {
             return send_error(h, e);
         }
         for (k, sector) in chunk.chunks_exact(emmc::SECTOR).enumerate() {
-            let hits =
-                sector.windows(4).filter(|w| (lo..=hi).contains(&u32::from_le_bytes([w[0], w[1], w[2], w[3]]))).count()
-                    as u32;
+            let hits = sector
+                .windows(4)
+                .filter(|&w| <[u8; 4]>::try_from(w).is_ok_and(|a| (lo..=hi).contains(&u32::from_le_bytes(a))))
+                .count() as u32;
             if hits >= 8 && lines < 512 {
                 h.send(&hex(at + k as u32)[..8]);
                 h.send(b" ");
@@ -743,14 +745,14 @@ pub fn send_get(h: &mut impl Host, d: &mut impl crate::fat::Disk, path: &str, of
         Ok(n) => n,
         Err(_) => return h.send(b"err not found or unreadable\n"),
     };
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     for chunk in buf.get(..n).unwrap_or(&[]).chunks(64) {
         let mut line = [0u8; 128];
-        for (i, &b) in chunk.iter().enumerate() {
-            line[2 * i] = DIGITS[usize::from(b >> 4)];
-            line[2 * i + 1] = DIGITS[usize::from(b & 15)];
+        for (pair, &b) in line.chunks_exact_mut(2).zip(chunk) {
+            if let [hi, lo] = pair {
+                (*hi, *lo) = (digit(b >> 4), digit(b & 15));
+            }
         }
-        h.send(&line[..2 * chunk.len()]);
+        h.send(line.get(..2 * chunk.len()).unwrap_or(&[]));
     }
     h.send(b"\n");
 }
@@ -859,20 +861,27 @@ fn parse(w: &[u8]) -> Option<u32> {
 /// `v` as 8 hex digits and a newline.
 fn hex(v: u32) -> [u8; 9] {
     let mut out = [b'\n'; 9];
-    for (i, d) in out[..8].iter_mut().enumerate() {
-        *d = b"0123456789abcdef"[(v >> (28 - 4 * i)) as usize & 0xf];
+    for (i, d) in out.iter_mut().take(8).enumerate() {
+        *d = digit((v >> (28 - 4 * i)) as u8);
     }
     out
+}
+
+/// The hex digit of the low 4 bits of `n`.
+fn digit(n: u8) -> u8 {
+    b"0123456789abcdef".get(usize::from(n & 15)).copied().unwrap_or(b'0')
 }
 
 fn decimal(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
     let mut i = buf.len();
     loop {
         i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
+        if let Some(s) = buf.get_mut(i) {
+            *s = b'0' + (v % 10) as u8;
+        }
         v /= 10;
         if v == 0 {
-            return &buf[i..];
+            return buf.get(i..).unwrap_or_default();
         }
     }
 }

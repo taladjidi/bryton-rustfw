@@ -209,7 +209,7 @@ impl App {
             }
         }
         for kind in Kind::ALL {
-            let want = open[kind as usize];
+            let want = open.at(kind);
             let id = match want {
                 Sensor::Paired(id) => Some(id),
                 _ => None,
@@ -225,11 +225,11 @@ impl App {
                     Err(_) => continue, // owed: asked for again
                 };
             if opened {
-                self.radio.sensors[kind as usize] = want;
+                *self.radio.sensors.at_mut(kind) = want;
             }
             // opened, refused or impossible (no Shimano key): not owed. Only a link that does not answer is.
             if self.ant || self.watch.refused {
-                self.watch.owed[kind as usize] = Sensor::Off;
+                *self.watch.owed.at_mut(kind) = Sensor::Off;
             }
         }
         if self.watch.refused && !was_refused {

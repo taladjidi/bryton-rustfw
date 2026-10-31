@@ -412,7 +412,10 @@ impl App {
         match f {
             // the editor shows the field the rider picked
             Field::Power3s | Field::Power10s | Field::Power30s if !matches!(self.screen, Screen::Edit(..)) => {
-                [Field::Power3s, Field::Power10s, Field::Power30s][self.settings.wkt_avg.min(2)]
+                [Field::Power3s, Field::Power10s, Field::Power30s]
+                    .get(self.settings.wkt_avg.min(2))
+                    .copied()
+                    .unwrap_or(Field::Power3s)
             }
             f => f,
         }

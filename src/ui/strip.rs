@@ -123,7 +123,7 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
     let hm = |s: &Strip| {
         let mut l = text::Line::<8>::new();
         for d in [s.time.0 / 10, s.time.0 % 10, 10, s.time.1 / 10, s.time.1 % 10] {
-            l.push_str(if d == 10 { ":" } else { DIGITS[usize::from(d % 10)] });
+            l.push_str(if d == 10 { ":" } else { crate::ui::digit(u32::from(d)) });
         }
         l
     };

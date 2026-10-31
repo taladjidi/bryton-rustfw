@@ -70,15 +70,13 @@ impl Rec {
         s[4] = u8::from(self.pending);
         s[5..17].copy_from_slice(&self.name);
         s[17] = self.suffix;
-        for (k, f) in self.files.iter().enumerate() {
-            if let Some((first, size, crc)) = f {
-                let at = 32 + 16 * k;
-                s[at] = 2;
-                s[at + 4..at + 8].copy_from_slice(&first.to_le_bytes());
-                s[at + 8..at + 12].copy_from_slice(&size.to_le_bytes());
-                s[at + 12] = u8::from(crc.is_some());
-                s[at + 14..at + 16].copy_from_slice(&crc.unwrap_or(0).to_le_bytes());
-            }
+        for (slot, f) in s[32..].chunks_exact_mut(16).zip(&self.files) {
+            let (Some((first, size, crc)), Ok(slot)) = (f, <&mut [u8; 16]>::try_from(slot)) else { continue };
+            slot[0] = 2;
+            slot[4..8].copy_from_slice(&first.to_le_bytes());
+            slot[8..12].copy_from_slice(&size.to_le_bytes());
+            slot[12] = u8::from(crc.is_some());
+            slot[14..16].copy_from_slice(&crc.unwrap_or(0).to_le_bytes());
         }
         let crc = crate::fit::crc(0, &s[..SECTOR - 2]);
         s[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
@@ -89,10 +87,11 @@ impl Rec {
         if s[..4] != TAG || crate::fit::crc(0, &s[..SECTOR - 2]).to_le_bytes() != s[SECTOR - 2..] {
             return None;
         }
-        let word = |i: usize| u32::from_le_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
+        let word = |i: usize| u32::from_le_bytes(super::take(s, i));
         let file = |k: usize| {
-            let (at, flag) = (32 + 16 * k, s[32 + 16 * k]);
-            let crc = (flag == 2 && s[at + 12] == 1).then(|| u16::from_le_bytes([s[at + 14], s[at + 15]]));
+            let at = 32 + 16 * k;
+            let flag = *s.get(at)?;
+            let crc = (flag == 2 && s.get(at + 12) == Some(&1)).then(|| u16::from_le_bytes(super::take(s, at + 14)));
             matches!(flag, 1 | 2).then(|| (word(at + 4), word(at + 8), crc))
         };
         let mut name = [0u8; 12];
@@ -105,18 +104,21 @@ impl Rec {
 fn file_name<'a>(name: &[u8; 12], suffix: u8, out: &'a mut [u8; 20]) -> Result<&'a str, Error> {
     out[..12].copy_from_slice(name);
     let mut n = 12;
+    let mut put = |bytes: &[u8]| -> Result<(), Error> {
+        let end = n + bytes.len();
+        out.get_mut(n..end).ok_or(Error::Corrupt)?.copy_from_slice(bytes);
+        n = end;
+        Ok(())
+    };
     if suffix > 0 {
-        out[n] = b'-';
-        n += 1;
+        put(b"-")?;
         if suffix >= 10 {
-            out[n] = b'0' + suffix / 10 % 10;
-            n += 1;
+            put(&[b'0' + suffix / 10 % 10])?;
         }
-        out[n] = b'0' + suffix % 10;
-        n += 1;
+        put(&[b'0' + suffix % 10])?;
     }
-    out[n..n + 4].copy_from_slice(b".fit");
-    core::str::from_utf8(out.get(..n + 4).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)
+    put(b".fit")?;
+    core::str::from_utf8(out.get(..n).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)
 }
 
 /// `\Rustfw\delete.rec`, made (one sector) if missing.
@@ -195,13 +197,13 @@ pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), 
     let name = name.ok_or(Error::NotFound)?;
     let mut buf = [0u8; 20];
     let mut files = [None; 2];
-    for (k, from) in FROM.iter().enumerate() {
+    for (slot, from) in files.iter_mut().zip(FROM.iter()) {
         let dir = match fat.open(d, from) {
             Ok(dir) => dir,
             Err(Error::NotFound) => continue, // no full copies at all
             Err(e) => return Err(e),
         };
-        files[k] = match fat.locate(d, dir, file_name(&name, 0, &mut buf)?) {
+        *slot = match fat.locate(d, dir, file_name(&name, 0, &mut buf)?) {
             Ok(h) => Some((h.first, h.size, first_crc(&mut fat, d, &h)?)),
             Err(Error::NotFound | Error::Refused) => None,
             Err(e) => return Err(e),
@@ -266,13 +268,13 @@ fn finish_on(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Opt
 fn moves(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, t: (u16, u16)) -> Result<(), Error> {
     let mut buf = [0u8; 20];
     for k in 0..2 {
-        let (Some((first, size, crc)), Some(from)) = (r.files[k], FROM.get(k)) else { continue };
+        let (Some((first, size, crc)), Some(from)) = (r.files.get(k).copied().flatten(), FROM.get(k)) else { continue };
         let dst = to_dir(fat, d, k, t)?;
         match fat.find(d, dst, file_name(&r.name, r.suffix, &mut buf)?) {
             Ok(f) if f.cluster == first => continue, // moved already
             Ok(_) => {
                 // a name taken since (by a computer): another suffix, free in both folders, recorded first
-                for j in (0..2).filter(|&j| r.files[j].is_some()) {
+                for j in (0..2).filter(|&j| r.files.get(j).is_some_and(Option::is_some)) {
                     to_dir(fat, d, j, t)?;
                 }
                 r.suffix = free_suffix(fat, d, r, r.suffix)?;

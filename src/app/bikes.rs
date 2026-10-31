@@ -10,6 +10,10 @@
 //! ([`App::ride_settled`]), by a build that may write the card, its two copies in this firmware's own folder, the
 //! FAT copies compared first after a write that failed. A read that fails for any reason but "no file" is tried
 //! again, and nothing is changed or counted until it succeeds: a first copy is never written beside a newer one.
+//! The file is never made here (nor made whole): a ride's start makes it, zeroed (storage/recorder/mod.rs `make_kept`,
+//! so no write between rides touches `\Rustfw`'s directory sector). Without it a change waits for the next ride
+//! (`no_file`), and the settings do not wait for it; ACTIVE BIKE, SERVICE EVERY and RESET are refused until then
+//! ("START A RIDE FIRST"): a reboot before that ride migrates again from the settings, which would undo them.
 //!
 //! **The migration** (no file, or no whole copy): BIKE 1 gets the settings' wheel, weight, chainrings and cassette and
 //! its ODOMETER; BIKE 2 and 3 the defaults. `settings.bin` and the backup registers are left as they are (they keep
@@ -22,7 +26,8 @@
 //! ride is open: then the settings' (a WHEEL changed during the ride, kept by the registers over a reset) stay and go
 //! to the active bike. Nothing is read while a ride waits to be resumed.
 //! `bikes.bin` is written before `settings.bin` (the settings wait while it is due), so a power cut between the two
-//! writes leaves the newer in the bikes' file, which wins.
+//! writes leaves the newer in the bikes' file, which wins; except on a card without bikes.bin, where the settings go
+//! alone (the bikes then migrate from them).
 //!
 //! **The rides** are counted from the ride scan's list when a scan has ended with a list not counted yet (its
 //! revision, so a scan that ends within a pass is not missed; [`bikes::Bikes::count`], idempotent: the mark and the
@@ -78,9 +83,9 @@ impl App {
         self.bikes.as_deref().filter(|s| s.file.loaded).map(|s| &s.list)
     }
 
-    /// A change to the bikes waits to be written (the settings wait for it: module doc).
+    /// A change to the bikes waits to be written (the settings wait for it: module doc), the file there.
     pub(crate) fn bikes_due(&self) -> bool {
-        self.bikes.as_deref().is_some_and(|s| s.file.loaded && s.file.dirty)
+        self.bikes.as_deref().is_some_and(|s| s.file.loaded && s.file.dirty && !s.file.no_file)
     }
 
     /// The file read when the settings' is, the active bike kept as the settings, the rides counted at a scan's end,
@@ -101,7 +106,9 @@ impl App {
             if count { from_epoch_s(epoch_s(self.rec_local()) + 86_400) } else { Default::default() };
         let (gear, writable) = (bikes::Gear::of(&self.settings), self.card_writable);
         let index = &self.stock.index;
+        let settled = self.ride_settled();
         let Some(st) = self.bikes.as_deref_mut().filter(|s| s.file.loaded) else { return };
+        st.file.no_file &= settled; // a ride's start makes the file: tried again once it is over
         if st.list.active().gear != gear {
             st.list.active_mut().gear = gear; // an edit in BIKE
             st.file.dirty |= writable;
@@ -119,7 +126,7 @@ impl App {
         if let Some(p) = due {
             self.part_notice(&st.list, p);
         }
-        if writable && st.file.dirty && self.ride_settled() && self.fats_ready(b, CopyFile::Bikes) {
+        if writable && st.file.dirty && !st.file.no_file && settled && self.fats_ready(b, CopyFile::Bikes) {
             self.save_bikes(b);
         }
     }
@@ -171,7 +178,7 @@ impl App {
         }
     }
 
-    /// Writes the bikes over the file's older copy (the file created with both if needed).
+    /// Writes the bikes over the file's older copy (never made here: module doc).
     fn save_bikes(&mut self, b: &mut impl Board) {
         let Some(st) = self.bikes.as_deref() else { return };
         let seq = st.file.seq.wrapping_add(1);
@@ -193,8 +200,15 @@ impl App {
         let loaded = self.bikes().is_some();
         if !loaded {
             self.say(if self.emmc.lent() { "USB DRIVE ON" } else { "BIKES NOT READ" });
+            return false;
         }
-        loaded
+        // no file to keep the change (a ride's start makes it): a reboot would migrate again from the settings,
+        // undoing a switch (BIKE 1 taking BIKE 2's gear), so nothing is changed until then (module doc)
+        if self.bikes.as_deref().is_some_and(|s| s.file.no_file) {
+            self.say("START A RIDE FIRST");
+            return false;
+        }
+        true
     }
 
     /// The bikes changed by the rider: written at the next pass.

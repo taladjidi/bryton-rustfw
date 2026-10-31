@@ -81,7 +81,7 @@ pub fn window(s: &str, w: u32, tick: u32) -> &str {
     }
     // the first character whose tail fits: the scroll's last position
     let last = s.char_indices().position(|(i, _)| s.get(i..).is_some_and(|t| LABEL.width(t) <= w)).unwrap_or(0);
-    let t = tick as usize % (last + 2 * HOLD - 1);
+    let t = (tick as usize).checked_rem(last + 2 * HOLD - 1).unwrap_or(0);
     let k = t.saturating_sub(HOLD - 1).min(last);
     s.char_indices().nth(k).and_then(|(i, _)| s.get(i..)).unwrap_or(s)
 }

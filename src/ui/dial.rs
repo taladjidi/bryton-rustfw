@@ -75,8 +75,10 @@ fn step_of(x: i32, y: i32) -> u32 {
 /// The point at radius `r` on the border of step `s` (0 to 48), relative to the centre, x right and y up.
 fn edge(s: u32, r: i32) -> (i32, i32) {
     let (t, k) = ((s % 6) as i32, (s % RING_STEPS) / 6);
-    let (vx, vy) =
-        [(t, 6), (6, 6 - t), (6, -t), (6 - t, -6), (-t, -6), (-6, t - 6), (-6, t), (t - 6, 6)][k as usize % 8];
+    let (vx, vy) = [(t, 6), (6, 6 - t), (6, -t), (6 - t, -6), (-t, -6), (-6, t - 6), (-6, t), (t - 6, 6)]
+        .get(k as usize % 8)
+        .copied()
+        .unwrap_or((0, 0));
     let (vx, vy) = (vx * 64, vy * 64); // the root of a small number is coarse
     let n = ((vx * vx + vy * vy) as u32).isqrt().max(1) as i32;
     (vx * r / n, vy * r / n)
@@ -119,10 +121,10 @@ fn ring_paint(
 ) {
     let (vx, vy, vw, vh) = ring_value_box(rg);
     let (bx0, bx1, by0, by1) = (
-        vx.clamp(x, x + w),
-        (vx + vw).clamp(x, x + w),
-        (vy + FIELD_LABEL_H).clamp(y, y + h),
-        (vy + vh).clamp(y, y + h),
+        vx.max(x).min(x + w),
+        (vx + vw).max(x).min(x + w),
+        (vy + FIELD_LABEL_H).max(y).min(y + h),
+        (vy + vh).max(y).min(y + h),
     );
     let mut paint = |x: u32, y: u32, w: u32, h: u32| {
         if w > 0 && h > 0 {
@@ -163,7 +165,7 @@ pub fn draw_dial(
 /// Columns `from` to `to` of the bar, those under `level` in `color`, the rest dark.
 fn draw_bar(c: &mut impl Canvas, (x, y, _, h): (u32, u32, u32, u32), color: u16, (from, to): (u32, u32), level: u32) {
     let top = (y + h).saturating_sub(BAR_GAP + BAR_H);
-    let lit = level.clamp(from, to);
+    let lit = level.max(from).min(to);
     c.fill(x + BAR_SIDE + from, top, lit - from, BAR_H, color);
     c.fill(x + BAR_SIDE + lit, top, to - lit, BAR_H, DARK);
 }

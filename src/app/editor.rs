@@ -102,6 +102,12 @@ impl CopyFile {
         }
     }
 
+    /// Its writer makes it when it is missing (pages, settings); bikes.bin and places.bin are made at a ride's start
+    /// only (recorder/mod.rs `make_kept`), so no write between rides touches `\Rustfw`'s directory sector.
+    fn makes(self) -> bool {
+        matches!(self, CopyFile::Pages | CopyFile::Settings)
+    }
+
     /// The notice when a write of it failed.
     fn not_saved(self) -> &'static str {
         match self {
@@ -277,7 +283,12 @@ impl App {
     pub(crate) fn load_copies(&mut self, b: &mut impl Board, f: CopyFile, file: &mut [u8; 1024]) -> Option<bool> {
         let read = self.read_copies(b, f.name(), file);
         let suspect = self.fats_suspect;
-        self.copies(f)?.read(read, f == CopyFile::Pages, suspect)
+        let st = self.copies(f)?;
+        let whole = st.read(read, f == CopyFile::Pages, suspect);
+        if let Some(whole) = whole.filter(|_| !f.makes()) {
+            st.no_file = !whole; // written once a ride's start has made it
+        }
+        whole
     }
 
     /// File `f` may be written now: the FAT copies known equal, else compared over the next passes first (from its
@@ -302,19 +313,26 @@ impl App {
         }
     }
 
-    /// `sector`, copy number `seq`, written over file `f`'s older copy (the file created with both if needed), its
-    /// change no longer waiting: Some(true) written, Some(false) failed (said, and the FAT copies compared before the
-    /// next write), None no volume (a card stock never formatted, the tests' blank one: nothing to say).
+    /// `sector`, copy number `seq`, written over file `f`'s older copy (the file created with both if needed and
+    /// [`CopyFile::makes`] it), its change no longer waiting: Some(true) written, Some(false) failed (said, and the
+    /// FAT copies compared before the next write), None no volume (a card stock never formatted, the tests' blank
+    /// one: nothing to say), or no whole file that is not made here (the change waits for a ride's start: `no_file`).
     pub(crate) fn save_copy(&mut self, b: &mut impl Board, f: CopyFile, seq: u32, sector: &[u8; 512]) -> Option<bool> {
         if let Some(st) = self.copies(f) {
             st.dirty = false; // once: a failure is said, and tried again at the next change
         }
-        let r = self.write_copy(b, f.name(), seq % 2, sector)?;
+        let r = self.write_copy(b, f.name(), seq % 2, sector, f.makes())?;
         match r {
             Ok(()) => {
                 if let Some(st) = self.copies(f) {
                     (st.seq, st.sound) = (seq, true);
                 }
+            }
+            Err(fat::Error::NotFound) if !f.makes() => {
+                if let Some(st) = self.copies(f) {
+                    (st.dirty, st.no_file) = (true, true); // nothing written: after the next ride's start
+                }
+                return None;
             }
             Err(_) => {
                 self.fats_unsure();
@@ -343,21 +361,28 @@ impl App {
     }
 
     /// Copy `slot` (0 or 1) of `\Rustfw\<name>` written with `sector`, the other untouched; the file created (or
-    /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]). None: no volume.
+    /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]), only if `make`: else nothing
+    /// written and `NotFound` unless it is whole (bikes.bin, places.bin: made at a ride's start, recorder/mod.rs
+    /// `make_kept`, so no later write touches `\Rustfw`'s directory sector). None: no volume.
     pub(crate) fn write_copy(
         &mut self,
         b: &mut impl Board,
         name: &str,
         slot: u32,
         sector: &[u8; 512],
+        make: bool,
     ) -> Option<Result<(), fat::Error>> {
         let t = fat::write::dos_time(self.rec_time().0);
         let mut d = emmc::Volume(&mut self.emmc, b);
         let mut fat = fat::Fat::mount(&mut d).ok()?;
-        Some(
-            fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)
-                .and_then(|dir| write_copy_in(&mut fat, &mut d, dir, name, slot, sector, t)),
-        )
+        let dir =
+            if make { fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t) } else { fat.open(&mut d, recorder::DIR) };
+        Some(dir.and_then(|dir| {
+            if !make && fat.locate(&mut d, dir, name)?.size != 1024 {
+                return Err(fat::Error::NotFound);
+            }
+            write_copy_in(&mut fat, &mut d, dir, name, slot, sector, t)
+        }))
     }
 
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
@@ -391,14 +416,14 @@ impl App {
         };
         self.store.file.seq = s.seq;
         let boot = self.store.boot;
-        let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| (i < s.count).then_some(s.pages[i]));
+        let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| s.pages.get(i).copied().filter(|_| i < s.count));
         let mut more_in = s.more;
         let mut meta_ok = true; // names and OFF bits belong to the file's pages
         if self.store.newer || (boot != s.words && boot != s.was) {
             // changes the file did not get (a switch-off before it was written), or another build changed the
             // registers since: the registers' pages win where they differ from the file's
             for (i, (now, then)) in boot.chunks_exact(2).zip(s.words.chunks_exact(2)).enumerate() {
-                let w = [now[0], now[1]];
+                let Ok(w) = <[u32; 2]>::try_from(now) else { continue };
                 if now != then
                     && let Some(c) = PageCfg::from_words(w)
                     && let Some(slot) = list.get_mut(i)
@@ -462,7 +487,7 @@ impl App {
         was[1] &= !PAGES_NEWER;
         let s = Saved {
             seq: self.store.file.seq.wrapping_add(1),
-            pages: core::array::from_fn(|i| self.pages[i]),
+            pages: core::array::from_fn(|i| self.pages.get(i).copied().unwrap_or(self.pages[0])),
             count: self.page_count,
             words: register_words(&self.pages, self.page_count),
             was,
@@ -685,8 +710,8 @@ impl App {
         let new = Page::preset(4, [Speed, Timer, Dist, Hr, Time, Time, Time, Time]).unwrap_or(BLANK);
         let (pages, count, more) = self.set_mut(which);
         let at = at.min(*count);
-        pages.copy_within(at..PAGES - 1, at + 1);
-        more.copy_within(at..PAGES - 1, at + 1);
+        crate::storage::move_within(pages, at..PAGES - 1, at + 1);
+        crate::storage::move_within(more, at..PAGES - 1, at + 1);
         if let (Some(p), Some(m)) = (pages.get_mut(at), more.get_mut(at)) {
             (*p, *m) = (new, None);
         }
@@ -709,8 +734,8 @@ impl App {
         let which = self.view_set();
         let (pages, count, more) = self.set_mut(which);
         if e.page < *count && *count > 1 {
-            pages.copy_within(e.page + 1..PAGES, e.page);
-            more.copy_within(e.page + 1..PAGES, e.page);
+            crate::storage::move_within(pages, e.page + 1..PAGES, e.page);
+            crate::storage::move_within(more, e.page + 1..PAGES, e.page);
             more[PAGES - 1] = None;
             *count -= 1;
             if which == ride::Profile::Road {
@@ -731,9 +756,10 @@ impl App {
         }
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         let order = ui::LAYOUT_ORDER;
-        let at = p.preset_id().and_then(|id| order.iter().position(|&l| l == id)).unwrap_or(order.len() - 1);
+        let at =
+            p.preset_id().and_then(|id| order.iter().position(|&l| l == id)).unwrap_or(order.len().saturating_sub(1));
         let next = (1..=order.len())
-            .filter_map(|d| Page::preset(order[(at + d) % order.len()], p.fields))
+            .filter_map(|d| Page::preset(*order.get((at + d) % order.len())?, p.fields))
             .find(|q| q.misfits() == 0);
         let which = self.view_set();
         if let (Some(q), Some(slot)) = (next, self.set_mut(which).0.get_mut(n)) {

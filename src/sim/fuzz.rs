@@ -1074,6 +1074,7 @@ fn ride_scan_on_a_damaged_volume() {
     let img = crate::fat::tests::image();
     let mut noise = bytes(5, 1 << 20);
     let mut scan = crate::stock::Scan::new();
+    let (mut found, mut cards, mut runs) = (0usize, 0u32, 0u32);
     for _ in 0..40 {
         let mut bad = img.clone();
         for _ in 0..64 {
@@ -1091,17 +1092,22 @@ fn ride_scan_on_a_damaged_volume() {
         }
         // and each ride it found opened as a card (the volume as damaged)
         let mut past = crate::history::Past::new();
+        runs += 1;
+        found += scan.index.len();
         for i in 0..scan.index.len() {
             let r = *scan.index.get(i).unwrap();
             past.start(&r, 250, true);
             for _ in 0..1000 {
                 if past.step(&mut d, 1 << 16).is_some() {
+                    cards += 1;
                     break;
                 }
             }
             assert!(!past.reading(), "a card is read in 64 MB at most");
         }
     }
+    std::println!("ride scan: {runs} scans, {found} rides found, {cards} cards read");
+    assert!(runs > 0 && found > 0 && cards > 0, "reached: {runs} {found} {cards}");
 }
 
 /// Random and damaged caches of the ride scan (`\Rustfw\scan.bin`, storage/stock.rs `Cache`) on the synthetic
@@ -4689,6 +4695,90 @@ fn recovery_records() {
     }
 }
 
+/// The trainer sector (`\\Rustfw\\sensors.bin`: the ANT+ trainer and the Bluetooth one) through the same cuts as the
+/// recovery records: intact, damaged, random. Both readers answer Some and None over the seeds.
+#[test]
+fn sensor_sectors() {
+    let mut next = xorshift(0x5e45);
+    let (mut ant, mut bt) = ([0u32; 4], [0u32; 4]);
+    for _ in 0..4000 {
+        let id =
+            (!next().is_multiple_of(4)).then(|| crate::nrf::SensorId { device: next() as u16, trans: next() as u8 });
+        let addr: [u8; 7] = core::array::from_fn(|_| next() as u8);
+        let fec = next().is_multiple_of(2);
+        let with_bt = !next().is_multiple_of(3);
+        let s = crate::sensors::sector(id, with_bt.then_some(addr), fec);
+        recovery_sectors(&mut next, &id, s, crate::sensors::from_sector, &mut ant);
+        if with_bt {
+            recovery_sectors(&mut next, &(addr, fec), s, crate::sensors::bt_from_sector, &mut bt);
+        }
+    }
+    std::println!("sensor sectors: ANT {ant:?}, BT {bt:?} (intact, damaged, random, accepted)");
+    for c in [ant, bt] {
+        assert!(c[1] - c[3] > 100 && c[3] > 100 && c[2] > 100, "reached: {c:?}");
+    }
+}
+
+/// The 32 backup registers at a start (`App::start`: the pages, the sensors, the GNSS aid, the fault marker 29, the
+/// ride marker 30, the USB snapshot): each register is 0, a word with a tag some decoder knows and a random payload,
+/// a word with a wrong tag, or fully random. A panic here is a reset loop; the counts say each decoder was reached.
+#[test]
+fn backup_registers_at_start() {
+    use super::Sim;
+    use super::tests::run;
+    use crate::{FAULT_BKP, PAGE_BKP, PAGE_BKP_B, RIDE_BKP, RIDE_OPEN};
+    const TAGS: [u32; 12] = [0xa5, 0xa6, 0xab, 0xac, 0xfa, 0x61, 0x62, 0x63, 0xc1, 0xc2, 0xa0, 0xb0];
+    let (mut pages_ok, mut pages_bad, mut fault, mut resume, mut wheel_ok, mut wheel_bad) =
+        (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
+    for seed in 1..=150u32 {
+        let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9) | 1);
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        for r in 0..32 {
+            sim.backup[r] = match next() % 8 {
+                0 | 1 => 0,
+                2..=4 => TAGS[next() as usize % TAGS.len()] << 24 | next() & 0x00ff_ffff,
+                5 => (next() & 0xff) << 24 | next() & 0x00ff_ffff, // mostly a wrong tag
+                6 => next(),
+                _ => (next() & 0xf) << 28 | next() & 0x0fff_ffff,
+            };
+        }
+        sim.backup[RIDE_BKP] = [RIDE_OPEN, 0, next()][next() as usize % 3];
+        // a page as the app saves it (intact or with one bit flipped), in either of its two layouts
+        if next().is_multiple_of(2) {
+            let w = crate::DEFAULT_PAGES[next() as usize % crate::DEFAULT_PAGES.len()].to_words();
+            let regs = if next().is_multiple_of(2) { PAGE_BKP[0] } else { PAGE_BKP_B[0] };
+            for (r, w) in regs.into_iter().zip(w) {
+                sim.backup[r] = if next().is_multiple_of(3) { w ^ 1 << (next() % 32) } else { w };
+            }
+        }
+        if next().is_multiple_of(6) {
+            sim.backup[FAULT_BKP] = 0xfa << 24 | next() & 0xff;
+        }
+        let pg = PAGE_BKP[0].map(|r| sim.backup[r]);
+        if crate::PageCfg::from_words(pg).is_some() {
+            pages_ok += 1
+        } else {
+            pages_bad += 1
+        }
+        fault += u32::from(sim.backup[FAULT_BKP] >> 24 == 0xfa);
+        if matches!(sim.backup[crate::WHEEL_BKP] >> 24, 0xa5..=0xac) {
+            wheel_ok += 1
+        } else {
+            wheel_bad += 1
+        }
+        let open = sim.backup[RIDE_BKP] == RIDE_OPEN;
+        let mut app = crate::App::start(&mut sim, None);
+        resume += u32::from(app.rec.resume_pending && open);
+        run(&mut sim, &mut app, 3_000);
+        assert!(app.page_count >= 1, "seed {seed}: no page");
+    }
+    std::println!(
+        "backup registers: pages {pages_ok}/{pages_bad}, wheel {wheel_ok}/{wheel_bad}, fault {fault}, resume {resume}"
+    );
+    assert!([pages_ok, pages_bad, fault, resume, wheel_ok, wheel_bad].iter().all(|&n| n >= 10));
+}
+
 /// A live segment file (nav/segment.rs) generated from its layout: the header and the data section with random
 /// counts, target codes (some not stock's), times (some falling, some past a u16), a FIT course of the same points,
 /// one record more or fewer, without positions or off the globe. Then cut, flipped, its fields set to wild values,
@@ -5289,16 +5379,24 @@ fn fault_log_files() {
     }
     let base = crate::fat::tests::image();
     let t = (0, 0);
-    let (mut created, mut appended, mut rotated) = (0, 0, 0);
+    let (mut created, mut appended, mut rotated, mut no_folder) = (0, 0, 0, 0);
     for seed in 1..=300u32 {
         let mut r = xorshift(seed);
         let mut d = Ram(base.clone(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let top = fat.ensure_dir(&mut d, fat.root(), crate::recorder::DIR, t).unwrap();
         let mut size = None;
+        // the folder a ride's start makes (recorder `make_kept`): without it, nothing written
+        if seed % 8 == 0 {
+            let before = d.0.clone();
+            assert_eq!(append(&mut fat, &mut d, top, b"x\n", t), Err(crate::fat::Error::NotFound), "seed {seed}");
+            assert!(d.0 == before, "seed {seed}: written without the folder");
+            no_folder += 1;
+            continue;
+        }
+        let dir = fat.ensure_dir(&mut d, top, LOG_DIR, t).unwrap();
         if seed % 4 != 0 {
             // a log there: some sectors of anything, then a size in its entry
-            let dir = fat.ensure_dir(&mut d, top, LOG_DIR, t).unwrap();
             let mut h = fat.create(&mut d, dir, FILE, t).unwrap();
             let sectors = 1 + r() % 140;
             let data: Vec<u8> = bytes(seed, sectors as usize * 512).collect();
@@ -5329,7 +5427,7 @@ fn fault_log_files() {
         }
     }
     std::println!("fault log: {created} created, {appended} appended, {rotated} started again");
-    assert!(created > 10 && appended > 10 && rotated > 10, "{created} {appended} {rotated}");
+    assert!(created > 10 && appended > 10 && rotated > 10 && no_folder > 10, "{created} {appended} {rotated}");
 }
 
 /// Lap lists (a past ride's LAPS, fitread.rs `lap` into history.rs `lap_row` and the card's list): FIT files built

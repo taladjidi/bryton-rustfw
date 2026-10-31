@@ -294,12 +294,14 @@ impl Altimeter {
             (self.smooth, self.n_recent) = (None, 0);
         }
         self.recent.rotate_left(1);
-        self.recent[MEDIAN - 1] = p;
+        if let Some(last) = self.recent.last_mut() {
+            *last = p;
+        }
         self.n_recent = (self.n_recent + 1).min(MEDIAN as u8);
         let mut w = self.recent;
-        let w = &mut w[MEDIAN - usize::from(self.n_recent)..];
+        let Some(w) = w.get_mut(MEDIAN - usize::from(self.n_recent)..) else { return };
         w.sort_unstable();
-        let x = w[w.len() / 2] * 16;
+        let x = w.get(w.len() / 2).map_or(p, |&m| m) * 16;
         self.smooth = Some(match self.smooth {
             Some(s) => (i64::from(s) + (i64::from(x) - i64::from(s)) / SMOOTH) as u32,
             None => x,

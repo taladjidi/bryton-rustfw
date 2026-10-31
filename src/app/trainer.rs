@@ -338,7 +338,7 @@ impl App {
         if !self.sensors_store.applied && self.ant {
             self.sensors_store.applied = true;
             if let Some(id) = self.sensors_store.trainer
-                && self.radio.sensors[Kind::Trainer as usize] == Sensor::Off
+                && self.radio.sensors.at(Kind::Trainer) == Sensor::Off
             {
                 self.set_sensor(b, Kind::Trainer, Sensor::Paired(id));
             }
@@ -523,7 +523,7 @@ impl App {
                 let g = g.unsigned_abs();
                 l.push_u32(g / 100);
                 l.push_str(".");
-                l.push_str(ui::DIGITS[(g / 10 % 10) as usize]);
+                l.push_str(digit(g / 10));
                 unit(l, "%");
             }
         }

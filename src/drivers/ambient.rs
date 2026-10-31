@@ -163,7 +163,7 @@ impl Auto {
         self.sum = self.sum.saturating_add(lux10);
         self.n += 1;
         if self.avg.is_none() || self.n >= AUTO_READS {
-            let avg = self.sum / self.n;
+            let avg = self.sum.checked_div(self.n).unwrap_or(0);
             self.band = AUTO_BANDS.iter().position(|&(top, _)| avg <= top).unwrap_or(AUTO_BANDS.len() - 1);
             (self.avg, self.sum, self.n) = (Some(avg), 0, 0);
         }

@@ -250,9 +250,11 @@ pub fn gauge_zones(kind: Kind, band: (u16, u16), cols: u32, zones: &ride::Zones)
         w => (u64::from(w - a) * u64::from(cols) / u64::from(b - a)) as u32,
     };
     let mut z = [(u32::MAX, ui::DARK); 7];
-    z[0] = (0, if edges.is_empty() { ui::DARK } else { zone_color(kind, 1) });
-    for (k, &w) in edges.iter().enumerate() {
-        z[k + 1] = (col_of(u32::from(w)), zone_color(kind, k as u8 + 2));
+    if let Some(first) = z.first_mut() {
+        *first = (0, if edges.is_empty() { ui::DARK } else { zone_color(kind, 1) });
+    }
+    for ((slot, k), &w) in z.iter_mut().skip(1).zip(0u8..).zip(edges) {
+        *slot = (col_of(u32::from(w)), zone_color(kind, k + 2));
     }
     z
 }

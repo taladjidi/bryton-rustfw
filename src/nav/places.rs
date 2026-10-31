@@ -118,7 +118,7 @@ impl Places {
     /// ```
     pub fn add(&mut self, lat: i32, lon: i32, alt_mm: Option<i32>) -> Option<usize> {
         let k = self.len();
-        let num = (1..=MAX as u8).find(|&m| self.list[..k].iter().all(|p| p.num != m))?;
+        let num = (1..=MAX as u8).find(|&m| self.list.iter().take(k).all(|p| p.num != m))?;
         let slot = self.list.get_mut(k)?;
         *slot = Place { lat, lon, alt_m: alt_m(alt_mm), num };
         self.n += 1;
@@ -129,7 +129,7 @@ impl Places {
     pub fn remove(&mut self, k: usize) {
         let n = self.len();
         if k < n {
-            self.list.copy_within(k + 1..n, k);
+            crate::storage::move_within(&mut self.list, k + 1..n, k);
             self.n -= 1;
         }
     }
@@ -155,11 +155,15 @@ impl Places {
     pub fn to_sector(&self, seq: u32) -> [u8; 512] {
         let mut s = [0u8; 512];
         let n = self.len();
-        for (p, e) in self.list[..n].iter().zip(s[DATA_AT..CRC_AT].chunks_exact_mut(ENTRY)) {
-            e[..4].copy_from_slice(&p.lat.to_le_bytes());
-            e[4..8].copy_from_slice(&p.lon.to_le_bytes());
-            e[8..10].copy_from_slice(&p.alt_m.to_le_bytes());
-            e[10] = p.num;
+        let entries = s.get_mut(DATA_AT..CRC_AT).into_iter().flat_map(|d| d.chunks_exact_mut(ENTRY));
+        for (p, e) in self.list.iter().take(n).zip(entries) {
+            let bytes = (p.lat.to_le_bytes().into_iter())
+                .chain(p.lon.to_le_bytes())
+                .chain(p.alt_m.to_le_bytes())
+                .chain([p.num]);
+            for (d, b) in e.iter_mut().zip(bytes) {
+                *d = b;
+            }
         }
         copies::seal(&mut s, MAGIC, VERSION, (n * ENTRY) as u16, seq);
         s
@@ -191,7 +195,7 @@ impl Places {
                 num: *e.get(10)?,
             };
             let alt_ok = p.alt_m == NO_ALT || crate::ride::ALT_RANGE_MM.contains(&(i32::from(p.alt_m) * 1000));
-            let used = out.list[..out.len()].iter().any(|q| q.num == p.num);
+            let used = out.list.iter().take(out.len()).any(|q| q.num == p.num);
             if p.lat.unsigned_abs() > 900_000_000
                 || p.lon.unsigned_abs() > 1_800_000_000
                 || !alt_ok

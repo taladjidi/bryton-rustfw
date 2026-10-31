@@ -61,7 +61,10 @@ pub fn rows(w: &[u16; N], ymax: u16) -> [Option<u8>; COLS] {
         let v = match (w.get(k + 1), X_PM.get(k + 1)) {
             _ if a == 0 => continue,
             (Some(&b), Some(&x1)) if b > 0 => {
-                i32::from(a) + (i32::from(b) - i32::from(a)) * (t - i32::from(x0)) / (i32::from(x1) - i32::from(x0))
+                i32::from(a)
+                    + ((i32::from(b) - i32::from(a)) * (t - i32::from(x0)))
+                        .checked_div(i32::from(x1) - i32::from(x0))
+                        .unwrap_or(0)
             }
             _ if t == i32::from(x0) => i32::from(a),
             _ => continue,

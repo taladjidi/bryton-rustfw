@@ -107,15 +107,17 @@ impl Huffman {
             *h.count.get_mut(usize::from(l)).ok_or(Error::Bad)? += 1;
         }
         let mut left: i32 = 1;
-        for len in 1..16 {
-            left = (left << 1) - i32::from(h.count[len]);
+        for &c in h.count.iter().skip(1) {
+            left = (left << 1) - i32::from(c);
             if left < 0 {
                 return Err(Error::Bad);
             }
         }
         let mut offs = [0u16; 16];
-        for len in 1..15 {
-            offs[len + 1] = offs[len] + h.count[len];
+        let mut acc = 0u16;
+        for (o, &c) in offs.iter_mut().zip(&h.count).skip(1) {
+            *o = acc;
+            acc += c;
         }
         for (sym, &l) in lens.iter().enumerate() {
             if l != 0 {
@@ -130,9 +132,9 @@ impl Huffman {
     /// The next symbol, bit by bit as puff does.
     fn decode<I: Iterator<Item = u8>>(&self, b: &mut Bits<'_, I>) -> Result<u16, Error> {
         let (mut code, mut first, mut index) = (0i32, 0i32, 0i32);
-        for len in 1..16 {
+        for &c in self.count.iter().skip(1) {
             code |= b.take(1)? as i32;
-            let count = i32::from(self.count[len]);
+            let count = i32::from(c);
             if code - count < first {
                 return self.symbol.get((index + (code - first)) as usize).copied().ok_or(Error::Bad);
             }
@@ -212,6 +214,7 @@ fn dynamic<I: Iterator<Item = u8>>(b: &mut Bits<'_, I>) -> Result<(Huffman, Huff
 }
 
 /// CRC-32 (the gzip one, polynomial 0xedb88320) a nibble at a time: 16 words of table.
+#[allow(clippy::indexing_slicing)] // compile time, i < 16: a mistake is a build error
 const CRC_NIBBLE: [u32; 16] = {
     let mut t = [0u32; 16];
     let mut i = 0;
@@ -240,9 +243,8 @@ pub fn crc32(bytes: impl Iterator<Item = u8>) -> u32 {
 /// One byte into a running CRC-32 (start at `!0`, finish with `!`): computed as the bytes are written, so the
 /// output is not read back a second time (it lives in uncached SDRAM).
 fn crc_byte(c: u32, b: u8) -> u32 {
-    let c = c ^ u32::from(b);
-    let c = CRC_NIBBLE[(c & 15) as usize] ^ (c >> 4);
-    CRC_NIBBLE[(c & 15) as usize] ^ (c >> 4)
+    let step = |c: u32| CRC_NIBBLE.get((c & 15) as usize).copied().unwrap_or(0) ^ (c >> 4);
+    step(step(c ^ u32::from(b)))
 }
 
 /// Where an [`Inflater`] is in the gzip member.

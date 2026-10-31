@@ -162,7 +162,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
         crate::fnv_str(4, power.as_str()),
         crate::fnv_str(5, cadence.as_str()),
         crate::fnv_str(u32::from(now.status_color) + 6, now.status),
-        crate::fnv_str(7, ["MODE", "BOTH", "RAMP", "CANCEL"][now.bottom as usize]),
+        crate::fnv_str(7, ["MODE", "BOTH", "RAMP", "CANCEL"].get(now.bottom as usize).copied().unwrap_or("")),
         crate::fnv_str(8, now.timer),
         crate::fnv_str(crate::fnv_str(9, now.source), now.pm), // the source line's box erases this one: repainted after it
     ];
@@ -185,7 +185,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
                 text::draw_in(c, &VALUE, 8, TARGET_Y, w, Align::Centre, now.target);
             }
             3 | 4 => {
-                let (x, bw, ..) = reading_boxes()[i - 3];
+                let Some(&(x, bw, ..)) = reading_boxes().get(i - 3) else { continue };
                 text::draw_in(
                     c,
                     &LABEL,

@@ -172,7 +172,27 @@ fn fault_log_written_once_and_appended() {
     run(&mut sim, &mut app, 10_000);
     assert_eq!(files(&sim.emmc.image, "Rustfw/Log"), None, "no fault, no log");
 
+    // the review of 2026-10-31, finding 1: without `\Rustfw\Log` (made at a ride's start) nothing is written, nothing
+    // said, the line kept for later
     let (mut sim, mut app) = faulted(crate::fat::tests::image(), [0; 32], marker(0, Kind::Panic, 412));
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(files(&sim.emmc.image, "Rustfw/Log"), None, "the folder never made here");
+    assert!(app.fault_due.is_some_and(|f| f.3 == 0), "kept, no try counted: {:?}", app.fault_due);
+    assert!(!app.notes.list.iter().any(|n| n.as_str().ends_with("FAULT LOG NOT SAVED")));
+    // a ride's start makes the folder: the line written once that ride is saved, once, the marker gone
+    app.start_pause();
+    run(&mut sim, &mut app, 70_000);
+    app.start_pause();
+    app.end_ride();
+    run(&mut sim, &mut app, 70_000);
+    assert!(app.ride_settled(), "the ride saved");
+    let text = log(&sim.emmc.image).expect("written after the ride");
+    assert_eq!(text.lines().filter(|l| l.contains(" panic at line 412,")).count(), 1, "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert_eq!(sim.backup[FAULT_BKP], 0, "logged past its minute: the marker cleared");
+    assert_eq!(fsck(&sim.emmc.image), Ok(0));
+
+    let (mut sim, mut app) = faulted(crate::recorder::tests::kept_card(), [0; 32], marker(0, Kind::Panic, 412));
     run(&mut sim, &mut app, 1000);
     assert_eq!(log(&sim.emmc.image), None, "not in the first seconds");
     run(&mut sim, &mut app, 3000);
@@ -303,7 +323,7 @@ fn fault_log_cut_at_every_sector() {
 /// writes again, the line is in the log, once.
 #[test]
 fn fault_log_retried_after_a_failure() {
-    let (mut sim, mut app) = faulted(crate::fat::tests::image(), [0; 32], marker(0, Kind::Panic, 3));
+    let (mut sim, mut app) = faulted(crate::recorder::tests::kept_card(), [0; 32], marker(0, Kind::Panic, 3));
     sim.emmc.bad = std::vec![0..u32::MAX];
     run(&mut sim, &mut app, 5000);
     assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("FAULT LOG NOT SAVED")));
@@ -321,7 +341,7 @@ fn fault_log_retried_after_a_failure() {
     assert_eq!(notes, 1, "said once");
 
     // a card that keeps failing: three tries again, then left to the next start
-    let (mut sim, mut app) = faulted(crate::fat::tests::image(), [0; 32], marker(0, Kind::Panic, 3));
+    let (mut sim, mut app) = faulted(crate::recorder::tests::kept_card(), [0; 32], marker(0, Kind::Panic, 3));
     sim.emmc.bad = std::vec![0..u32::MAX];
     run(&mut sim, &mut app, 150_000); // tried at 2 s, 62 s and 122 s: the third try again due at 182 s
     assert!(app.fault_due.is_some_and(|f| f.3 == 3), "{:?}", app.fault_due);

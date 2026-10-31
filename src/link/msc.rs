@@ -151,11 +151,11 @@ enum Data {
 }
 
 fn be16(b: &[u8], at: usize) -> u32 {
-    b.get(at..at + 2).map_or(0, |x| u32::from(u16::from_be_bytes([x[0], x[1]])))
+    b.get(at..at + 2).and_then(|x| x.try_into().ok()).map_or(0, |x| u32::from(u16::from_be_bytes(x)))
 }
 
 fn be32(b: &[u8], at: usize) -> u32 {
-    b.get(at..at + 4).map_or(0, |x| u32::from_be_bytes([x[0], x[1], x[2], x[3]]))
+    b.get(at..at + 4).and_then(|x| x.try_into().ok()).map_or(0, u32::from_be_bytes)
 }
 
 fn byte(b: &[u8], at: usize) -> u8 {
@@ -227,10 +227,11 @@ impl Drive {
             pipe.stall();
             return Event::None;
         }
+        // the check above holds the length at 31 and `len` within 16: these cannot fail
+        let (Ok(cbw), Some(cb)) = (<&[u8; 31]>::try_from(cbw), cbw.get(15..15 + len)) else { return Event::None };
         let tag = [cbw[4], cbw[5], cbw[6], cbw[7]];
         let host = u32::from_le_bytes([cbw[8], cbw[9], cbw[10], cbw[11]]);
         let host_in = cbw[12] & 0x80 != 0;
-        let cb = &cbw[15..15 + len];
         let mut event = Event::None;
         let (status, data) = self.command(cb, media, &mut event);
         let (status, residue) = self.transfer(status, data, host, host_in, pipe, media);
@@ -370,7 +371,7 @@ impl Drive {
                 let mut at = 0;
                 while at < count {
                     let n = (count - at).min(CHUNK as u32);
-                    let chunk = &mut buf[..n as usize * BLOCK];
+                    let chunk = buf.get_mut(..n as usize * BLOCK).unwrap_or_default();
                     if !media.read(lba + at, chunk) {
                         status = FAILED;
                         self.sense = READ_ERROR;
@@ -391,7 +392,7 @@ impl Drive {
             let zeros = [0u8; PACKET];
             while done < host {
                 let n = (host - done).min(PACKET as u32);
-                if !pipe.send(&zeros[..n as usize]) {
+                if !pipe.send(zeros.get(..n as usize).unwrap_or(&[])) {
                     return (PHASE, host - relevant);
                 }
                 done += n;
@@ -417,10 +418,14 @@ impl Drive {
             while off < n && at < count {
                 let blocks = ((count - at) as usize).min(CHUNK);
                 let take = (n - off).min(blocks * BLOCK - fill);
-                buf[fill..fill + take].copy_from_slice(&packet[off..off + take]);
+                if let (Some(d), Some(s)) = (buf.get_mut(fill..fill + take), packet.get(off..off + take)) {
+                    d.copy_from_slice(s);
+                } else {
+                    status = FAILED;
+                }
                 (fill, off) = (fill + take, off + take);
                 if fill == blocks * BLOCK {
-                    if status == PASSED && !media.write(lba + at, &buf[..fill]) {
+                    if status == PASSED && !buf.get(..fill).is_some_and(|b| media.write(lba + at, b)) {
                         status = FAILED;
                         self.sense = WRITE_ERROR;
                     }

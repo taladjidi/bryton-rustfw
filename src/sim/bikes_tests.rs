@@ -88,7 +88,7 @@ fn last_ride_m(app: &App) -> u32 {
 /// once (a restart's scan adds nothing again); stock's settings and registers untouched by the migration.
 #[test]
 fn migration_then_a_saved_ride_counts_once() {
-    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    let (mut sim, mut app) = boot(crate::recorder::tests::kept_card());
     let regs = sim.backup;
     let b = bikes(&app);
     assert_eq!((b.active, b.list[0].gear, b.list[0].odo_m), (0, Gear::of(&app.settings), app.settings.odo_m));
@@ -120,11 +120,37 @@ fn migration_then_a_saved_ride_counts_once() {
     assert_eq!(bikes(&app).list[0].odo_m, m, "not counted again");
 }
 
+/// The review of 2026-10-31, finding 1: on a card without bikes.bin (`\Rustfw` not even there) the migration is never
+/// written between rides, which would make the file in `\Rustfw`'s directory sector; the settings do not wait for it.
+/// The next ride's start makes the file (recorder `make_kept`) and the bikes are written once that ride is saved.
+#[test]
+fn bikes_wait_for_a_ride_to_make_their_file() {
+    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    let b = bikes(&app);
+    run(&mut sim, &mut app, 60_000);
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    assert!(read_all(&mut fat, &mut d, "Rustfw/bikes.bin").is_err(), "never made between rides");
+    assert!(!app.bikes_due(), "the settings do not wait for it");
+    // no switch the file cannot keep: a reboot before a ride would migrate again, BIKE 1 taking BIKE 2's gear
+    app.next_bike(&mut sim);
+    assert_eq!(app.notes.text.as_str(), "START A RIDE FIRST");
+    assert_eq!(bikes(&app).active, 0, "BIKE 1 still");
+    ride(&mut sim, &mut app);
+    settle(&mut sim, &mut app);
+    let file = file(&sim).expect("written after the ride").1;
+    assert_eq!(file.list[0].gear, b.list[0].gear, "the migration");
+    assert_eq!(file.list[1..], b.list[1..]);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    app.next_bike(&mut sim);
+    assert_eq!(bikes(&app).active, 1, "the file there: BIKE 2");
+}
+
 /// The scan after a short ride's save ends in the pass after it (a small card): the ride is counted at once, not at
 /// the next scan (the list's revision, not the scan's end, says a count is due).
 #[test]
 fn a_rescan_ended_within_a_pass_is_counted() {
-    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    let (mut sim, mut app) = boot(crate::recorder::tests::kept_card());
     settle(&mut sim, &mut app);
     ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
@@ -137,7 +163,7 @@ fn a_rescan_ended_within_a_pass_is_counted() {
 /// ride) has the old wheel; the resumed ride keeps the new one, and the active bike takes it.
 #[test]
 fn a_wheel_changed_mid_ride_survives_a_reset() {
-    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    let (mut sim, mut app) = boot(crate::recorder::tests::kept_card());
     settle(&mut sim, &mut app);
     let old = app.settings.wheel_mm;
     app.press(&mut sim, Press::Short(Key::Start));
@@ -165,7 +191,7 @@ fn a_wheel_changed_mid_ride_survives_a_reset() {
 /// `start_while_the_card_failed_at_boot`), with the WHEEL changed during it, and its save counts it.
 #[test]
 fn active_bike_is_refused_while_a_resume_waits() {
-    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    let (mut sim, mut app) = boot(crate::recorder::tests::kept_card());
     settle(&mut sim, &mut app);
     let old = app.settings.wheel_mm;
     app.press(&mut sim, Press::Short(Key::Start));
@@ -211,7 +237,7 @@ fn active_bike_is_refused_while_a_resume_waits() {
 #[test]
 fn a_migration_during_a_ride_counts_that_ride() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.image = crate::recorder::tests::kept_card();
     sim.own_settings();
     sim.gnss.fix = Some(8000);
     let mut app = App::start(&mut sim, None);
@@ -237,7 +263,7 @@ fn a_migration_during_a_ride_counts_that_ride() {
 #[test]
 fn a_cut_between_the_save_and_the_write_and_during_it_counts_once() {
     let setup = || {
-        let (mut sim, mut app) = boot(crate::fat::tests::image());
+        let (mut sim, mut app) = boot(crate::recorder::tests::kept_card());
         sim.emmc.tear = true;
         settle(&mut sim, &mut app);
         ride(&mut sim, &mut app); // saved; the scan after it not ended: bikes.bin not written yet
@@ -288,7 +314,7 @@ fn a_cut_between_the_save_and_the_write_and_during_it_counts_once() {
 fn a_cut_at_every_sector_of_the_first_write() {
     let setup = || {
         let mut sim = Sim::new(9, 0, 0);
-        sim.emmc.image = crate::fat::tests::image();
+        sim.emmc.image = crate::recorder::tests::kept_card();
         sim.own_settings();
         sim.emmc.tear = true;
         let mut app = App::start(&mut sim, None);
@@ -321,7 +347,7 @@ fn a_cut_at_every_sector_of_the_first_write() {
 /// restart too: the file's active bike wins).
 #[test]
 fn switching_the_active_bike_changes_the_wheel_and_weight() {
-    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    let (mut sim, mut app) = boot(crate::recorder::tests::kept_card());
     settle(&mut sim, &mut app);
     (app.settings.wheel_mm, app.settings.bike_hg) = (crate::WHEELS[3], 75); // BIKE 1 set in BIKE
     run(&mut sim, &mut app, 1000);
@@ -355,7 +381,7 @@ fn switching_the_active_bike_changes_the_wheel_and_weight() {
 /// (asked first) puts it back to 0.
 #[test]
 fn a_part_past_its_interval_is_said_and_reset() {
-    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    let (mut sim, mut app) = boot(crate::recorder::tests::kept_card());
     settle(&mut sim, &mut app);
     if let Some(st) = app.bikes.as_deref_mut() {
         st.list.list[0].parts[0] = Part { m: 600_000, every_km: 500 };

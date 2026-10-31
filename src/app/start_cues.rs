@@ -98,13 +98,17 @@ impl App {
         let mut names = [""; Kind::ALL.len()];
         let mut miss = 0;
         for k in Kind::ALL.iter().filter(counted).filter(|k| !self.sensor_heard(**k)) {
-            names[miss] = k.short();
+            if let Some(n) = names.get_mut(miss) {
+                *n = k.short();
+            }
             miss += 1;
         }
         let mut total = miss;
         if miss == 0 {
             for k in Kind::ALL.iter().filter(counted) {
-                names[total] = k.short();
+                if let Some(n) = names.get_mut(total) {
+                    *n = k.short();
+                }
                 total += 1;
             }
         }
