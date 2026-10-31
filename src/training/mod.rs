@@ -6,6 +6,7 @@ pub mod alerts;
 pub mod hrtss;
 pub mod hrv;
 pub mod hrvt;
+pub mod load;
 pub mod pacing;
 pub mod power;
 pub mod power_curve;

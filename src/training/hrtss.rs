@@ -58,7 +58,12 @@ pub struct Hrtss {
 impl Hrtss {
     /// One moving second at `hr` (None: no reading, nothing counted).
     pub fn second(&mut self, hr: Option<u16>, max_hr: u16, female: bool) {
-        self.sum += hr.and_then(|h| weight(h, max_hr, female)).unwrap_or(0);
+        self.seconds(hr, 1, max_hr, female);
+    }
+
+    /// `n` moving seconds at `hr` (a ride's average, for the scan's rides: [`crate::load`]).
+    pub fn seconds(&mut self, hr: Option<u16>, n: u32, max_hr: u16, female: bool) {
+        self.sum += hr.and_then(|h| weight(h, max_hr, female)).unwrap_or(0) * u64::from(n);
     }
 
     /// The score for an LTHR of `lthr`: None while LTHR is unset or `max_hr` is not over the resting rate, or nothing

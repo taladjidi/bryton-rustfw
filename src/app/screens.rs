@@ -214,6 +214,7 @@ impl App {
             Screen::RampResult => self.draw_ramp(c),
             Screen::PowerCal => self.draw_powercal(c),
             Screen::Curve(k) => self.draw_curve(c, k),
+            Screen::Load(k) => self.draw_load(c, k),
             Screen::Notif(k, top) => self.draw_notif(c, k, top),
             Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"), env!("GIT_DATE")),
             Screen::Nearby => {

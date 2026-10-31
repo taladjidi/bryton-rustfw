@@ -27,7 +27,9 @@ pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, pan
 pub use link::{dev, msc, phone, prof};
 pub use nav::{altitude, climbs_ahead, course, segment, segment_match, sun};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash, volume};
-pub use training::{alerts, hrtss, hrv, hrvt, pacing, power, power_curve, power_match, ramp, ride, trainer, workout};
+pub use training::{
+    alerts, hrtss, hrv, hrvt, load, pacing, power, power_curve, power_match, ramp, ride, trainer, workout,
+};
 pub use ui::{fonts, map, menu, page, text, theme, tiles};
 // the app's parts (app/mod.rs), at the root as before the split
 pub use app::*;
@@ -195,6 +197,8 @@ pub struct App {
     ride_curve: Option<&'static mut power_curve::Rolling>,
     curve_shown: [u16; power_curve::N],
     curve_ready: bool,
+    /// Training load and month totals from the scan's rides (app/pmc.rs).
+    pmc: app::pmc::State,
     /// The title a menu was drawn with (app/menus.rs `title_print`).
     menu_title_print: u32,
     /// What the quick panel shows, box by box, and its shape (app/quick.rs).
@@ -573,6 +577,7 @@ impl App {
             ride_curve: None,
             curve_shown: [0; power_curve::N],
             curve_ready: false,
+            pmc: app::pmc::State::new(),
             menu_title_print: 0,
             quick_shown: [0; app::QUICK_BOXES],
             quick_shape: 0,
@@ -732,6 +737,7 @@ impl App {
         self.step_trainer(b);
         self.step_powercal(b);
         self.step_curve(b);
+        self.step_pmc(b);
         t = self.timed(b, Sec::Trainer, t);
         if self.ble.is_some() {
             self.step_phone(b);

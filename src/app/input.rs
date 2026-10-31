@@ -157,6 +157,8 @@ pub enum Screen {
     PowerCal,
     /// The POWER CURVE (app/curve.rs), the cursor on duration `k` ([`power_curve::DURATIONS`]).
     Curve(usize),
+    /// The TRAINING LOAD chart (app/pmc.rs), the cursor on day `k` of the last [`load::SHOWN`] (the last is today).
+    Load(usize),
     /// The ramp test's result, APPLY or keep (app/ramp.rs).
     RampResult,
     /// ABOUT: the version, the commit, Ferris.
@@ -405,6 +407,7 @@ impl App {
             Screen::RampResult => self.input_ramp(b, i, shown),
             Screen::PowerCal => self.input_powercal(b, i, shown),
             Screen::Curve(_) => self.input_curve(b, i),
+            Screen::Load(_) => self.input_load(b, i),
             Screen::Trainer => self.input_trainer(b, i, shown),
             Screen::SegmentResult => self.input_segment(b, i, recording, graph_hit, shown),
             Screen::Edit(..) => self.editor_input(b, i),

@@ -1478,5 +1478,5 @@ fn gauge_fields_round_trip_in_pages_bin() {
     };
     assert_eq!(Saved::from_sector(&s.to_sector()), Some(s));
     assert_eq!(page.fields[..3], [PowerRing, CadBar, HrRing]);
-    assert_eq!(Field::from_index(Field::BattHrs as u32 + 1), PowerRing, "appended after the field that was last");
+    assert_eq!(Field::from_index(Field::Tsb as u32 + 1), PowerRing, "appended after the training load");
 }

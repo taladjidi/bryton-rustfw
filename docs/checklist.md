@@ -238,7 +238,7 @@ Others
 - [ ] Targeted adaptive coaching / daily suggested workouts (Garmin)
 - [ ] Pace Pilot: pacing plan for a course, with eat and drink reminders (stock app, S810)
 - [ ] Power Guide: power targets along a course (Garmin)
-- [ ] Training load, fitness / fatigue / form (CTL, ATL, TSB) (stock app, Garmin, Coros, Karoo)
+- [~] Training load, fitness / fatigue / form (CTL, ATL, TSB) (stock app, Garmin, Coros, Karoo): sim (CTL, ATL, TSB fields, FITNESS > TRAINING LOAD chart); not yet seen on the unit; hrTSS of a ride without power from its average heart rate
 - [ ] Training status, training readiness, recovery time (Garmin)
 - [ ] Load focus, aerobic / anaerobic split (Garmin, Coros)
 - [ ] Power curve and rider profile (stock app, Garmin, Karoo)
@@ -381,10 +381,10 @@ Storage, USB and updates
 
 - [~] Ride list on the unit with summary and details (stock, all): sim; no laps or graphs per ride
 - [x] Delete rides on the unit (stock): sim
-- [~] Totals: week, month, year, odometer (stock, Garmin): unit; week, year and total, no month
+- [~] Totals: week, month, year, odometer (stock, Garmin): unit; week, year and total; FITNESS > MONTHS rows (km, hours, rides, ascent, TSS): sim
 - [ ] Personal records and best efforts (Garmin, Karoo)
 - [~] Power curve over season and all time (stock app, Garmin): sim; bests for CP and W' only, no screen, no season
-- [ ] Training load chart on the unit (stock app, Garmin)
+- [~] Training load chart on the unit (stock app, Garmin): sim, not yet on the unit
 - [ ] Each ride matched to the planned workout (ours)
 - [x] Rides read from stock's \Activities too (ours): sim
 - [ ] Ride upload to intervals.icu or Strava from a computer tool (ours)
