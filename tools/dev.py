@@ -249,13 +249,13 @@ def usbdrop_decode(words):
     if not words or words[0] >> 24 != 0xd2:
         return ['no USB snapshot kept (none yet, or the registers hold something else)']
     b = bytearray(24)
-    have = 0
+    got = [False] * 8
     for i, w in enumerate(words[:8]):
         if w >> 24 == 0xd2:               # an old 0xd1 drive word or 0x0b drop count in 0 / 31 is not ours
             b[3 * i:3 * i + 3] = (w & 0xffffff).to_bytes(3, 'little')
-            have = 3 * i + 3
+            got[i] = True
     ans = lambda i: b[0] >> 4 & 1 << i
-    has = lambda at, ln=1: have >= at + ln
+    has = lambda at, ln=1: all(got[k // 3] for k in range(at, at + ln))   # every word covering it is ours
     num = lambda at, ln: int.from_bytes(b[at:at + ln], 'little') if has(at, ln) else None
     hexv = lambda v, w: 'not stored' if v is None else f'{v:0{w}x}'
     phy = lambda i, at: 'PHY did not answer' if not ans(i) else (f'{b[at]:02x}' if has(at) else 'not stored')
@@ -282,7 +282,7 @@ def usbdrop_decode(words):
         out.append(f'  suspend {d & 1}, ENUMSPD {d >> 1 & 3} (0 high, 1 full), FNSOF {d >> 8 & 0x3fff}')
     if has(9, 2) and has(10):
         out.append(f'GINTSTS bits 0..7 and 24..31: {b[9]:02x}, {b[10]:02x}')
-    for name, at, ln in (('DIEPINT1', 11, 2), ('DTXFSTS1', 13, 2), ('DIEPCTL1', 15, 4), ('GOTGINT', 19, 2)):
+    for name, at, ln in (('DIEPINT3', 11, 2), ('DTXFSTS3', 13, 2), ('DIEPCTL3', 15, 4), ('GOTGINT', 19, 2)):
         out.append(f'{name}: {hexv(num(at, ln), 2 * ln)}')
     return out
 
@@ -367,7 +367,10 @@ def selftest():
     assert 'PHY 0x15 Debug: 01 (LineState J)' in full, full
     assert any('USBSUSP USBRST IEPINT' in x for x in full), full
     assert any('(HostDisconnect' not in x and 'VbusValid SessValid' in x for x in full), full
-    assert 'DSTS: 0a0006' in full and 'DIEPCTL1: not stored' in full, full
+    assert 'DSTS: 0a0006' in full and 'DIEPCTL3: not stored' in full, full
+    mid = usbdrop_decode([0xd2 << 24 | 0x01 << 16 | 0x45 << 8 | 0xf1, 0x0b00_0003, 0xd2 << 24 | 0x0a << 16 | 0x06])
+    assert 'DSTS: 0a0006' in mid and 'GINTSTS bits 8..23: not stored' in mid, mid   # word 1 overwritten: not zeros
+    assert 'PHY 0x13 USB Interrupt Status: not stored' in mid, mid
     assert usbdrop_decode([0x1234])[0].startswith('no USB snapshot')
     assert usbdrop_decode([0xd2 << 24 | 0xf1, 0xd100_0000, 0x0b00_0003])[0].startswith('event')   # old words: untagged, skipped
     print('dev.py selftest ok')
@@ -469,7 +472,10 @@ def main():
             elif a.cmd in ('info', 'where', 'reset', 'drive', 'stackfault'):
                 print(command(s, a.cmd))
             elif a.cmd == 'usbdrop':
-                print('\n'.join(usbdrop_decode([int(command(s, f'peek {BKP0 + 4 * r:#x} 1'), 16) for r in SNAP_BKP])))
+                got = [command(s, f'peek {BKP0 + 4 * r:#x} 1') for r in SNAP_BKP]
+                if any(g.startswith('err') for g in got):
+                    sys.exit(next(g for g in got if g.startswith('err')))
+                print('\n'.join(usbdrop_decode([int(g, 16) for g in got])))
             elif a.cmd == 'peek':
                 first = command(s, f'peek {a.addr} {a.n}')
                 if first.startswith('err'):

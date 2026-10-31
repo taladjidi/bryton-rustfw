@@ -177,9 +177,9 @@ impl App {
     /// The computer dropped the USB device and the board reconnected it: counted (read it with `tools/dev.py peek`) and
     /// said in a notice.
     pub fn usb_dropped(&mut self, b: &mut impl Board) {
-        if self.usb_snapped {
+        if core::mem::take(&mut self.usb_snapped) {
             self.notice("USB RECONNECT");
-            return; // registers 0 and 31 hold the snapshot's words now
+            return; // this drop's snapshot holds registers 0 and 31 now; the next drop counts again
         }
         let n = b.backup_read(USB_DROPS_BKP);
         let n = if n >> 24 == 0x0b { n & 0xffff } else { 0 };

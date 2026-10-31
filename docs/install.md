@@ -12,7 +12,7 @@
   mean to ride with.
 - `USB_HS=1 ./check.sh` (src/board/usb.rs `FULL_SPEED`): USB at high speed (480 Mbit/s, 512-byte packets) instead
   of the default full speed (12 Mbit/s, 64-byte packets). An experiment for the drops (docs/usb.md); never install it.
-- `USB_HS=1 USB_PACE_US=100 cargo build --release` (src/board/usb.rs `PACE_US`): with USB_HS, waits that many
+- `USB_HS=1 USB_PACE_US=100 cargo build --release` (src/board/usb.rs `PACE_US`): only with USB_HS (a full-speed build ignores it), waits that many
   microseconds (a spin, up to 10000) after each bulk IN packet of the drive, to see whether the high-speed drop
   depends on the rate. 0 or unset: off. An experiment; never install it.
 - `DIAG_STOP=N cargo build --release` (src/main.rs `STOP`): stops at boot stage N, to see where a boot stops

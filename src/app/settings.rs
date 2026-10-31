@@ -138,8 +138,7 @@ pub const USB_LAST_BKP: usize = 0;
 /// RTC backup registers holding the USB snapshot of the first failure of a link ([`usbsnap::pack`], tag 0xd2, read by
 /// `tools/dev.py usbdrop`). 15 is the only free one (stock reads it at boot but keeps its value only if it is 0x4649;
 /// an old build's page word, tag 0xa, which a 0xd2 word is not); words 1 and 2 go to 0 and 31, the diagnostics
-/// [`USB_LAST_BKP`] and [`USB_DROPS_BKP`], which [`App::usb_dropped`] leaves alone once a snapshot is written since
-/// boot. Three words are 9 bytes, through DSTS; [`usbsnap::WORDS`] are packed, the most telling bytes first.
+/// [`USB_LAST_BKP`] and [`USB_DROPS_BKP`], which [`App::usb_dropped`] leaves alone for the drop whose snapshot was just written. Three words are 9 bytes, through DSTS; [`usbsnap::WORDS`] are packed, the most telling bytes first.
 pub const SNAP_BKP: [usize; 3] = [15, 0, 31];
 
 /// The standby breadcrumbs (main.rs `standby`: the power button did not start the unit after switching off,

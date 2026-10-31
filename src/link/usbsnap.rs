@@ -12,7 +12,7 @@ pub const EVENT_SEND: u8 = 1;
 /// The failure that took the snapshot: the watch decided a drop.
 pub const EVENT_DROP: u8 = 2;
 
-/// The registers read at a failure. `phy` is `None` where the PHY never answered (a finding in itself).
+/// The registers read at a failure (endpoint 3 is the drive's bulk IN: the CDC function has 1 and 2). `phy` is `None` where the PHY never answered (a finding in itself).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UsbSnap {
     /// [`EVENT_SEND`] or [`EVENT_DROP`].
@@ -25,12 +25,12 @@ pub struct UsbSnap {
     pub gotgint: u32,
     /// OTG_DSTS (0x808).
     pub dsts: u32,
-    /// OTG_DIEPINT1 (0x928).
-    pub diepint1: u32,
-    /// OTG_DTXFSTS1 (0x918).
-    pub dtxfsts1: u32,
-    /// OTG_DIEPCTL1 (0x920).
-    pub diepctl1: u32,
+    /// OTG_DIEPINT3 (0x968).
+    pub diepint3: u32,
+    /// OTG_DTXFSTS3 (0x978).
+    pub dtxfsts3: u32,
+    /// OTG_DIEPCTL3 (0x960).
+    pub diepctl3: u32,
 }
 
 /// Words of a packed snapshot: 22 bytes, 3 to a word behind the tag byte.
@@ -40,8 +40,8 @@ pub const TAG: u32 = 0xd2;
 
 /// The snapshot as bytes, the most telling first (fewer than [`WORDS`] registers may be free): 0 event (low nibble)
 /// with which PHY registers answered (high nibble, in `phy` order), 1 PHY 0x04, 2 PHY 0x15, 3..4 GINTSTS bits 8..23,
-/// 5 PHY 0x13, 6..8 DSTS (22 bits), 9 GINTSTS bits 0..7, 10 GINTSTS bits 24..31, 11..12 DIEPINT1, 13..14 DTXFSTS1,
-/// 15..18 DIEPCTL1, 19..20 GOTGINT (16 bits), 21 PHY 0x07; little endian.
+/// 5 PHY 0x13, 6..8 DSTS (22 bits), 9 GINTSTS bits 0..7, 10 GINTSTS bits 24..31, 11..12 DIEPINT3, 13..14 DTXFSTS3,
+/// 15..18 DIEPCTL3, 19..20 GOTGINT (16 bits), 21 PHY 0x07; little endian.
 fn bytes(s: &UsbSnap) -> [u8; WORDS * 3] {
     let p = |i: usize| s.phy.get(i).copied().flatten().unwrap_or(0);
     let ok = (0..4).fold(0, |a, i| a | u8::from(s.phy.get(i).is_some_and(Option::is_some)) << i);
@@ -55,9 +55,9 @@ fn bytes(s: &UsbSnap) -> [u8; WORDS * 3] {
         at += v.len();
     };
     put(&[s.event & 15 | ok << 4, p(0), p(2), g[1], g[2], p(1), d[0], d[1], d[2], g[0], g[3]]);
-    put(&s.diepint1.to_le_bytes()[..2]);
-    put(&s.dtxfsts1.to_le_bytes()[..2]);
-    put(&s.diepctl1.to_le_bytes());
+    put(&s.diepint3.to_le_bytes()[..2]);
+    put(&s.dtxfsts3.to_le_bytes()[..2]);
+    put(&s.diepctl3.to_le_bytes());
     put(&s.gotgint.to_le_bytes()[..2]);
     put(&[p(3)]);
     b
@@ -93,9 +93,9 @@ pub fn unpack(words: &[u32]) -> Option<UsbSnap> {
         phy: [phy(0, 1), phy(1, 5), phy(2, 2), phy(3, 21)],
         gintsts: g(0) | g(1) | g(2) | g(3),
         dsts: n(6, 3),
-        diepint1: n(11, 2),
-        dtxfsts1: n(13, 2),
-        diepctl1: n(15, 4),
+        diepint3: n(11, 2),
+        dtxfsts3: n(13, 2),
+        diepctl3: n(15, 4),
         gotgint: n(19, 2),
     })
 }
@@ -135,9 +135,9 @@ mod tests {
             gintsts: 0x04f0_1030,
             gotgint: 0x0000_0404,
             dsts: 0x003f_ff06,
-            diepint1: 0x2081,
-            dtxfsts1: 0x0200,
-            diepctl1: 0x8008_0240,
+            diepint3: 0x2081,
+            dtxfsts3: 0x0200,
+            diepctl3: 0x8008_0240,
         }
     }
 

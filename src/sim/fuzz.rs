@@ -1301,6 +1301,52 @@ fn lz4_blocks() {
     assert!(still_decoded > 0 && refused > 0, "reached: {still_decoded} mutations decode, {refused} refused");
 }
 
+/// The USB snapshot words (usbsnap.rs): random snapshots, any prefix of the words, and the keeper handing over once.
+#[test]
+fn usb_snapshot_words() {
+    use crate::usbsnap;
+    let mut full = 0;
+    for seed in 0..400u64 {
+        let mut r = xorshift(seed as u32 + 1);
+        let mut phy = || {
+            let v = r();
+            (!v.is_multiple_of(3)).then_some((v >> 8) as u8)
+        };
+        let phy = [phy(), phy(), phy(), phy()];
+        let s = usbsnap::UsbSnap {
+            event: (r() % 3) as u8,
+            phy,
+            gintsts: r(),
+            gotgint: r() & 0xffff,
+            dsts: r() & 0x003f_ffff,
+            diepint3: r() & 0xffff,
+            dtxfsts3: r() & 0xffff,
+            diepctl3: r(),
+        };
+        let w = usbsnap::pack(&s);
+        let n = 1 + r() as usize % usbsnap::WORDS;
+        let back = usbsnap::unpack(&w[..n]).expect("tagged");
+        assert_eq!((back.event, back.phy[0], back.phy[2]), (s.event, s.phy[0], s.phy[2]), "seed {seed}, {n} words");
+        if n == usbsnap::WORDS {
+            assert_eq!(back, s, "seed {seed}");
+            full += 1;
+        }
+        assert_eq!(usbsnap::unpack(&w[..n]), usbsnap::unpack(&w[..n]));
+        let mut k = usbsnap::Keeper::default();
+        let reads = 1 + r() % 4;
+        let mut seen = 0;
+        for _ in 0..reads {
+            k.note(|| {
+                seen += 1;
+                s
+            });
+        }
+        assert_eq!((seen, k.take(), k.take()), (1, Some(s), None), "seed {seed}");
+        k.note(|| panic!("read again after the hand over"));
+    }
+    assert!(full > 20, "the full-length case ran {full} times");
+}
+
 /// The USB drive (msc.rs): random command blocks behind a valid CBW header, and damaged CBWs, with random host
 /// lengths, directions and data packets (sometimes none): no panic, a well-formed CSW for every one answered.
 #[test]

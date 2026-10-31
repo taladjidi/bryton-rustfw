@@ -333,6 +333,8 @@ fn a_drop_after_a_snapshot_keeps_its_registers() {
     assert_eq!(kept, usbsnap::pack(&s)[..3]);
     app.usb_dropped(&mut sim);
     assert_eq!(SNAP_BKP.iter().map(|&r| sim.backup[r]).collect::<Vec<_>>(), kept);
+    app.usb_dropped(&mut sim); // the next drop counts again, over word 2
+    assert_eq!(sim.backup[USB_DROPS_BKP], 0x0b00_0001);
     assert_eq!(app.notes.list[0].as_str(), "09:00 USB RECONNECT");
 }
 

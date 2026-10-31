@@ -53,6 +53,9 @@ const fn parse_us(s: Option<&str>) -> u32 {
 // shortcut: a spin, not a sleep; an experiment build's switch, off (a constant 0, so the clippy lint) by default
 #[allow(clippy::absurd_extreme_comparisons)]
 fn pace() {
+    if FULL_SPEED {
+        return; // the default build never stalls
+    }
     let t0 = cycles();
     while cycles().wrapping_sub(t0) < PACE_US * (CPU_HZ / 1_000_000) {}
 }
@@ -80,9 +83,9 @@ fn snapshot(event: u8) -> UsbSnap {
         gintsts: rd(OTG_HS + 0x014),
         gotgint: rd(OTG_HS + 0x004),
         dsts: rd(DSTS),
-        diepint1: rd(OTG_HS + 0x928),
-        dtxfsts1: rd(OTG_HS + 0x918),
-        diepctl1: rd(OTG_HS + 0x920),
+        diepint3: rd(OTG_HS + 0x968),
+        dtxfsts3: rd(OTG_HS + 0x978),
+        diepctl3: rd(OTG_HS + 0x960),
         phy: [0x04, 0x13, 0x15, 0x07].map(ulpi_read),
     }
 }
@@ -228,10 +231,13 @@ impl msc::Pipe for Bulk<'_> {
                     Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
                         self.dev.poll(&mut [&mut *self.cdc, &mut *self.msc]);
                     }
-                    Err(_) => {
+                    Err(UsbError::WouldBlock) => {
+                        // the 1 s guard ran out: nobody is taking the packet. (Any other error is an eject, a bus
+                        // reset or a deconfigure, which says nothing about the PHY.)
                         self.msc.snap.note(|| snapshot(usbsnap::EVENT_SEND));
                         return false;
                     }
+                    Err(_) => return false,
                 }
             }
         })
@@ -427,7 +433,11 @@ impl Link {
         let since = if bus == UsbState::Configured { self.sof.1 } else { self.bus.1 };
         let w = dev::watch_usb(bus, self.was_configured, now_ms.wrapping_sub(since), failed);
         if w == UsbWatch::Drop {
-            self.msc.snap.note(|| snapshot(usbsnap::EVENT_DROP)); // before the reconnect changes the core
+            // the watch's failures only: the frame number frozen while configured, or a suspend after a phase error
+            // (not the host going away or sleeping); before the reconnect changes the core
+            if bus == UsbState::Configured || failed {
+                self.msc.snap.note(|| snapshot(usbsnap::EVENT_DROP));
+            }
             self.reconnect(now_ms);
         }
         w

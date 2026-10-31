@@ -1935,7 +1935,12 @@ fn main() -> ! {
                         l.linger(50);
                         system_reset();
                     }
-                    let dot = match l.watch(policy.now_ms(), app.drive_failed()) {
+                    let watched = l.watch(policy.now_ms(), app.drive_failed());
+                    // before usb_dropped, which leaves registers 0 and 31 to a snapshot written for this drop
+                    if let Some(s) = l.snapshot() {
+                        app.usb_snapshot(&mut board, &s);
+                    }
+                    let dot = match watched {
                         UsbWatch::Up => UsbDot::Ready,
                         UsbWatch::Suspended => UsbDot::Suspended,
                         UsbWatch::Down => UsbDot::Powered,
@@ -1944,9 +1949,6 @@ fn main() -> ! {
                             UsbDot::Powered
                         }
                     };
-                    if let Some(s) = l.snapshot() {
-                        app.usb_snapshot(&mut board, &s);
-                    }
                     // a drive command read or wrote the card, which may have slept and taken over SysTick: without
                     // this, the sleep's end is lost and the main loop stalls while USB is still served (seen on the
                     // unit, 2026-10-24: the uptime stopped, the dev link kept answering)

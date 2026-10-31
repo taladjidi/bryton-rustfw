@@ -87,7 +87,7 @@ What the unit saw at a drop, the suspend watch, and the causes ruled out are dat
 - **The unit** (the failure snapshot, `dev.py usbdrop`, taken when the bulk IN gave up 1 s later): the PHY answered
   every ULPI register read; Function Control 0x45 (XcvrSelect 01 full speed, TermSelect 1), LineState J; the core
   suspended (DSTS.SUSPSTS 1, GINTSTS.ESUSP) and **enumerated at full speed** (DSTS.ENUMSPD 01), so it saw the
-  computer's reset but the high-speed chirp did not complete; GINTSTS bit 23 set (reset detected, inferred).
+  computer's reset but the high-speed chirp did not complete; GINTSTS showed ESUSP.
 - **Reading (inferred):** after the first bad packet nothing passes any more, not even a full-speed SET_ADDRESS,
   while the PHY's register path and its line state sensing still work: the data path (the PHY's transmitter or
   receiver, or the core's transmit side) is stuck until a power cycle. Not the cable (it would let the resets and a
@@ -104,10 +104,12 @@ What the unit saw at a drop, the suspend watch, and the causes ruled out are dat
    0 (tag 0xd1; src/app/device.rs `usb_dropped`). After a replug: `./dev.py peek 0x58004050`. `./dev.py drivelog`
    gives the last 32 commands whenever the link is up.
    Also, at the first failure of a link (the drive's 1 s give-up on a bulk IN packet, or a drop), the core's GINTSTS,
-   GOTGINT, DSTS, DIEPINT1, DTXFSTS1, DIEPCTL1 and the PHY's registers 0x04, 0x13, 0x15, 0x07 (ULPI over GPVNDCTL, "PHY
+   GOTGINT, DSTS, DIEPINT3, DTXFSTS3, DIEPCTL3 and the PHY's registers 0x04, 0x13, 0x15, 0x07 (ULPI over GPVNDCTL, "PHY
    did not answer" if it is silent) are kept in backup registers 15, 0 and 31 (tag 0xd2, 9 bytes: event, PHY 0x04, 0x15, GINTSTS bits 8..23, PHY 0x13, DSTS; the rest does not fit; the layout in src/link/usbsnap.rs). After
    the replug: `tools/dev.py usbdrop`. It tells a PHY that fell over (no answer, or LineState / VbusValid wrong) from a
-   core that did (DSTS, DIEPINT1 / DIEPCTL1 of the drive's IN endpoint). Three words fit (BOARD.md 8: 0 and 31 lose their drive log
+   core that did (DSTS, DIEPINT3 / DIEPCTL3 of the drive's IN endpoint). Endpoint 3 is the drive's bulk IN (the CDC function has 1 and 2). Register 15 is one stock reads at boot (kept only
+   if it is 0x4649), so a snapshot costs stock its remembered value. Read the snapshot right after the replug: the next
+   boot's first failure, or a standby (tag 0x5b in register 0), overwrites words. Three words fit (BOARD.md 8: 0 and 31 lose their drive log
    and count after a snapshot until the next boot). `USB_HS=1 USB_PACE_US=n` paces the bulk IN packets (docs/install.md).
 2. **FIFOs as stock and ST size them:** RX 0x200 words, the bulk IN FIFOs 0x200 (double buffered). The crate
    recomputes them at every bus reset (`configure_all`), so this needs a crate option or a small patch.

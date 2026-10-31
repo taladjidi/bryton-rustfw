@@ -309,8 +309,8 @@ pub struct App {
     told_low: bool,
     /// BATTERY SAVER AUTO has turned the saver on ([`App::saver_on`]): from [`BATTERY_SAVER_PERCENT`] until the charger.
     saver_auto: bool,
-    /// A USB snapshot was written to the backup registers since boot ([`App::usb_snapshot`]): the drop diagnostics
-    /// leave registers 0 and 31 to it.
+    /// A USB snapshot was just written to the backup registers ([`App::usb_snapshot`]): the drop that follows it
+    /// leaves registers 0 and 31 to it.
     usb_snapped: bool,
     /// BATTERY SAVER AUTO's state as the rider was last told.
     saver_said: bool,
