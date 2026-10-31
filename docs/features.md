@@ -576,7 +576,7 @@ chart from the rides the scan read. Each ride has a TSS: from power (NP and the 
 ride without power, the hrTSS of its average heart rate over its moving time (the scan keeps no per-second heart rate,
 so that one is low for a variable ride). CTL (fitness) and ATL (fatigue) are the 42- and 7-day exponentially weighted
 averages of the daily TSS, `x = x + (TSS - x) / N`, starting at 0 four months before the chart; TSB (form) is
-**yesterday's** CTL minus yesterday's ATL, as TrainingPeaks has it. The chart shows 90 days, two columns a day: CTL
+**yesterday's** CTL minus yesterday's ATL, as TrainingPeaks has it (the linear k = 1/N form, inferred to match TrainingPeaks; WKO may use 1 - e^(-1/N), about 7 % different for ATL's last day). The hrTSS of an average heart rate is an estimate: the chart says HR EST when a ride of the window used it, and PARTIAL (for "90 D") when the index was full and reaches back less than the window. A power ride with no power (a meter that dropped out) falls back to its heart rate; without FTP the live ride's score is its heart rate's. The chart shows 90 days, two columns a day: CTL
 orange, ATL yellow, TSB as bars (green over 0, red under), a white cursor under the plot and its day read below
 ("FRI 23 OCT", TSS, CTL, ATL, TSB): Page and Lap step a day, a tap on the plot picks one, Back leaves; the plot is drawn
 once when the screen opens (and again when the scan finishes under it). The fields **CTL**, **ATL** and **TSB** (group

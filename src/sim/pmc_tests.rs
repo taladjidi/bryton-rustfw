@@ -220,7 +220,7 @@ fn fuzz_the_load() {
         let today = (next() % 30_000) as u16;
         let mut l = load::Load::new();
         let (ftp, female) = ((next() % 400) as u16, next() % 2 == 0);
-        l.build(today, &ix, |r| load::ride_tss(r, ftp, 160, 190, female));
+        l.build(today, &ix, |r| load::ride_tss_est(r, ftp, 160, 190, female));
         let d = l.days(next() % 100_000);
         assert!(d.iter().all(|d| d.ctl >= 0 && d.atl >= 0), "averages of non-negative loads");
         assert!(l.months().len() <= load::MONTHS);
@@ -228,4 +228,42 @@ fn fuzz_the_load() {
         built += usize::from(l.months().iter().any(|m| m.rides > 0) && d.iter().any(|d| d.tss > 0));
     }
     assert!(built > 100, "the random indexes reached the sums: {built}");
+}
+
+/// Fuzz-free checks of the review's cases: a full index reaching back less than the window says PARTIAL; HR-scored
+/// rides say HR EST; FTP 0 mid-ride does not make the fields jump.
+#[test]
+fn partial_estimate_and_no_ftp() {
+    // a full index of one ride a day: the oldest is inside the window
+    let mut ix = Index::new();
+    let today = 20_000u16;
+    for back in 0..crate::history::RIDES as u16 {
+        let (y, m, d) = crate::civil_from_days(i32::from(today - back));
+        ix.add(Ride { start: (y, m, d, 8, 0), avg_hr: Some(150), timer_s: 3600, ..NONE });
+    }
+    let mut l = load::Load::new();
+    l.build(today, &ix, |r| load::ride_tss_est(r, 0, 160, 190, false));
+    assert!(l.partial() && l.hr_est(), "128 rides in 128 days, scored from heart rate");
+    let mut few = Index::new();
+    few.add(*ix.get(0).unwrap());
+    l.build(today, &few, |r| load::ride_tss_est(r, 200, 160, 190, false));
+    assert!(!l.partial());
+    // the chart draws the words
+    let (mut sim, mut app) = unit();
+    app.open_load();
+    app.repaint(&mut sim);
+    let before = sim.screen.clone();
+    app.pmc.load = l;
+    app.repaint(&mut sim);
+    assert_ne!(before, sim.screen, "PARTIAL and HR EST are drawn");
+    // FTP lost mid-ride: the live score comes from the heart rate, so the fields do not jump to a huge TSS
+    app.close();
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 120_000);
+    let atl = |a: &App| text(a, Field::Atl).parse::<i32>().unwrap();
+    let was = atl(&app);
+    app.settings.ftp = 0;
+    run(&mut sim, &mut app, 3000);
+    // the scanned power rides have no score without FTP (it falls), the live one must not explode (a TSS over FTP 1)
+    assert!(atl(&app) <= was + 5, "no jump with FTP 0: {was} -> {}", atl(&app));
 }

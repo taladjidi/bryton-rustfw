@@ -11,6 +11,8 @@
 //!   picks one, Back leaves. The plot is drawn once when it opens (and again when the scan finishes under it).
 //! - **MONTHS** (FITNESS): a row per month, newest first; Select changes what every row shows (km, hours, rides, ascent,
 //!   TSS).
+//! - The chart says PARTIAL (for "90 D") when the index was full and reaches back less than the window, and HR EST when a
+//!   ride of the window was scored from its average heart rate.
 //! - What the scan does not give: heart rate per second (a ride without power gets the hrTSS of its average, low for a
 //!   variable ride), and rides past the newest 128 (the index's size).
 
@@ -44,7 +46,13 @@ impl App {
 
     /// The TSS of the ride on its way, not in the scan yet.
     pub(crate) fn pmc_extra(&self) -> u32 {
-        if self.ride.state() == ride::State::Idle { 0 } else { self.tss_now().unwrap_or(0) }
+        let s = &self.settings;
+        match self.ride.state() {
+            ride::State::Idle => 0,
+            // no FTP: power::tss would divide by 1, so the ride's score is its heart rate's, as the rides' are
+            _ if s.ftp == 0 => self.hrtss.score(s.lthr, s.max_hr, s.female).unwrap_or(0),
+            _ => self.tss_now().unwrap_or(0),
+        }
     }
 
     /// Once a pass: builds the load when the scan's results are new.
@@ -59,7 +67,7 @@ impl App {
         }
         let (ftp, lthr, max_hr, female) = (s.ftp, s.lthr, s.max_hr, s.female);
         self.pmc.key = key;
-        self.pmc.load.build(key.1, &self.stock.index, |r| load::ride_tss(r, ftp, lthr, max_hr, female));
+        self.pmc.load.build(key.1, &self.stock.index, |r| load::ride_tss_est(r, ftp, lthr, max_hr, female));
         if matches!(self.screen, Screen::Load(_) | Screen::Menu(Menu::Months, _)) {
             self.show(b); // the scan finished under the chart, or the day turned
         }
@@ -79,7 +87,14 @@ impl App {
     /// The whole screen.
     pub(crate) fn draw_load(&self, c: &mut impl Canvas, cursor: usize) {
         let days = self.pmc.load.days(self.pmc_extra());
-        ui::load::draw_screen(c, &days, cursor, self.pmc.load.is_built(), date_text(self.load_date(cursor)).as_str());
+        let (partial, hr_est) = (self.pmc.load.partial(), self.pmc.load.hr_est());
+        ui::load::draw_screen(
+            c,
+            &days,
+            cursor,
+            (self.pmc.load.is_built(), partial, hr_est),
+            date_text(self.load_date(cursor)).as_str(),
+        );
     }
 
     /// An input on the chart: Next and Prev move the cursor a day, a tap picks one, Back leaves.

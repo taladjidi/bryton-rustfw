@@ -43,16 +43,26 @@ impl Axis {
 }
 
 /// The whole screen: title, legend, plot, cursor and readout. `date` is the cursor day's.
-pub fn draw_screen(c: &mut impl Canvas, d: &[Day; SHOWN], cursor: usize, ready: bool, date: &str) {
+pub fn draw_screen(
+    c: &mut impl Canvas,
+    d: &[Day; SHOWN],
+    cursor: usize,
+    (ready, partial, hr_est): (bool, bool, bool),
+    date: &str,
+) {
     draw_title(c, "TRAINING LOAD");
     if ready {
         let sty = |fg| Style { fg, ..LABEL };
         draw(c, &sty(ACCENT), 8, LIST_Y + 2, Align::Left, "CTL");
         draw(c, &sty(YELLOW), 8 + 4 * 12, LIST_Y + 2, Align::Left, "ATL");
         draw(c, &sty(GREEN), 8 + 8 * 12, LIST_Y + 2, Align::Left, "TSB");
-        draw(c, &sty(GREY), W - 8, LIST_Y + 2, Align::Right, "90 D");
+        draw_in(c, &sty(GREY), 140, LIST_Y + 2, W - 148, Align::Right, if partial { "PARTIAL" } else { "90 D" });
     } else {
         draw_in(c, &LABEL, 0, LIST_Y + 2, W, Align::Centre, "READ RIDES FIRST");
+    }
+    if hr_est {
+        let (x, y) = (W - 8 - 6 * 12, READ_Y + 2 * READ_H);
+        draw_in(c, &Style { fg: GREY, ..LABEL }, x, y, 6 * 12, Align::Right, "HR EST");
     }
     draw_plot(c, d);
     draw_cursor(c, d, cursor, date);
@@ -167,7 +177,7 @@ mod tests {
         for t in metric_ends() {
             let mut f = Frame::themed(t);
             let d = days(|i| (30 + i as i16 / 2, 50 + (i as i16 % 20) * 2, -20 + i as i16 / 3));
-            draw_screen(&mut f, &d, 40, true, "FRI 23 OCT");
+            draw_screen(&mut f, &d, 40, (true, true, true), "FRI 23 OCT");
             assert!(f.filled() > 25_000);
             let has = |col: u16| f.px.iter().any(|&p| p == f.theme.ink(col));
             assert!(has(ACCENT) && has(YELLOW) && has(GREEN) && has(RED) && has(WHITE));

@@ -244,6 +244,11 @@ pub fn wbal_color(j: i32, wprime_j: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tss_holds_its_seconds() {
+        assert_eq!(tss(u32::MAX, u16::MAX, 1), tss(1_000_000, u16::MAX, 1), "no overflow from a damaged file");
+    }
     use crate::ride::Input;
 
     fn riding() -> Ride {

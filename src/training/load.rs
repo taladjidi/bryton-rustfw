@@ -7,12 +7,14 @@
 //! - **The model** (Coggan's Performance Management Chart, "Training and Racing with a Power Meter", 2nd ed. 2010;
 //!   TrainingPeaks' help page on the PMC): CTL and ATL are exponentially weighted averages of the daily TSS with time
 //!   constants of 42 and 7 days, `x[d] = x[d-1] + (TSS[d] - x[d-1]) / N`, and TSB is the form the rider starts the day
-//!   with, **yesterday's CTL minus yesterday's ATL**. (Written from memory of those two sources, not re-read online;
-//!   TrainingPeaks' own rounding is not published, so the numbers can differ by a point or two.) Days without a ride
-//!   count 0; the series starts at 0, `WARM` days before the chart.
+//!   with, **yesterday's CTL minus yesterday's ATL**. Read in: trainerroad.com/forum/t/performance-management-chart/18713,
+//!   groups.google.com/g/golden-cheetah-users/c/h_KSL1oUmLI, uphillathlete.com/?p=60379 and
+//!   fascatcoaching.com/tips/realtstwkt. This is the linear form (weight k = 1/N), **inferred** to match TrainingPeaks;
+//!   WKO may use 1 - e^(-1/N), which weighs ATL's last day about 7 % differently. Days without a ride count 0; the
+//!   series starts at 0, `WARM` days before the chart.
 //! - **Where the rides come from:** the scan's index ([`crate::history::Index`], the newest [`RIDES`] rides). A rider
 //!   with more rides than that in `DAYS` days gets a CTL that is too low at the far end; the oldest month of a full
-//!   index is partial and is left out of [`Load::months`].
+//!   index is partial and is left out of [`Load::months`]; [`Load::partial`] says the window may be cut short.
 //! - Fixed point (1/256), no heap, nothing written to the card.
 
 use crate::history::{Index, RIDES, Ride};
@@ -69,18 +71,28 @@ pub struct Load {
     months: [Month; MONTHS],
     n: usize,
     built: bool,
+    /// The index was full and its oldest ride is inside the window: older rides may be missing.
+    partial: bool,
+    /// A ride of the window got the heart rate estimate.
+    hr_est: bool,
 }
 
 /// TSS of a ride: from power at `ftp`, else the hrTSS of its average heart rate; None with neither.
 pub fn ride_tss(r: &Ride, ftp: u16, lthr: u16, max_hr: u16, female: bool) -> Option<u32> {
+    ride_tss_est(r, ftp, lthr, max_hr, female).map(|t| t.0)
+}
+
+/// As [`ride_tss`], and whether it is the heart rate estimate. A power ride of zero TSS (a meter that dropped out)
+/// with a heart rate falls back to the heart rate.
+pub fn ride_tss_est(r: &Ride, ftp: u16, lthr: u16, max_hr: u16, female: bool) -> Option<(u32, bool)> {
     if ftp > 0
-        && let Some(t) = r.tss(ftp)
+        && let Some(t) = r.tss(ftp).filter(|&t| t > 0 || r.avg_hr.is_none())
     {
-        return Some(t);
+        return Some((t, false));
     }
     let mut h = hrtss::Hrtss::default();
     h.seconds(r.avg_hr.map(u16::from), r.timer_s, max_hr, female);
-    h.score(lthr, max_hr, female)
+    h.score(lthr, max_hr, female).map(|t| (t, true))
 }
 
 fn step(x: i32, tss: u32, n: i32) -> i32 {
@@ -96,14 +108,14 @@ fn sat(v: u32) -> u16 {
 }
 
 fn ym_of(r: &Ride) -> u16 {
-    r.start.0.saturating_mul(12) + u16::from(r.start.1.max(1)) - 1
+    r.start.0.saturating_mul(12).saturating_add(u16::from(r.start.1.max(1)) - 1)
 }
 
 impl Load {
     /// Nothing built yet.
     pub const fn new() -> Self {
         let m = Month { ym: 0, rides: 0, dist_100m: 0, minutes: 0, ascent_m: 0, tss: 0 };
-        Load { daily: [0; DAYS], y: (0, 0), months: [m; MONTHS], n: 0, built: false }
+        Load { daily: [0; DAYS], y: (0, 0), months: [m; MONTHS], n: 0, built: false, partial: false, hr_est: false }
     }
 
     /// Built from a scan.
@@ -111,21 +123,33 @@ impl Load {
         self.built
     }
 
+    /// The index was full and reaches back less than the window: older rides may be missing.
+    pub fn partial(&self) -> bool {
+        self.partial
+    }
+
+    /// A ride of the window was scored from its average heart rate (an estimate).
+    pub fn hr_est(&self) -> bool {
+        self.hr_est
+    }
+
     /// Builds the series ending on `today` (days since 1970) and the month totals from the scan's `index`, `tss`
     /// giving a ride's score (its settings: FTP, LTHR).
-    pub fn build(&mut self, today: u16, ix: &Index, tss: impl Fn(&Ride) -> Option<u32>) {
+    pub fn build(&mut self, today: u16, ix: &Index, tss: impl Fn(&Ride) -> Option<(u32, bool)>) {
         self.daily.fill(0);
+        (self.partial, self.hr_est) = (false, false);
         self.months.fill(Month::default());
         self.n = 0;
         for r in (0..RIDES).map_while(|i| ix.get(i)) {
             let (y, mo, d, ..) = r.start;
             let day = u16::try_from(epoch_s((y, mo, d, 0, 0, 0)) / 86_400).unwrap_or(0);
-            let t = tss(r).unwrap_or(0);
+            let (t, est) = tss(r).unwrap_or((0, false));
             let back = usize::from(today.wrapping_sub(day));
             if day <= today
                 && let Some(slot) = (DAYS - 1).checked_sub(back).and_then(|i| self.daily.get_mut(i))
             {
                 *slot = slot.saturating_add(sat(t));
+                self.hr_est |= est;
             }
             // the index is newest first: a month is one run
             let ym = ym_of(r);
@@ -142,7 +166,12 @@ impl Load {
                 m.tss = m.tss.saturating_add(sat(t));
             }
         }
-        // a full index has cut its oldest month short
+        // a full index has cut its oldest month short, and the window too when its oldest ride is inside it
+        self.partial = ix.get(RIDES - 1).is_some_and(|o| {
+            let (y, m, d, ..) = o.start;
+            let day = u16::try_from(epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0);
+            usize::from(today.saturating_sub(day)) < DAYS
+        });
         if let (Some(old), Some(m)) = (ix.get(RIDES - 1), self.n.checked_sub(1).and_then(|k| self.months.get(k)))
             && m.ym == ym_of(old)
         {
@@ -220,7 +249,7 @@ mod tests {
             ix.add(ride(back, t));
         }
         let mut l = Load::new();
-        l.build(TODAY, &ix, |r| ride_tss(r, FTP, 170, 190, false));
+        l.build(TODAY, &ix, |r| ride_tss_est(r, FTP, 170, 190, false));
         l
     }
 
@@ -244,6 +273,12 @@ mod tests {
         assert_eq!(ride_tss(&hr, 0, 170, 190, false), Some(100), "no FTP set: the heart rate");
         assert_eq!(ride_tss(&NONE, FTP, 170, 190, false), None);
         assert_eq!(ride_tss(&hr, FTP, 0, 190, false), None, "no LTHR");
+        // a meter that dropped out: power ride of 0 TSS with a heart rate falls back to it, and says so
+        let dropped = Ride { np: Some(0), power_s: 3600, avg_hr: Some(170), timer_s: 3600, ..NONE };
+        assert_eq!(ride_tss_est(&dropped, FTP, 170, 190, false), Some((100, true)));
+        assert_eq!(ride_tss_est(&ride(0, 100), FTP, 170, 190, false), Some((100, false)));
+        let no_hr = Ride { np: Some(0), power_s: 3600, ..NONE };
+        assert_eq!(ride_tss_est(&no_hr, FTP, 170, 190, false), Some((0, false)), "no heart rate to fall back on");
     }
 
     /// A steady 100 a day: the averages follow the recurrence and head for 100, ATL faster than CTL.
