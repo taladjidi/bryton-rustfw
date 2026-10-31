@@ -32,6 +32,9 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Heading, sun and battery fields](img/ride-sun-fields.png) |  |  |
 | Heading, sunrise, sunset, time to sunset, ETA ("--" off course) and the unit's battery on a ride page (sim) |  |  |
 
+| ![Power ring](img/gauge-ring-full.png) | ![Heart rate ring and cadence bar](img/gauge-rings-quad.png) | ![The same in LIGHT](img/gauge-rings-quad-light.png) |
+| POWER RING on a 1-field page: the digits sized to the ring's hole, the arc in the zone's colour (sim) | HR RING over CAD BAR (sim) | The same in the LIGHT theme (sim) |
+
 ## Page editor
 
 | | | |

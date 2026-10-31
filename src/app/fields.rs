@@ -324,8 +324,23 @@ impl App {
         self.sun.and_then(|(_, t)| t)
     }
 
+    /// Gauge field `f` in box `bx` now: its value, the value's colour, the gauge's (its zone's, else white) and the
+    /// steps lit: the reading over its full scale (150 % of FTP, the maximum heart rate, 120 rpm).
+    pub(crate) fn dial_now(&self, f: Field, bx: (u32, u32, u32, u32)) -> Drawn {
+        let Some((base, ring)) = f.dial() else { return Drawn::Fixed };
+        let (reading, full) = match base {
+            Field::Power => (self.power_now().map(u32::from), u32::from(self.settings.ftp) * 3 / 2),
+            Field::Hr => (self.live.shown(Metric::Hr).map(u32::from), u32::from(self.settings.max_hr)),
+            _ => (self.live.shown(Metric::Cadence).map(u32::from), 120),
+        };
+        let level = reading.map_or(0, |v| v.min(full) * ui::dial_steps(bx, ring) / full.max(1));
+        let color = Some(self.field_bar(f)).filter(|&c| c != ui::BLACK).unwrap_or(ui::WHITE);
+        Drawn::Dial(self.field_text(f), self.field_color(f), color, level)
+    }
+
     /// The text of ride field `f` now ("--" without a value).
     pub(crate) fn field_text(&self, f: Field) -> Line<8> {
+        let f = f.dial().map_or(f, |d| d.0); // a gauge field shows its plain field's value
         let mut l = Line::new();
         let (r, live) = (&self.ride, |m| self.live.shown(m).map(u32::from)); // one reading a second
         let (p, ftp) = (&self.power, self.settings.ftp);
@@ -658,6 +673,7 @@ impl App {
                 }
                 (v.map(i32::unsigned_abs), !matches!(f, Field::Vam | Field::MaxAlt))
             }
+            Field::PowerRing | Field::HrRing | Field::CadBar => (None, false), // mapped to the plain field above
         };
         match v {
             None => l.push_str("--"),
@@ -676,6 +692,7 @@ impl App {
     /// it drains, the step target by how the reading sits against the band, CLIMB by its grade. Each bar zones exactly
     /// the number in its box, with a margin on the value against flicker at a zone's edge ([`ride::ZoneHold`]).
     pub(crate) fn field_bar(&self, f: Field) -> u16 {
+        let f = f.dial().map_or(f, |d| d.0);
         let zone = |z: u8, power: bool| match (z, power) {
             (0, _) => ui::BLACK,
             (z, true) => ride::power_color(z),
@@ -709,6 +726,7 @@ impl App {
     /// The colour of ride field `f`'s value: white, except the alarms in red (a shifting battery low, off course): the
     /// state is the edge bar's ([`App::field_bar`]).
     pub(crate) fn field_color(&self, f: Field) -> u16 {
+        let f = f.dial().map_or(f, |d| d.0);
         // a shifting battery low (20 % or less, or the ANT+ status low or critical): red, to charge before the ride
         let low = |s: u16| if s >= sensors::SHIFT_STATUS { s >= sensors::SHIFT_STATUS + 4 } else { s <= 20 };
         if f == Field::ShiftBattery && self.live.get(Metric::ShiftBattery).is_some_and(low) {
@@ -749,7 +767,8 @@ mod tests {
         assert_eq!(Field::from_index(107), Field::ClimbLeft);
         assert_eq!([Field::from_index(108), Field::from_index(109)], [Field::TorqueEff, Field::PedalSmooth]);
         assert_eq!([Field::from_index(109), Field::from_index(110)], [Field::PedalSmooth, Field::BattHrs]);
-        assert_eq!(Field::ALL.len(), 111);
+        assert_eq!(Field::ALL.len(), 114);
+        assert_eq!([Field::from_index(111), Field::from_index(113)], [Field::PowerRing, Field::CadBar]);
     }
 
     #[test]

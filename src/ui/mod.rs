@@ -15,10 +15,12 @@ pub mod theme;
 pub mod tiles;
 pub mod trainer;
 
+mod dial;
 mod fields;
 mod gauge;
 mod overview;
 mod strip;
+pub use dial::*;
 pub use fields::*;
 pub use gauge::*;
 pub use overview::*;

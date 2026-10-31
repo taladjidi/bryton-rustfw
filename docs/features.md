@@ -87,6 +87,16 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   clock of arrival (ETA); the distance to go is the course's own field. Batteries: the unit's percent (the status bar's),
   and the power meter's and the heart-rate strap's ANT+ status (page 82: NEW, GOOD, OK, LOW, CRIT). The Di2 battery is the
   shifting field. The sunset alert is in ALERTS (features.md, reminders).
+- **Gauge fields (ui/dial.rs; POWER RING in POWER, HR RING in HEART, CAD BAR in RIDE)**: the plain field's value with a
+  gauge that fills with it. The ring surrounds the value (full at 150 % of FTP, at the maximum heart rate), in the
+  zone's colour with a dark track; the bar runs under the value (cadence, full at 120 rpm). Appended to the field list,
+  so pages.bin keeps them as indexes and needs no new byte; an editor box takes one only where it fits (the ring from
+  120 x 118, the bar a row more than a value). The value in a ring is sized to its hole. Both are drawn with the box;
+  a second sends the bar's columns or the ring's arc between the old level and the new (blits of the arc's bounding
+  boxes, 2 steps of 48 each, less the value's rows) and the value's changed digits; a new zone repaints the lit part.
+  Measured in the sim (power with 0 to 60 W of noise a second, ring 240 x 296): 12 000 px/s, the plain value 1 200, the
+  box whole 50 000. A 2 step move in a half box sends 410 px. Field value scales follow the box already (`box_scale`:
+  width for five characters, height under the label), so a 1-field page draws 8x digits.
 - **BATT HRS (RIDE group, drivers/battery.rs `Battery::minutes_left`)**: the time left on the unit's battery. The drain
   is the least-squares slope of the last 20 minutes on the battery (one smoothed reading a minute, in tenths of a
   percent on the same curve as the strip), so a load sag of 10 mV in the window moves it about 14 %. Shown as "45M"

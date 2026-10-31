@@ -73,6 +73,8 @@ pub(crate) enum Drawn {
     Print(u32),
     /// A value, its colour and its zone bar's (BLACK: none).
     Value(Line<8>, u16, u16),
+    /// A gauge field: the value, its colour, the gauge's colour and the steps lit.
+    Dial(Line<8>, u16, u16, u32),
     /// A map.
     Map(map::Shown),
     /// A graph.
@@ -322,6 +324,7 @@ impl App {
             }
             Widget::Field(Field::WktPower) => Drawn::Gauge(self.gauge_now(ui::gauge_cols(bx))),
             Widget::Field(Field::ClimbPace) => Drawn::Gauge(self.pace_now(ui::gauge_cols(bx))),
+            Widget::Field(f) if f.dial().is_some() => self.dial_now(f, bx),
             Widget::Field(f) => match graph_plot(f) {
                 Some(plot) => Drawn::Graph(self.graph_now(plot, ui::graph_area(bx).2)),
                 None => Drawn::Value(self.field_text(f), self.field_color(f), self.field_bar(f)),
@@ -378,6 +381,9 @@ impl App {
                         self.draw_graph_axes(c, bx, g);
                         let a = ui::graph_area(bx);
                         ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
+                    }
+                    Drawn::Dial(text, fg, color, level) => {
+                        ui::draw_dial(c, bx, f.dial().is_some_and(|d| d.1), text.as_str(), fg, color, level);
                     }
                     Drawn::Value(text, fg, _) => ui::draw_field_value(c, bx, text.as_str(), fg),
                     _ => {}
@@ -678,6 +684,21 @@ impl App {
                     }
                     None => Drawn::Head(was), // the segment just ended: the page leaves at this pass
                 },
+                (Widget::Field(f), Drawn::Dial(t, fg, color, level)) => {
+                    let now = self.dial_now(f, bx);
+                    if let (Drawn::Dial(nt, nfg, ncolor, nlevel), true) = (now, now != old) {
+                        let p = &mut Panel(b, self.area(), self.look());
+                        let ring = f.dial().is_some_and(|d| d.1);
+                        ui::update_dial(
+                            p,
+                            bx,
+                            ring,
+                            (t.as_str(), fg, color, level),
+                            (nt.as_str(), nfg, ncolor, nlevel),
+                        );
+                    }
+                    now
+                }
                 (Widget::Field(f), Drawn::Value(was, was_fg, was_bar)) => {
                     let (text, fg, bar) = (self.field_text(f), self.field_color(f), self.field_bar(f));
                     if bar != was_bar {

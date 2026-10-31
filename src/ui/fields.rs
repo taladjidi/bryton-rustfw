@@ -254,12 +254,19 @@ pub enum Field {
     /// The time left on the battery, "45M" under an hour, "9.5H", then "12H"; "--" on the charger or before the drain
     /// is measured.
     BattHrs,
+    // gauge fields: the plain field's value with a ring or a bar that fills with it (dial.rs). Appended, as above.
+    /// Power with a ring around it: full at 150 % of FTP, in the power zone's colour.
+    PowerRing,
+    /// Heart rate with a ring around it: full at the maximum heart rate, in the heart rate zone's colour.
+    HrRing,
+    /// Cadence with a bar under it: full at 120 rpm.
+    CadBar,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 111] = {
+    pub const ALL: [Field; 114] = {
         use Field::*;
         [
             Time,
@@ -373,6 +380,9 @@ impl Field {
             TorqueEff,
             PedalSmooth,
             BattHrs,
+            PowerRing,
+            HrRing,
+            CadBar,
         ]
     };
 
@@ -495,6 +505,9 @@ impl Field {
             "TE L/R",
             "PS L/R",
             "BATT HRS",
+            "WATTS",
+            "HR",
+            "RPM",
         ];
         LABELS[self as usize]
     }
@@ -550,9 +563,19 @@ impl Field {
             "88:88", "888", "88:88", "888", "888", "888", "888", "8888", "8888", "8888", "8888", "88.88", "88.88",
             "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
             "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT", "88888.8", "88888.8", "88888.8", "888.8",
-            "888.8", "", "88:88", "88.8|KM", "888/888", "888/888", "8.8H",
+            "888.8", "", "88:88", "88.8|KM", "888/888", "888/888", "8.8H", "8888", "888", "888",
         ];
         WIDEST[self as usize]
+    }
+
+    /// A gauge field: the plain field it shows and whether its gauge is a ring (else a bar).
+    pub fn dial(self) -> Option<(Field, bool)> {
+        match self {
+            Field::PowerRing => Some((Field::Power, true)),
+            Field::HrRing => Some((Field::Hr, true)),
+            Field::CadBar => Some((Field::Cadence, false)),
+            _ => None,
+        }
     }
 
     /// Its box holds a picture (map, graph), not a value.
@@ -608,13 +631,14 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
             &[
                 Time, Timer, TripTime, Laps, LastLap, Speed, Dist, AvgSpeed, MaxSpeed, MaxCadence, Cadence, AvgCadence,
                 LapTime, LapDist, Kcal, Temp, Map, Heading, Sunrise, Sunset, ToSunset, TimeToDest, Eta, UnitBatt,
-                BattHrs,
+                BattHrs, CadBar,
             ],
         ),
         (
             "POWER",
             &[
                 Power,
+                PowerRing,
                 Power3s,
                 Power10s,
                 Power30s,
@@ -643,7 +667,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
                 PowerBatt,
             ],
         ),
-        ("HEART", &[Hr, AvgHr, MaxHr, Dfa, Rmssd, PctMaxHr, PctLthr, HrZone, HrZoneTime, HrBatt]),
+        ("HEART", &[Hr, HrRing, AvgHr, MaxHr, Dfa, Rmssd, PctMaxHr, PctLthr, HrZone, HrZoneTime, HrBatt]),
         ("CLIMB", &[Ascent, Vam, Grade, MaxAlt, Descent, LapAscent, LapDescent, UphillKm, DownhillKm]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),
