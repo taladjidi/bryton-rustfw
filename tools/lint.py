@@ -157,13 +157,17 @@ def key_search(k):
     """-> a function data -> bool: does `data` carry key `k` in one of the forms a person or a tool writes."""
     rk = k[::-1]
     hexes = (k.hex(), rk.hex())  # the reverse is a little-endian u64 literal
+    if len(k) % 8 == 0 and len(k) > 8:  # a 16-byte key as two little-endian u64 words
+        hexes += (b"".join(k[i : i + 8][::-1] for i in range(0, len(k), 8)).hex(),)
+    rep = repr(k)[2:-1].encode()  # Python's bytes repr: printable bytes are written as characters
     b64 = []
     for off in range(3):
         s = base64.b64encode(bytes(off) + k).decode().rstrip("=")
         b64.append(s[(0, 2, 3)[off] : -1].encode())  # drop the chars the prefix and the padding share
 
     def hit(data):
-        if k in data or any(b in data for b in b64):
+        unwrapped = data.replace(b"\n", b"").replace(b"\r", b"")  # base64 wrapped at 64 or 76 columns
+        if k in data or rep in data or any(b in data or b in unwrapped for b in b64):
             return True
         if len(data) > 2_000_000:  # shortcut: no text forms in a huge file, raise if one is ever needed
             return False
@@ -171,7 +175,8 @@ def key_search(k):
         flat = re.sub(r"[^0-9a-f]", "", text.replace("0x", "").replace("\\x", ""))
         if any(h in flat for h in hexes):
             return True
-        toks = (int(t, 16) if t[1:2] == "x" else int(t) for t in re.findall(r"0x[0-9a-f]+|\d+", text))
+        # int() raises past 4300 digits: a long decimal run is no byte, so it is skipped
+        toks = (int(t, 16) if t[1:2] == "x" else (int(t) if len(t) <= 3 else 256) for t in re.findall(r"0x[0-9a-f]+|\d+", text))
         nums = bytes(v for v in toks if v < 256)
         return k in nums or rk in nums
 
@@ -299,11 +304,14 @@ def selftest_keys():
         "decimal": ("[" + ", ".join(map(str, key)) + "]").encode(),
         "rustfmt": ("const K: [u8; 8] = [\n" + "".join(f"    0x{p},\n" for p in pairs) + "];\n").encode(),
         "bytes repr": ("b'" + "".join(f"\\x{p}" for p in pairs) + "'").encode(),
+        "repr": repr(key).encode(),
         "le u64": ("0x" + "_".join(key[::-1].hex()[i : i + 4] for i in range(0, 16, 4))).encode(),
     }
     for pre in range(3):
         for post in range(3):
             forms[f"b64 {pre}/{post}"] = base64.b64encode(b"\x11\x22"[:pre] + key + b"ab"[:post]) + b"\n"
+    wrapped = base64.b64encode(b"\x11\x22" + key + b"ab").decode()
+    forms["b64 wrapped 64"] = "\n".join(wrapped[i : i + 64] for i in range(0, len(wrapped), 64)).encode()
     leak = [key.hex(), key[::-1].hex()]
     with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as h:
         root, home = Path(d), Path(h)
@@ -314,6 +322,9 @@ def selftest_keys():
         (root / "src/part.rs").write_text("[0xa1, 0x3c, 0x5e, 0x77, 0x09, 0xd2, 0xb4]\n")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             assert keys(root, [home]) == []  # near misses and unrelated numbers are no hit
+            (root / "src/digits.rs").write_text("9" * 5000 + "\n")  # a long decimal run: no hit, no crash
+            assert keys(root, [home]) == []
+            (root / "src/digits.rs").unlink()
             for name, data in forms.items():
                 (root / "src/new.rs").write_bytes(data)  # untracked, never added: still scanned
                 got = keys(root, [home])
@@ -327,6 +338,11 @@ def selftest_keys():
         text = out.getvalue()
         assert "no key files, skipped" in text and "checked ant_key.bin" in text, text
         assert not any(x in text for x in leak), "key printed"
+    wide = bytes.fromhex("3fa19c0d52e7b48a6e0c15d9a2f4871b")  # made-up 16-byte key
+    words = b"".join(wide[i : i + 8][::-1] for i in range(0, 16, 8)).hex()
+    wide_hit = key_search(wide)
+    assert wide_hit(("const W: [u64; 2] = [0x" + words[:16] + ", 0x" + words[16:] + "];").encode())
+    assert not wide_hit(b"const W: [u64; 2] = [0x0000000000000000, 0x0000000000000001];")
     if shutil.which("ruff"):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "tools").mkdir()
