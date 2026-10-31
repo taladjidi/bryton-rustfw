@@ -110,8 +110,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
   (features.md, SYSTEM > SCREENSHOT and "Fault log").
 
 **3c. Medium** (implementer, sonnet):
-- history (phase 4b): the ride index with TSS, the power curve screen, personal records and best efforts, this
-  ride's power curve, training load (CTL, ATL, TSB) with its chart and fields, month totals, each ride matched to
+- history (phase 4b): the ride index with TSS, the power curve screen (done: 90 days and this ride's, app/curve.rs; the all-time curve and
+  the date of each best are not), personal records and best efforts, training load (CTL, ATL, TSB) with its chart and fields, month totals, each ride matched to
   the planned workout; the scan's results written by critical;
 - courses: ~~reverse, navigate to the start (straight line), retrace along the ride's own track~~ done, sim (features.md, ride menu: REVERSE COURSE, BACK TO START); the way back drawn differently from the course, routed navigation (3d), turn cues from
   stock's `voiceTrip.fit`, POIs and peaks along a course where the map has them;

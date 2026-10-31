@@ -7,6 +7,7 @@ mod barometer;
 mod climbs_done;
 mod clock;
 mod courses;
+mod curve;
 mod device;
 mod drive;
 mod editor;

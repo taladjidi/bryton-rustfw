@@ -186,21 +186,7 @@ impl App {
                 self.draw_edit_frame(c);
             }
             Screen::Menu(menu, sel) => {
-                let mut title = Line::<16>::new();
-                match menu {
-                    Menu::Page(OVERVIEW) => title.push_str("OVERVIEW"),
-                    Menu::Page(QUICK) => title.push_str("QUICK STATUS"),
-                    Menu::Steps if !self.plan.workout.name().is_empty() => title.push_str(self.plan.workout.name()),
-                    Menu::Edit(k) => {
-                        title.push_str("PAGE ");
-                        title.push_u32(self.edit.map_or(0, |e| e.page) as u32 + 1);
-                        title.push_str(" BOX ");
-                        title.push_u32(k as u32 + 1);
-                    }
-                    Menu::Page(n) => self.page_label(n, &mut title),
-                    _ => title.push_str(menu_title(menu)),
-                }
-                ui::draw_title(c, title.as_str());
+                ui::draw_title(c, self.menu_title(menu).as_str());
                 self.draw_menu_rows(c, menu, sel);
             }
             Screen::Summary => self.draw_summary(c),
@@ -225,6 +211,7 @@ impl App {
             Screen::SegmentResult => self.draw_segment_result(c),
             Screen::RampResult => self.draw_ramp(c),
             Screen::PowerCal => self.draw_powercal(c),
+            Screen::Curve(k) => self.draw_curve(c, k),
             Screen::Notif(k, top) => self.draw_notif(c, k, top),
             Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"), env!("GIT_DATE")),
             Screen::Nearby => {
@@ -241,6 +228,26 @@ impl App {
         if self.phone.ringing {
             ui::draw_call(c, self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()));
         }
+    }
+
+    /// A menu's title: a page's name (it changes with the profile: [`App::update_menu_rows`] draws it again), the
+    /// workout's, or the menu's own.
+    pub(crate) fn menu_title(&self, menu: Menu) -> Line<16> {
+        let mut title = Line::<16>::new();
+        match menu {
+            Menu::Page(OVERVIEW) => title.push_str("OVERVIEW"),
+            Menu::Page(QUICK) => title.push_str("QUICK STATUS"),
+            Menu::Steps if !self.plan.workout.name().is_empty() => title.push_str(self.plan.workout.name()),
+            Menu::Edit(k) => {
+                title.push_str("PAGE ");
+                title.push_u32(self.edit.map_or(0, |e| e.page) as u32 + 1);
+                title.push_str(" BOX ");
+                title.push_u32(k as u32 + 1);
+            }
+            Menu::Page(n) => self.page_label(n, &mut title),
+            _ => title.push_str(menu_title(menu)),
+        }
+        title
     }
 
     /// The boxes of the page on screen and what each holds (none on a menu or a list). The status strip is not
@@ -605,6 +612,7 @@ impl App {
         }
         if let Screen::Menu(menu, sel) = self.screen {
             let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
+            self.menu_title_print = title_print(self.menu_title(menu).as_str());
             self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, first, i));
             self.menu_head = core::array::from_fn(|i| self.menu_print(menu, sel, first, i, false));
         }

@@ -12,6 +12,9 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **The power curve screen (app/curve.rs, ui/curve.rs, HISTORY > FITNESS > POWER CURVE and the ride menu)**: sim only.
+  To check on the unit: the 90-day curve after the scan, the green curve growing during a ride with the meter, the
+  cursor by Page and by tap, both ends of the axis legible, and the redraw cost of opening it (`tools/dev.py info`).
 - **Course reverse, the way to the start and BACK TO START (app/courses.rs, nav/course)**: sim only. To check on a ride:
   follow a course, REVERSE COURSE and ride it the other way (turns the other way round); start away from a course and
   see NEXT TURN give the compass point and distance until joined; ride out, BACK TO START in the ride menu, and ride
