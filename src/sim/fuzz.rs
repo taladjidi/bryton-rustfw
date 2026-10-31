@@ -5439,16 +5439,19 @@ fn settings_file_time_zone_bytes() {
     assert!(zones > 1000 && rules > 1000 && wild > 1000 && short > 1000, "{zones} {rules} {wild} {short}");
 }
 
-/// LEVEL STEP and SLOPE SCALE (settings bytes 168, 169): random bytes, in range and wild, files of 168 to 170 bytes;
+/// LEVEL STEP and SLOPE SCALE (settings bytes 168, 169) and STEEP DESCENT (171): random bytes, in range and wild, files of
+/// 168 to 172 bytes;
 /// the indexes read always lie inside their tables. The fuzz reaches kept and wild bytes.
 #[test]
 fn settings_file_trainer_bytes() {
     use crate::{LEVEL_STEPS, SLOPE_SCALES, SettingsCopy};
     let mut next = xorshift(0x1e7e);
-    let (mut kept, mut wild) = (0u32, 0u32);
+    let (mut kept, mut wild, mut steep_kept, mut steep_wild) = (0u32, 0u32, 0u32, 0u32);
     for _ in 0..20_000 {
         let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = 168 + (next() % 3) as usize;
+        let len = 168 + (next() % 5) as usize;
+        let c = if next().is_multiple_of(2) { (next() % 4) as u8 } else { next() as u8 };
+        sec[28 + 171] = c;
         let (a, b) = (
             if next().is_multiple_of(2) { (next() % 3) as u8 } else { next() as u8 },
             if next().is_multiple_of(2) { (next() % 4) as u8 } else { next() as u8 },
@@ -5459,10 +5462,16 @@ fn settings_file_trainer_bytes() {
         sec[508..].copy_from_slice(&crc.to_le_bytes());
         let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
         assert!(st.level_step < LEVEL_STEPS.len() && st.slope_scale < SLOPE_SCALES.len());
+        assert!(st.steep_descent < crate::STEEP_DESCENT_PCT.len());
+        steep_kept += u32::from(len > 171 && usize::from(c) < crate::STEEP_DESCENT_PCT.len());
+        steep_wild += u32::from(len > 171 && usize::from(c) >= crate::STEEP_DESCENT_PCT.len());
         kept += u32::from(len > 168 && usize::from(a) < LEVEL_STEPS.len());
         wild += u32::from(len > 169 && usize::from(b) >= SLOPE_SCALES.len());
     }
-    assert!(kept > 1000 && wild > 1000, "{kept} {wild}");
+    assert!(
+        kept > 1000 && wild > 1000 && steep_kept > 500 && steep_wild > 500,
+        "{kept} {wild} {steep_kept} {steep_wild}"
+    );
 }
 
 /// LEVEL mode under random keys and LEVEL STEPs: the level stays 1 to 20 and the brake at most 100 %.
@@ -5722,7 +5731,7 @@ fn places_files() {
     assert!(reach.iter().all(|&n| n > 20), "{reach:?}");
 }
 
-/// BATTERY SAVER's settings byte (app/settings_file.rs, byte 171): any byte value, in files cut before it or whole,
+/// BATTERY SAVER's settings byte (app/settings_file.rs, byte 172): any byte value, in files cut before it or whole,
 /// reads as one of the three modes and the same one as its position says; the counts assert each path was reached.
 #[test]
 fn battery_saver_byte() {
@@ -5732,10 +5741,10 @@ fn battery_saver_byte() {
     for _ in 0..5000 {
         let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
         let byte = if next().is_multiple_of(2) { (next() % 3) as u8 } else { next() as u8 };
-        sec[28 + 171] = byte;
+        sec[28 + 172] = byte;
         let cut = !next().is_multiple_of(4);
         if !cut {
-            sec[6..8].copy_from_slice(&171u16.to_le_bytes());
+            sec[6..8].copy_from_slice(&172u16.to_le_bytes());
         }
         let crc = crate::inflate::crc32(sec[..508].iter().copied());
         sec[508..].copy_from_slice(&crc.to_le_bytes());

@@ -414,6 +414,8 @@ pub struct App {
     ahead: Option<(&'static mut climbs_ahead::Ahead, &'static mut [u16])>,
     /// The last and the longest tile load of the road ahead, and the longest slice, us ([`App::ahead_tile_us`]).
     ahead_us: AheadUs,
+    /// The steep descent said last: its place on the ride's odometer, m ([`App::descent_second`]).
+    descent_said: Option<i32>,
     /// The time spent so far on the tile being loaded, us.
     ahead_acc: u32,
     /// Where the CPU's time goes, by section of the pass (link/prof.rs; the dev link's `prof`).
@@ -577,6 +579,7 @@ impl App {
             thresholds: None,
             ahead: None,
             ahead_us: AheadUs::default(),
+            descent_said: None,
             ahead_acc: 0,
             drive: msc::Drive::new(),
             restart: false,

@@ -210,6 +210,9 @@ impl App {
     /// The course fields' text: "--" without a course followed and a fix on it.
     pub(crate) fn course_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
+        if f == Field::DescentAhead {
+            return self.descent_text();
+        }
         if f == Field::NextPoi {
             match self.next_poi() {
                 Some((_, m)) => push_dist(&mut l, m),
@@ -301,7 +304,7 @@ impl App {
 }
 
 /// A distance as the next turn's field shows it: 10 m steps under a kilometre, then km.
-fn push_dist(l: &mut Line<8>, m: u32) {
+pub(crate) fn push_dist(l: &mut Line<8>, m: u32) {
     match m {
         0..1000 => {
             l.push_u32(m / 10 * 10);

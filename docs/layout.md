@@ -272,6 +272,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   read 8 headers a pass, the matcher fed once a second during a ride, the active segment loaded from its file in 1 KB reads, what
   the screens (S4) read (`segment_now`, `events`); the efforts (S5): each finish's times kept in RAM, written after the
   ride's save (`<id>.pr`, `efforts.csv`), the `.pr` the PR target at the next load. Nothing drawn.
+- `src/app/descents.rs`: the DESCENT AHEAD field and the STEEP DESCENT alert (the next descent of the course followed, else of the road ahead).
 - `src/app/climbs_done.rs`: CLIMBS DONE, the climbs ridden to the top this ride (bounded list, bookkeeping, the ride menu rows).
 - `src/app/segment_ui.rs`: the live segment screens' glue (step S4): the banners for the matcher's events, the head box of the CLIMB page
   (`head_text`), the result card, the SEGMENTS menu's list rows (headers read from the card).

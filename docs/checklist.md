@@ -255,6 +255,7 @@ Others
 - [x] Climb detection on a course: length, grade, what is left (stock, Garmin, Wahoo, Karoo): sim; a banner and a beep at each start
 - [~] Climb page that opens by itself at a climb's start (stock, Garmin): sim; no off switch
 - [~] Climbs without a course, predicted from the road ahead (stock, Karoo, Garmin): sim; not seen on the unit
+- [~] Descents and a steep descent warning (Garmin, Karoo): sim; STEEP DESCENT 8, 10 or 12 % banner 300 m ahead, DESCENT AHEAD field; not seen on the unit
 - [ ] Climb filter: all or medium and above (stock)
 - [x] Gradient-coloured climb profile in sections (stock, all): sim
 - [x] Pacing on a climb from FTP and W' balance (ours, Garmin): sim; not yet on a real climb
