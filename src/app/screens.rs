@@ -126,7 +126,10 @@ impl App {
     /// A ride runs (or its card is on screen, or its save is still running): what a reset or switching off would lose
     /// (main.rs does not reset on a USB unplug then).
     pub fn busy(&self) -> bool {
-        self.ride.state() != ride::State::Idle || self.screen == Screen::Summary || !self.ride_settled()
+        self.ride.state() != ride::State::Idle
+            || self.screen == Screen::Summary
+            || self.rec.clean.phase() != recorder::Phase::Done
+            || self.rec.full.phase() != recorder::Phase::Done // a save in progress, not a card that keeps failing
     }
 
     /// The card of the ride (the one running, or the last one): its numbers and title, as a past ride's

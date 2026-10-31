@@ -56,7 +56,7 @@ impl App {
                     b.backup_write(FAULT_BKP, if self.up_ms >= FAULT_CLEAR_MS { 0 } else { cur | faultlog::LOGGED });
                 }
             }
-            Err(fat::Error::NotFat32) => {} // no volume (a card stock never formatted): nothing to say
+            Err(fat::Error::NotFat32) => self.fault_given_up(b, word), // no volume (a card stock never formatted)
             Err(_) => {
                 self.fats_unsure(); // the next writes compare the FAT copies first
                 if tries == 0 {
@@ -64,8 +64,17 @@ impl App {
                 }
                 if tries < RETRIES {
                     self.fault_due = Some((word, at, self.up_ms.saturating_add(RETRY_MS), tries + 1));
+                } else {
+                    self.fault_given_up(b, word);
                 }
             }
+        }
+    }
+
+    /// No line will be written this boot: past the minute the marker goes, or every boot would find it again.
+    fn fault_given_up(&self, b: &mut impl Board, word: u32) {
+        if self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 8 == word >> 8 {
+            b.backup_write(FAULT_BKP, 0);
         }
     }
 }

@@ -452,3 +452,35 @@ fn busy_until_the_save_is_settled() {
     assert!(app.ride_settled());
     assert_eq!(app.screen() == Screen::Summary, app.busy());
 }
+
+/// As `fault_marker_survives_the_minute_until_logged`, the second boot running past its minute before the save: one
+/// line, the marker cleared once logged.
+#[test]
+fn fault_marker_cleared_when_logged_after_the_minute() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    let word = marker(0, Kind::Stack, 0);
+    let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, word);
+    run(&mut sim, &mut app, 120_000);
+    let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, sim.backup[FAULT_BKP]);
+    run(&mut sim, &mut app, 70_000);
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(sim.backup[FAULT_BKP], 0);
+    assert_eq!(log(&sim.emmc.image).unwrap().lines().count(), 1);
+}
+
+/// A card that keeps failing with no ride: not busy once the resume back-off is over.
+#[test]
+fn not_busy_with_a_failing_card_and_no_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.writable = false;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 120_000);
+    assert!(!app.busy());
+}
