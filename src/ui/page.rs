@@ -191,9 +191,11 @@ impl Page {
 
     /// `new` in at cell `at`, the fields from there moved on (the last one out).
     fn insert_field(&mut self, at: usize, new: Field) {
-        if at < CELLS {
-            self.fields.copy_within(at..CELLS - 1, at + 1);
-            self.fields[at] = new;
+        if let Some(tail) = self.fields.get_mut(at..) {
+            tail.rotate_right(1);
+            if let Some(f) = tail.first_mut() {
+                *f = new;
+            }
         }
     }
 
@@ -240,6 +242,8 @@ impl Page {
     /// let p = p.split_down(0, Power).unwrap();
     /// assert_eq!((p.used(), &p.fields[..2]), (&[(1, 1), (1, 1)][..], &[Speed, Power][..]));
     /// ```
+    // Indexing: r < ROWS (from place); r + 1 < ROWS since fewer than ROWS rows are used (checked first).
+    #[allow(clippy::indexing_slicing)]
     pub fn split_down(&self, k: usize, new: Field) -> Result<Page, &'static str> {
         let (r, _) = self.place(k).ok_or("NO BOX")?;
         if self.cells() >= CELLS {
@@ -271,6 +275,8 @@ impl Page {
     /// let (q, k) = q.merge(0).unwrap(); // the map takes the row under it
     /// assert_eq!((q.used(), k, &q.fields[..3]), (&[(3, 1), (1, 2)][..], 0, &[Map, Power, Dist][..]));
     /// ```
+    // Indexing: r < ROWS (from place); other is the neighbour row of r among the used rows (at least two).
+    #[allow(clippy::indexing_slicing)]
     pub fn merge(&self, k: usize) -> Result<(Page, usize), &'static str> {
         let (r, j) = self.place(k).ok_or("NO BOX")?;
         let mut p = *self;
@@ -301,7 +307,8 @@ impl Page {
     pub fn resize(&self, k: usize, taller: bool) -> Result<Page, &'static str> {
         let (r, _) = self.place(k).ok_or("NO BOX")?;
         let mut p = *self;
-        let s = &mut p.rows[r].0;
+        let Some(row) = p.rows.get_mut(r) else { return Err("NO BOX") };
+        let s = &mut row.0;
         *s = match (taller, *s) {
             (true, SHARE) => return Err("TALLEST"),
             (false, 1) => return Err("SHORTEST"),
@@ -357,7 +364,7 @@ impl Page {
             return Err("TOO SMALL");
         }
         let mut p = *self;
-        p.fields[k] = f;
+        *p.fields.get_mut(k).ok_or("NO BOX")? = f;
         Ok(p)
     }
 }
@@ -499,7 +506,9 @@ impl Meta {
     pub fn insert(&mut self, at: usize) {
         if at < crate::PAGES {
             self.names.copy_within(at..crate::PAGES - 1, at + 1);
-            self.names[at] = [b' '; NAME_CHARS];
+            if let Some(n) = self.names.get_mut(at) {
+                *n = [b' '; NAME_CHARS];
+            }
             let low = (1u8 << at) - 1;
             self.off = (self.off & low | (self.off & !low) << 1) & ((1u8 << crate::PAGES) - 1);
         }
@@ -545,12 +554,13 @@ impl Meta {
     /// From a sector: None where absent, damaged or holding a character code the alphabet does not have.
     fn read(s: &[u8; 512]) -> Option<Meta> {
         let b = s.get(META_AT..META_CRC_AT + 2)?;
-        if b[0] & 0x80 == 0 || b[META_CRC_AT - META_AT..] != meta_crc(s).to_le_bytes() {
+        let (&b0, &b1) = (b.first()?, b.get(1)?);
+        if b0 & 0x80 == 0 || b.get(META_CRC_AT - META_AT..)? != meta_crc(s).to_le_bytes() {
             return None;
         }
-        let mut m = Meta { off: b[1] & ((1u8 << crate::PAGES) - 1), auto: b[0] & 3, ..Meta::DEFAULT };
-        for (n, c) in m.names.iter_mut().zip(b.get(2..)?.chunks_exact(3)) {
-            let bits = u32::from_le_bytes([c[0], c[1], c[2], 0]);
+        let mut m = Meta { off: b1 & ((1u8 << crate::PAGES) - 1), auto: b0 & 3, ..Meta::DEFAULT };
+        for (n, &[c0, c1, c2]) in m.names.iter_mut().zip(b.get(2..)?.as_chunks::<3>().0) {
+            let bits = u32::from_le_bytes([c0, c1, c2, 0]);
             for (i, ch) in n.iter_mut().enumerate() {
                 *ch = *ALPHABET.get((bits >> (6 * i) & 63) as usize)?;
             }
@@ -690,7 +700,9 @@ impl Saved {
         s[4..8].copy_from_slice(&self.seq.to_le_bytes());
         s[8] = self.count as u8;
         for (k, w) in self.words.iter().chain(&self.was).enumerate() {
-            s[12 + 4 * k..16 + 4 * k].copy_from_slice(&w.to_le_bytes());
+            for (d, b) in s.iter_mut().skip(12 + 4 * k).take(4).zip(w.to_le_bytes()) {
+                *d = b;
+            }
         }
         for (p, out) in self.pages.iter().zip(s[PAGES_AT..CRC_AT].chunks_exact_mut(PAGE_BYTES)) {
             write_page(p, out);
@@ -807,7 +819,10 @@ impl Saved {
             return None;
         }
         let count = usize::from(s[8]);
-        let word = |k: usize| u32::from_le_bytes([s[12 + 4 * k], s[13 + 4 * k], s[14 + 4 * k], s[15 + 4 * k]]);
+        let word = |k: usize| {
+            let b = s.get(12 + 4 * k..16 + 4 * k).and_then(|b| <[u8; 4]>::try_from(b).ok());
+            b.map_or(0, u32::from_le_bytes)
+        };
         let mut pages = [BLANK; crate::PAGES];
         for (k, (p, b)) in pages.iter_mut().zip(s.get(PAGES_AT..CRC_AT)?.chunks_exact(PAGE_BYTES)).enumerate() {
             *p = read_page(b)?;

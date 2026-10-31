@@ -11,7 +11,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::needless_pass_by_ref_mut)]
-#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable)
+)]
 
 mod app;
 pub mod drivers;

@@ -75,8 +75,10 @@ fn step_of(x: i32, y: i32) -> u32 {
 /// The point at radius `r` on the border of step `s` (0 to 48), relative to the centre, x right and y up.
 fn edge(s: u32, r: i32) -> (i32, i32) {
     let (t, k) = ((s % 6) as i32, (s % RING_STEPS) / 6);
-    let (vx, vy) =
-        [(t, 6), (6, 6 - t), (6, -t), (6 - t, -6), (-t, -6), (-6, t - 6), (-6, t), (t - 6, 6)][k as usize % 8];
+    let (vx, vy) = [(t, 6), (6, 6 - t), (6, -t), (6 - t, -6), (-t, -6), (-6, t - 6), (-6, t), (t - 6, 6)]
+        .get(k as usize % 8)
+        .copied()
+        .unwrap_or((0, 0));
     let (vx, vy) = (vx * 64, vy * 64); // the root of a small number is coarse
     let n = ((vx * vx + vy * vy) as u32).isqrt().max(1) as i32;
     (vx * r / n, vy * r / n)

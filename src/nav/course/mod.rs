@@ -630,6 +630,8 @@ impl Course {
     }
 
     /// Keeps a point; when full, every other point goes first and the step doubles.
+    // Indexing: i < POINTS / 2, so 2 * i < POINTS and i / 32 < gaps.len() (POINTS / 32).
+    #[allow(clippy::indexing_slicing)]
     fn put(&mut self, p: (i32, i32), d: u32, a: u16) {
         if self.len >= POINTS {
             for i in 0..POINTS / 2 {

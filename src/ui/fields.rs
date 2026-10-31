@@ -531,7 +531,7 @@ impl Field {
             "NEXT POI",
             "NEXT DESC",
         ];
-        LABELS[self as usize]
+        LABELS.get(self as usize).copied().unwrap_or("")
     }
 
     /// Its label in the units chosen (UNITS, TEMPERATURE): a field the units do not touch keeps [`Field::label`].

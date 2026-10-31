@@ -107,6 +107,11 @@ const ARROW: i32 = 9;
 /// sin of the 16 compass directions (22.5 degrees apart, clockwise from north), x 256.
 const SIN16: [i32; 16] = [0, 98, 181, 237, 256, 237, 181, 98, 0, -98, -181, -237, -256, -237, -181, -98];
 
+/// `SIN16[i % 16]`.
+fn sin16(i: usize) -> i32 {
+    SIN16.get(i % 16).copied().unwrap_or(0)
+}
+
 /// cos and sin x 256 of map step `rot` (22.5 degrees clockwise from north, `View::rot`), exact at 0, 90, 180 and 270.
 ///
 /// ```
@@ -115,7 +120,7 @@ const SIN16: [i32; 16] = [0, 98, 181, 237, 256, 237, 181, 98, 0, -98, -181, -237
 /// ```
 pub fn rot_cs(rot: u8) -> (i32, i32) {
     let r = usize::from(rot % 16);
-    (SIN16[(r + 4) % 16], SIN16[r])
+    (sin16((r + 4) % 16), sin16(r))
 }
 
 /// A rectangle in screen pixels, signed so shapes may start off it: x, y, width, height.
@@ -272,7 +277,11 @@ impl Track {
         }
         if self.len == POINTS {
             for i in 0..POINTS / 2 {
-                self.pts[i] = self.pts[2 * i];
+                if let Some(&q) = self.pts.get(2 * i)
+                    && let Some(slot) = self.pts.get_mut(i)
+                {
+                    *slot = q;
+                }
             }
             self.len = POINTS / 2;
             self.step_m = self.step_m.saturating_mul(2);
@@ -402,7 +411,7 @@ impl View {
         // heading up, "ahead" is the top of the map, which may lag the heading by a step
         let dir = if track.up { usize::from(track.rot) } else { Arrow::dir(track.heading) };
         let at = |s: i32| (i64::from(s) * ahead / 256) as i32;
-        Some(View { cx: p.0 + at(SIN16[dir]), cy: p.1 + at(SIN16[(dir + 4) % 16]), mpp16, rot: track.rot })
+        Some(View { cx: p.0 + at(sin16(dir)), cy: p.1 + at(sin16((dir + 4) % 16)), mpp16, rot: track.rot })
     }
 
     /// Where point `p` (metres) falls on screen.
@@ -467,7 +476,7 @@ impl Arrow {
     /// Its corners at `size` pixels from the centre: the tip ahead, the two others behind at +-135 degrees.
     fn corners(&self, size: i32) -> [(i32, i32); 3] {
         let at = |d: usize, len: i32| {
-            let (s, c) = (SIN16[d % 16], SIN16[(d + 4) % 16]);
+            let (s, c) = (sin16(d % 16), sin16((d + 4) % 16));
             (self.x + s * len / 256, self.y - c * len / 256) // screen y points south
         };
         [at(self.dir, size), at(self.dir + 6, size * 3 / 4), at(self.dir + 10, size * 3 / 4)]
