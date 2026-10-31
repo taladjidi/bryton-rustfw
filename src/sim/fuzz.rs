@@ -5730,3 +5730,35 @@ fn places_files() {
     std::println!("places files reached: {reach:?}");
     assert!(reach.iter().all(|&n| n > 20), "{reach:?}");
 }
+
+/// BATTERY SAVER's settings byte (app/settings_file.rs, byte 172): any byte value, in files cut before it or whole,
+/// reads as one of the three modes and the same one as its position says; the counts assert each path was reached.
+#[test]
+fn battery_saver_byte() {
+    use crate::{SaverMode, SettingsCopy};
+    let mut next = xorshift(0x5a7e);
+    let (mut modes, mut wild, mut short) = ([0u32; 3], 0u32, 0u32);
+    for _ in 0..5000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let byte = if next().is_multiple_of(2) { (next() % 3) as u8 } else { next() as u8 };
+        sec[28 + 172] = byte;
+        let cut = !next().is_multiple_of(4);
+        if !cut {
+            sec[6..8].copy_from_slice(&172u16.to_le_bytes());
+        }
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let read = SettingsCopy::from_sector(&sec).expect("a whole copy").settings.saver;
+        if !cut {
+            assert_eq!(read, SaverMode::Off, "a copy ending before the byte");
+            short += 1;
+        } else if byte < 3 {
+            assert_eq!(read as u8, byte);
+            modes[usize::from(byte)] += 1;
+        } else {
+            assert_eq!(read, SaverMode::Off, "byte {byte}");
+            wild += 1;
+        }
+    }
+    assert!(modes.iter().all(|&n| n > 300) && wild > 300 && short > 300, "{modes:?} {wild} {short}");
+}

@@ -173,6 +173,11 @@ A feature not listed here was seen on the unit.
 - **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: seen on the unit 2026-10-29: 7 passes a second idle
   on the overview (`prof`, 1 s window, 0.91 % awake). Still to see: a real press of each key, after 30 s idle, acts at
   once (not up to 250 ms later).
+- **BATTERY SAVER (SYSTEM, `App::saver_on`)**: sim only. On the unit: the same ride (same route, brightness, pages) once with
+  it OFF and once ON, the battery's percent and `tools/dev.py info` awake share read at the start and after an hour: the
+  drain per hour ON against OFF (estimated gain in docs/power.md "Battery saver"); the "S" in the strip; the map
+  redrawing every 5 s on a map page; AUTO turning on at 20 % with its notice and off on the charger; the receiver in cyclic
+  tracking (CFG-PM-OPERATEMODE 2) while ON; the recording unchanged (checkpoints as usual).
 - **GNSS SYSTEMS and AssistNow Offline (`gnss::systems`, `mga::Ano`, `tools/assist.py`)**: on the host only. On the unit:
   CFG-VALGET of the CFG-SIGNAL-GPS/GAL/BDS/GLO_ENA keys (0x1031001f, 21, 22, 25) reads what the setting says after
   power-up and after a change (and the receiver keeps tracking after the restart of its engine); with `mga.ubx` on

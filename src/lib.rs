@@ -307,6 +307,10 @@ pub struct App {
     notes: Notices,
     /// The battery was reported low.
     told_low: bool,
+    /// BATTERY SAVER AUTO has turned the saver on ([`App::saver_on`]): from [`BATTERY_SAVER_PERCENT`] until the charger.
+    saver_auto: bool,
+    /// BATTERY SAVER AUTO's state as the rider was last told.
+    saver_said: bool,
     /// A ride was just started from a key: the page is drawn again (its map and graphs start over).
     new_ride: bool,
     /// The card's map and elevation profile as drawn (set when the card is shown).
@@ -527,6 +531,8 @@ impl App {
             heading: None,
             notes: Notices::new(),
             told_low: false,
+            saver_auto: false,
+            saver_said: false,
             graph_whole: false,
             plot_taps: [[None; page::CELLS]; PAGES + 1],
             ride_started: RideStart::new((2000, 1, 1), (0, 0)),

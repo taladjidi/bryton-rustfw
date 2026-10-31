@@ -309,6 +309,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `assist_tests.rs` (GNSS SYSTEMS and the AssistNow Offline messages to the receiver), `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`), `laps_tests.rs` (a past ride's lap list) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `curve_tests.rs` (the power curve screen), `pmc_tests.rs` (training load, its chart and the month rows), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
+- `src/sim/saver_tests.rs`: BATTERY SAVER: each knob applied and given back, AUTO at 20 % once and off on the charger, the recording unchanged, the strip tag.
 - `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
   counted while riding, a system that goes silent.

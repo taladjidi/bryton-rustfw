@@ -1685,6 +1685,9 @@ mod fuzz;
 mod recorder_tests;
 
 #[cfg(test)]
+mod saver_tests;
+
+#[cfg(test)]
 mod drive_tests;
 
 #[cfg(test)]
