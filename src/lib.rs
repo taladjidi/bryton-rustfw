@@ -309,6 +309,9 @@ pub struct App {
     told_low: bool,
     /// BATTERY SAVER AUTO has turned the saver on ([`App::saver_on`]): from [`BATTERY_SAVER_PERCENT`] until the charger.
     saver_auto: bool,
+    /// A USB snapshot was written to the backup registers since boot ([`App::usb_snapshot`]): the drop diagnostics
+    /// leave registers 0 and 31 to it.
+    usb_snapped: bool,
     /// BATTERY SAVER AUTO's state as the rider was last told.
     saver_said: bool,
     /// A ride was just started from a key: the page is drawn again (its map and graphs start over).
@@ -534,6 +537,7 @@ impl App {
             notes: Notices::new(),
             told_low: false,
             saver_auto: false,
+            usb_snapped: false,
             saver_said: false,
             graph_whole: false,
             plot_taps: [[None; page::CELLS]; PAGES + 1],

@@ -323,6 +323,19 @@ fn the_first_usb_snapshot_is_kept() {
     assert_eq!(sim.backup[SNAP_BKP[0]] & 15, u32::from(usbsnap::EVENT_SEND));
 }
 
+/// A drop after the snapshot leaves registers 15, 0 and 31 holding it (the drive log and the count wait).
+#[test]
+fn a_drop_after_a_snapshot_keeps_its_registers() {
+    let (mut sim, mut app) = started();
+    let s = usbsnap::UsbSnap { event: 2, dsts: 0x0012_3406, gintsts: 0x0001_2300, ..Default::default() };
+    app.usb_snapshot(&mut sim, &s);
+    let kept: Vec<u32> = SNAP_BKP.iter().map(|&r| sim.backup[r]).collect();
+    assert_eq!(kept, usbsnap::pack(&s)[..3]);
+    app.usb_dropped(&mut sim);
+    assert_eq!(SNAP_BKP.iter().map(|&r| sim.backup[r]).collect::<Vec<_>>(), kept);
+    assert_eq!(app.notes.list[0].as_str(), "09:00 USB RECONNECT");
+}
+
 /// The two diagnostics that share registers 0 and 31 (settings.rs) never read each other's words as their own: the
 /// standby breadcrumbs' reset flags, whose top byte can be the drop count's tag 0x0b raw, are tagged 0x5c, so a drop
 /// after them counts from 1 (the review of 2026-10-25).

@@ -81,10 +81,10 @@ What the unit saw at a drop, the suspend watch, and the causes ruled out are dat
    gives the last 32 commands whenever the link is up.
    Also, at the first failure of a link (the drive's 1 s give-up on a bulk IN packet, or a drop), the core's GINTSTS,
    GOTGINT, DSTS, DIEPINT1, DTXFSTS1, DIEPCTL1 and the PHY's registers 0x04, 0x13, 0x15, 0x07 (ULPI over GPVNDCTL, "PHY
-   did not answer" if it is silent) are kept in backup register 15 (tag 0xd2; the layout in src/link/usbsnap.rs). After
+   did not answer" if it is silent) are kept in backup registers 15, 0 and 31 (tag 0xd2, 9 bytes: event, PHY 0x04, 0x15, GINTSTS bits 8..23, PHY 0x13, DSTS; the rest does not fit; the layout in src/link/usbsnap.rs). After
    the replug: `tools/dev.py usbdrop`. It tells a PHY that fell over (no answer, or LineState / VbusValid wrong) from a
-   core that did (DSTS, DIEPINT1 / DIEPCTL1 of the drive's IN endpoint). Only the first word fits for now (BOARD.md 8:
-   no other register is free); `SNAP_BKP` takes more. `USB_HS=1 USB_PACE_US=n` paces the bulk IN packets (docs/install.md).
+   core that did (DSTS, DIEPINT1 / DIEPCTL1 of the drive's IN endpoint). Three words fit (BOARD.md 8: 0 and 31 lose their drive log
+   and count after a snapshot until the next boot). `USB_HS=1 USB_PACE_US=n` paces the bulk IN packets (docs/install.md).
 2. **FIFOs as stock and ST size them:** RX 0x200 words, the bulk IN FIFOs 0x200 (double buffered). The crate
    recomputes them at every bus reset (`configure_all`), so this needs a crate option or a small patch.
 3. **Reset the PHY on a drop:** PA7 low, then high, 200 ms, then a core soft reset and a new enumeration. This is what

@@ -109,6 +109,7 @@ pub const CLIMB: usize = PAGES + 3;
 //
 //   reg      owner                                                  name
 //   0        diagnostics: USB drive at a drop (0xd1), standby (0x5b) USB_LAST_BKP = STANDBY_BKP
+//            (after a USB snapshot of the boot, its word 1, tag 0xd2; 31 holds word 2)
 //   1..4     stock (clock set, clock, USB mode)                     -
 //   5..8, 10 paired ANT+ sensors (tag 0xa5)                         sensors::Kind::backup
 //   9, 12,13 stock (12: its Nordic image; 13: last battery mV)      -
@@ -135,11 +136,11 @@ pub const USB_DROPS_BKP: usize = 31;
 pub const USB_LAST_BKP: usize = 0;
 
 /// RTC backup registers holding the USB snapshot of the first failure of a link ([`usbsnap::pack`], tag 0xd2, read by
-/// `tools/dev.py usbdrop`). Only 15 is free (stock reads it at boot but keeps its value only if it is 0x4649; an old
-/// build's page word, tag 0xa, which a 0xd2 word is not), so the first word only: the event, which PHY registers
-/// answered, USB Interrupt Status and Debug (LineState). [`usbsnap::WORDS`] are packed; give this array the other
-/// seven registers and the rest is stored too.
-pub const SNAP_BKP: [usize; 1] = [15];
+/// `tools/dev.py usbdrop`). 15 is the only free one (stock reads it at boot but keeps its value only if it is 0x4649;
+/// an old build's page word, tag 0xa, which a 0xd2 word is not); words 1 and 2 go to 0 and 31, the diagnostics
+/// [`USB_LAST_BKP`] and [`USB_DROPS_BKP`], which [`App::usb_dropped`] leaves alone once a snapshot is written since
+/// boot. Three words are 9 bytes, through DSTS; [`usbsnap::WORDS`] are packed, the most telling bytes first.
+pub const SNAP_BKP: [usize; 3] = [15, 0, 31];
 
 /// The standby breadcrumbs (main.rs `standby`: the power button did not start the unit after switching off,
 /// 2026-10-25): tag 0x5b in bits 24..31, the boots since standby was entered in bits 16..23, the times WFI returned

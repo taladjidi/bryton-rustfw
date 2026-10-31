@@ -351,8 +351,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
   0x52430001, lib.rs `RIDE_BKP`), 31 (USB drops the link recovered from, tag 0x0b, `USB_DROPS_BKP`) and 0 (what the USB drive saw last at a
   drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md) and 15 (the USB snapshot of a link's first failure, tag 0xd2, `SNAP_BKP`: 8 words of
-  3 bytes are packed, src/link/usbsnap.rs, but only 15 is free, so the first word is kept: event, which PHY registers
-  answered, USB Interrupt Status 0x13, Debug 0x15; `tools/dev.py usbdrop` decodes it). The ULPI registers are read through
+  3 bytes are packed, src/link/usbsnap.rs, but only 15 is free, so words 1 and 2 go to 0 and 31 (after a snapshot
+  they carry tag 0xd2 and `usb_dropped` no longer writes its drive log and count there until the next boot): 9 bytes, event and which
+  PHY registers answered, PHY 0x04, PHY 0x15, GINTSTS bits 8..23, PHY 0x13, DSTS; `tools/dev.py usbdrop` decodes it). The ULPI registers are read through
   OTG_GPVNDCTL (0x40040034: RegData 7:0, RegAddr 21:16, RegWr 22, NewRegReq 25, VStsDone 27). Otherwise none free: the standby breadcrumbs share 0 (tag 0x5b) and 31 (the
   reset flags, tag 0x5c), the last writer winning; the whole table is in src/app/settings.rs.
 - **Setting it** (this firmware, from the phone's time; not yet seen on the unit): RM0399's calendar initialisation:

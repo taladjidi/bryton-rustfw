@@ -177,6 +177,10 @@ impl App {
     /// The computer dropped the USB device and the board reconnected it: counted (read it with `tools/dev.py peek`) and
     /// said in a notice.
     pub fn usb_dropped(&mut self, b: &mut impl Board) {
+        if self.usb_snapped {
+            self.notice("USB RECONNECT");
+            return; // registers 0 and 31 hold the snapshot's words now
+        }
         let n = b.backup_read(USB_DROPS_BKP);
         let n = if n >> 24 == 0x0b { n & 0xffff } else { 0 };
         b.backup_write(USB_DROPS_BKP, 0x0b00_0000 | (n + 1).min(0xffff));
@@ -196,6 +200,7 @@ impl App {
         for (r, w) in SNAP_BKP.iter().zip(usbsnap::pack(s)) {
             b.backup_write(*r, w);
         }
+        self.usb_snapped = true;
     }
 
     /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,

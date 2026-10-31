@@ -38,12 +38,14 @@ pub const WORDS: usize = 8;
 /// A packed word's tag, bits 24..31.
 pub const TAG: u32 = 0xd2;
 
-/// The snapshot as bytes: event (low nibble) with which PHY registers answered (high nibble), the PHY registers
-/// 0x13, 0x15, 0x04, 0x07 (the most telling first, since fewer than [`WORDS`] registers may be free), then
-/// GINTSTS, DSTS (3 bytes: 22 bits), DIEPINT1 and DTXFSTS1 (2 bytes), DIEPCTL1, GOTGINT (2 bytes), little endian.
+/// The snapshot as bytes, the most telling first (fewer than [`WORDS`] registers may be free): 0 event (low nibble)
+/// with which PHY registers answered (high nibble, in `phy` order), 1 PHY 0x04, 2 PHY 0x15, 3..4 GINTSTS bits 8..23,
+/// 5 PHY 0x13, 6..8 DSTS (22 bits), 9 GINTSTS bits 0..7, 10 GINTSTS bits 24..31, 11..12 DIEPINT1, 13..14 DTXFSTS1,
+/// 15..18 DIEPCTL1, 19..20 GOTGINT (16 bits), 21 PHY 0x07; little endian.
 fn bytes(s: &UsbSnap) -> [u8; WORDS * 3] {
     let p = |i: usize| s.phy.get(i).copied().flatten().unwrap_or(0);
     let ok = (0..4).fold(0, |a, i| a | u8::from(s.phy.get(i).is_some_and(Option::is_some)) << i);
+    let (g, d) = (s.gintsts.to_le_bytes(), s.dsts.to_le_bytes());
     let mut b = [0u8; WORDS * 3];
     let mut at = 0;
     let mut put = |v: &[u8]| {
@@ -52,13 +54,12 @@ fn bytes(s: &UsbSnap) -> [u8; WORDS * 3] {
         }
         at += v.len();
     };
-    put(&[s.event & 15 | ok << 4, p(1), p(2), p(0), p(3)]);
-    put(&s.gintsts.to_le_bytes());
-    put(&s.dsts.to_le_bytes()[..3]);
+    put(&[s.event & 15 | ok << 4, p(0), p(2), g[1], g[2], p(1), d[0], d[1], d[2], g[0], g[3]]);
     put(&s.diepint1.to_le_bytes()[..2]);
     put(&s.dtxfsts1.to_le_bytes()[..2]);
     put(&s.diepctl1.to_le_bytes());
     put(&s.gotgint.to_le_bytes()[..2]);
+    put(&[p(3)]);
     b
 }
 
@@ -86,15 +87,16 @@ pub fn unpack(words: &[u32]) -> Option<UsbSnap> {
     }
     let n = |at: usize, len: usize| (0..len).fold(0u32, |a, k| a | u32::from(b[at + k]) << (8 * k));
     let phy = |i: usize, at: usize| (b[0] >> 4 & (1 << i) != 0).then_some(b[at]);
+    let g = |k: usize| u32::from(b[[9, 3, 4, 10][k]]) << (8 * k);
     Some(UsbSnap {
         event: b[0] & 15,
-        phy: [phy(0, 3), phy(1, 1), phy(2, 2), phy(3, 4)],
-        gintsts: n(5, 4),
-        dsts: n(9, 3),
-        diepint1: n(12, 2),
-        dtxfsts1: n(14, 2),
-        diepctl1: n(16, 4),
-        gotgint: n(20, 2),
+        phy: [phy(0, 1), phy(1, 5), phy(2, 2), phy(3, 21)],
+        gintsts: g(0) | g(1) | g(2) | g(3),
+        dsts: n(6, 3),
+        diepint1: n(11, 2),
+        dtxfsts1: n(13, 2),
+        diepctl1: n(15, 4),
+        gotgint: n(19, 2),
     })
 }
 
@@ -143,7 +145,7 @@ mod tests {
     fn pack_round_trips_and_tags_every_word() {
         let w = pack(&sample());
         assert!(w.iter().all(|w| w >> 24 == TAG));
-        assert_eq!(w[0], 0xd2 << 24 | 0x16 << 8 | 0xb2, "event 2, PHY 0x04 0x13 0x07 answered, then 0x13");
+        assert_eq!(w[0], 0xd2 << 24 | 0x45 << 8 | 0xb2, "event 2, PHY 0x04 0x13 0x07 answered, then 0x04");
         let mut s = sample();
         s.dsts &= 0x003f_ffff; // 22 bits
         assert_eq!(unpack(&w), Some(s));
@@ -151,9 +153,15 @@ mod tests {
     }
 
     #[test]
-    fn a_prefix_of_words_keeps_the_telling_phy_registers() {
+    fn a_prefix_of_words_keeps_the_telling_registers() {
         let s = unpack(&pack(&sample())[..1]).unwrap();
-        assert_eq!((s.event, s.phy[1], s.phy[2], s.gintsts), (EVENT_DROP, Some(0x16), None, 0));
+        assert_eq!((s.event, s.phy[0], s.phy[2], s.gintsts), (EVENT_DROP, Some(0x45), None, 0));
+    }
+
+    #[test]
+    fn three_words_reach_dsts() {
+        let s = unpack(&pack(&sample())[..3]).unwrap();
+        assert_eq!((s.gintsts, s.dsts, s.phy[1]), (0x04f0_1030 & 0x00ff_ff00, 0x003f_ff06, Some(0x16)));
     }
 
     #[test]

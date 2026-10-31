@@ -235,40 +235,55 @@ def prof_table(p, title=None):
 
 
 BKP0 = 0x58004050                    # RTC_BKP0R; BKP n is at BKP0 + 4 n
-SNAP_BKP = [15]                      # src/app/settings.rs SNAP_BKP: the registers holding the snapshot, in order
+SNAP_BKP = [15, 0, 31]                    # src/app/settings.rs SNAP_BKP: the registers holding the snapshot, in order
 LINE = ('SE0', 'J', 'K', 'SE1')      # ULPI 1.1 Debug register, LineState bits 1:0
 EVENTS = {1: 'a bulk IN packet gave up after 1 s', 2: 'the watch decided a drop'}
 
 
+def bits(v, names):
+    return ' '.join(nm for k, nm in names if v >> k & 1)
+
+
 def usbdrop_decode(words):
-    """The snapshot of src/link/usbsnap.rs (tag 0xd2, 3 bytes a word) as text lines; the layout is mirrored there."""
+    """The snapshot of src/link/usbsnap.rs (tag 0xd2, 3 bytes a word, order in its `bytes`) as text lines."""
     if not words or words[0] >> 24 != 0xd2:
         return ['no USB snapshot kept (none yet, or the registers hold something else)']
     b = bytearray(24)
     have = 0
     for i, w in enumerate(words[:8]):
-        if w >> 24 == 0xd2:
+        if w >> 24 == 0xd2:               # an old 0xd1 drive word or 0x0b drop count in 0 / 31 is not ours
             b[3 * i:3 * i + 3] = (w & 0xffffff).to_bytes(3, 'little')
             have = 3 * i + 3
     ans = lambda i: b[0] >> 4 & 1 << i
-    n = lambda at, ln: int.from_bytes(b[at:at + ln], 'little') if have >= at + ln else None
+    has = lambda at, ln=1: have >= at + ln
+    num = lambda at, ln: int.from_bytes(b[at:at + ln], 'little') if has(at, ln) else None
     hexv = lambda v, w: 'not stored' if v is None else f'{v:0{w}x}'
-    phy = lambda i, at: 'PHY did not answer' if not ans(i) else ('not stored' if have <= at else f'{b[at]:02x}')
+    phy = lambda i, at: 'PHY did not answer' if not ans(i) else (f'{b[at]:02x}' if has(at) else 'not stored')
     out = [f'event: {EVENTS.get(b[0] & 15, "unknown " + str(b[0] & 15))}']
-    out.append(f'PHY 0x04 Function Control:  {phy(0, 3)}')
-    out.append(f'PHY 0x07 Interface Control: {phy(3, 4)}')
-    v13 = phy(1, 1)
-    if ans(1):
-        names = ('HostDisconnect', 'VbusValid', 'SessValid', 'SessEnd', 'IdGnd')
-        v13 += ' (' + ' '.join(nm for k, nm in enumerate(names) if b[1] >> k & 1) + ')'
+    f4 = phy(0, 1)
+    if ans(0) and has(1):
+        v = b[1]
+        f4 += f' (XcvrSelect {v & 3}, TermSelect {v >> 2 & 1}, OpMode {v >> 3 & 3}, Reset {v >> 5 & 1}, SuspendM {v >> 6 & 1})'
+    out.append(f'PHY 0x04 Function Control: {f4}')
+    out.append('PHY 0x15 Debug: ' + (f'{b[2]:02x} (LineState {LINE[b[2] & 3]})' if ans(2) and has(2) else phy(2, 2)))
+    v13 = phy(1, 5)
+    if ans(1) and has(5):
+        v13 += ' (' + bits(b[5], enumerate(('HostDisconnect', 'VbusValid', 'SessValid', 'SessEnd', 'IdGnd'))) + ')'
     out.append(f'PHY 0x13 USB Interrupt Status: {v13}')
-    out.append('PHY 0x15 Debug: ' + (f'{b[2]:02x} (LineState {LINE[b[2] & 3]})' if ans(2) else phy(2, 2)))
-    for name, at, ln in (('GINTSTS', 5, 4), ('DSTS', 9, 3), ('DIEPINT1', 12, 2), ('DTXFSTS1', 14, 2), ('DIEPCTL1', 16, 4),
-                         ('GOTGINT', 20, 2)):
-        out.append(f'{name}: {hexv(n(at, ln), 2 * ln)}')
-    d = n(9, 3)
+    out.append(f'PHY 0x07 Interface Control: {phy(3, 21)}')
+    if has(3, 2):
+        g = b[3] | b[4] << 8
+        out.append(f'GINTSTS bits 8..23: {g:04x} << 8 ({bits(g << 8, ((10, "ESUSP"), (11, "USBSUSP"), (12, "USBRST"), (13, "ENUMDNE"), (18, "IEPINT")))})')
+    else:
+        out.append('GINTSTS bits 8..23: not stored')
+    d = num(6, 3)
+    out.append(f'DSTS: {hexv(d, 6)}')
     if d is not None:
-        out.append(f'  DSTS: suspend {d & 1}, speed {(d >> 1) & 3} (0 high, 1 full), FNSOF {(d >> 8) & 0x3fff}')
+        out.append(f'  suspend {d & 1}, ENUMSPD {d >> 1 & 3} (0 high, 1 full), FNSOF {d >> 8 & 0x3fff}')
+    if has(9, 2) and has(10):
+        out.append(f'GINTSTS bits 0..7 and 24..31: {b[9]:02x}, {b[10]:02x}')
+    for name, at, ln in (('DIEPINT1', 11, 2), ('DTXFSTS1', 13, 2), ('DIEPCTL1', 15, 4), ('GOTGINT', 19, 2)):
+        out.append(f'{name}: {hexv(num(at, ln), 2 * ln)}')
     return out
 
 
@@ -341,13 +356,20 @@ def selftest():
         assert 'not in its folder' in str(e), e
     else:
         raise AssertionError('a file ls does not list was copied')
-    # one word (event 2 = drop; PHY 0x04 and 0x13 answered, 0x13 = 0x16; 0x15 did not): the rest is not stored
-    t = usbdrop_decode([0xd2 << 24 | 0x16 << 8 | 0x32])
+    # one word (event 2 = drop; PHY 0x04 0x13 0x07 answered, 0x15 did not; 0x04 = 0x45)
+    t = usbdrop_decode([0xd2 << 24 | 0x45 << 8 | 0xb2])
     assert 'event: the watch decided a drop' in t and 'PHY 0x15 Debug: PHY did not answer' in t, t
-    assert 'GINTSTS: not stored' in t and any('VbusValid SessValid' in x for x in t), t
-    full = usbdrop_decode([0xd2 << 24 | 0x01 << 16 | 0x16 << 8 | 0x72, 0xd2 << 24 | 0x45 << 0, 0xd2 << 24 | 0x30 << 16])
-    assert 'PHY 0x15 Debug: 01 (LineState J)' in full and 'PHY 0x04 Function Control:  45' in full, full
+    assert 'GINTSTS bits 8..23: not stored' in t and 'DSTS: not stored' in t, t
+    assert any('XcvrSelect 1, TermSelect 1, OpMode 0, Reset 0, SuspendM 1' in x for x in t), t
+    # three words (15, 0, 31): event 1, all answered, 0x04 = 0x45, 0x15 = 1 (J), GINTSTS 0x00041c00, 0x13 = 0x16, DSTS 0x000a06
+    full = usbdrop_decode([0xd2 << 24 | 0x01 << 16 | 0x45 << 8 | 0xf1, 0xd2 << 24 | 0x16 << 16 | 0x04 << 8 | 0x1c,
+                           0xd2 << 24 | 0x0a << 16 | 0x00 << 8 | 0x06])
+    assert 'PHY 0x15 Debug: 01 (LineState J)' in full, full
+    assert any('USBSUSP USBRST IEPINT' in x for x in full), full
+    assert any('(HostDisconnect' not in x and 'VbusValid SessValid' in x for x in full), full
+    assert 'DSTS: 0a0006' in full and 'DIEPCTL1: not stored' in full, full
     assert usbdrop_decode([0x1234])[0].startswith('no USB snapshot')
+    assert usbdrop_decode([0xd2 << 24 | 0xf1, 0xd100_0000, 0x0b00_0003])[0].startswith('event')   # old words: untagged, skipped
     print('dev.py selftest ok')
 
 
