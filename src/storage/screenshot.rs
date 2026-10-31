@@ -136,15 +136,19 @@ pub struct Shot {
 }
 
 impl Shot {
-    /// Room checked, the folder found (never made: [`Error::NotFound`] when it is missing, nothing written), `name`
-    /// free in it: [`Error::Refused`] when the card has not the file's room and [`FULL_RESERVE`] left (FSInfo's count;
-    /// unknown counts as none); None when the name is taken (a shot in the same second).
+    /// Room checked, the folder found (never made: [`Error::NotFound`] when the folder is missing or is a plain file,
+    /// nothing written), `name` free in it: [`Error::Refused`] when the card has not the file's room and
+    /// [`FULL_RESERVE`] left (FSInfo's count; unknown counts as none); None when the name is taken (a shot in the same
+    /// second).
     pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, name: &str) -> Result<Option<Shot>, Error> {
         let free = fat.free_clusters(d)?.map_or(0, u64::from) * u64::from(fat.cluster_bytes());
         if free < u64::from(SIZE) + FULL_RESERVE {
             return Err(Error::Refused);
         }
         let dir = fat.open(d, DIR)?;
+        if !dir.dir {
+            return Err(Error::NotFound); // a plain file named Screenshot: never written into
+        }
         match fat.find(d, dir, name) {
             Err(Error::NotFound) => Ok(Some(Shot { dir, h: Handle::default() })),
             Ok(_) => Ok(None),

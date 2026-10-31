@@ -66,7 +66,7 @@ fn screenshot_saves_the_panel() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "the menus left: {:?}", app.screen());
     app.step(&mut sim);
-    let shots = files(&sim.emmc.image, "Screenshot").expect("the folder made");
+    let shots = files(&sim.emmc.image, "Screenshot").expect("the folder");
     assert_eq!(shots.len(), 1, "{shots:?}");
     let (name, size) = &shots[0];
     assert!(name.starts_with("20261023090") && name.ends_with(".bmp") && name.len() == 18, "{name}");
@@ -119,18 +119,43 @@ fn screenshot_without_its_folder_writes_nothing() {
     let (mut sim, mut app) = started();
     sim.emmc.image = crate::fat::tests::image();
     run(&mut sim, &mut app, 3000);
-    let root = {
-        let mut d = Ram(sim.emmc.image.clone(), 0);
-        let fat = Fat::mount(&mut d).unwrap();
-        let at = fat.lba(fat.root().cluster) as usize * 512;
-        at..at + 512
-    };
+    let root = root_cluster(&sim.emmc.image);
     let before = sim.emmc.image[root.clone()].to_vec();
     app.shot_due = true;
     app.step(&mut sim);
     assert!(newest_notice(&app).ends_with("NO SCREENSHOT FOLDER"), "{}", newest_notice(&app));
     assert_eq!(files(&sim.emmc.image, "Screenshot"), None, "no folder made");
-    assert_eq!(sim.emmc.image[root], before[..], "the root directory sector unchanged");
+    assert_eq!(sim.emmc.image[root], before[..], "the root directory cluster unchanged");
+    assert_eq!(fsck(&sim.emmc.image), Ok(0));
+}
+
+/// The bytes of the root directory's whole cluster (`\Activities` and `\System` live in it).
+fn root_cluster(img: &[u8]) -> std::ops::Range<usize> {
+    let mut d = Ram(img.to_vec(), 0);
+    let fat = Fat::mount(&mut d).unwrap();
+    let at = fat.lba(fat.root().cluster) as usize * 512;
+    at..at + fat.cluster_bytes() as usize
+}
+
+/// A plain empty file named `Screenshot` in the root, where the folder goes: refused like a missing folder, and
+/// nothing is written into the file or the root cluster.
+#[test]
+fn screenshot_with_a_file_named_screenshot_writes_nothing() {
+    let (mut sim, mut app) = started();
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let root = fat.root();
+    fat.link(&mut d, root, "Screenshot", &crate::fat::write::Handle::default(), (0, 0)).unwrap();
+    sim.emmc.image = d.0;
+    run(&mut sim, &mut app, 3000);
+    let root = root_cluster(&sim.emmc.image);
+    let before = sim.emmc.image[root.clone()].to_vec();
+    app.shot_due = true;
+    app.step(&mut sim);
+    assert!(newest_notice(&app).ends_with("NO SCREENSHOT FOLDER"), "{}", newest_notice(&app));
+    let file = crate::storage::trash::tests::file(&sim.emmc.image, "Screenshot");
+    assert_eq!(file, Some(Vec::new()), "the plain file untouched");
+    assert_eq!(sim.emmc.image[root], before[..], "the root cluster unchanged");
     assert_eq!(fsck(&sim.emmc.image), Ok(0));
 }
 
