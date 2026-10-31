@@ -11,11 +11,23 @@ use crate::text::clips::{self, Clip};
 use std::string::String;
 
 /// Clippings not fixed yet: (screen path contains, string prefix, why).
-const KNOWN: &[(&str, &str, &str)] = &[(
-    "BLE NEARBY",
-    "",
-    "the list shows 12 characters at 2x; a long device name needs a 1x font or two lines (layout decision)",
-)];
+const KNOWN: &[(&str, &str, &str)] = &[
+    (
+        "BLE NEARBY",
+        "DECATH TRAINER 4",
+        "the list shows 12 characters at 2x; a long device name needs a 1x font or two lines (layout decision)",
+    ),
+    (
+        "BLE NEARBY",
+        "Wahoo KICKR 5A3F",
+        "the list shows 12 characters at 2x; a long device name needs a 1x font or two lines (layout decision)",
+    ),
+    (
+        "BLE NEARBY",
+        "HRM-Dual 1234567",
+        "the list shows 12 characters at 2x; a long device name needs a 1x font or two lines (layout decision)",
+    ),
+];
 
 struct Walk {
     n: usize,
@@ -52,10 +64,11 @@ impl Walk {
 fn key(sim: &mut Sim, app: &mut App, w: &mut Walk, k: &'static str) {
     let p = match k {
         "page" => Press::Short(Key::Page),
+        "page --long" => Press::Long(Key::Page),
         "lap" => Press::Short(Key::Lap),
         "start" => Press::Short(Key::Start),
         "back" => Press::Short(Key::Back),
-        _ => Press::Long(Key::Page),
+        _ => unreachable!("unknown key {k}"),
     };
     w.keys.push(k);
     app.press(sim, p);
@@ -231,7 +244,7 @@ fn pass(w: &mut Walk, imperial: bool) {
     w.keys.clear();
     w.cur = format!("{tag} OVERVIEW");
     w.shot(&sim);
-    key(&mut sim, &mut app, w, "long_page");
+    key(&mut sim, &mut app, w, "page --long");
     visit(&mut sim, &mut app, w, Menu::Main, &format!("{tag} MAIN"));
     app.screen = Screen::Main;
     for _ in 0..3 {
@@ -251,7 +264,7 @@ fn pass(w: &mut Walk, imperial: bool) {
         w.drain();
         w.shot(&sim);
     }
-    key(&mut sim, &mut app, w, "long_page");
+    key(&mut sim, &mut app, w, "page --long");
     if let Screen::Menu(m, 0) = app.screen() {
         visit(&mut sim, &mut app, w, m, &format!("{tag} RIDE MENU"));
     }
@@ -274,6 +287,9 @@ fn walk_every_screen() {
     let mut w =
         Walk { n: 0, keys: Vec::new(), cur: String::new(), paths: Vec::new(), seen: Vec::new(), found: Vec::new() };
     let dir = out_dir().join("walk");
+    if let Err(e) = std::fs::remove_dir_all(&dir) {
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "{e}");
+    }
     std::fs::create_dir_all(&dir).unwrap();
     pass(&mut w, false);
     pass(&mut w, true);
@@ -290,6 +306,14 @@ fn walk_every_screen() {
     std::fs::write(dir.join("paths.json"), format!("[\n{}\n]\n", json.join(",\n"))).unwrap();
     let bad: Vec<_> =
         w.found.iter().filter(|(p, c)| !KNOWN.iter().any(|k| p.contains(k.0) && c.1.starts_with(k.1))).collect();
+    for k in KNOWN {
+        assert!(
+            w.found.iter().any(|(p, c)| p.contains(k.0) && c.1.starts_with(k.1)),
+            "stale KNOWN entry: {} {:?}",
+            k.0,
+            k.1
+        );
+    }
     std::println!("walk: {} screens, {} clips, {:?}", w.n, w.found.len(), t0.elapsed());
     assert!(
         bad.is_empty(),

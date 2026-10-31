@@ -44,7 +44,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `notifs.rs`: the phone's last notifications kept (`phone::Inbox`), the NOTIFICATIONS list (a tap on the overview's
     notices, or PHONE in the menu) and a notification's detail.
   - `status.rs`: QUICK STATUS, the six chosen fields over a ride page by a tap on a plain field (`Screen::Status`).
-  - `start_cues.rs`: the START REMINDER (the bike moves with no ride) and the READY CHECK card at a new ride's start.
+  - `start_cues.rs`: the REMINDER (the bike moves with no ride) and the READY CHECK card at a new ride's start.
   - `riding.rs`: Start / pause, the end-ride screen (RESUME, SAVE, DISCARD), the second tick, the recorder glue.
     `stock_data.rs`: the scan of stock's rides and the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
   - `ahead.rs`: climbs ahead, with no course followed: the memory (main.rs), the second's step (the rider on the trace,
@@ -322,7 +322,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `assist_tests.rs` (GNSS SYSTEMS and the AssistNow Offline messages to the receiver), `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`), `laps_tests.rs` (a past ride's lap list) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `curve_tests.rs` (the power curve screen), `pmc_tests.rs` (training load, its chart and the month rows), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
-- `src/sim/saver_tests.rs`: BATTERY SAVER: each knob applied and given back, AUTO at 20 % once and off on the charger, the recording unchanged, the strip tag.
+- `src/sim/saver_tests.rs`: BATT SAVER: each knob applied and given back, AUTO at 20 % once and off on the charger, the recording unchanged, the strip tag.
 - `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
   counted while riding, a system that goes silent.

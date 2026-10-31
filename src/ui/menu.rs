@@ -163,13 +163,13 @@ pub enum Setting {
     SlopeScale,
     /// The window of the big power value: the live reading, 3, 5 or 10 s (app/settings.rs, POWER_SMOOTH_S).
     PowerSmooth,
-    /// AUTO LAP: OFF, BY DISTANCE or BY TIME (`auto_lap`).
+    /// AUTO LAP: OFF, DISTANCE or TIME (`auto_lap`).
     AutoLap,
-    /// The distance of a BY DISTANCE auto lap, km.
+    /// The distance of a DISTANCE auto lap, km.
     LapKm,
-    /// The moving time of a BY TIME auto lap, minutes.
+    /// The moving time of a TIME auto lap, minutes.
     LapMin,
-    /// SUNSET ALERT: OFF, or the minutes before the sunset it says so (`sunset_alert`, [`crate::SUNSET_LEAD_MIN`]).
+    /// SUNSET: OFF, or the minutes before the sunset it says so (`sunset_alert`, [`crate::SUNSET_LEAD_MIN`]).
     SunsetAlert,
     /// CHAINRINGS: the front chainrings' teeth, a preset (`chainrings`, [`crate::CHAINRINGS`]); OFF shows gear numbers.
     Chainrings,
@@ -181,7 +181,7 @@ pub enum Setting {
     SegTarget,
     /// SOUND: the buzzer on or off (`sound`).
     Sound,
-    /// START REMINDER (BIKE): a banner and a beep when the bike moves with no ride (`start_reminder`).
+    /// REMINDER (BIKE): a banner and a beep when the bike moves with no ride (`start_reminder`).
     StartReminder,
     /// READY CHECK (BIKE): the card at a ride's start, GPS, sensors and battery (`ready_check`).
     ReadyCheck,
