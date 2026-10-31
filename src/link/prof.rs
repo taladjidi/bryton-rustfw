@@ -126,6 +126,38 @@ pub struct Slot {
     pub max: u32,
 }
 
+/// The awake time: the board's cycle counter ([`crate::Board::cycles`], 32 bits, wrapping, stopped in WFI) summed
+/// into 64 bits, and the main loop's last sleep. Read at least every 21 s of work (a pass does) or a wrap is missed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Clock {
+    cycles_at: u32,
+    cycles: u64,
+    /// The last sleep between passes: ms (wall time), and the work in it (USB served while a cable is in), us. The
+    /// work is in the awake time too: a held key counts the sleep by its length, not that work again.
+    pub sleep: (u32, u32),
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Clock { cycles_at: 0, cycles: 0, sleep: (crate::POLL_MS, 0) }
+    }
+}
+
+impl Clock {
+    /// Microseconds the CPU has been awake (working, not asleep in a wait) since start-up, wrapping: what a pass's
+    /// work took, so the app can bound its background work by time and count a key's hold in real time.
+    pub fn us<B: crate::Board>(&mut self, b: &mut B) -> u32 {
+        let now = b.cycles();
+        self.cycles += u64::from(now.wrapping_sub(core::mem::replace(&mut self.cycles_at, now)));
+        (self.cycles / u64::from((B::CPU_HZ / 1_000_000).max(1))) as u32
+    }
+
+    /// The loop's sleep before the next pass: `ms` of wall time, `work_us` of it spent serving USB.
+    pub fn slept(&mut self, ms: u32, work_us: u32) {
+        self.sleep = (ms, work_us);
+    }
+}
+
 /// The profiler: a slot per section and the window's wall time and I/O.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prof {
@@ -143,6 +175,8 @@ pub struct Prof {
     pub written: u32,
     /// What one section costs, cycles (two counter reads and [`Prof::add`], measured at start-up; kept by a reset).
     pub overhead: u32,
+    /// The awake time (kept by a reset).
+    pub clock: Clock,
 }
 
 impl Prof {
@@ -175,7 +209,7 @@ impl Prof {
 
     /// A new window (the overhead stays).
     pub fn reset(&mut self) {
-        *self = Prof { overhead: self.overhead, ..Prof::default() };
+        *self = Prof { overhead: self.overhead, clock: self.clock, ..Prof::default() };
     }
 }
 
@@ -222,6 +256,16 @@ mod tests {
         assert_eq!(p.slots[Sec::Usb as usize].total, 100);
         p.span(Sec::Usb, 10, 10);
         assert_eq!(p.slots[Sec::Usb as usize].count, 2);
+    }
+
+    #[test]
+    fn clock_counts_across_a_wrap_of_the_cycle_counter() {
+        let mut sim = crate::sim::Sim::new(0, 0, 0);
+        let mut c = Clock::default();
+        sim.cycles = u32::MAX - 100;
+        assert_eq!(c.us(&mut sim), ((u64::from(u32::MAX) - 100) / 1000) as u32);
+        sim.cycles = 400; // wrapped, 501 cycles since (the simulator's counter runs at 1 GHz)
+        assert_eq!(c.us(&mut sim), (((1u64 << 32) + 400) / 1000) as u32); // 64 bits inside, no lost wrap
     }
 
     #[test]

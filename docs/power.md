@@ -275,7 +275,7 @@ calls out of ITCM). The I-cache keeps its lines in Stop (D1 logic retained); the
 
 **What breaks.**
 - SysTick stops with the core clock: the sleep's length must come from the RTC (RTC_SSR sub-seconds, 1/256 s with
-  PREDIV_S 255) or LPTIM2's counter, for `Board::last_sleep`, the uptime and the profiler's `slept_ms`. `delay_ms`
+  PREDIV_S 255) or LPTIM2's counter, for `prof::Clock::slept`, the uptime and the profiler's `slept_ms`. `delay_ms`
   stays SysTick and WFI (CSleep): Stop is only for the sleep between passes.
 - DWT CYCCNT stops (it already stops in WFI), so awake time still counts work only; the wake (about 2 ms with HSE)
   becomes a profiler section of its own, `wake`, or it looks like the step's.

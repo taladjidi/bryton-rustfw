@@ -87,7 +87,7 @@ pub const IDLE_POLL_MS: u32 = 250;
 pub const RIDE_POLL_MS: u32 = 100;
 /// No key for this long (the backlight's default OFF AFTER), and the loop may slow to [`IDLE_POLL_MS`].
 pub const IDLE_AFTER_MS: u32 = 30_000;
-/// A pass's work counted at most ([`Board::awake_us`]): the first pass, or a stall, is not a key held for seconds.
+/// A pass's work counted at most ([`prof::Clock::us`]): the first pass, or a stall, is not a key held for seconds.
 pub const MAX_PASS_MS: u32 = 1000;
 
 /// How often the battery is read.
@@ -139,7 +139,11 @@ impl App {
         }
         self.battery_ms = 0;
         let charging = b.charger_present();
-        let reading = b.battery_adc().and_then(|(raw, vref, cal)| battery::millivolts(raw, vref, cal));
+        // VREFINT (channel 19), the battery (channel 1), then the factory VREFINT_CAL (BOARD.md 12)
+        let reading = b.adc_read(19).and_then(|vref| {
+            let raw = b.adc_read(1)?;
+            battery::millivolts(raw, vref, b.vrefint_cal())
+        });
         if let Some(mv) = reading
             && self.battery.update(mv, charging)
         {

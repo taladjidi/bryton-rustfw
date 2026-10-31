@@ -75,22 +75,13 @@ pub trait Board {
     fn rtc_set(&mut self, tr: u32, dr: u32);
     /// Sleeps `ms` milliseconds (SysTick and WFI on the unit; the simulator advances its clock).
     fn delay_ms(&mut self, ms: u32);
-    /// Microseconds the CPU has been awake (working, not asleep in a wait) since start-up, wrapping: what a pass's
-    /// work took, so the app can bound its background work by time and count a key's hold in real time (a long
-    /// pass is longer than [`POLL_MS`]). The DWT cycle counter on the unit. 0 always: work is not timed.
-    fn awake_us(&mut self) -> u32 {
-        0
-    }
-    /// The DWT cycle counter (CYCCNT, 32 bits, wrapping; stopped in WFI): the profiler's clock ([`prof`]). 0 always:
-    /// nothing is timed.
+    /// The CPU clock the cycle counter runs at, Hz: [`prof::Clock`] turns cycles into microseconds with it. The
+    /// default (1 GHz: a cycle is a nanosecond) is the simulator's.
+    const CPU_HZ: u32 = 1_000_000_000;
+    /// The DWT cycle counter (CYCCNT, 32 bits, wrapping; stopped in WFI): the profiler's clock ([`prof`]) and, through
+    /// [`prof::Clock`], the awake time. 0 always: nothing is timed.
     fn cycles(&mut self) -> u32 {
         0
-    }
-    /// The main loop's last sleep between passes: how long it lasted, ms (wall time), and the work done in it, us
-    /// (USB served while a cable is in), which [`Board::awake_us`] counts too. A held key counts the sleep by its
-    /// length, not that work again. Default: [`POLL_MS`] and none.
-    fn last_sleep(&mut self) -> (u32, u32) {
-        (POLL_MS, 0)
     }
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
@@ -100,9 +91,11 @@ pub trait Board {
     fn nrf_send(&mut self, data: &[u8]);
     /// Bytes received from the Nordic chip, at most `buf.len()`; never waits.
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
-    /// The battery as ADC3 reads it (BOARD.md 12): the battery channel, VREFINT, and VREFINT_CAL (VREFINT at
-    /// VDDA = 3.3 V), all 16-bit; None if the ADC did not come up. Takes about half a millisecond.
-    fn battery_adc(&mut self) -> Option<(u16, u16, u16)>;
+    /// One 16-bit reading of ADC3 channel `channel` (BOARD.md 12; 1: the battery, 19: VREFINT); None if the ADC did
+    /// not come up. Takes about a quarter of a millisecond.
+    fn adc_read(&mut self, channel: u8) -> Option<u16>;
+    /// VREFINT_CAL: VREFINT as read at VDDA = 3.3 V (factory value, BOARD.md 12).
+    fn vrefint_cal(&mut self) -> u16;
     /// GNSS receiver power (PI6, BOARD.md 13).
     fn gnss_power(&mut self, on: bool);
     /// Exchanges `buf` with the GNSS receiver over SPI, in place; `buf.len()` is a multiple of 4. The receiver
@@ -382,7 +375,7 @@ pub struct App {
     /// it one ([`App::set_scan_cache`]). 13 KB in its own cell beside the app in AXI SRAM (main.rs `make_stock_scan`),
     /// so the app stays under its size budget and its copy on the stack at start-up shrinks with it.
     stock: &'static mut stock::Scan,
-    /// [`Board::awake_us`] at the start of the last pass: the work since, plus the sleep ([`Board::last_sleep`]),
+    /// [`prof::Clock::us`] at the start of the last pass: the work since, plus the sleep ([`prof::Clock::slept`]),
     /// is the time a held key counts.
     awake_at: u32,
     /// The length of this pass, ms: the sleep plus the work since the last ([`App::step`] sets it once, capped at
@@ -637,7 +630,7 @@ impl App {
     pub fn begin(&mut self, b: &mut impl Board) {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
         self.card_writable = b.emmc_writable();
-        self.awake_at = b.awake_us();
+        self.awake_at = self.prof.clock.us(b);
         self.rec.resume_if(self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN);
         self.trash_check = self.card_writable;
         if self.chips.baro {
@@ -687,8 +680,8 @@ impl App {
         let mut t = b.cycles(); // each section's start (link/prof.rs): the end of the one before
         // the time since the last pass: its sleep and the work of that pass (bounded: a first pass, a stall); the
         // work done during the sleep (USB) is in the sleep's length already (2026-10-25 review: counted twice)
-        let now = b.awake_us();
-        let (sleep_ms, sleep_work_us) = b.last_sleep();
+        let now = self.prof.clock.us(b);
+        let (sleep_ms, sleep_work_us) = self.prof.clock.sleep;
         let work_us = now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)).saturating_sub(sleep_work_us);
         let pass_ms = (sleep_ms + (work_us / 1000)).min(MAX_PASS_MS);
         self.dt_ms = pass_ms;

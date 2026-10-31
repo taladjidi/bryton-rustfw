@@ -232,8 +232,13 @@ impl App {
     /// [`App::SCAN_IDLE_US`]: Some(true) once all are, Some(false) to go on at the next pass, None when it cannot be
     /// (the write then says why).
     #[inline(never)]
-    pub(crate) fn sync_fats_step(emmc: &mut emmc::Emmc, b: &mut impl Board, at: &mut u32) -> Option<bool> {
-        let t0 = b.awake_us();
+    pub(crate) fn sync_fats_step(
+        emmc: &mut emmc::Emmc,
+        clock: &mut prof::Clock,
+        b: &mut impl Board,
+        at: &mut u32,
+    ) -> Option<bool> {
+        let t0 = clock.us(b);
         let mut d = emmc::Volume(emmc, b);
         let mut fat = fat::Fat::mount(&mut d).ok()?;
         for _ in 0..fat.fat_sectors() / Self::SYNC_SECTORS + 1 {
@@ -241,7 +246,7 @@ impl App {
             if *at >= fat.fat_sectors() {
                 return Some(true);
             }
-            if d.1.awake_us().wrapping_sub(t0) >= Self::SCAN_IDLE_US {
+            if clock.us(d.1).wrapping_sub(t0) >= Self::SCAN_IDLE_US {
                 return Some(false);
             }
         }
@@ -299,7 +304,7 @@ impl App {
             return true;
         }
         let mut at = st.sync;
-        let r = Self::sync_fats_step(&mut self.emmc, b, &mut at);
+        let r = Self::sync_fats_step(&mut self.emmc, &mut self.prof.clock, b, &mut at);
         if let Some(st) = self.copies(f) {
             st.sync = at;
         }

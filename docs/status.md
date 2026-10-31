@@ -8,8 +8,8 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 The simulator (src/sim/) is the host tests' fake board. Nothing below is checked by them; each one is for the unit:
 - `beep` records the frequency only: not the duration, nor the timing of the tone.
-- `cycles` advances by a fixed step per call, not from the CPU's cycle counter (DWT): no measured time awake there.
-- `last_sleep` is constant: the length of a sleep and its wake reason are not tested.
+- `cycles` follows the simulated awake time at 1 GHz (plus an optional step per call), not the CPU's cycle counter (DWT): no measured time awake there.
+- The sleep between passes is whatever a test hands `prof::Clock::slept`: its real length and wake reason are not tested.
 - The panel's DMA fallback: the simulated panel takes its pixels by plain writes, not by the DMA stream (hw.rs `PanelDma`).
 - The USB core (OTG, PHY, VBUS timing): the dev link runs against a fake computer (`Pc`), not the cable.
 - DBP (the backup domain write enable, PWR_CR1): the simulated backup registers are always writable.

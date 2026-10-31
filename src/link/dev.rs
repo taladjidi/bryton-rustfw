@@ -571,11 +571,11 @@ pub fn check_image(head: &[u8], size: u32) -> Result<(), &'static str> {
 fn bench_reads(app: &mut App, b: &mut impl crate::Board, lba: u32, n: u32, count: u32) -> Result<u32, emmc::Error> {
     let mut buf = [0u8; 32 * emmc::SECTOR];
     let len = (n as usize * emmc::SECTOR).min(buf.len());
-    let t = b.awake_us();
+    let t = app.prof().clock.us(b);
     for k in 0..count {
         app.emmc().read(b, lba + k * n, buf.get_mut(..len).unwrap_or_default())?;
     }
-    Ok(b.awake_us().wrapping_sub(t))
+    Ok(app.prof().clock.us(b).wrapping_sub(t))
 }
 
 impl App {
@@ -601,15 +601,15 @@ impl App {
                 send_bench(h, r);
             }
             Effect::BenchScan(bytes) => {
-                let t = b.awake_us();
+                let t = self.prof.clock.us(b);
                 // the bytes it read are about the ones asked (the protocol answers the time only)
                 self.bench_scan(b, bytes);
-                send_bench(h, Ok(b.awake_us().wrapping_sub(t)));
+                send_bench(h, Ok(self.prof.clock.us(b).wrapping_sub(t)));
             }
             Effect::BenchMap(level, dx, dy) => {
-                let t = b.awake_us();
+                let t = self.prof.clock.us(b);
                 let got = self.bench_map(b, level, dx, dy);
-                let us = b.awake_us().wrapping_sub(t);
+                let us = self.prof.clock.us(b).wrapping_sub(t);
                 send_bench_map(h, got.map(|s| (us, s)));
             }
             Effect::Find(lba, count, lo, hi) => {

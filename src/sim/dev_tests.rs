@@ -188,6 +188,9 @@ fn prof_times_the_sections_and_answers() {
     app.prof().reset();
     sim.cycles_step = 1000;
     sim.cycles = u32::MAX - 2500; // wraps in the first pass
+    // the awake clock starts from this counter, not from 0
+    app.prof().clock = Default::default();
+    app.awake_at = app.prof().clock.us(&mut sim);
     for _ in 0..4 {
         app.step(&mut sim);
     }

@@ -1591,7 +1591,7 @@ fn a_hold_while_usb_is_busy_counts_real_time() {
             // the sleep: 50 ms, 45 of them serving USB
             sim.delay_ms(POLL_MS);
             sim.awake_ns += 45_000_000;
-            sim.sleep = (POLL_MS, 45_000);
+            app.prof().clock.sleep = (POLL_MS, 45_000);
         }
         assert_eq!(sim.standby, off, "Back held {hold} ms");
     }
@@ -1632,12 +1632,12 @@ fn history_reaches_the_oldest_of_a_full_index() {
 }
 
 /// Passes of `pass` ms each for `ms` (a slow card, or a deeper sleep): the step is told the pass was that long
-/// ([`Board::last_sleep`]), as main.rs does.
+/// ([`prof::Clock::slept`]), as main.rs does.
 pub(super) fn run_passes(sim: &mut Sim, app: &mut App, ms: u64, pass: u32) {
     let end = sim.ms + ms;
     while sim.ms < end && !sim.standby {
         app.step(sim);
-        sim.sleep = (pass, 0);
+        app.prof().clock.sleep = (pass, 0);
         sim.delay_ms(pass);
     }
 }
@@ -1882,7 +1882,7 @@ fn run_main(sim: &mut Sim, app: &mut App, ms: u64) -> Vec<u64> {
             }
             keys = now;
         }
-        sim.sleep = (slept, 0);
+        app.prof().clock.sleep = (slept, 0);
     }
     passes
 }

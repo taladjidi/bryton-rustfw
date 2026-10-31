@@ -2694,7 +2694,7 @@ fn random_pass_lengths() {
         while sim.ms - t0 < 200_000 {
             let pass = 5 + (r.next().unwrap_or(0) << 8 | r.next().unwrap_or(0)) % 996;
             app.step(&mut sim);
-            sim.sleep = (pass, 0);
+            app.prof().clock.sleep = (pass, 0);
             sim.delay_ms(pass);
             worst = worst.max(u64::from(pass));
             let t = sim.ms - t0;

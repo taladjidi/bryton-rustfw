@@ -351,7 +351,7 @@ fn gnss_read_waits_for_the_next_pvt() {
         while sim.ms < end {
             app.step(&mut sim);
             oldest = oldest.max(app.gps.pvt_ms);
-            sim.sleep = (pass, 0);
+            app.prof().clock.sleep = (pass, 0);
             sim.delay_ms(pass);
         }
         let spi = (sim.gnss.got.len() - g) as f64 / 32.0 / 60.0;

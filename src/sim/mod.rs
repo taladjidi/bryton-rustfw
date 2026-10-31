@@ -74,7 +74,7 @@ pub struct Sim {
     pub bus: Bus,
     pub touch: TouchChip,
     /// The work an eMMC read costs, ns a byte (reading and parsing what was read: about 430 on the unit, 2.3 MB/s,
-    /// `tools/dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`Board::awake_us`]. 0 (the default): free.
+    /// `tools/dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`prof::Clock::us`]. 0 (the default): free.
     pub work_ns_per_byte: u64,
     /// Work done so far, ns.
     pub awake_ns: u64,
@@ -82,8 +82,6 @@ pub struct Sim {
     pub cycles: u32,
     /// What each read of the cycle counter adds (0, the default: the counter stands still).
     pub cycles_step: u32,
-    /// What [`Board::last_sleep`] says: ms, and the work in it, us. Default: [`POLL_MS`], none.
-    pub sleep: (u32, u32),
 }
 
 /// The Sitronix touch controller (BOARD.md 17), as the protocol doc describes it: Init for 50 ms after its reset
@@ -1235,7 +1233,6 @@ impl Sim {
             awake_ns: 0,
             cycles: 0,
             cycles_step: 0,
-            sleep: (POLL_MS, 0),
         }
     }
 
@@ -1443,11 +1440,14 @@ impl Board for Sim {
         }
     }
 
-    fn battery_adc(&mut self) -> Option<(u16, u16, u16)> {
+    fn adc_read(&mut self, channel: u8) -> Option<u16> {
         // VDDA 3.3 V: VREFINT reads its calibration value; the pin sees the battery through the divider by 1.5
-        const CAL: u16 = 24_000;
         let mv = self.battery_mv?;
-        Some(((u32::from(mv) * 2 * 65535).div_ceil(3 * 3300) as u16, CAL, CAL))
+        Some(if channel == 19 { 24_000 } else { (u32::from(mv) * 2 * 65535).div_ceil(3 * 3300) as u16 })
+    }
+
+    fn vrefint_cal(&mut self) -> u16 {
+        24_000
     }
 
     fn gnss_power(&mut self, on: bool) {
@@ -1523,17 +1523,10 @@ impl Board for Sim {
         self.emmc.read(index, arg, buf)
     }
 
-    fn awake_us(&mut self) -> u32 {
-        (self.awake_ns / 1000) as u32
-    }
-
     fn cycles(&mut self) -> u32 {
+        // the awake time at 1 GHz (Board::CPU_HZ): a cycle is a nanosecond; cycles_step moves it on a read as well
         self.cycles = self.cycles.wrapping_add(self.cycles_step);
-        self.cycles
-    }
-
-    fn last_sleep(&mut self) -> (u32, u32) {
-        self.sleep
+        (self.awake_ns as u32).wrapping_add(self.cycles)
     }
 
     fn emmc_writable(&self) -> bool {

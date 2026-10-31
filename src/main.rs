@@ -27,7 +27,7 @@ use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
 use bryton_rustfw::storage::faultlog::Kind;
 use bryton_rustfw::ui::UsbDot;
-use bryton_rustfw::{App, Board, Cable, LoopPolicy, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, Woke, standby_flags_word};
+use bryton_rustfw::{App, Board, Cable, LoopPolicy, STANDBY_BKP, STANDBY_FLAGS_BKP, Woke, standby_flags_word};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
@@ -1538,13 +1538,8 @@ fn i2c_read(i2c: u32, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
 // ---------------------------------------------------------------------------------------------------------------
 // The board for the app in lib.rs: each method is the transport only.
 // ---------------------------------------------------------------------------------------------------------------
-/// The board: its state is the awake time counted so far ([`Board::awake_us`]): the cycle counter's last value
-/// and the cycles before it (the counter wraps every 21 s of work).
+/// The board: the panel's DMA and the profiler's I/O counts; the rest is the registers.
 struct S510 {
-    cycles_at: u32,
-    cycles: u64,
-    /// The last sleep between passes: ms, and the work in it (USB), us ([`Board::last_sleep`]).
-    sleep: (u32, u32),
     /// For the profiler (`App::prof`), since the main loop last took them: pixels to the panel, eMMC sectors read,
     /// written.
     io: (u32, u32, u32),
@@ -1585,18 +1580,9 @@ impl Board for S510 {
     fn delay_ms(&mut self, ms: u32) {
         delay_ms(ms);
     }
-    fn awake_us(&mut self) -> u32 {
-        // DWT_CYCCNT stops in WFI (seen on the unit, 2026-10-23): it counts work only; read at least every 21 s of
-        // it (each main loop pass does)
-        let now = cycles();
-        self.cycles += u64::from(now.wrapping_sub(core::mem::replace(&mut self.cycles_at, now)));
-        (self.cycles / u64::from(CPU_HZ / 1_000_000)) as u32
-    }
+    const CPU_HZ: u32 = CPU_HZ;
     fn cycles(&mut self) -> u32 {
         cycles()
-    }
-    fn last_sleep(&mut self) -> (u32, u32) {
-        self.sleep
     }
     fn standby(&mut self) {
         standby();
@@ -1610,10 +1596,11 @@ impl Board for S510 {
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         nrf_recv(buf)
     }
-    fn battery_adc(&mut self) -> Option<(u16, u16, u16)> {
-        let vref = adc_read(19)?;
-        let battery = adc_read(1)?;
-        Some((battery, vref, rd(VREFINT_CAL) as u16))
+    fn adc_read(&mut self, channel: u8) -> Option<u16> {
+        adc_read(u32::from(channel))
+    }
+    fn vrefint_cal(&mut self) -> u16 {
+        rd(VREFINT_CAL) as u16
     }
     fn gnss_power(&mut self, on: bool) {
         pin_set(GNSS_POWER.0, GNSS_POWER.1, on);
@@ -1872,7 +1859,7 @@ fn main() -> ! {
     key_lines_init();
     sleep_power_init();
     checkpoint(4);
-    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0), io: (0, 0, 0), dma };
+    let mut board = S510 { io: (0, 0, 0), dma };
     let app = make_app(&mut board, make_stock_scan(), make_past());
     // what one profiler section costs (link/prof.rs): two counter reads and an add, the second time (the first
     // fills the I-cache from SDRAM)
@@ -2047,7 +2034,7 @@ fn main() -> ! {
         }
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
         let slept = policy.slept_ms();
-        board.sleep = (slept, sleep_cycles / (CPU_HZ / 1_000_000));
+        app.prof().clock.slept(slept, sleep_cycles / (CPU_HZ / 1_000_000));
         let t1 = cycles();
         if press.is_some() || touched.is_some() {
             if let Some(p) = press {

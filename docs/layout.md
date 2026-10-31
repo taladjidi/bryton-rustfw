@@ -220,7 +220,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
-  over the main loop's passes, each pass bounded by `Board::awake_us`) and the import of its settings. Its cache
+  over the main loop's passes, each pass bounded by `prof::Clock`) and the import of its settings. Its cache
   (`Cache`, `\Rustfw\scan.bin`, <!-- n:scan_cache -->198 KB<!-- /n --> in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
   (totals, history, best powers), at most 3072 rides (rides past that are read and counted again at every start,
   in a second pass), so each ride is decoded once ever and a start reads only new or changed rides. `src/training/power_curve.rs`: best powers per duration in
@@ -300,7 +300,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait; `App::serve` there answers the effects that need the app and the card (main.rs keeps the keys, the reset
   and the image run). `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from
-  `Board::cycles`); `tools/profile.py`: scripted scenarios on the unit, a `prof` window each; `tools/walk.py`: the simulator's screen walk
+  `Board::cycles`) and `Clock`, the awake time and the loop's last sleep; `tools/profile.py`: scripted scenarios on the unit, a `prof` window each; `tools/walk.py`: the simulator's screen walk
   (`src/sim/walk_tests.rs`) replayed on the unit, unit and sim shots side by side in contact sheets under `target/walk/`.
 - `src/link/usbsnap.rs`: the USB core and ULPI PHY registers taken at a link's first failure (`Keeper`), packed into
   backup-register words (`pack`) that `tools/dev.py usbdrop` decodes.

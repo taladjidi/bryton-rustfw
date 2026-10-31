@@ -115,7 +115,7 @@ impl App {
     }
 
     /// The scan of stock's rides goes on, if it runs: [`IO`](stock::IO) bytes at a time until the pass has spent
-    /// [`App::SCAN_IDLE_US`] of work ([`Board::awake_us`]) or [`App::SCAN_IDLE`] bytes (less during a ride), so a
+    /// [`App::SCAN_IDLE_US`] of work ([`prof::Clock::us`]) or [`App::SCAN_IDLE`] bytes (less during a ride), so a
     /// pass stays short whatever the card and the files cost. Its cache is read at the first pass, kept up to date
     /// on a new day, and written once the scan has changed it, only between rides, in the same time a pass.
     #[inline(never)]
@@ -141,7 +141,7 @@ impl App {
             let t = fat::write::dos_time(self.rec_time().0);
             self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t) == Err(fat::Error::Io);
         }
-        let t0 = b.awake_us();
+        let t0 = self.prof.clock.us(b);
         if self.stock.status() == stock::Status::Running {
             let idle = self.ride.state() == ride::State::Idle;
             let (bytes, us) =
@@ -152,7 +152,7 @@ impl App {
             let b0 = self.stock.read_bytes();
             while self.stock.step(&mut emmc::Volume(&mut self.emmc, b), stock::IO as u32)
                 && self.stock.read_bytes().wrapping_sub(b0) < bytes
-                && b.awake_us().wrapping_sub(t0) < us
+                && self.prof.clock.us(b).wrapping_sub(t0) < us
             {}
         }
         // the cache written, its FAT comparison first spread over passes in the same time budget (a read-only build
@@ -161,7 +161,7 @@ impl App {
         while self.stock.unsaved()
             && self.card_writable
             && self.ride_settled()
-            && b.awake_us().wrapping_sub(t0) < Self::SCAN_IDLE_US
+            && self.prof.clock.us(b).wrapping_sub(t0) < Self::SCAN_IDLE_US
         {
             // failed: read again next start (no longer unsaved)
             let _ = self.stock.save(&mut emmc::Volume(&mut self.emmc, b), t, Self::SYNC_SECTORS);

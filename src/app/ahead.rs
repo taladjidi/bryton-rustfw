@@ -6,14 +6,14 @@
 use crate::*;
 
 impl App {
-    /// Work per pass at most, in microseconds of CPU ([`Board::awake_us`]): a tile read, inflated and decoded is the
+    /// Work per pass at most, in microseconds of CPU ([`prof::Clock::us`]): a tile read, inflated and decoded is the
     /// unit, so one may go over it; the next waits for the next pass.
     const AHEAD_US: u32 = 6_000;
     /// Units of work per pass at most (where the CPU time is not measured, as in the simulation).
     const AHEAD_STEPS: u32 = 6;
 
     /// The last tile of the road ahead read, inflated and decoded (all its slices), the longest so far, and the
-    /// longest single call on a tile, in microseconds of CPU ([`Board::awake_us`]; `tools/dev.py info`).
+    /// longest single call on a tile, in microseconds of CPU ([`prof::Clock::us`]; `tools/dev.py info`).
     pub fn ahead_tile_us(&self) -> (u32, u32, u32) {
         (self.ahead_us.last, self.ahead_us.max, self.ahead_us.slice)
     }
@@ -68,11 +68,11 @@ impl App {
             return; // paused: what is half done waits
         }
         let Some((a, mem)) = self.ahead.as_mut().filter(|(a, _)| a.busy()) else { return };
-        let t0 = b.awake_us();
+        let t0 = self.prof.clock.us(b);
         for _ in 0..Self::AHEAD_STEPS {
-            let (tiles, loading, t1) = (a.io().0, a.loading(), b.awake_us());
+            let (tiles, loading, t1) = (a.io().0, a.loading(), self.prof.clock.us(b));
             let more = a.work(&mut emmc::Volume(&mut self.emmc, b), mem);
-            let spent = b.awake_us().wrapping_sub(t1);
+            let spent = self.prof.clock.us(b).wrapping_sub(t1);
             if loading || a.loading() || a.io().0 != tiles {
                 // a slice of a tile: the longest one, and the tile's whole (tools/dev.py info says how long)
                 let (total, max, slice) =
@@ -84,7 +84,7 @@ impl App {
                     self.ahead_acc = 0;
                 }
             }
-            if !more || b.awake_us().wrapping_sub(t0) >= Self::AHEAD_US {
+            if !more || self.prof.clock.us(b).wrapping_sub(t0) >= Self::AHEAD_US {
                 break;
             }
         }

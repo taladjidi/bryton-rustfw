@@ -106,7 +106,7 @@ fn overview_totals_from_the_cache_at_once() {
 }
 
 /// Back held 3 s switches off even while a scan makes every pass long (each read here costs 250 ms of work):
-/// the hold counts the passes' real time ([`Board::awake_us`]), not their number.
+/// the hold counts the passes' real time ([`prof::Clock::us`]), not their number.
 #[test]
 fn back_held_switches_off_during_a_slow_scan() {
     let mut sim = Sim::new(9, 0, 0).keys(|ms| if (5000..9300).contains(&ms) { Key::Back as u8 } else { 0 });
