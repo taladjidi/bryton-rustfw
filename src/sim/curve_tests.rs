@@ -23,6 +23,7 @@ fn unit() -> (Sim, App) {
     sim.backup[Kind::Power.backup()] = Kind::Power.to_word(ID);
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+    app.set_ride_curve(std::boxed::Box::leak(std::boxed::Box::new(crate::power_curve::Rolling::new())));
     run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 20_000);
     assert!(app.stock.ready() && app.stock.out.curve.watts[7] > 0, "stock's curve is read");
     (sim, app)
@@ -65,7 +66,7 @@ fn the_curve_with_this_ride_over_it() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 400_000);
-    let best = app.ride_curve.best;
+    let best = app.ride_best();
     assert!(best[..8].iter().all(|&w| (205..=215).contains(&w)), "210 W for every duration up to 5 min: {best:?}");
     assert_eq!(best[9], 0, "not held 12 minutes");
     app.press(&mut sim, Press::Long(Key::Page));

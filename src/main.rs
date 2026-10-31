@@ -1741,6 +1741,14 @@ fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
     CACHE.take()
 }
 
+/// This ride's power curve (training/power_curve.rs `Rolling`, 3.3 KB), beside the app in AXI SRAM (link.x `.axibss`): a
+/// const cell, zeroed with the section at reset, so the app stays under its size budget.
+fn make_ride_curve() -> &'static mut bryton_rustfw::power_curve::Rolling {
+    static CURVE: static_cell::ConstStaticCell<bryton_rustfw::power_curve::Rolling> =
+        static_cell::ConstStaticCell::new(bryton_rustfw::power_curve::Rolling::new());
+    CURVE.take()
+}
+
 /// The reading of the recent rides for FITNESS's heart rate variability thresholds (storage/thresholds.rs `Scan`,
 /// about 5 KB), beside the app in AXI SRAM (link.x `.axibss`): built once on the stack and moved in, as the courses.
 #[inline(never)]
@@ -1825,6 +1833,7 @@ fn main() -> ! {
     app.set_segment_memory(make_segments());
     app.set_scan_cache(make_scan_cache());
     app.set_threshold_memory(make_thresholds());
+    app.set_ride_curve(make_ride_curve());
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
     let mut session = Session::new();

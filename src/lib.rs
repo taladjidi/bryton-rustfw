@@ -192,7 +192,7 @@ pub struct App {
     /// What the calibration screen shows (phase, auto zero state); None: not drawn yet.
     powercal_shown: Option<(powercal::Phase, Option<powercal::AutoZero>)>,
     /// This ride's best power per duration, computed as the ride goes (app/curve.rs), and what the POWER CURVE screen shows.
-    ride_curve: power_curve::Rolling,
+    ride_curve: Option<&'static mut power_curve::Rolling>,
     curve_shown: [u16; power_curve::N],
     /// What the quick panel shows, box by box, and its shape (app/quick.rs).
     quick_shown: [u32; app::QUICK_BOXES],
@@ -561,7 +561,7 @@ impl App {
             sensors_store: SensorStore::default(),
             powercal: powercal::Cal::default(),
             powercal_shown: None,
-            ride_curve: power_curve::Rolling::new(),
+            ride_curve: None,
             curve_shown: [0; power_curve::N],
             quick_shown: [0; app::QUICK_BOXES],
             quick_shape: 0,
@@ -746,12 +746,11 @@ mod tests {
 
     /// The app's size (printed): it lives in AXI SRAM (main.rs make_app; about 19 KB of the 512 KB free on
     /// 2026-10-27), and its one temporary copy at start-up is on the stack (123 KB of DTCM: 64 KB here plus main's
-    /// 16 KB fits). Raised from 56 KB at the owner's go (2026-10-27: App was 57 104 B of 57 344), and to 68 KB for
-    /// the ride's power curve (3.3 KB of rings, app/curve.rs; 2026-10-31: App was 65 856 B).
+    /// 16 KB fits). Raised from 56 KB at the owner's go (2026-10-27: App was 57 104 B of 57 344).
     #[test]
     fn app_size_budget() {
         std::println!("App is {} B", core::mem::size_of::<App>());
-        assert!(core::mem::size_of::<App>() < 68 * 1024, "App is {} B", core::mem::size_of::<App>());
+        assert!(core::mem::size_of::<App>() < 64 * 1024, "App is {} B", core::mem::size_of::<App>());
     }
 
     #[test]

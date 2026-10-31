@@ -20,9 +20,20 @@ const FIRST: usize = 7;
 const REDRAW_S: u32 = 5;
 
 impl App {
+    /// Gives the screen this ride's curve (main.rs: 3.3 KB in AXI SRAM, outside the app); without one the ride's curve
+    /// stays empty.
+    pub fn set_ride_curve(&mut self, r: &'static mut power_curve::Rolling) {
+        self.ride_curve = Some(r);
+    }
+
+    /// This ride's bests so far.
+    pub(crate) fn ride_best(&self) -> [u16; power_curve::N] {
+        self.ride_curve.as_deref().map_or([0; power_curve::N], |r| r.best)
+    }
+
     /// Opens the power curve.
     pub(crate) fn open_curve(&mut self) {
-        self.curve_shown = self.ride_curve.best;
+        self.curve_shown = self.ride_best();
         self.open(Screen::Curve(FIRST));
     }
 
@@ -51,7 +62,7 @@ impl App {
 
     /// The whole screen.
     pub(crate) fn draw_curve(&self, c: &mut impl Canvas, cursor: usize) {
-        ui::curve::draw_screen(c, self.curve_head().as_str(), &self.curve_best(), &self.ride_curve.best, cursor);
+        ui::curve::draw_screen(c, self.curve_head().as_str(), &self.curve_best(), &self.ride_best(), cursor);
     }
 
     /// An input on the curve: Page and Lap step the cursor, a tap picks a duration, Back leaves.
@@ -72,7 +83,7 @@ impl App {
         if k != self.screen_cursor() {
             self.screen = Screen::Curve(k);
             let mut p = panel::Panel(b, self.area(), self.look());
-            ui::curve::draw_cursor(&mut p, &self.curve_best(), &self.ride_curve.best, k);
+            ui::curve::draw_cursor(&mut p, &self.curve_best(), &self.ride_best(), k);
         }
     }
 
@@ -88,11 +99,11 @@ impl App {
     /// Once a pass: while the screen is up during a ride, the plot again when this ride's bests changed.
     pub(crate) fn step_curve(&mut self, b: &mut impl Board) {
         let Screen::Curve(k) = self.screen else { return };
-        if self.ride_curve.best != self.curve_shown && self.ride.timer_s().is_multiple_of(REDRAW_S) {
-            self.curve_shown = self.ride_curve.best;
+        if self.ride_best() != self.curve_shown && self.ride.timer_s().is_multiple_of(REDRAW_S) {
+            self.curve_shown = self.ride_best();
             let mut p = panel::Panel(b, self.area(), self.look());
-            ui::curve::draw_plot(&mut p, &self.curve_best(), &self.ride_curve.best);
-            ui::curve::draw_cursor(&mut p, &self.curve_best(), &self.ride_curve.best, k);
+            ui::curve::draw_plot(&mut p, &self.curve_best(), &self.ride_best());
+            ui::curve::draw_cursor(&mut p, &self.curve_best(), &self.ride_best(), k);
         }
     }
 }
