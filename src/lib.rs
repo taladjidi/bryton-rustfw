@@ -201,6 +201,8 @@ pub struct App {
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
+    /// The climbs ridden to the top this ride (app/climbs_done.rs).
+    climbs_done: ClimbsDone,
     /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
     zones: [ride::ZoneHold; 5],
     /// The seconds the ride spent in each heart-rate and power zone (app/riding.rs): cleared at a Start and a resume.
@@ -460,6 +462,7 @@ impl App {
             profile_by_hand: false,
             tlink: TrainerLink::new(),
             live: Live::default(),
+            climbs_done: ClimbsDone::new(),
             zones: [ride::ZoneHold::default(); 5],
             zone_s: ride::ZoneTime::default(),
             hrtss: hrtss::Hrtss::default(),

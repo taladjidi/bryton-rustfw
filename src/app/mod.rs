@@ -4,6 +4,7 @@
 
 mod ahead;
 mod barometer;
+mod climbs_done;
 mod clock;
 mod courses;
 mod device;
@@ -48,6 +49,7 @@ mod trainer;
 mod workouts;
 
 pub use barometer::*;
+pub(crate) use climbs_done::ClimbsDone;
 pub use clock::*;
 pub(crate) use courses::push_grade;
 pub use device::*;

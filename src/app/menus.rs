@@ -70,6 +70,8 @@ pub enum Menu {
     Courses,
     /// LIVE SEGMENTS, TARGET, then the segments of the card (name, distance, gain), then the files skipped.
     Segments,
+    /// The climbs ridden to the top this ride, newest first (app/climbs_done.rs).
+    Climbs,
     /// The phone link ([`menu::PHONE`]).
     Phone,
     /// What the Di2 buttons do ([`menu::REMOTE`]).
@@ -112,6 +114,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Steps => "WORKOUT",
         Menu::Courses => "COURSES",
         Menu::Segments => "SEGMENTS",
+        Menu::Climbs => "CLIMBS DONE",
         Menu::Phone => "PHONE",
         Menu::Remote => "DI2 KEYS",
         Menu::Notifs => "NOTIFICATIONS",
@@ -167,6 +170,7 @@ impl App {
                     (Row::Ride(RideRow::End), true),
                     (Row::Open(Menu::WorkoutNow), self.workout_running()),
                     (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
+                    (Row::Open(Menu::Climbs), self.climbs_done.len() > 0), // once one is done
                     (Row::Ride(RideRow::BackToStart), self.track.points().len() >= 2),
                     (Row::Ride(RideRow::Trainer), self.trainer_on()),
                     (Row::Ride(RideRow::Indoor), true),
@@ -237,6 +241,8 @@ impl App {
                     _ => None,
                 }
             }
+            Menu::Climbs if self.climbs_done.len() == 0 => (i == 0).then_some(Row::Empty("NONE YET")),
+            Menu::Climbs => self.climbs_done.get(i).map(|_| Row::Done(i)),
             Menu::Phone => menu::PHONE
                 .get(i)
                 .map(|&r| Row::Phone(r))
@@ -509,6 +515,7 @@ impl App {
             }
             Row::Step(k) => color = self.step_row(self.plan.steps().get(k)?, &mut label, &mut value),
             Row::Course(k) => color = self.course_row(k, &mut label, &mut value)?,
+            Row::Done(k) => self.climb_done_row(k, &mut label, &mut value)?,
             Row::Seg(k) => self.segment_row(k, &mut label, &mut value)?,
             Row::SegSkipped => value.push_u32(u32::from(self.segments()?.skipped)),
             Row::Group(g) => {
@@ -795,7 +802,8 @@ impl App {
                 self.apply_estimate(b, menu, sel, r)
             }
             Some(Row::Phone(r)) => self.activate_phone(b, menu, sel, r),
-            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_) | Row::Seg(_) | Row::SegSkipped) | None => {}
+            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_) | Row::Done(_) | Row::Seg(_) | Row::SegSkipped)
+            | None => {}
         }
     }
 

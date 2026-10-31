@@ -188,6 +188,7 @@ Others
 - [~] Off-course alert, back on track (stock, Wahoo, all): sim; the alert and the distance off, no way back drawn
 - [~] Navigate to the start of a course first (stock): sim; a straight line (compass point and distance), no routing
 - [x] Reverse a course (stock, Garmin): sim
+- [~] Completed climbs listed with time, VAM, power (Garmin ClimbPro summary): sim; CLIMBS DONE in the ride menu, not kept across a reset
 - [x] The way back: the ride's own track followed back as a course (Garmin Back to Start): sim
 - [x] Turn-by-turn cues (stock, all): sim
 - [ ] Voice turn-by-turn on a speaker (Garmin, Wahoo, Karoo)

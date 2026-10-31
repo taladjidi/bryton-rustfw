@@ -589,6 +589,7 @@ impl App {
         }
         let alt = self.alt_now();
         self.live.snapshot(); // the pages show this second's readings, not each broadcast's
+        self.climbs_second();
         self.tlink.second = true; // and the trainer screen
         let input = ride::Input {
             speed_x10: self.live.get(Metric::Speed),

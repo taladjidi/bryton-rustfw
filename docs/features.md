@@ -1028,6 +1028,13 @@ area. A build without EMMC_WRITE=1 offers it write protected.
 
 ## Climbs and dates
 
+- **CLIMBS DONE (ride menu, from the first one done, app/climbs_done.rs)**: the climbs of the followed course or the road ahead that the rider
+  rode to the top, newest first, at most 20, one row each: "2.0K 6% 4:09" (length, average grade, time) and "1734 210W"
+  (VAM in m/h, average power; "142B" for the heart rate when no power was heard). A banner says it at the top
+  ("CLIMB 2.0K 4:09 VAM 1734"). The list starts empty with each ride and after a reset-resume (RAM only: keeping it is
+  a recorder change); a climb joined past its first 100 m (a resume, a late trace) is not counted; a live segment is not
+  a climb here. Sim: a synthetic course with one hill (the second climb is covered by the unit tests).
+
 - **CLIMBS** (BIKE, ours): ALL (the default) or MEDIUM+. A climb ahead without a course is kept only if it is
   category 3 or harder; the scheme is inferred, not checked against ASO: score = length (m) x average grade (%), which
   is 100 x the gain (m); category 4 from 8000, 3 from 16000, 2 from 32000, 1 from 64000, HC from 80000 (search results
