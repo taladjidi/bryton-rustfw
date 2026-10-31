@@ -97,6 +97,12 @@ fn dm(v: u16) -> i32 {
     i32::from(v) * 2 - 5000
 }
 
+/// The length of a vector, m, each part clamped to 2^31 so the squares cannot overflow.
+fn hypot(dx: i64, dy: i64) -> u32 {
+    let sq = |v: i64| v.unsigned_abs().min(1 << 31).pow(2);
+    (sq(dx) + sq(dy)).isqrt().min(u64::from(u32::MAX)) as u32
+}
+
 /// The length of the step from `a` to `b` (degrees x 1e-7), mm, on the local plane at `a` (as the map's).
 ///
 /// ```
@@ -616,6 +622,7 @@ impl Course {
     /// The course followed the other way: points, distances, altitudes, gaps, ascent, boxes and climbs of the
     /// reversed profile, and the turns found again on the reversed shape (a right turn is a left one). The file's own
     /// cues are dropped (their turns would be the wrong way round). The plane's origin stays where it was.
+    #[inline(never)]
     pub fn reverse(&mut self) {
         let n = self.len.min(POINTS);
         let total = self.len_m();
@@ -647,18 +654,22 @@ impl Course {
 
     /// The course from a track: `pts` (metres east and north of `origin`, degrees x 1e-7), in the order to follow
     /// them, thinned to [`POINTS`] as a file's are. No altitudes, no cues of a file: the shape's turns.
+    #[inline(never)]
     pub fn from_plane(&mut self, origin: (i32, i32), pts: impl Iterator<Item = (i32, i32)>) {
         self.clear();
         self.origin = Some((origin.0, origin.1, cos_q16(origin.0)));
-        let (mut d, mut prev) = (0u32, None::<(i32, i32)>);
+        let (mut d, mut prev, mut widest) = (0u32, None::<(i32, i32)>, 0u32);
         for p in pts {
             if let Some(q) = prev {
-                let (dx, dy) = (i64::from(p.0) - i64::from(q.0), i64::from(p.1) - i64::from(q.1));
-                d = d.saturating_add(((dx * dx + dy * dy) as u64).isqrt().min(u64::from(u32::MAX)) as u32);
+                let gap = hypot(i64::from(p.0) - i64::from(q.0), i64::from(p.1) - i64::from(q.1));
+                (d, widest) = (d.saturating_add(gap), widest.max(gap));
             }
+            // every point is kept (put thins by halving when full, the last one is pushed after it)
             self.put(p, d, NO_ALT);
             prev = Some(p);
         }
+        // a sparse track: the matcher's chord tolerance and the cues' arms follow the spacing ([`Course::follow`])
+        self.step_m = self.step_m.max(widest);
         self.finish();
     }
 
@@ -667,7 +678,7 @@ impl Course {
     pub fn to_start(&self, t: &Tracker) -> Option<(u32, u32)> {
         let s = self.xy.first().filter(|_| self.len >= 2 && t.off_m.is_some() && !t.joined)?;
         let (dx, dy) = (i64::from(s.0) - i64::from(t.here.0), i64::from(s.1) - i64::from(t.here.1));
-        let m = ((dx * dx + dy * dy) as u64).isqrt().min(u64::from(u32::MAX)) as u32;
+        let m = hypot(dx, dy);
         Some(((-angle_deg((0, 1), (dx, dy))).rem_euclid(360) as u32, m))
     }
 
@@ -963,14 +974,58 @@ pub(crate) mod tests {
     /// The way back: a track in the order of its end to its start, thinned to the memory, ending at the start.
     #[test]
     fn course_from_a_track_is_bounded() {
-        let track: Vec<(i32, i32)> = (0..POINTS as i32 * 3).map(|k| (k, 0)).collect();
+        let track: Vec<(i32, i32)> = (0..512).map(|k| (k, 0)).collect(); // the map's own bound
         let mut c = Course::new();
         c.from_plane((0, 0), track.iter().rev().copied());
-        assert!(c.points().len() <= POINTS && c.points().len() >= POINTS / 2, "{}", c.points().len());
+        assert_eq!(c.points().len(), 512);
         assert_eq!((c.points()[0], c.len_m()), (track[track.len() - 1], track.len() as u32 - 1));
-        assert!(c.points().last().is_some_and(|p| p.0 < 4), "ends at the start (thinned: within a step)");
+        assert_eq!(c.points().last(), Some(&(0, 0)), "ends at the start");
+        // more than the memory holds: thinned, the ends kept
+        let big: Vec<(i32, i32)> = (0..POINTS as i32 * 3).map(|k| (k, 0)).collect();
+        c.from_plane((0, 0), big.iter().rev().copied());
+        assert!(c.points().len() <= POINTS && c.points().len() >= POINTS / 2, "{}", c.points().len());
+        assert_eq!((c.points()[0], c.points().last()), (big[big.len() - 1], Some(&(0, 0))));
         c.from_plane((0, 0), core::iter::empty());
         assert!(c.points().is_empty() && c.len_m() == 0);
+    }
+
+    /// A sparse track (512 points over 100 km, 195 m apart) followed from its start is never off course.
+    #[test]
+    fn a_sparse_way_back_is_followed() {
+        let track: Vec<(i32, i32)> = (0..512).map(|k| (k * 195, 0)).collect();
+        let mut c = Course::new();
+        c.from_plane((0, 0), track.iter().copied());
+        let mut t = Tracker::new();
+        for k in 0..99_600 / 8 {
+            let lon = (f64::from(k * 8) / 0.011_132) as i32;
+            assert_ne!(c.follow(&mut t, 0, lon), Some(Event::Off), "at {} m", k * 8);
+        }
+        // a fix far away: no overflow
+        let mut t = Tracker::new();
+        let _ = c.follow(&mut t, 899_000_000, 1_799_000_000);
+        let _ = c.to_start(&t);
+    }
+
+    /// Reversed with gaps and without altitudes: the gaps stay between the same points, no altitude appears, and
+    /// reversing twice is the course again.
+    #[test]
+    fn reverse_keeps_gaps_and_no_altitude() {
+        let mut c = Course::new();
+        for k in 0..40 {
+            let x = if k < 20 { k * 10 } else { 5000 + k * 10 }; // a jump at point 20
+            c.add(Pt { lat: 0, lon: (f64::from(x) / 0.011_132) as i32, alt_dm: None, split: k == 20, dist_m: None });
+        }
+        c.finish();
+        let n = c.points().len();
+        let gaps: Vec<_> = (1..n).filter(|&i| c.gap_at(i)).collect();
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        let (pts, dist) = (c.points().to_vec(), c.dist[..n].to_vec());
+        c.reverse();
+        assert!(!c.has_alt());
+        assert_eq!((1..n).filter(|&i| c.gap_at(i)).collect::<Vec<_>>(), [n - gaps[0]]);
+        c.reverse();
+        assert_eq!((c.points(), &c.dist[..n]), (&pts[..], &dist[..]));
+        assert_eq!((1..n).filter(|&i| c.gap_at(i)).collect::<Vec<_>>(), gaps);
     }
 
     /// Not on the course yet: the bearing and distance of its start, until the course is joined.

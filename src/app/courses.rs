@@ -81,8 +81,14 @@ impl App {
 
     /// BACK TO START: the ride's own track (the map's breadcrumb, already thinned) followed back as a course; it
     /// replaces the course followed. The track is the ride's own (never stock's files).
+    #[inline(never)]
     pub(crate) fn back_to_start(&mut self) {
         let (Some(c), Some(o)) = (self.courses.as_deref_mut(), self.track.origin()) else { return };
+        if self.track.points().len() < 2 {
+            return self.say("NO TRACK YET");
+        }
+        c.cancel_load(); // a course still being read would be written over the way back
+        c.on = None;
         c.course.from_plane(o, self.track.points().iter().rev().copied());
         if c.course.points().len() < 2 {
             return self.say("NO TRACK YET");

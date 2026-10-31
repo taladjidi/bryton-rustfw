@@ -1256,7 +1256,7 @@ fn reversed_course_ride() {
     assert!(!c.course.cues().is_empty());
     assert_eq!(app.field_text(Field::ToGo).as_str().chars().next(), Some('4'), "about 4.8 km to go");
     sim.save("course_reversed");
-    // not assert_consistent: the default course page's profile leaves one pixel stale in its first column on main too
+    assert_consistent(&sim, &app);
 }
 
 /// Off the start of the course: the way to it (compass point and distance) in the next turn field, until joined.
@@ -1297,4 +1297,44 @@ fn back_to_start_after_a_ride() {
     assert_eq!(pts.last(), here.first(), "ends where the ride began");
     assert!((3100..=3500).contains(&c.course.len_m()), "{}", c.course.len_m());
     assert!(c.course.cues().iter().any(|q| q.turn.is_turn()), "the corner, the other way round");
+}
+
+/// The default course page of a ridden hill: the profile's first column is redrawn when the rider's marker leaves
+/// it (it stayed stale until the next full draw on main).
+#[test]
+fn course_page_consistent_after_the_first_fix() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(course_route);
+    let mut app = course_app(&mut sim);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    while sim.ms < 9_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    assert_consistent(&sim, &app);
+}
+
+/// BACK TO START while a course is still being read: the reading is given up, the way back stays whole.
+#[test]
+fn back_to_start_while_reading_a_course() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(course_route);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    while sim.ms < 60_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    app.follow_course(hill(&app)); // reading starts
+    app.back_to_start();
+    let c = app.courses.as_deref().unwrap();
+    let before = (c.course.points().to_vec(), c.course.id());
+    run(&mut sim, &mut app, 2000);
+    let c = app.courses.as_deref().unwrap();
+    assert!(c.on.is_some());
+    assert_eq!((c.course.points().to_vec(), c.course.id()), before, "the way back, not the hill read over it");
 }

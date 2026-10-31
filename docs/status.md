@@ -11,7 +11,8 @@ A feature not listed here was seen on the unit.
 - **Course reverse, the way to the start and BACK TO START (app/courses.rs, nav/course)**: sim only. To check on a ride:
   follow a course, REVERSE COURSE and ride it the other way (turns the other way round); start away from a course and
   see NEXT TURN give the compass point and distance until joined; ride out, BACK TO START in the ride menu, and ride
-  back on the breadcrumb with its cues.
+  back on the breadcrumb with its cues. A reversed or way-back course is not kept across a reset: after one mid-ride
+  nothing is followed (the ride itself resumes).
 
 - **Torque effectiveness and pedal smoothness (drivers/sensors.rs page 0x13, the TE L/R and PS L/R fields)**: sim only.
   The owner's Sigeyi spider PM may not send page 0x13 at all, so its fields would stay "--" for a whole ride. To check:
