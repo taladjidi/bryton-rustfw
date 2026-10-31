@@ -51,8 +51,9 @@ impl App {
                 if suspect {
                     self.fats_equal();
                 }
-                if b.backup_read(FAULT_BKP) == word {
-                    b.backup_write(FAULT_BKP, word | faultlog::LOGGED);
+                let cur = b.backup_read(FAULT_BKP); // the count byte may have been cleared at the minute meanwhile
+                if cur >> 8 == word >> 8 {
+                    b.backup_write(FAULT_BKP, if self.up_ms >= FAULT_CLEAR_MS { 0 } else { cur | faultlog::LOGGED });
                 }
             }
             Err(fat::Error::NotFat32) => {} // no volume (a card stock never formatted): nothing to say
