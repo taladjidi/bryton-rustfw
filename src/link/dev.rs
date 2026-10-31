@@ -883,11 +883,13 @@ mod tests {
         assert_eq!((r, Watcher::real_failure(bus, false)), (UsbWatch::Drop, true));
         w.reconnected(t + SOF_LOST_MS);
         t += SOF_LOST_MS;
+        assert_eq!(w.poll(false, true, 0, t + 1, false).1, UsbWatch::Down, "a suspend right after a reconnect");
         // not configured, none since the reconnect: down, however long
         assert_eq!(w.poll(false, false, 0, t + UNCONFIGURED_MS, false).1, UsbWatch::Down);
         // the computer enumerates again, then idles (suspend): left alone
         assert_eq!(w.poll(true, false, 1, t + 3000, false).1, UsbWatch::Up);
         assert_eq!(w.poll(false, true, 1, t + 3010, false).1, UsbWatch::Suspended);
+        assert_eq!(w.poll(false, true, 1, t + 3010 + UNCONFIGURED_MS, false).1, UsbWatch::Suspended);
         // a failed transfer, then a suspend that outlasts the give-up: a drop with a snapshot
         let (bus, r) = w.poll(false, true, 1, t + 3010 + UNCONFIGURED_MS, true);
         assert_eq!((r, Watcher::real_failure(bus, true)), (UsbWatch::Drop, true));
