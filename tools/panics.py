@@ -17,7 +17,8 @@ and the tables, and named on their own line ("panic handler: N sites, excluded")
 
     panics.py [ELF]            the report (default: the release ELF); exit 0 always
     panics.py [ELF] --json F   also write it as JSON to F
-    panics.py selftest         offline checks of the parsing (check.sh may run it)
+    panics.py [ELF] --max N    the report, then exit 1 when the total is above N (check.sh: --max 0)
+    panics.py selftest         offline checks of the parsing and the comparison (check.sh may run it)
 """
 import collections
 import json
@@ -143,7 +144,13 @@ def report(found, deny):
                             'denied_bounds': [dict(file=f, line=n) for f, n, *_ in bad]}
 
 
+def over(total, max_allowed):
+    """True when a report of `total` sites is above the allowed `max_allowed`."""
+    return total > max_allowed
+
+
 def selftest():
+    assert not over(0, 0) and over(1, 0) and not over(3, 5)
     text = '\n'.join([
         'd0000000 <app::step>:', f'; {ROOT}/src/app/a.rs:42', 'd0000000: \tmovw\tr2, #0x100', 'd0000002: \tmovt\tr2, #0xd000',
         'd0000000: \tbl\t0xd0009000 <core::panicking::panic_bounds_check::h7761f4e897d698b2> @ imm = #0x9334c',
@@ -185,7 +192,8 @@ if __name__ == '__main__':
         sys.exit()
     args = sys.argv[1:]
     jf = args.pop(args.index('--json') + 1) if '--json' in args else None
-    elf = [a for a in args if a != '--json']
+    mx = int(args.pop(args.index('--max') + 1)) if '--max' in args else None
+    elf = [a for a in args if a != '--max']
     elf = pathlib.Path(elf[0]) if elf else ELF
     sysroot = subprocess.run(['rustc', '--print', 'sysroot'], capture_output=True, text=True, check=True).stdout.strip()
     bins = next(pathlib.Path(sysroot).glob('lib/rustlib/*/bin/llvm-objdump')).parent
@@ -195,3 +203,6 @@ if __name__ == '__main__':
     print(txt)
     if jf:
         pathlib.Path(jf).write_text(json.dumps(js, indent=1))
+    if mx is not None and over(js['total'], mx):
+        print(f"panics: {js['total']} sites, more than the allowed {mx}")
+        sys.exit(1)

@@ -264,7 +264,7 @@ pub(crate) fn push_cut<const N: usize>(l: &mut Line<N>, name: &str, room: usize)
     let keep = room - 2;
     let end = |n: usize| full.char_indices().nth(n).map_or(full.len(), |(i, _)| i);
     let head = full.get(..end(keep + 1)).unwrap_or("");
-    let cut = head.rfind(' ').filter(|&i| i > 0).unwrap_or(end(keep));
+    let cut = crate::storage::rfind_ascii(head, b' ').filter(|&i| i > 0).unwrap_or(end(keep));
     l.push_str(full.get(..cut).unwrap_or("").trim_end());
     l.push_str("..");
 }

@@ -108,7 +108,7 @@ The point of this project is a firmware in safe Rust.
   - Raw pointers appear only in hw.rs.
 - **Panics:** no `unwrap` / indexing that can fail on the firmware path, unless it is provably in range. A panic
   marks the fault and resets the unit (hw.rs `default_handler`), so a ride resumes from its checkpoint. The unit
-  parks after 3 resets in a row without a minute of running.
+  parks after 3 resets in a row without a minute of running. Since 2026-10-31 the release image has no panic site, and the gate (`tools/panics.py --max 0`) keeps it so.
 
 ## Layout: logic in the library, transport in the board
 
@@ -170,7 +170,7 @@ seconds, and the run ends with all of them and a total:
   tracked files, dead functions in `tools/`, and ruff's pyflakes checks when ruff is installed;
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - **lane F, the firmware:** `cargo clippy --release -- -D warnings`, the firmware build, `tools/stack_check.py` and its
-  selftest (the stack frames against their budgets), `tools/pack.py`; after the lanes, if Renode is installed, `renode/run.py`
+  selftest (the stack frames against their budgets), `tools/panics.py --max 0` (every panic site of the release ELF: there must be none; the panic handler's own sites are excluded), `tools/pack.py`; after the lanes, if Renode is installed, `renode/run.py`
   (the boot, then the cable in) and `--off` (docs/devloop.md, Emulation), in sequence (`RENODE_PARALLEL=1` runs both
   together), each killed after 300 s (`RENODE_TIMEOUT`) and failing;
 - **lane H, the host:** clippy on the tests and the simulator, `cargo test-host` (unit tests, simulator tests and doc

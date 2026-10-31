@@ -92,6 +92,7 @@ lane_F() {  # the firmware
     step "cargo build --release" cargo build --release
     step "stack_check" python3 -I tools/stack_check.py
     step "stack_check selftest" python3 -I tools/stack_check.py selftest
+    step "panics.py --max 0" python3 -I tools/panics.py --max 0
     step "pack.py" python3 -I tools/pack.py
 }
 
