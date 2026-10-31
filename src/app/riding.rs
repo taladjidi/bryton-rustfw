@@ -511,7 +511,8 @@ impl App {
                         .unwrap_or(self.profile);
                 }
                 (self.profile_by_hand, self.tlink.quiet_s) = (self.rec.clean.by_hand(), 0);
-                let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
+                let digit = |i: usize| name.get(i).copied().unwrap_or(b'0').wrapping_sub(b'0') % 10;
+                let two = |i: usize| digit(i) * 10 + digit(i + 1);
                 self.ride_started = RideStart::new((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
                 // the recovery record keeps the ride's totals, not power.rs's sums: the end card's NP, TSS and kJ

@@ -24,3 +24,8 @@ pub mod thresholds;
 pub mod trash;
 pub mod volume;
 pub mod workout_file;
+
+/// The `N` bytes of `b` from `i`, zeros when `b` is too short (a malformed record reads as empty, never panics).
+pub(crate) fn take<const N: usize>(b: &[u8], i: usize) -> [u8; N] {
+    i.checked_add(N).and_then(|end| b.get(i..end)).and_then(|s| s.try_into().ok()).unwrap_or([0; N])
+}

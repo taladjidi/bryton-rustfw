@@ -51,7 +51,7 @@ pub fn name(z: u8, x: u32, y: u32) -> Line<32> {
 
 /// The header is a version 1 pack of tile (`z`, `x`, `y`)'s block.
 pub fn header_ok(h: &[u8; HEAD as usize], z: u8, x: u32, y: u32) -> bool {
-    let u32_at = |i: usize| u32::from_le_bytes([h[i], h[i + 1], h[i + 2], h[i + 3]]);
+    let u32_at = |i: usize| u32::from_le_bytes(super::take(h, i));
     h[..4] == *b"IGNP"
         && h[4..6] == [1, 0]
         && h[6] == z
@@ -84,7 +84,7 @@ pub fn decode(src: &mut impl Iterator<Item = u8>, out: &mut [u16]) -> bool {
         }
     }
     let Some(out) = out.get_mut(..TILE) else { return false };
-    lz4(src, out, |i| pal[usize::from(i)]) == Some(TILE)
+    lz4(src, out, |i| pal.get(usize::from(i)).copied().unwrap_or(0)) == Some(TILE)
 }
 
 /// Decodes one LZ4 block from `src` into `out`, each literal byte through `map`: the length decoded, None when the

@@ -172,13 +172,16 @@ impl App {
             _ => return,
         };
         let text = |stats: [Option<u16>; 2]| {
-            core::array::from_fn::<_, 2, _>(|k| {
+            let mut figures = names.iter().zip(stats);
+            core::array::from_fn::<_, 2, _>(|_| {
                 let mut l = Line::<10>::new();
-                l.push_str(names[k]);
-                l.push_str(" ");
-                match stats[k] {
-                    Some(v) => l.push_u32(u32::from(v)),
-                    None => l.push_str("--"),
+                if let Some((name, stat)) = figures.next() {
+                    l.push_str(name);
+                    l.push_str(" ");
+                    match stat {
+                        Some(v) => l.push_u32(u32::from(v)),
+                        None => l.push_str("--"),
+                    }
                 }
                 l
             })
@@ -186,8 +189,9 @@ impl App {
         let (lines, was) = (text(g.stats), old.map(|o| text(o.stats)));
         // each figure that changed, with what it was (its characters redrawn alone when the length stays)
         let line = |k: usize| {
-            let was = was.as_ref().map(|w| w[k].as_str());
-            (old.map(|o| o.stats[k]) != Some(g.stats[k])).then(|| (was.unwrap_or(""), lines[k].as_str()))
+            let (now, stat) = (lines.get(k)?, g.stats.get(k)?);
+            let was = was.as_ref().and_then(|w| w.get(k)).map(|l| l.as_str());
+            (old.and_then(|o| o.stats.get(k).copied()) != Some(*stat)).then(|| (was.unwrap_or(""), now.as_str()))
         };
         ui::draw_graph_stats(c, bx, graph_title(g.plot), [line(0), line(1)]);
     }

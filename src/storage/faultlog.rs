@@ -87,10 +87,8 @@ pub const CFSR_BITS: [(u8, &str); 13] = [
 #[inline(always)]
 pub fn cfsr_detail(cfsr: u32) -> u32 {
     let mut d = 0;
-    let mut i = 0;
-    while i < CFSR_BITS.len() {
-        d |= (cfsr >> CFSR_BITS[i].0 & 1) << i;
-        i += 1;
+    for (i, bit) in CFSR_BITS.iter().enumerate() {
+        d |= (cfsr >> bit.0 & 1) << i;
     }
     d
 }
@@ -205,7 +203,7 @@ pub fn append(
     if keep > 0 {
         let mut s = [0u8; 512];
         fat.read_sector(d, &h, first, &mut s)?;
-        buf[..keep].copy_from_slice(s.get(..keep).ok_or(Error::Corrupt)?);
+        buf.get_mut(..keep).ok_or(Error::Corrupt)?.copy_from_slice(s.get(..keep).ok_or(Error::Corrupt)?);
     }
     buf.get_mut(keep..keep + line.len()).ok_or(Error::Corrupt)?.copy_from_slice(line);
     let end = at + len;

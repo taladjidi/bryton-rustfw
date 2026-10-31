@@ -107,7 +107,12 @@ pub fn ride_start(name: &[u8]) -> Option<Start> {
     if !ext.eq_ignore_ascii_case(b".fit") || !digits.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let two = |i: usize| digits.get(i..i + 2).map_or(0, |d| (d[0] - b'0') * 10 + (d[1] - b'0'));
+    let two = |i: usize| {
+        digits.get(i..i + 2).map_or(0, |d| match *d {
+            [a, b] => (a - b'0') * 10 + (b - b'0'),
+            _ => 0,
+        })
+    };
     let (y, m, d) = (2000 + u16::from(two(0)), two(2), two(4));
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) || two(6) > 23 || two(8) > 59 || two(10) > 59 {
         return None;
@@ -183,8 +188,8 @@ impl Entry {
         b[28..32].copy_from_slice(&r.dist_m.to_le_bytes());
         b[32..34].copy_from_slice(&sat(r.power_s));
         b[34..36].copy_from_slice(&sat(r.kj));
-        for (i, w) in self.best.iter().enumerate() {
-            b[36 + 2 * i..38 + 2 * i].copy_from_slice(&w.to_le_bytes());
+        for (c, w) in b[36..].chunks_exact_mut(2).zip(&self.best) {
+            c.copy_from_slice(&w.to_le_bytes());
         }
         b
     }
@@ -192,8 +197,8 @@ impl Entry {
     /// The entry in `b` (at least [`ENTRY`] bytes; None if shorter).
     pub fn from_bytes(b: &[u8]) -> Option<Entry> {
         let b: &[u8; ENTRY] = b.get(..ENTRY)?.try_into().ok()?;
-        let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
-        let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let u16_at = |i: usize| u16::from_le_bytes(super::take(b, i));
+        let u32_at = |i: usize| u32::from_le_bytes(super::take(b, i));
         let opt16 = |i: usize| Some(u16_at(i)).filter(|&v| v != 0xffff);
         let opt8 = |v: u8| Some(v).filter(|&v| v != 0xff);
         let ride = Ride {
@@ -980,8 +985,9 @@ fn named<'a>(buf: &'a mut [u8; 16], prefix: &str, suffix: &str, n: u32) -> &'a s
     l.push_u32(n);
     let b = l.as_str().as_bytes();
     let len = b.len().min(16);
-    buf[..len].copy_from_slice(&b[..len]);
-    core::str::from_utf8(&buf[..len]).unwrap_or("")
+    let (Some(dst), Some(src)) = (buf.get_mut(..len), b.get(..len)) else { return "" };
+    dst.copy_from_slice(src);
+    core::str::from_utf8(buf.get(..len).unwrap_or(&[])).unwrap_or("")
 }
 
 impl Imported {
