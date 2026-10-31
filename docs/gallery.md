@@ -105,6 +105,11 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![ABOUT](img/about.png) | ![STORAGE](img/storage.png) | ![STORAGE's oldest ride](img/storage-ride.png) |
 | ABOUT under SYSTEM: the version and the commit, Ferris, the map and font notices (sim) | STORAGE under SYSTEM: the card's size, free space, rides and the five oldest, read over the passes (sim) | The oldest ride's card from STORAGE, DELETE on it as in HISTORY (sim) |
 
+| | | |
+|:-:|:-:|:-:|
+| ![BATTERY SAVER tag](img/battery-saver.png) |  |  |
+| BATTERY SAVER on: the green "S" in the strip, left of the battery (sim) |  |  |
+
 ## Sensors and phone
 
 | | | |

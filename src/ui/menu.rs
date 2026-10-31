@@ -153,6 +153,8 @@ pub enum Setting {
     PowerMatch,
     /// GNSS SYSTEMS (BIKE): which satellite systems the receiver tracks ([`crate::gnss::SYSTEMS`]).
     GnssSystems,
+    /// BATTERY SAVER (SYSTEM): OFF, ON or AUTO ([`crate::SaverMode`]).
+    BatterySaver,
     /// LEVEL STEP (BIKE): how many levels a press moves in the trainer's LEVEL mode ([`crate::LEVEL_STEPS`]).
     LevelStep,
     /// STEEP DESCENT (ALERTS): OFF, or the grade a descent ahead must pass to be said ([`crate::STEEP_DESCENT_PCT`]).
@@ -312,6 +314,7 @@ impl Setting {
             Setting::MapUp => "MAP",
             Setting::PowerMatch => "POWER MATCH",
             Setting::GnssSystems => "GNSS",
+            Setting::BatterySaver => "BATTERY SAVER",
             Setting::LevelStep => "LEVEL STEP",
             Setting::SlopeScale => "SLOPE SCALE",
             Setting::SteepDescent => "STEEP DESCENT",
@@ -962,7 +965,7 @@ pub const BIKE: [Row; 23] = [
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
-pub const SYSTEM: [Row; 9] = [
+pub const SYSTEM: [Row; 10] = [
     Row::Drive,
     Row::Stock(StockRow::Import),
     Row::Open(Menu::Gps),
@@ -972,6 +975,7 @@ pub const SYSTEM: [Row; 9] = [
     Row::About,
     Row::Screenshot,
     Row::Set(Setting::AutoOff),
+    Row::Set(Setting::BatterySaver),
 ];
 
 /// What the page editor does to the selected cell or its page (Start in the editor: UI review 2, 5.2 point 6).

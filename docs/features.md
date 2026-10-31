@@ -237,6 +237,18 @@ settings) starts with BRIGHTNESS AUTO and OFF AFTER 30 S; saved settings, or sto
 AUTO OFF (SYSTEM > AUTO OFF: off, or after 5, 10, 30 or 60 min idle) switches the unit off with no ride, cable, drive
 or write waiting and no movement; details: docs/power.md.
 
+BATTERY SAVER (SYSTEM > BATTERY SAVER: OFF, ON or AUTO; settings file byte 172, one setting for all profiles): ON applies, on top of
+the other settings (it changes none of them, so OFF gives them back exactly), the GPS in cyclic tracking (GPS POWER SAVER's mode) while no ride is running (a running ride, and an MTB ride, keep the rider's GPS POWER: its distance
+comes from the GPS speed), the backlight capped at 30 % with a 10 s time-out at most (never off and 30 / 60 s become 10 s; a running ride keeps its
+time-out, only the level is capped), and the graphs of a ride page redrawn every 5 s instead of each second (at once on a touch or a key; the map and
+the course profile keep their rate). A green "S" shows in the status strip
+while it is on. AUTO turns it on once, with the notice BATTERY SAVER ON, at 20 % of charge or less (not while charging) and off,
+with BATTERY SAVER OFF, when the charger comes. The recording is not touched: the ride is sampled and checkpointed as with it off. Not
+used: GNSS GPS-only (cyclic tracking draws the same 5 mA with any set, docs/power.md) and the phone link (advertising is already 1 s, 10 to 15 uA).
+**Estimated saving** (docs/power.md "Battery saver", from data sheets, not measured on the unit): GPS about 4.8 mA; backlight 42 mA less at 100 %
+(60 to 18 mA), 18 mA less at 60 %, and the time-out up to the whole 18 to 60 mA while the unit sits unwatched; the 5 s redraw well under 1 mA
+(inferred; the CPU is awake 1.3 % on a ride page). In daylight with AUTO brightness (1 %) only the GPS counts, about 4.8 mA.
+
 - **Menus:** rows 44 px tall (about 8 mm, a fingertip), six a screen, a longer menu turned a screen at a time;
   a "<" left of the title goes back. The selected row is black on orange (10:1 contrast; white on that orange was
   2:1); a row's value is white like its label, green when it says a state that is on (a sensor heard, the phone

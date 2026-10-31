@@ -97,6 +97,7 @@ pub(super) fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: b
             rec: app.strip.rec,
             locked: app.strip.locked,
             more: app.strip.more,
+            saver: app.strip.saver,
         },
     );
     let page = app.pages()[n];
@@ -141,6 +142,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
             rec: app.strip.rec,
             locked: app.strip.locked,
             more: app.strip.more,
+            saver: app.strip.saver,
         },
     );
     let _ = s;
@@ -597,6 +599,7 @@ fn gps_fix_and_speed() {
         rec: Rec::Idle,
         locked: false,
         more: false,
+        saver: false,
     };
     crate::ui::draw_strip(&mut want, &strip);
     assert!(want.px == sim.screen, "GPS speed, green GPS");

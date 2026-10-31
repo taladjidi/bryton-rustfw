@@ -269,6 +269,11 @@ impl App {
         if self.ride.state() != ride::State::Idle && self.profile.tracks() {
             return false; // off road: continuous tracking whatever GPS POWER says (the owner, 2026-10-27)
         }
+        // BATTERY SAVER: cyclic tracking (docs/power.md), but not under a running ride: its distance comes from the
+        // GPS speed and cyclic tracking can lose fixes, so a ride keeps the rider's GPS POWER (review 2026-10-31)
+        if self.saver_on() && self.ride.state() != ride::State::Running {
+            return true;
+        }
         match self.settings.gps_power {
             GpsPower::Auto => self.gps.auto.saver(),
             GpsPower::Full => false,

@@ -310,6 +310,8 @@ pub struct Settings {
     pub slope_scale: usize,
     /// GNSS SYSTEMS (BIKE): an index in [`gnss::SYSTEMS`] (data 170); the receiver's default (0) in a file that predates it.
     pub gnss_systems: usize,
+    /// BATTERY SAVER (SYSTEM), settings file byte 172.
+    pub saver: SaverMode,
     /// LTHR (ME): the lactate threshold heart rate, bpm; 0 until it is set (the LTHR fields show "--"). Kept in
     /// settings.bin only, after the alert limits (byte 66); 0 in a file that predates it.
     pub lthr: u16,
@@ -580,6 +582,26 @@ pub enum GpsPower {
     Saver,
 }
 
+/// BATTERY SAVER (SYSTEM): the knobs of docs/power.md "Battery saver", applied on top of the other settings (they
+/// are not changed, so OFF restores them exactly).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SaverMode {
+    /// Never: the default.
+    #[default]
+    Off,
+    /// Always.
+    On,
+    /// From [`crate::BATTERY_SAVER_PERCENT`] of charge until the charger is plugged in.
+    Auto,
+}
+
+impl SaverMode {
+    /// The choice a settings byte names (its position in the list), None for any other byte.
+    pub fn from_byte(b: u8) -> Option<Self> {
+        [SaverMode::Off, SaverMode::On, SaverMode::Auto].get(usize::from(b)).copied()
+    }
+}
+
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
 /// (power.rs [`power::Power::rolling`] 0, 1, 2), then the power each second. 3 s first: the default.
 pub const WKT_AVGS: [&str; 3] = ["3S", "10S", "30S"];
@@ -637,6 +659,7 @@ impl Settings {
             slope_scale: 0,
             steep_descent: 0,
             gnss_systems: 0,
+            saver: SaverMode::Off,
             lthr: 0,
             power_smooth: 0,
             auto_theme: false,
@@ -908,6 +931,11 @@ impl Settings {
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
             Setting::GnssSystems => l.push_str(gnss::SYSTEMS.get(self.gnss_systems).copied().unwrap_or("?")),
+            Setting::BatterySaver => l.push_str(match self.saver {
+                SaverMode::Off => "OFF",
+                SaverMode::On => "ON",
+                SaverMode::Auto => "AUTO",
+            }),
             Setting::PowerMatch => l.push_str(if self.power_match { "ON" } else { "OFF" }),
             Setting::LevelStep => l.push_u32(u32::from(LEVEL_STEPS.get(self.level_step).copied().unwrap_or(1))),
             Setting::SlopeScale => {
@@ -1098,6 +1126,13 @@ impl Settings {
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::GnssSystems => self.gnss_systems = (self.gnss_systems + 1) % gnss::SYSTEMS.len(),
+            Setting::BatterySaver => {
+                self.saver = match self.saver {
+                    SaverMode::Off => SaverMode::On,
+                    SaverMode::On => SaverMode::Auto,
+                    SaverMode::Auto => SaverMode::Off,
+                }
+            }
             Setting::PowerMatch => self.power_match = !self.power_match,
             Setting::LevelStep => self.level_step = (self.level_step + 1) % LEVEL_STEPS.len(),
             Setting::SlopeScale => self.slope_scale = (self.slope_scale + 1) % SLOPE_SCALES.len(),
