@@ -31,6 +31,9 @@
 //! `\System\DeviceData.ini` `[DeviceSys]`: `Alt_P0` (the sea-level pressure in hPa, default 1020.0) and
 //! `calAltitude_km` / `calAltitude_mi` (the typed altitude, defaults 200 and 218.7: metres and yards, inferred), and
 //! its Baro_CheckAltCalibrationAtLocation sets the altitude from a saved place (ghidra/notes agent_a2.md, agent_b1.md).
+//! So does this firmware: stopped within 30 m of a saved place with an altitude (places.rs, app/places.rs), the
+//! barometer reads that altitude ([`Altimeter::calibrate_by`], [`By::Place`]), at a ride's start (before the
+//! receiver's 30 s average ends, which it replaces) or at any stop there.
 //!
 //! **Which altitude** ([`Altimeter::source`]): the barometer's when it reads and its calibration is *trusted* (made
 //! in the last [`FRESH_S`], or this power-up, or being made at the ride's start); the receiver's otherwise, while it
@@ -127,6 +130,8 @@ pub enum By {
     Auto = 3,
     /// Stock's `Alt_P0` (its age unknown).
     Stock = 4,
+    /// The altitude of a saved place the rider stopped at (places.rs).
+    Place = 5,
 }
 
 /// A calibration: the sea-level pressure, and when it was made.
@@ -180,6 +185,7 @@ impl Cal {
             2 => By::Gps,
             3 => By::Auto,
             4 => By::Stock,
+            5 => By::Place,
             _ => return None,
         };
         let p0 = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
@@ -353,8 +359,13 @@ impl Altimeter {
 
     /// Calibrates so that the barometer reads `alt_mm` now. False if it is silent or no sea-level pressure fits.
     pub fn calibrate(&mut self, alt_mm: i32, now_s: u32) -> bool {
+        self.calibrate_by(alt_mm, now_s, By::Typed)
+    }
+
+    /// As [`Altimeter::calibrate`], marked as made `by` (a saved place's altitude: [`By::Place`]).
+    pub fn calibrate_by(&mut self, alt_mm: i32, now_s: u32, by: By) -> bool {
         let Some(p0) = self.pressure().and_then(|p| p0_for(p, alt_mm)) else { return false };
-        self.set(p0, now_s, By::Typed);
+        self.set(p0, now_s, by);
         true
     }
 

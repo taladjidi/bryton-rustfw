@@ -436,6 +436,7 @@ MENU
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >,
                    SCREENSHOT
+ +- PLACES >       SAVE PLACE, then the favourite places (distance and bearing from here) -> ALTITUDE (typed), DELETE
 ```
 
 - **SENSORS:** Start on a row: an off sensor searches; a searching one stops; a paired one heard asks "SURE?" and
@@ -467,6 +468,7 @@ MENU
    +- BRIGHTNESS       changed in place
    +- SENSORS >        the same menu as off the ride
    +- EDIT THIS PAGE > paused only: the page editor on the page (the overview: its fields; the course page has none)
+   +- SAVE PLACE       stopped only: here, as a favourite place (written once the ride is saved)
    +- ALL SETTINGS >   the full menu above
   ```
   An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when
@@ -966,6 +968,13 @@ STOCK):
   old; kept in `\Rustfw\altcal.bin` between rides; stock's `Alt_P0` imported (not trusted). The ride, its graphs and the
   FIT records take the barometer's altitude when it reads, the receiver's otherwise. No drift correction in a ride
   (module doc: why).
+- **Favourite places** (`src/nav/places.rs`, `src/app/places.rs`): SAVE PLACE (MENU > PLACES, or the ride menu while
+  stopped) keeps where the rider is, up to 16, named PLACE 1, PLACE 2..., with the barometer's altitude when its
+  calibration is fresh, else the receiver's (3D fix, six satellites), else none; PLACES lists them with their distance
+  and bearing from here ("1.2 KM NE"); a place's menu types its altitude by hand (from a known elevation) or DELETEs
+  it (asked first). Stopped within 30 m of a place with an altitude (a fix of 10 m or better), the barometer is
+  calibrated to it, once a visit and again when a ride's start asks for a calibration (it replaces the receiver's 30 s
+  average there). Kept in `\Rustfw\places.bin`, two copies with a CRC, written between rides only.
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.

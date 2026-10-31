@@ -738,7 +738,10 @@ impl App {
                         self.editing = false;
                         // Back (and a swipe back) leaves the altitude as it was; Select or a tap sets it
                         if s == menu::Setting::Altitude && matches!(i, Input::Select | Input::Touch(Gesture::Tap(..))) {
-                            self.alt_typed();
+                            match menu {
+                                Menu::Place(k) => self.place_alt_typed(k),
+                                _ => self.alt_typed(),
+                            }
                         }
                         self.setting_edited(s);
                         self.save_misc(b);

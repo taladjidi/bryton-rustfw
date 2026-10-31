@@ -246,6 +246,10 @@ impl App {
                 title.push_u32(k as u32 + 1);
             }
             Menu::Page(n) => self.page_label(n, &mut title),
+            Menu::Place(k) => match self.places.list.get(k) {
+                Some(p) => p.name(&mut title),
+                None => title.push_str("PLACE"),
+            },
             _ => title.push_str(menu_title(menu)),
         }
         title

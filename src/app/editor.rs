@@ -226,13 +226,14 @@ impl App {
 
     /// Both FAT copies compared equal: neither file's next write compares them again.
     pub(crate) fn fats_equal(&mut self) {
-        (self.store.sound, self.settings_store.sound, self.fats_suspect) = (true, true, false);
+        (self.store.sound, self.settings_store.sound, self.places.sound, self.fats_suspect) = (true, true, true, false);
     }
 
     /// A write failed (a FAT sector may differ between the copies): both files' next writes compare them first.
     pub(crate) fn fats_unsure(&mut self) {
         (self.store.sound, self.store.sync) = (false, 0);
         (self.settings_store.sound, self.settings_store.sync) = (false, 0);
+        (self.places.sound, self.places.sync) = (false, 0);
         self.fats_suspect = true; // and a file read whole later does not say they are equal
     }
 

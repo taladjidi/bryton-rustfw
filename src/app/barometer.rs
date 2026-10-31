@@ -43,7 +43,7 @@ impl App {
 
     /// The receiver's altitude when it is good enough to calibrate by: a valid 3D fix with six satellites or more
     /// (a 2D fix holds its last altitude).
-    fn alt_for_cal(&self) -> Option<i32> {
+    pub(crate) fn alt_for_cal(&self) -> Option<i32> {
         self.gps.pvt.filter(|p| p.fix_ok && p.fix == 3 && p.sats >= 6).map(|p| p.alt_mm)
     }
 
