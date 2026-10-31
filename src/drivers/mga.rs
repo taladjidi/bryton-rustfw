@@ -140,10 +140,11 @@ impl Ano {
         while let Some(&b) = self.sector.get(self.at).filter(|_| self.at < self.len) {
             self.at += 1;
             let Some((0x13, 0x20, p)) = self.parser.push(b) else { continue };
-            if p.len() != PAYLOAD || p[0] != 0 {
+            let &[0, _, _, _, d4, d5, d6, ..] = p else { continue };
+            if p.len() != PAYLOAD {
                 continue;
             }
-            let date = (p[4], p[5], p[6]);
+            let date = (d4, d5, d6);
             if self.phase == Phase::Find {
                 if date > self.today {
                     self.finish();

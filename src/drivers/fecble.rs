@@ -106,7 +106,7 @@ pub fn broadcast(page: [u8; 8], sum: bool) -> [u8; FRAME] {
 /// assert_eq!(fecble::parse(&f), None);
 /// ```
 pub fn parse(d: &[u8]) -> Option<([u8; 8], bool)> {
-    let f = d.get(..FRAME)?;
+    let f: &[u8; FRAME] = d.get(..FRAME)?.try_into().ok()?;
     if f[0] != 0xa4 || f[1] != 9 || !matches!(f[2], 0x4e | 0x4f) {
         return None;
     }

@@ -29,6 +29,8 @@ use crate::drivers::ble::EncKey;
 use crate::text::Line;
 
 /// A 128-bit UUID written as usual (most significant byte first), turned into the stack's order (least first).
+// const evaluation: an out-of-range index here fails the build, so it cannot panic on the unit
+#[allow(clippy::indexing_slicing)]
 const fn le(be: [u8; 16]) -> [u8; 16] {
     let mut out = [0; 16];
     let mut i = 0;
@@ -157,6 +159,8 @@ pub const PNP_ID: [u8; 7] = [2, 0x15, 0x19, 0xee, 0xee, 1, 0];
 
 /// The advertising data: flags (LE general discoverable, no BR/EDR), the HID and battery services, the appearance
 /// (generic HID, 0x03c0), and a solicitation of ANCS, so an iPhone offers its notifications (31 bytes, the most).
+// const evaluation: an out-of-range index fails the build (head is shorter than 31, VS rows are 31 - head.len())
+#[allow(clippy::indexing_slicing)]
 pub const ADV: [u8; 31] = {
     let mut a = [0; 31];
     let head = [2, 0x01, 0x06, 5, 0x03, 0x12, 0x18, 0x0f, 0x18, 3, 0x19, 0xc0, 0x03, 17, 0x15];
@@ -285,11 +289,14 @@ pub struct Attributes {
 /// Get App Attributes for the app `id` (command 1, the app identifier NUL-terminated, attribute 0 DisplayName): the
 /// request's length in `out`. An identifier of up to 24 bytes (what [`Attributes::app`] keeps) always fits.
 pub fn get_app(id: &str, out: &mut [u8; 28]) -> usize {
-    out[0] = 1;
     let n = id.len().min(24);
-    out[1..=n].copy_from_slice(&id.as_bytes()[..n]);
-    out[n + 1] = 0; // the terminator
-    out[n + 2] = 0; // DisplayName
+    if let Some((cmd, tail)) = out.split_first_mut() {
+        *cmd = 1;
+        tail.iter_mut().zip(id.as_bytes().iter().take(n)).for_each(|(o, &c)| *o = c);
+        if let Some([nul, attr]) = tail.get_mut(n..n + 2) {
+            (*nul, *attr) = (0, 0); // the terminator, then DisplayName
+        }
+    }
     n + 3
 }
 
@@ -351,8 +358,9 @@ fn parse_app(p: &[u8]) -> Result<Option<AppInfo>, ()> {
     let [_, rest @ ..] = p else { return Ok(None) };
     let Some(z) = rest.iter().position(|&c| c == 0) else { return if rest.len() > 24 { Err(()) } else { Ok(None) } };
     let mut info = AppInfo::default();
-    fold(&mut info.id, &rest[..z]);
-    match rest[z + 1..] {
+    let Some((id, [_, after @ ..])) = rest.split_at_checked(z) else { return Ok(None) };
+    fold(&mut info.id, id);
+    match *after {
         [] | [0] | [0, _] => Ok(None),
         [0, l0, l1, ref more @ ..] => {
             let n = usize::from(u16::from_le_bytes([l0, l1]));
@@ -402,7 +410,7 @@ impl DataSource {
                 return None;
             }
         }
-        let p = &self.buf[..self.len];
+        let p = self.buf.get(..self.len).unwrap_or(&[]);
         let done = match p.first() {
             Some(0) => parse_notif(p).map(Answer::Notif),
             Some(1) => match parse_app(p) {
@@ -440,7 +448,7 @@ fn parse_notif(p: &[u8]) -> Option<Attributes> {
             3 => fold(&mut a.message, value),
             _ => {}
         }
-        at = &more[n..];
+        at = more.get(n..)?;
     }
     Some(a)
 }
@@ -645,7 +653,7 @@ pub fn current_time(p: &[u8]) -> Option<(u16, u8, u8, u8, u8, u8)> {
             let days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
             let ok = (2020..2100).contains(&y)
                 && (1..=12).contains(&mo)
-                && (1..=days[usize::from(mo.clamp(1, 12)) - 1]).contains(&d);
+                && (1..=days.get(usize::from(mo.clamp(1, 12)) - 1).copied().unwrap_or(0)).contains(&d);
             (ok && h < 24 && mi < 60 && s < 60).then_some((y, mo, d, h, mi, s))
         }
         _ => None,
