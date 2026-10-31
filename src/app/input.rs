@@ -562,7 +562,7 @@ impl App {
             // a hold on a ride page's box: the editor on it, that box selected (stock's long press; not while
             // recording, above)
             (Screen::Ride(n), Input::Touch(Gesture::Hold(x, y))) if n < PAGES => {
-                self.pages_set = self.ride_profile(); // the set on screen
+                self.pages_set = self.ride_profile().page_set(); // the set on screen
                 let k = self.widgets().position(|(bx, _)| inside(bx, x, y)).unwrap_or(0);
                 self.edit_page(b, n, k)
             }

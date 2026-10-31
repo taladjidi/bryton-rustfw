@@ -6,6 +6,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **GRAVEL, CX and COMMUTE profiles**: sim only. Still to see: BIKE > PROFILE cycling to them and back to AUTO; a GRAVEL ride
+  (file as gravel_cycling, auto-pause at 3 km/h, continuous tracking), a CX one (cyclocross, never pauses, laps by hand), a
+  COMMUTE one (commuting, no climb warnings, the sunset alert at 30 min with a fix); the unit restarted mid-ride coming back
+  with the same profile and sub_sport; the profile kept in settings.bin across a restart.
 - **RIDE A COURSE** (WORKOUTS): sim only. On the D900: pick a course, the ride starts indoors, the trainer follows the grades, the profile's rider moves with the trainer's distance, DONE at the length. Known limit: a reset mid course resumes the ride, not the course.
 
 - **Phone link: the ATT MTU and the notification's app**: sim only. Still to see with an iPhone: the chip starts with

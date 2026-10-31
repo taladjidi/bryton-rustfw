@@ -31,13 +31,14 @@ impl App {
         self.settings.ahead
             && self.ride.state() != ride::State::Idle
             && !self.indoors()
+            && self.ride_profile().climbs()
             && self.courses.as_deref().is_none_or(|c| c.on.is_none())
             && !self.emmc.lent()
     }
 
     /// The ride is an MTB ride: climbs ahead follow paths and tracks.
     pub(crate) fn mtb(&self) -> bool {
-        self.ride_profile() == ride::Profile::Mtb
+        self.ride_profile().trails()
     }
 
     /// Once a second: the rider on the trace, a new trace when needed, a climb to say.

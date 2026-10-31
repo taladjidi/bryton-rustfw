@@ -67,8 +67,15 @@ pub const NUMBERS: [Setting; 8] = [
 ];
 
 /// BIKE > PROFILE as its byte is the index.
-const PROFILES: [Option<ride::Profile>; 4] =
-    [None, Some(ride::Profile::Road), Some(ride::Profile::Indoor), Some(ride::Profile::Mtb)];
+const PROFILES: [Option<ride::Profile>; 7] = [
+    None,
+    Some(ride::Profile::Road),
+    Some(ride::Profile::Indoor),
+    Some(ride::Profile::Mtb),
+    Some(ride::Profile::Gravel),
+    Some(ride::Profile::Cx),
+    Some(ride::Profile::Commute),
+];
 
 /// GPS POWER as its byte is the index.
 const GPS_POWERS: [GpsPower; 3] = [GpsPower::Auto, GpsPower::Full, GpsPower::Saver];
@@ -332,6 +339,14 @@ impl SettingsCopy {
     }
 }
 
+/// The profile after a register change: a register that says ROAD does not undo GRAVEL, CX or COMMUTE from the file
+/// (the register holds ROAD for them). shortcut: an explicit GRAVEL to ROAD change before a reset is lost until the
+/// file is written (retried each minute after a failure), until the register gets a bit.
+fn keep_new_profile(file: Option<ride::Profile>, reg: Option<ride::Profile>) -> Option<ride::Profile> {
+    use ride::Profile::{Commute, Cx, Gravel, Road};
+    if reg == Some(Road) && matches!(file, Some(Gravel | Cx | Commute)) { file } else { reg }
+}
+
 /// A theme name is letters, digits, - and _, then NUL padding (an empty name is DARK).
 fn theme_name_ok(name: &[u8; 12]) -> bool {
     let n = name.iter().position(|&b| b == 0).unwrap_or(name.len());
@@ -367,6 +382,8 @@ pub(crate) struct SettingsStore {
     pub(crate) dirty: bool,
     /// The newest copy's number.
     pub(crate) seq: u32,
+    /// After a failed write: `gps.ms` before which it is not tried again (at most once a minute).
+    pub(crate) retry_ms: u32,
     /// At the start, register 11 held no settings of this firmware's: the file wins.
     pub(crate) lost: bool,
     /// The registers at the start ([`registers`]) and the words of the settings read from them
@@ -470,14 +487,16 @@ impl Settings {
                 (s.max_hr, s.ftp) = (r.max_hr, r.ftp);
             }
             if tag(0) >= 0xa7 {
-                (s.touch, s.ahead, s.profile) = (r.touch, r.ahead, r.profile);
+                (s.touch, s.ahead) = (r.touch, r.ahead);
+                s.profile = keep_new_profile(s.profile, r.profile);
             }
         }
         if changed(1) && matches!(tag(1), 0xa0..=0xbf | 0xc1) {
             took[1] = true;
             (s.weight_kg, s.wprime_j, s.wkt_avg, s.bike_hg) = (r.weight_kg, r.wprime_j, r.wkt_avg, r.bike_hg);
             if tag(1) <= 0xaf {
-                (s.face, s.gps_power, s.profile) = (r.face, r.gps_power, r.profile);
+                (s.face, s.gps_power) = (r.face, r.gps_power);
+                s.profile = keep_new_profile(s.profile, r.profile);
             } else {
                 (s.remote[0], s.remote[1]) = (r.remote[0], r.remote[1]); // earlier builds' single presses
             }
@@ -517,7 +536,7 @@ impl App {
         }
         self.pay_trips();
         let st = self.settings_store;
-        if !(self.card_writable && st.loaded && st.dirty && self.ride_settled()) {
+        if !(self.card_writable && st.loaded && st.dirty && self.ride_settled() && self.gps.ms >= st.retry_ms) {
             return;
         }
         if !st.sound {
@@ -546,7 +565,7 @@ impl App {
 
     /// Reads `\Rustfw\settings.bin` (module doc: which wins).
     #[inline(never)] // its 1 KB buffer in its own frame
-    fn load_settings(&mut self, b: &mut impl Board) {
+    pub(crate) fn load_settings(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
         let read = self.read_copies(b, SETTINGS_FILE, &mut file);
         let regs = registers(b);
@@ -611,7 +630,7 @@ impl App {
 
     /// Writes the settings over the file's older copy (the file created with both if needed).
     fn save_settings(&mut self, b: &mut impl Board) {
-        self.settings_store.dirty = false; // once: a failure is said, and tried again at the next change
+        self.settings_store.dirty = false; // a failure is said, and tried again a minute later (below)
         let st = self.settings_store;
         let c = SettingsCopy {
             seq: st.seq.wrapping_add(1),
@@ -625,6 +644,9 @@ impl App {
             Some(Err(_)) => {
                 self.fats_unsure(); // compared again first
                 self.notice("SETTINGS NOT SAVED");
+                // still not in the file (a GRAVEL to ROAD change is lost to a reset until it is): tried again
+                self.settings_store.dirty = true;
+                self.settings_store.retry_ms = self.gps.ms.saturating_add(60_000);
             }
         }
     }
@@ -850,6 +872,33 @@ mod day_night_file_tests {
         }
         assert!(SettingsCopy::from_sector(&sec).unwrap().settings.zone_custom, "the good ones are read");
         assert!(o.zones_lthr && o.female, "the rest kept");
+    }
+
+    /// A register that changed alone (the light) says ROAD for a GRAVEL file: the file's profile stays.
+    #[test]
+    fn a_register_change_keeps_a_gravel_profile_from_the_file() {
+        let file = Settings { profile: Some(ride::Profile::Gravel), light_level: 1, ..Settings::from_word(0) };
+        let words = file.register_words();
+        let now = Settings { light_level: 3, ..file };
+        let mut regs = words;
+        regs[0] = Settings { profile: Some(ride::Profile::Road), ..now }.to_word();
+        let (s, took) = file.with_registers(words, regs);
+        assert!(took[0]);
+        assert_eq!((s.light_level, s.profile), (3, Some(ride::Profile::Gravel)));
+    }
+
+    /// The profile byte (data 27) is the index in [`PROFILES`]: the first four keep their numbers (a file written before
+    /// GRAVEL, CX and COMMUTE reads the same profile), the new ones follow, and each round-trips.
+    #[test]
+    fn the_profile_byte_keeps_old_indexes_and_reads_the_new_profiles() {
+        use ride::Profile::{Commute, Cx, Gravel, Indoor, Mtb, Road};
+        let want = [None, Some(Road), Some(Indoor), Some(Mtb), Some(Gravel), Some(Cx), Some(Commute)];
+        for (i, p) in want.into_iter().enumerate() {
+            let s = Settings { profile: p, ..Settings::from_word(0) };
+            let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+            assert_eq!(sec[28 + 27] as usize, i, "{p:?}");
+            assert_eq!(SettingsCopy::from_sector(&sec).map(|c| c.settings.profile), Some(p));
+        }
     }
 
     /// AUTO LAP, LAP EVERY km and min are kept at data 94, 95, 96 and read back; a file of 44, 66, 69 or 94 bytes reads

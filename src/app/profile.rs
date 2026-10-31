@@ -37,15 +37,15 @@ pub struct ClimbNow {
 impl App {
     /// The set PAGES and the editor show: the profile's while a ride is open, else the one chosen in PAGES.
     pub(crate) fn view_set(&self) -> ride::Profile {
-        if self.ride.state() == ride::State::Idle { self.pages_set } else { self.profile }
+        if self.ride.state() == ride::State::Idle { self.pages_set.page_set() } else { self.profile.page_set() }
     }
 
     /// A set's pages, how many are used, and their MORE variants: the profile's (ROAD, INDOOR or MTB).
     pub(crate) fn set_ref(&self, p: ride::Profile) -> (&[page::Page], usize, &[Option<page::Page>; PAGES]) {
-        match p {
+        match p.page_set() {
             ride::Profile::Indoor => (&self.indoor.pages, self.indoor.count, &self.indoor.more),
             ride::Profile::Mtb => (&self.mtb.pages, self.mtb.count, &self.mtb.more),
-            ride::Profile::Road => (self.pages.get(..PAGES).unwrap_or(&[]), self.page_count, &self.more),
+            _ => (self.pages.get(..PAGES).unwrap_or(&[]), self.page_count, &self.more),
         }
     }
 
@@ -54,12 +54,10 @@ impl App {
         &mut self,
         p: ride::Profile,
     ) -> (&mut [page::Page], &mut usize, &mut [Option<page::Page>; PAGES]) {
-        match p {
+        match p.page_set() {
             ride::Profile::Indoor => (&mut self.indoor.pages, &mut self.indoor.count, &mut self.indoor.more),
             ride::Profile::Mtb => (&mut self.mtb.pages, &mut self.mtb.count, &mut self.mtb.more),
-            ride::Profile::Road => {
-                (self.pages.get_mut(..PAGES).unwrap_or(&mut []), &mut self.page_count, &mut self.more)
-            }
+            _ => (self.pages.get_mut(..PAGES).unwrap_or(&mut []), &mut self.page_count, &mut self.more),
         }
     }
 
@@ -273,7 +271,7 @@ impl App {
     /// MTB if BIKE says so, else ROAD.
     pub(crate) fn chosen_profile(&self) -> ride::Profile {
         match self.settings.profile {
-            Some(p) if p != ride::Profile::Mtb => p,
+            Some(p) if !p.outdoors() => p,
             _ if self.trainer_heard() => ride::Profile::Indoor,
             p => p.unwrap_or_default(),
         }
@@ -295,7 +293,7 @@ impl App {
 
     /// What a ride outdoors is: MTB when BIKE > PROFILE says so, else ROAD.
     fn outdoor(&self) -> ride::Profile {
-        if self.settings.profile == Some(ride::Profile::Mtb) { ride::Profile::Mtb } else { ride::Profile::Road }
+        self.settings.profile.filter(|p| p.outdoors()).unwrap_or_default()
     }
 
     /// At Start and at a workout's start: takes the chosen profile unless the rider set this ride's by hand.
@@ -306,11 +304,10 @@ impl App {
             return;
         }
         self.profile = p;
-        self.say(match p {
-            ride::Profile::Road => "ROAD RIDE",
-            ride::Profile::Indoor => "INDOOR RIDE",
-            ride::Profile::Mtb => "MTB RIDE",
-        });
+        let mut l = Line::<16>::new();
+        l.push_str(p.name());
+        l.push_str(" RIDE");
+        self.say(l.as_str());
     }
 
     /// The ride menu's INDOOR row: indoors or out (ROAD or MTB: [`App::outdoor`]), by hand, for the rest of this ride.
@@ -337,11 +334,11 @@ impl App {
             self.tlink.quiet_s = self.tlink.quiet_s.saturating_add(1);
             if self.tlink.quiet_s >= TRAINER_QUIET_S {
                 self.profile = self.outdoor();
-                self.say(if self.profile == ride::Profile::Mtb {
-                    "TRAINER LOST: MTB RIDE"
-                } else {
-                    "TRAINER LOST: ROAD RIDE"
-                });
+                let mut l = Line::<32>::new();
+                l.push_str("TRAINER LOST: ");
+                l.push_str(self.profile.name());
+                l.push_str(" RIDE");
+                self.say(l.as_str());
             }
         }
     }

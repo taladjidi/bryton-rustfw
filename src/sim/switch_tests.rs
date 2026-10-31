@@ -81,6 +81,23 @@ fn paging_skips_pages_that_are_off() {
     assert!(!app2.page_on(0) && !app2.page_on(1) && app2.page_on(2));
 }
 
+/// GRAVEL, CX and COMMUTE ride the road set: its OFF pages are skipped and the editor works on the road set.
+#[test]
+fn a_gravel_ride_skips_the_road_sets_off_pages() {
+    let (mut sim, mut app) = started();
+    app.toggle_page(&mut sim, 1);
+    assert!(!app.sw.meta.on(1));
+    app.settings.profile = Some(ride::Profile::Gravel);
+    press(&mut sim, &mut app, Key::Start);
+    assert_eq!(app.ride_profile(), ride::Profile::Gravel);
+    assert!(!app.switched_on(1) && app.switched_on(0), "the road set's switches");
+    assert_eq!(app.view_set(), ride::Profile::Road);
+    app.screen = Screen::Ride(0);
+    app.show(&mut sim);
+    press(&mut sim, &mut app, Key::Page);
+    assert_eq!(app.screen(), Screen::Ride(2), "page 1 is OFF");
+}
+
 /// MOVE UP / DOWN swap the page with its name and switch, the menu follows it, and it is kept.
 #[test]
 fn pages_move_and_keep_their_names() {

@@ -281,7 +281,7 @@ impl Ride {
                 self.still_s = if slow { self.still_s.saturating_add(1) } else { 0 };
                 self.moving = self.still_s < MTB_PAUSE_S;
             }
-            Profile::Road => {
+            Profile::Road | Profile::Gravel | Profile::Cx | Profile::Commute => {
                 self.still_s = 0;
                 self.moving = !slow;
             }
@@ -688,6 +688,71 @@ pub enum Profile {
     Indoor,
     /// Off road: sub_sport mountain in the file, continuous GNSS tracking, a time-based auto-pause.
     Mtb,
+    /// Gravel: a road ride on tracks (sub_sport gravel_cycling): auto-pause at 3 km/h, continuous GNSS, climbs on paths.
+    Gravel,
+    /// Cyclocross: laps by hand, no auto-pause, no auto lap, no climbs ahead (sub_sport cyclocross).
+    Cx,
+    /// Commute: no climbs ahead or pacer, the sunset alert at least 30 min (sub_sport commuting).
+    Commute,
+}
+
+impl Profile {
+    /// The profile's name as BIKE > PROFILE shows it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Profile::Road => "ROAD",
+            Profile::Indoor => "INDOOR",
+            Profile::Mtb => "MTB",
+            Profile::Gravel => "GRAVEL",
+            Profile::Cx => "CX",
+            Profile::Commute => "COMMUTE",
+        }
+    }
+
+    /// Chosen outdoors (not the trainer's): it stays when BIKE says so, and an indoor ride goes back to it.
+    pub const fn outdoors(self) -> bool {
+        !matches!(self, Profile::Road | Profile::Indoor)
+    }
+
+    /// The pages set it rides with: GRAVEL, CX and COMMUTE share the road set (the sets live in pages.bin, which
+    /// has room for the indoor and MTB ones only).
+    pub const fn page_set(self) -> Profile {
+        match self {
+            Profile::Gravel | Profile::Cx | Profile::Commute => Profile::Road,
+            p => p,
+        }
+    }
+
+    /// AUTO PAUSE's rule when the setting says "the profile's own" ([`Input::pause_kmh`]): GRAVEL 3 km/h (a track
+    /// is slower than a road, a choice), CX never (dismounts), else 0, the ride's own.
+    pub const fn pause_kmh(self) -> u8 {
+        match self {
+            Profile::Gravel => 3,
+            Profile::Cx => 255,
+            _ => 0,
+        }
+    }
+
+    /// The receiver tracks continuously whatever GPS POWER says (MTB since the owner, 2026-10-27; GRAVEL and CX:
+    /// a choice, trails and turns want a fix a second).
+    pub const fn tracks(self) -> bool {
+        matches!(self, Profile::Mtb | Profile::Gravel | Profile::Cx)
+    }
+
+    /// Climbs ahead (and the pacer, which feeds on them) are detected: not on a CX circuit or a commute (a choice).
+    pub const fn climbs(self) -> bool {
+        !matches!(self, Profile::Cx | Profile::Commute)
+    }
+
+    /// The climbs ahead follow paths and tracks.
+    pub const fn trails(self) -> bool {
+        self.tracks()
+    }
+
+    /// AUTO LAP may fire: CX laps are by hand.
+    pub const fn auto_lap(self) -> bool {
+        !matches!(self, Profile::Cx)
+    }
 }
 
 /// A zone shown with hysteresis on the value, not on time: the bar follows the number it sits on at once, but a value

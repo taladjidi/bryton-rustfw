@@ -1062,7 +1062,7 @@ fn mtb_gives_way_to_a_trainer_and_comes_back() {
 fn the_profile_setting_is_kept() {
     let mut s = crate::Settings::from_word(0);
     let mut seen = std::vec::Vec::new();
-    for _ in 0..4 {
+    for _ in 0..7 {
         let mut l = crate::Line::<12>::new();
         s.text(crate::menu::Setting::BikeProfile, &mut l);
         seen.push((
@@ -1078,7 +1078,11 @@ fn the_profile_setting_is_kept() {
             ("AUTO".to_string(), 0xa7, true),
             ("ROAD".to_string(), 0xa8, true),
             ("INDOOR".to_string(), 0xa9, true),
-            ("MTB".to_string(), 0xa7, true)
+            ("MTB".to_string(), 0xa7, true),
+            // in settings.bin only: the register keeps ROAD
+            ("GRAVEL".to_string(), 0xa8, false),
+            ("CX".to_string(), 0xa8, false),
+            ("COMMUTE".to_string(), 0xa8, false)
         ]
     );
     assert_eq!(s.profile, None, "round");
@@ -1092,6 +1096,42 @@ fn the_profile_setting_is_kept() {
     assert!(app.indoors(), "fixed to INDOOR: indoor with no trainer heard");
     run(&mut sim, &mut app, 130_000);
     assert!(app.indoors(), "a profile fixed by hand stays when no trainer is heard");
+}
+
+/// GRAVEL, CX and COMMUTE: each starts as itself, and the features follow the profile in force.
+#[test]
+fn the_outdoor_profiles_switch_the_features() {
+    use crate::ride::Profile::{Commute, Cx, Gravel, Mtb, Road};
+    let mut seen = std::vec::Vec::new();
+    for p in [None, Some(Gravel), Some(Cx), Some(Commute), Some(Mtb)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.own_settings();
+        let mut app = App::start(&mut sim, Some(KEY));
+        run(&mut sim, &mut app, 1000);
+        app.settings.profile = p;
+        app.settings.gps_power = crate::GpsPower::Saver;
+        app.press(&mut sim, Press::Short(Key::Start));
+        let rp = app.ride_profile();
+        seen.push((rp, app.gnss_saver(), rp.pause_kmh(), rp.climbs(), rp.auto_lap(), rp.page_set()));
+    }
+    assert_eq!(
+        seen,
+        [
+            (Road, true, 0, true, true, Road),
+            (Gravel, false, 3, true, true, Road),
+            (Cx, false, 255, false, false, Road),
+            (Commute, true, 0, false, true, Road),
+            (Mtb, false, 0, true, true, Mtb),
+        ]
+    );
+    // a trainer silent for good: an automatic indoor ride goes back to the profile BIKE names
+    let (mut sim, mut app) = indoor_unit();
+    app.settings.profile = Some(Gravel);
+    assert!(app.indoors(), "a trainer heard makes it INDOOR");
+    app.press(&mut sim, Press::Short(Key::Start));
+    sim.nordic.sensors.clear();
+    run(&mut sim, &mut app, 135_000);
+    assert_eq!(app.ride_profile(), Gravel, "back to GRAVEL, not ROAD");
 }
 
 /// The unit with a trainer heard and a good receiver fix, 5 s in.
@@ -1536,6 +1576,28 @@ fn a_lap_on_the_trainer_screen_redraws_the_target_at_once() {
     assert_eq!(app.field_text(Field::ErgTarget).as_str(), "210", "the second step, no adjust");
     // what the panel was told equals what the screen means now (the LAP banner over the top is not the trainer's)
     assert_eq!(app.tlink.shown, app.with_trainer_now(ui::trainer::shown));
+}
+
+/// BIKE > PROFILE on COMMUTE, the last of the cycle (screenshot `target/sim/menu-bike-profile.bmp`).
+#[test]
+fn the_profile_row_shows_commute() {
+    use super::tests::to_row;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, crate::menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, crate::menu::Row::Open(Menu::Bike));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, crate::menu::Row::Set(crate::menu::Setting::BikeProfile));
+    for _ in 0..6 {
+        app.press(&mut sim, Press::Short(Key::Start));
+    }
+    assert_eq!(app.settings.profile, Some(crate::ride::Profile::Commute));
+    run(&mut sim, &mut app, 500);
+    sim.save("menu-bike-profile");
 }
 
 /// WORKOUTS > RIDE A COURSE > the hill: the ride starts indoors on the trainer, which gets the course grades; the
