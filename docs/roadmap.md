@@ -120,7 +120,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ride profiles: gravel, cyclocross, commute, three bikes, auto features per profile, component wear;
 - torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: ~~completed climbs listed with their
   times~~ done, sim (features.md, ride menu CLIMBS DONE), detection on or off per profile, ~~descents~~ done, sim (features.md: STEEP DESCENT alert, DESCENT AHEAD field);
-- trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); a virtual course as a workout from the workout list;
+- trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); ~~a virtual course as a workout from the workout list~~ done, sim (features.md, RIDE A COURSE);
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~a larger ATT MTU,
   the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md);
 - ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); a battery saver mode; ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the

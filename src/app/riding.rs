@@ -680,6 +680,7 @@ impl App {
         self.history.second([input.power, input.hr, wbal, dfa, alt]);
         self.history.dist_second(self.ride.dist_m(), alt);
         // the course followed: where the rider is on it, and what to say
+        self.virtual_course_second();
         let fix = self.gps.pvt.filter(|p| p.good());
         let ev = match (self.courses.as_deref_mut(), fix) {
             (Some(c), Some(p)) if c.on.is_some() => c.course.follow(&mut c.at, p.lat, p.lon),

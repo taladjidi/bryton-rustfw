@@ -126,8 +126,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 
 | | |
 |:-:|:-:|
-| ![Power match](img/trainer-power-match.png) | |
-| ERG with a power meter reading 20 W under the trainer: "PM+10%" left of the source line (sim) | |
+| ![Power match](img/trainer-power-match.png) | ![Ride a course](img/ride-a-course.png) |
+| ERG with a power meter reading 20 W under the trainer: "PM+10%" left of the source line (sim) | RIDE A COURSE: the course's profile with the rider's place from the trainer's distance, the distance to go, the timer (sim) |
 
 ## Themes
 

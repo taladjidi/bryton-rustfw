@@ -1537,3 +1537,37 @@ fn a_lap_on_the_trainer_screen_redraws_the_target_at_once() {
     // what the panel was told equals what the screen means now (the LAP banner over the top is not the trainer's)
     assert_eq!(app.tlink.shown, app.with_trainer_now(ui::trainer::shown));
 }
+
+/// WORKOUTS > RIDE A COURSE > the hill: the ride starts indoors on the trainer, which gets the course grades; the
+/// course page tracks the trainer distance; the end says DONE once with the length and the time.
+#[test]
+fn ride_a_course_from_the_workout_list() {
+    let (mut sim, mut app) = unit();
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    run(&mut sim, &mut app, 4000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    super::tests::to_row(&mut sim, &mut app, Row::RideCourse);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..super::tests::hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 200_000);
+    assert_eq!(app.screen(), Screen::Ride(COURSE));
+    assert!(app.indoors(), "an indoor ride");
+    assert!(commands(&sim).iter().any(|p| p[0] == 0x33), "the course grades go to the trainer");
+    let (len, along) = app.on_course().map(|(c, at)| (c.len_m(), at.along_m)).unwrap();
+    assert!(along > 1000 && along < len, "placed by the trainer distance: {along} of {len}");
+    sim.save("trainer_ride_a_course");
+    let mut done = 0;
+    for _ in 0..400 {
+        run(&mut sim, &mut app, 10_000);
+        done += usize::from(app.notes.text.as_str().starts_with("DONE "));
+    }
+    assert!(done > 0, "DONE said: {:?}", app.notes.text.as_str());
+    assert!(app.on_course().is_some_and(|(_, at)| at.along_m >= len));
+    assert_eq!(commands(&sim).last().map(|p| p[0]), Some(0x30), "the trainer is let go at the end");
+}
