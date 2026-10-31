@@ -61,7 +61,7 @@ fn the_trainer_and_the_phone_at_once() {
     let mut phone = PhoneSim::new(true);
     phone.connect_at = 1000;
     let (mut sim, mut app) = unit_with(FtmsSim::new(), Some(phone));
-    assert_eq!(sim.nordic.cfg.len(), 2, "the two links configured");
+    assert_eq!(sim.nordic.cfg.len(), 3, "the two links and the MTU configured");
     assert!(app.ble.is_some_and(|v| v.central));
     app.activate(&mut sim, Menu::Phone, 1); // PAIR
     run(&mut sim, &mut app, 2000);
@@ -265,7 +265,7 @@ fn a_chip_without_room_for_two_links_keeps_the_phone() {
         sim.nordic.phone = Some(phone);
         sim.nordic.ftms = Some(FtmsSim::new());
         let mut app = App::start(&mut sim, Some(KEY));
-        assert_eq!(sim.nordic.resets.len(), 2, "started again on the defaults");
+        assert_eq!(sim.nordic.resets.len(), 3, "the MTU dropped, then the links, started on the defaults");
         assert!(app.ble.is_some_and(|v| !v.central));
         app.activate(&mut sim, Menu::Phone, 1);
         run(&mut sim, &mut app, 2000);

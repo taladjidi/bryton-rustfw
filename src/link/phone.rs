@@ -9,7 +9,9 @@
 //!   in the spec's figure 2-1, as Nordic's ble_ancs_c reads them), Get Notification Attributes (command 0, the
 //!   UID, attribute ids: AppIdentifier (0, no length), Title (1), Subtitle (2), Message (3), the last two with a
 //!   2-byte max length; the spec gives no cap on Message, the app's choice here is [`MESSAGE_MAX`]), its answer on the Data
-//!   Source (command, UID, then id / u16 length / value tuples, fragmented over notifications), Perform Notification
+//!   Source (command, UID, then id / u16 length / value tuples, fragmented over notifications), Get App Attributes
+//!   (command 1, the app identifier NUL-terminated, attribute ids: DisplayName 0; its answer is command, the
+//!   identifier NUL-terminated, then id / u16 length / value; the spec's Control Point and Data Source sections), Perform Notification
 //!   Action (command 2, UID, ActionID 0 positive, 1 negative), the tables of the appendix.
 //! - AMS: Apple, "Apple Media Service Reference" (same archive): the UUIDs, Remote Command ids (play 0, pause 1,
 //!   toggle 2, next 3, previous 4, volume up 5, down 6), Entity Update (write entity then attribute ids; notified
@@ -276,6 +278,94 @@ pub struct Attributes {
     pub title: Line<24>,
     /// The text.
     pub message: Line<120>,
+    /// The app's display name in capitals, from Get App Attributes ([`AppCache`]); empty until known.
+    pub name: Line<16>,
+}
+
+/// Get App Attributes for the app `id` (command 1, the app identifier NUL-terminated, attribute 0 DisplayName): the
+/// request's length in `out`. An identifier of up to 24 bytes (what [`Attributes::app`] keeps) always fits.
+pub fn get_app(id: &str, out: &mut [u8; 28]) -> usize {
+    out[0] = 1;
+    let n = id.len().min(24);
+    out[1..=n].copy_from_slice(&id.as_bytes()[..n]);
+    out[n + 1] = 0; // the terminator
+    out[n + 2] = 0; // DisplayName
+    n + 3
+}
+
+/// An app's display name, as the Data Source answers Get App Attributes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AppInfo {
+    /// The bundle id asked for.
+    pub id: Line<24>,
+    /// Its display name in capitals ("WhatsApp" -> "WHATSAPP"), cut to what fits.
+    pub name: Line<16>,
+}
+
+/// What the Data Source delivered once complete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// Get Notification Attributes' answer.
+    Notif(Attributes),
+    /// Get App Attributes' answer.
+    App(AppInfo),
+}
+
+/// The names of the last [`APPS`] apps seen, newest first, so an app is asked about once.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AppCache {
+    items: [AppInfo; APPS],
+    n: usize,
+}
+
+/// Apps whose names are kept.
+pub const APPS: usize = 8;
+
+impl AppCache {
+    /// The name kept for `id` (it may be empty: the phone had none).
+    pub fn get(&self, id: &str) -> Option<Line<16>> {
+        self.items.get(..self.n)?.iter().find(|i| i.id.as_str() == id).map(|i| i.name)
+    }
+
+    /// How many apps are kept (at most [`APPS`]).
+    pub fn len(&self) -> usize {
+        self.n
+    }
+
+    /// Whether none is.
+    pub fn is_empty(&self) -> bool {
+        self.n == 0
+    }
+
+    /// Keeps `info` as the newest; the oldest goes when full.
+    pub fn put(&mut self, info: AppInfo) {
+        self.items.rotate_right(1);
+        self.items[0] = info;
+        self.n = (self.n + 1).min(APPS);
+    }
+}
+
+/// Get App Attributes' answer in `p` (command 1, the identifier NUL-terminated, then DisplayName as id 0, u16 length,
+/// value); None while incomplete. Err when it cannot be one (another attribute, an identifier too long).
+fn parse_app(p: &[u8]) -> Result<Option<AppInfo>, ()> {
+    let [_, rest @ ..] = p else { return Ok(None) };
+    let Some(z) = rest.iter().position(|&c| c == 0) else { return if rest.len() > 24 { Err(()) } else { Ok(None) } };
+    let mut info = AppInfo::default();
+    fold(&mut info.id, &rest[..z]);
+    match rest[z + 1..] {
+        [] | [0] | [0, _] => Ok(None),
+        [0, l0, l1, ref more @ ..] => {
+            let n = usize::from(u16::from_le_bytes([l0, l1]));
+            let Some(value) = more.get(..n) else { return Ok(None) };
+            let mut tmp = Line::<16>::new();
+            fold(&mut tmp, value);
+            for c in tmp.as_str().chars() {
+                info.name.push_str(c.to_ascii_uppercase().encode_utf8(&mut [0; 4]));
+            }
+            Ok(Some(info))
+        }
+        _ => Err(()),
+    }
 }
 
 /// The Data Source's fragments put back together into one answer.
@@ -294,6 +384,14 @@ impl DataSource {
     /// Takes one notification; returns the attributes once the three asked for ([`get_attributes`]) are complete.
     /// A fragment that does not fit, or an answer that is not one, starts it over.
     pub fn push(&mut self, frag: &[u8]) -> Option<Attributes> {
+        match self.push_any(frag)? {
+            Answer::Notif(a) => Some(a),
+            Answer::App(_) => None,
+        }
+    }
+
+    /// Takes one notification; returns the answer of either command once complete.
+    pub fn push_any(&mut self, frag: &[u8]) -> Option<Answer> {
         match self.buf.get_mut(self.len..self.len + frag.len()) {
             Some(dst) => {
                 dst.copy_from_slice(frag);
@@ -305,27 +403,46 @@ impl DataSource {
             }
         }
         let p = &self.buf[..self.len];
-        let [0, u0, u1, u2, u3, rest @ ..] = p else {
-            self.len = if p.first().is_some_and(|&c| c != 0) { 0 } else { self.len };
-            return None;
-        };
-        let mut a = Attributes { uid: u32::from_le_bytes([*u0, *u1, *u2, *u3]), ..Default::default() };
-        let mut at = rest;
-        for _ in 0..3 {
-            let [id, l0, l1, more @ ..] = at else { return None };
-            let n = usize::from(u16::from_le_bytes([*l0, *l1]));
-            let value = more.get(..n)?;
-            match id {
-                0 => fold(&mut a.app, value),
-                1 => fold(&mut a.title, value),
-                3 => fold(&mut a.message, value),
-                _ => {}
+        let done = match p.first() {
+            Some(0) => parse_notif(p).map(Answer::Notif),
+            Some(1) => match parse_app(p) {
+                Ok(i) => i.map(Answer::App),
+                Err(()) => {
+                    self.len = 0;
+                    None
+                }
+            },
+            Some(_) => {
+                self.len = 0;
+                None
             }
-            at = &more[n..];
+            None => None,
+        };
+        if done.is_some() {
+            self.len = 0;
         }
-        self.len = 0;
-        Some(a)
+        done
     }
+}
+
+/// Get Notification Attributes' answer in `p` (its command byte already checked); None while incomplete.
+fn parse_notif(p: &[u8]) -> Option<Attributes> {
+    let [0, u0, u1, u2, u3, rest @ ..] = p else { return None };
+    let mut a = Attributes { uid: u32::from_le_bytes([*u0, *u1, *u2, *u3]), ..Default::default() };
+    let mut at = rest;
+    for _ in 0..3 {
+        let [id, l0, l1, more @ ..] = at else { return None };
+        let n = usize::from(u16::from_le_bytes([*l0, *l1]));
+        let value = more.get(..n)?;
+        match id {
+            0 => fold(&mut a.app, value),
+            1 => fold(&mut a.title, value),
+            3 => fold(&mut a.message, value),
+            _ => {}
+        }
+        at = &more[n..];
+    }
+    Some(a)
 }
 
 /// Notifications kept for the NOTIFICATIONS list.
@@ -356,8 +473,10 @@ impl Inbox {
     /// Keeps `a` as the newest, at `time`; the oldest goes when full.
     pub fn add(&mut self, a: &Attributes, time: (u8, u8)) {
         self.items.rotate_right(1);
-        let mut app = Line::new();
-        app_name(&mut app, a.app.as_str());
+        let mut app = a.name;
+        if app.as_str().is_empty() {
+            app_name(&mut app, a.app.as_str());
+        }
         self.items[0] = Saved { app, title: a.title, message: a.message, time };
         self.n = (self.n + 1).min(INBOX);
     }
@@ -658,6 +777,43 @@ mod tests {
         assert_eq!((a.uid, a.title.as_str(), a.message.as_str()), (9, "Bob", "Helo"), "the accent folded");
         assert_eq!(d.push(&[0xa1]), None, "not an answer: dropped");
         assert!(d.push(&answer).is_some(), "and the next answer reads whole");
+    }
+
+    #[test]
+    fn app_attributes_request_and_answer() {
+        let mut out = [0; 28];
+        let n = get_app("net.example.Chat", &mut out);
+        assert_eq!(&out[..n], b"\x01net.example.Chat\0\0");
+        let mut answer = b"\x01net.example.Chat\0".to_vec();
+        answer.extend([0, 4, 0]);
+        answer.extend(b"Chat");
+        for size in [20, 100] {
+            let mut d = DataSource::default();
+            let mut got = None;
+            for f in answer.chunks(size) {
+                assert!(got.is_none(), "complete only at the last fragment");
+                got = d.push_any(f);
+            }
+            let Some(Answer::App(i)) = got else { panic!("no answer at {size}") };
+            assert_eq!((i.id.as_str(), i.name.as_str()), ("net.example.Chat", "CHAT"));
+        }
+        let mut d = DataSource::default();
+        assert_eq!(d.push_any(&[1, b'a', 0, 5, 0, 0]), None, "another attribute: dropped");
+        assert!(d.push_any(&answer).is_some(), "and the next reads whole");
+        assert_eq!(d.push(&answer), None, "push() keeps to notifications");
+    }
+
+    #[test]
+    fn app_cache_keeps_the_last_eight() {
+        let mut c = AppCache::default();
+        for k in 0..APPS + 3 {
+            let mut i = AppInfo::default();
+            i.id.push_u32(k as u32);
+            i.name.push_str("X");
+            c.put(i);
+        }
+        assert!(c.get("0").is_none() && c.get("2").is_none(), "the oldest went");
+        assert!(c.get("3").is_some() && c.get("10").is_some());
     }
 
     #[test]

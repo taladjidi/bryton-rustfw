@@ -521,7 +521,7 @@ impl App {
                 let _ = ble::data_length_update(b, rx, conn);
             }
             Event::MtuRequest { conn } => {
-                let _ = ble::exchange_mtu_reply(b, rx, conn);
+                let _ = ble::exchange_mtu_reply(b, rx, conn, 23);
             }
             Event::SysAttrMissing { conn } => {
                 let _ = ble::sys_attr_set(b, rx, conn, None); // our server, read by the trainer: nothing kept

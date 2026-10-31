@@ -21,8 +21,10 @@
 //!
 //! **Configuration** (`nrf::start`): two links, the phone's (we are its peripheral) and a trainer's (we are its
 //! central, app/ftms.rs), on connection configuration tag [`TAG`]; when the chip refuses that, the defaults (no
-//! `sd_ble_cfg_set`, tag 0: one peripheral link). Either way ATT MTU 23, an attribute table of 1408 B, 10 vendor
-//! UUIDs, one queued notification (ble_gap.h, ble_gatts.h, ble.h `*_DEFAULT`).
+//! `sd_ble_cfg_set`, tag 0: one peripheral link). The ATT MTU is asked of the chip too ([`nrf::ATT_MTU`], tried first
+//! and dropped when the chip refuses; else 23); the rest stays at an attribute table of 1408 B, 10 vendor UUIDs, one
+//! queued notification (ble_gap.h, ble_gatts.h, ble.h `*_DEFAULT`). The unit then sends the Exchange MTU Request
+//! itself ([`exchange_mtu_request`], GATTC opcode 0x9e, response event 0x3a): an iPhone never starts one.
 //!
 //! **As a central** (the trainer): `sd_ble_gap_connect` (`ble_gap_connect_req_enc`: the peer's address, the scan
 //! parameters and the connection parameters, each behind a presence byte, then the configuration tag; the address
@@ -61,6 +63,8 @@ const GATTC_DESCS_DISCOVER: u8 = 0x97;
 const GATTC_READ: u8 = 0x9a;
 const GATTC_WRITE: u8 = 0x9c;
 const GATTC_HV_CONFIRM: u8 = 0x9d;
+/// `SD_BLE_GATTC_EXCHANGE_MTU_REQUEST`: inferred from enum adjacency in ble_gattc.h (the unit's SoftDevice bases differ from SDK 17.1's: 0x94 is verified, 0x9a / 0x9c / 0x9d follow the same order).
+const GATTC_EXCHANGE_MTU_REQUEST: u8 = 0x9e;
 const GATTS_SERVICE_ADD: u8 = 0xa0;
 const GATTS_CHARACTERISTIC_ADD: u8 = 0xa2;
 const GATTS_DESCRIPTOR_ADD: u8 = 0xa3;
@@ -429,9 +433,16 @@ pub fn sys_attr_get(b: &mut impl Board, rx: &mut Rx, conn: u16, out: &mut [u8]) 
     }
 }
 
-/// Answers the peer's MTU exchange with the default MTU (23: no larger one configured).
-pub fn exchange_mtu_reply(b: &mut impl Board, rx: &mut Rx, conn: u16) -> Result<(), Error> {
-    Cmd::new(GATTS_EXCHANGE_MTU_REPLY).u16(conn).u16(23).run(b, rx)
+/// Answers the peer's MTU exchange with our Server Rx MTU `mtu` (at most what the chip was configured for,
+/// [`nrf::Version::mtu`]; 23 when it was not).
+pub fn exchange_mtu_reply(b: &mut impl Board, rx: &mut Rx, conn: u16, mtu: u16) -> Result<(), Error> {
+    Cmd::new(GATTS_EXCHANGE_MTU_REPLY).u16(conn).u16(mtu).run(b, rx)
+}
+
+/// Sends the Exchange MTU Request (Core spec Vol 3 Part F 3.4.2.1) with our Client Rx MTU `mtu` (at most the
+/// configured one); the answer is [`Event::MtuRsp`]. The ATT allows one exchange per link.
+pub fn exchange_mtu_request(b: &mut impl Board, rx: &mut Rx, conn: u16, mtu: u16) -> Result<(), Error> {
+    Cmd::new(GATTC_EXCHANGE_MTU_REQUEST).u16(conn).u16(mtu).run(b, rx)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -610,6 +621,15 @@ pub enum Event<'a> {
         /// Connection handle.
         conn: u16,
     },
+    /// The peer answered our MTU request with its Server Rx MTU (the link uses the smaller of the two, spec 3.4.2.2).
+    MtuRsp {
+        /// Connection handle.
+        conn: u16,
+        /// GATT status.
+        status: u16,
+        /// The peer's Server Rx MTU.
+        mtu: u16,
+    },
     /// Primary services found: (16-bit UUID, type, start, end) entries of 7 bytes ([`services`]).
     Services {
         /// Connection handle.
@@ -694,6 +714,7 @@ impl Event<'_> {
             | Write { conn, .. }
             | SysAttrMissing { conn }
             | MtuRequest { conn }
+            | MtuRsp { conn, .. }
             | Services { conn, .. }
             | Chars { conn, .. }
             | Descs { conn, .. }
@@ -769,7 +790,7 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
         0x52 => Event::SysAttrMissing { conn: conn? },
         0x55 => Event::MtuRequest { conn: conn? },
         0x56 | 0x3b => Event::GattTimeout { conn: conn? },
-        0x30 | 0x32 | 0x33 | 0x36 | 0x38 | 0x39 => {
+        0x30 | 0x32 | 0x33 | 0x36 | 0x38 | 0x39 | 0x3a => {
             let (conn, status, rest) = (conn?, u16_at(f, 2)?, f.get(6..)?);
             match id {
                 0x30 => Event::Services { conn, status, list: entries(rest, 7)? },
@@ -780,6 +801,7 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
                     Event::Read { conn, status, handle: u16_at(rest, 0)?, data: rest.get(6..6 + len)? }
                 }
                 0x38 => Event::Written { conn, status, handle: u16_at(rest, 0)? },
+                0x3a => Event::MtuRsp { conn, status, mtu: u16_at(rest, 0)? },
                 _ => {
                     let len = usize::from(u16_at(rest, 3)?);
                     Event::Hvx { conn, handle: u16_at(rest, 0)?, kind: *rest.get(2)?, data: rest.get(5..5 + len)? }
@@ -818,6 +840,20 @@ pub fn descs(list: &[u8]) -> impl Iterator<Item = (u16, Uuid)> + '_ {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn the_mtu_exchange_pdus() {
+        // Exchange MTU Request: the connection, our Client Rx MTU; the configuration: BLE_CONN_CFG_GATT, tag 1, att_mtu
+        let mut c = Cmd::new(GATTC_EXCHANGE_MTU_REQUEST);
+        c.u16(0).u16(crate::nrf::ATT_MTU);
+        assert_eq!(c.payload(), Some(&[0, 0x9e, 0, 0, 103, 0][..]));
+        assert_eq!(crate::nrf::cfg_mtu(), [0, 0x69, 0x23, 0, 0, 0, 1, 1, 103, 0]);
+        // the response event: conn, status, error handle, then the peer's Server Rx MTU
+        let rsp = [2, 0x3a, 0, 0, 0, 0, 0, 0, 0, 185, 0];
+        assert_eq!(event(&rsp), Some(Event::MtuRsp { conn: 0, status: 0, mtu: 185 }));
+        assert_eq!(event(&rsp[..9]), None, "truncated");
+        assert_eq!(event(&rsp).and_then(|e| e.conn()), Some(0));
+    }
 
     #[test]
     fn commands_have_the_codec_layouts() {
