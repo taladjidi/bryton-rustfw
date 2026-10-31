@@ -39,6 +39,8 @@ impl EndpointBuffer {
 
         // patched (vendor/PATCHES.md): the same word-by-word copy by chunks and zip, without indexing
         let Some(dst) = buf.get_mut(..data_size) else {
+            // patched (vendor/PATCHES.md): the packet is dropped; kept, RXFLVL stays pending and no WFI sleeps
+            self.has_data = false;
             return Err(UsbError::BufferOverflow);
         };
 

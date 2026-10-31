@@ -262,6 +262,9 @@ pub struct Link {
     watcher: dev::Watcher,
     /// A drive command ran since [`Link::worked`]: its eMMC access may have slept, which takes over SysTick.
     worked: bool,
+    /// A packet timed out (nobody reading): output is dropped until the host sends a packet again, so a killed client
+    /// costs one second, not one a packet.
+    dead: bool,
 }
 
 fn wait(cond: impl Fn() -> bool, ms: u32) -> bool {
@@ -344,7 +347,17 @@ pub fn start() -> Option<Link> {
         modify(DCTL, 1 << 1, 0);
     }
     wr(NVIC_ISER2, OTG_HS_IRQ);
-    Some(Link { dev, cdc, msc, out: [0; 512], len: 0, last_full: false, watcher: dev::Watcher::new(), worked: false })
+    Some(Link {
+        dev,
+        cdc,
+        msc,
+        out: [0; 512],
+        len: 0,
+        last_full: false,
+        watcher: dev::Watcher::new(),
+        worked: false,
+        dead: false,
+    })
 }
 
 impl Link {
@@ -367,7 +380,10 @@ impl Link {
             }
             while effect == Effect::None {
                 match self.cdc.read_packet(&mut buf) {
-                    Ok(n) if n > 0 => effect = s.feed(buf.get(..n).unwrap_or(&[]), app, stats, self),
+                    Ok(n) if n > 0 => {
+                        self.dead = false;
+                        effect = s.feed(buf.get(..n).unwrap_or(&[]), app, stats, self);
+                    }
                     _ => break,
                 }
             }
@@ -378,9 +394,10 @@ impl Link {
 
     /// Keeps servicing USB for `ms`, so the last answer reaches the computer before a reset or a jump.
     pub fn linger(&mut self, ms: u32) {
-        let t0 = cycles();
-        while cycles().wrapping_sub(t0) < ms * (CPU_HZ / 1000) {
+        // asleep between polls (WFI in delay_ms; USB activity ends a sleep early, the next poll serves it)
+        for _ in 0..ms {
             self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
+            delay_ms(1);
         }
     }
 
@@ -426,7 +443,8 @@ impl Link {
     /// A soft disconnect and connect: the computer sees a detach, then an attach, and enumerates the device again.
     fn reconnect(&mut self, now_ms: u32) {
         modify(DCTL, 0, 1 << 1); // SDIS: the D+ pull-up off
-        wait(|| false, 100);
+        delay_ms(100); // asleep; it takes over SysTick, so the slice's end is lost: `worked` ends it
+        self.worked = true;
         modify(DCTL, 1 << 1, 0);
         self.watcher.reconnected(now_ms);
     }
@@ -439,13 +457,22 @@ impl Link {
     /// Writes the buffered bytes in packets of the bus's size (one zero-length packet for none), servicing USB while
     /// the endpoint is busy; gives up after 1 s a packet (nobody reading).
     fn write(&mut self, len: usize) {
+        if self.dead {
+            self.len = 0;
+            self.last_full = false;
+            return;
+        }
         let data = self.out.get(..len).unwrap_or(&[]);
-        for p in data.chunks(MPS).chain((len == 0).then_some(&[][..])) {
+        'packets: for p in data.chunks(MPS).chain((len == 0).then_some(&[][..])) {
             let t0 = cycles();
             loop {
                 match self.cdc.write_packet(p) {
                     Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
                         self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
+                    }
+                    Err(UsbError::WouldBlock) => {
+                        self.dead = true;
+                        break 'packets;
                     }
                     _ => break,
                 }

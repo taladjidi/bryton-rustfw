@@ -264,3 +264,68 @@ fn stackfault_only_with_no_ride_open() {
     assert_eq!(s.feed(b"stackfault\n", &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(pc.got, b"err ride open\n");
 }
+
+/// With a ride open the commands that stall the loop, run a new image, or write a register refuse; the read-only
+/// ones still answer.
+#[test]
+fn ride_open_refuses_the_risky_commands() {
+    let (mut sim, mut app) = app_at(9, 0, 0);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    for cmd in [
+        "load 1000 5",
+        "reset",
+        "find 0 4 0 9",
+        "bench 0 4 2",
+        "bench scan 4",
+        "bench map 4 0 0",
+        "sector 3",
+        "poke 0x40013014 1",
+    ] {
+        pc.got.clear();
+        assert_eq!(s.feed(format!("{cmd}\n").as_bytes(), &app, Stats::default(), &mut pc), Effect::None, "{cmd}");
+        assert_eq!(pc.got, b"err ride open\n", "{cmd}");
+    }
+    assert!(pc.regs.is_empty());
+    pc.got.clear();
+    s.feed(b"peek 0x40013010\nprof reset\n", &app, Stats::default(), &mut pc);
+    assert_eq!(pc.got, b"00000000\nok\n");
+    // settled again: a bench over the cap is refused with its usage
+    let (_, app) = app_at(9, 0, 0);
+    pc.got.clear();
+    s.feed(b"bench 0 4 1001\n", &app, Stats::default(), &mut pc);
+    assert!(pc.got.starts_with(b"err usage: bench"), "{:?}", pc.got);
+}
+
+/// An upload the computer abandoned does not swallow the next commands: after 2 s without a byte it is dropped.
+#[test]
+fn a_stalled_upload_is_dropped() {
+    let (_, app) = app_at(9, 0, 0);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    let at = |uptime_ms| Stats { uptime_ms, ..Stats::default() };
+    s.feed(b"load 1000 5\n", &app, at(100), &mut pc);
+    assert_eq!(pc.got, b"ready\n");
+    s.feed(&[7; 100], &app, at(1900), &mut pc); // 1.8 s later: still the upload
+    assert_eq!(pc.got, b"ready\n");
+    pc.got.clear();
+    s.feed(b"info\n", &app, at(3901), &mut pc); // 2.001 s of silence: a command
+    assert!(pc.got.starts_with(b"bryton-rustfw"), "{:?}", pc.got);
+}
+
+/// A line longer than the buffer is refused whole, never run cut.
+#[test]
+fn a_long_line_is_refused() {
+    let (_, app) = app_at(9, 0, 0);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    let long = format!("get /{} 0 100\n", "a".repeat(70));
+    s.feed(long.as_bytes(), &app, Stats::default(), &mut pc);
+    assert_eq!(pc.got, b"err line too long\n");
+    assert_eq!(s.path(), "");
+    pc.got.clear();
+    s.feed(format!("peek {}\n", "0".repeat(59)).as_bytes(), &app, Stats::default(), &mut pc); // 64 bytes: fits
+    assert!(pc.got.starts_with(b"err usage: peek"), "{:?}", pc.got);
+    pc.got.clear();
+    s.feed(b"where\n", &app, Stats::default(), &mut pc);
+    assert!(pc.got.starts_with(b"where "), "{:?}", pc.got);
+}

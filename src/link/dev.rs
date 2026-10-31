@@ -273,7 +273,13 @@ struct Load {
     got: u32,
     acc: u32,
     head: [u8; HEAD],
+    /// The main loop's clock when bytes last came: an upload silent for [`LOAD_STALL_MS`] is dropped.
+    seen_ms: u32,
 }
+
+/// An upload that got no byte for this long was abandoned (the computer's script was killed): the next bytes are a
+/// command again, not more image.
+const LOAD_STALL_MS: u32 = 2000;
 
 /// Protocol state: the current command line, or the image being loaded.
 pub struct Session {
@@ -282,6 +288,8 @@ pub struct Session {
     load: Option<Load>,
     path: [u8; 64],
     path_len: usize,
+    /// The line in progress passed the buffer: it is answered `err line too long`, not run cut.
+    overflow: bool,
 }
 
 impl Default for Session {
@@ -293,7 +301,7 @@ impl Default for Session {
 impl Session {
     /// Waiting for a command.
     pub const fn new() -> Self {
-        Session { line: [0; 64], len: 0, load: None, path: [0; 64], path_len: 0 }
+        Session { line: [0; 64], len: 0, load: None, path: [0; 64], path_len: 0, overflow: false }
     }
 
     /// The path of the last `ls` or `get`.
@@ -303,6 +311,13 @@ impl Session {
 
     /// Takes bytes from the computer; `stats` is for `info`.
     pub fn feed(&mut self, mut data: &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
+        // the clock is the main loop's: `load` sees a gap between packets, not the time of the connection
+        if self.load.take_if(|l| stats.uptime_ms.wrapping_sub(l.seen_ms) > LOAD_STALL_MS).is_some() {
+            self.len = 0;
+        }
+        if let Some(l) = &mut self.load {
+            l.seen_ms = stats.uptime_ms;
+        }
         while !data.is_empty() {
             if let Some(l) = &mut self.load {
                 let n = data.len().min((l.size - l.got) as usize);
@@ -335,7 +350,12 @@ impl Session {
             let Some((&b, rest)) = data.split_first() else { break };
             data = rest;
             if b == b'\n' || b == b'\r' {
-                let effect = self.command(app, stats, h);
+                let effect = if core::mem::take(&mut self.overflow) {
+                    h.send(b"err line too long\n");
+                    Effect::None
+                } else {
+                    self.command(app, stats, h)
+                };
                 self.len = 0;
                 if effect != Effect::None {
                     return effect;
@@ -343,6 +363,8 @@ impl Session {
             } else if let Some(slot) = self.line.get_mut(self.len) {
                 *slot = b;
                 self.len += 1;
+            } else {
+                self.overflow = true;
             }
         }
         Effect::None
@@ -353,6 +375,11 @@ impl Session {
         let mut words = line.split(|&c| c == b' ').filter(|w| !w.is_empty());
         match words.next() {
             None => {}
+            // a RAM run mid-ride loses up to 60 s of it; the card commands stall the loop (and the recorder) for
+            // seconds; a poke can hit the card's controller: all wait for a settled ride, as wtest does
+            Some(b"load" | b"reset" | b"find" | b"bench" | b"sector" | b"poke") if !app.ride_settled() => {
+                h.send(b"err ride open\n");
+            }
             Some(b"info") => {
                 h.send(
                     concat!("bryton-rustfw ", env!("CARGO_PKG_VERSION"), " ", env!("GIT_DESCRIBE"), " up ").as_bytes(),
@@ -412,7 +439,7 @@ impl Session {
             }
             Some(b"load") => match (words.next().and_then(parse), words.next().and_then(parse)) {
                 (Some(size), Some(sum)) if (HEAD as u32..=STAGE_MAX).contains(&size) => {
-                    self.load = Some(Load { size, sum, got: 0, acc: 0, head: [0; HEAD] });
+                    self.load = Some(Load { size, sum, got: 0, acc: 0, head: [0; HEAD], seen_ms: stats.uptime_ms });
                     h.send(b"ready\n");
                 }
                 _ => h.send(b"err usage: load <size 156..1048576> <sum>\n"),
@@ -515,8 +542,8 @@ impl Session {
             },
             Some(b"bench") => {
                 match (words.next().and_then(parse), words.next().and_then(parse), words.next().and_then(parse)) {
-                    (Some(lba), Some(n @ 1..=32), Some(count @ 1..=100_000)) => return Effect::Bench(lba, n, count),
-                    _ => h.send(b"err usage: bench <lba> <sectors 1..32> <count>\n"),
+                    (Some(lba), Some(n @ 1..=32), Some(count @ 1..=1000)) => return Effect::Bench(lba, n, count),
+                    _ => h.send(b"err usage: bench <lba> <sectors 1..32> <count 1..1000>\n"),
                 }
             }
             Some(b"prof") => match words.next() {

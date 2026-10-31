@@ -515,6 +515,87 @@ fn dev_link_input() {
         pc.got.clear();
     }
     assert!(maps > 0, "bench map reached");
+    dev_link_lines(&app);
+}
+
+/// The dev link by structure: addresses at and around the range edges, counts at the bounds, long lines, uploads at
+/// the size bounds. Every address the computer saw peeked or poked is aligned and inside the ranges, and each command
+/// is reached over the seeds (a regression of a bound, or of a parser, would pass word soup).
+fn dev_link_lines(app: &crate::App) {
+    use crate::dev::{Effect, IO, MEMORY, Session, Stats};
+    let addrs = ["0xfffffffc", "0x5ffffffc", "0x60000000", "0x40000000", "0x40000002", "0x1fffffff", "0x2001fffc"];
+    let addrs =
+        [addrs.as_slice(), &["0xd3fffffc", "0xe000e100", "0xe000e340", "0xe000ed04", "0x5ffffff8", "-4"]].concat();
+    let counts = ["0", "1", "2", "63", "64", "65", "4294967295", "x"];
+    let (mut session, mut pc) = (Session::new(), super::Pc::default());
+    let (mut peeks, mut pokes, mut loads, mut lss, mut gets, mut finds, mut wtests, mut sectors) =
+        (0, 0, 0, 0, 0, 0, 0, 0);
+    let effect = |session: &mut Session, pc: &mut super::Pc, line: &[u8]| {
+        let e = session.feed(line, app, Stats::default(), pc);
+        pc.got.clear();
+        e
+    };
+    for c in bytes(77, 6 << 10).collect::<std::vec::Vec<_>>().chunks_exact(6) {
+        let (a, n, v) = (addrs[usize::from(c[1]) % addrs.len()], counts[usize::from(c[2]) % counts.len()], c[3]);
+        let before = (pc.peeked.len(), pc.regs.len());
+        let line = match c[0] % 9 {
+            0 => std::format!("peek {a} {n}\n"),
+            1 => std::format!("poke {a} {v}\n"),
+            2 => std::format!("ls /{}\n", "d".repeat(usize::from(c[4]) % 80)),
+            3 => std::format!("get /{} {n} {n}\n", "g".repeat(usize::from(c[4]) % 80)),
+            4 => std::format!("find {n} {n} {v} {}\n", c[5]),
+            5 => std::format!("wtest {n}\n"),
+            6 => std::format!("sector {n}\n"),
+            7 => std::format!("peek {a}\n"),
+            _ => std::format!("{}\n", "x".repeat(usize::from(c[4]))),
+        };
+        let e = effect(&mut session, &mut pc, line.as_bytes());
+        peeks += usize::from(pc.peeked.len() > before.0);
+        pokes += usize::from(pc.regs.len() > before.1);
+        lss += usize::from(e == Effect::Ls);
+        gets += usize::from(matches!(e, Effect::Get(..)));
+        finds += usize::from(matches!(e, Effect::Find(..)));
+        wtests += usize::from(matches!(e, Effect::WriteTest(_)));
+        sectors += usize::from(matches!(e, Effect::Sector(_)));
+    }
+    for &a in pc.peeked.iter().chain(pc.regs.keys()) {
+        assert!(a % 4 == 0 && (IO.contains(&a) || MEMORY.iter().any(|r| r.contains(&a))), "{a:#x} reached the board");
+    }
+    assert!(pc.regs.keys().all(|a| IO.contains(a)), "a poke outside IO");
+    // uploads: sizes at the bounds, a good image (tag, size word, SP, reset vector) and a short one
+    for size in [155u32, 156, 157, 4096, 1 << 20, (1 << 20) + 1, 0, u32::MAX] {
+        let mut img = std::vec![0u8; size.min(1 << 20) as usize];
+        if img.len() >= 0x9c {
+            img[0..4].copy_from_slice(&0x2002_0000u32.to_le_bytes());
+            img[4..8].copy_from_slice(&0xd000_0101u32.to_le_bytes());
+            img[0x94..0x98].copy_from_slice(b"R039");
+            img[0x98..0x9c].copy_from_slice(&size.to_le_bytes());
+        }
+        let sum = img.iter().fold(0u32, |a, &b| a.wrapping_add(u32::from(b)));
+        pc.staged.clear();
+        let mut session = Session::new();
+        effect(&mut session, &mut pc, std::format!("load {size} {sum}\n").as_bytes());
+        let mut last = Effect::None;
+        for chunk in img.chunks(512) {
+            last = session.feed(chunk, app, Stats::default(), &mut pc);
+        }
+        pc.got.clear();
+        let ok = (4096..=1 << 20).contains(&size); // the reset vector (0x100) must lie inside the image
+        assert_eq!(last == Effect::Run(size), ok, "load {size}");
+        loads += usize::from(ok);
+    }
+    for (name, n) in [
+        ("peek", peeks),
+        ("poke", pokes),
+        ("load", loads),
+        ("ls", lss),
+        ("get", gets),
+        ("find", finds),
+        ("wtest", wtests),
+        ("sector", sectors),
+    ] {
+        assert!(n > 0, "{name} never reached");
+    }
 }
 
 /// FIT files from the card (stock's rides): random bytes behind a valid header, and every kind of damage to a
@@ -1358,15 +1439,40 @@ fn usb_snapshot_words() {
 #[test]
 fn usb_drive_commands() {
     use crate::msc::tests::{Host, cbw, ram};
-    use crate::msc::{Drive, LOG, PACKET};
+    use crate::msc::{Drive, LOG, Media, PACKET};
+    /// The RAM disk, or the card that cannot be identified (`blocks()` None).
+    struct Disk(crate::msc::tests::Ram, bool);
+    impl Media for Disk {
+        fn blocks(&mut self) -> Option<u32> {
+            if self.1 { None } else { self.0.blocks() }
+        }
+        fn writable(&self) -> bool {
+            self.0.writable()
+        }
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> bool {
+            self.0.read(lba, buf)
+        }
+        fn write(&mut self, lba: u32, buf: &[u8]) -> bool {
+            self.0.write(lba, buf)
+        }
+    }
     const OPS: [u8; 13] = [0x00, 0x03, 0x12, 0x1a, 0x1b, 0x1e, 0x23, 0x25, 0x28, 0x2a, 0x2f, 0x35, 0x5a];
     // what the drive logged: READ(10) and WRITE(10) that passed, those that failed, an opcode it does not have
     // (refused), a CBW not valid (0xfd)
     let (mut reads, mut writes, mut failed, mut refused, mut damaged) = (0usize, 0usize, 0usize, 0usize, 0usize);
-    for seed in 1..=4u32 {
+    // per seed: 0 a writable drive, 1 no medium (never inserted), 2 write protected, 3 a card with no size; and in the
+    // last two a pass per mode is counted apart: nothing may pass where the drive refuses
+    let (mut absent_ok, mut absent_failed, mut protected_ok, mut protected_failed, mut unsized_ok) = (0, 0, 0, 0, 0);
+    let mut short = 0usize; // READ / WRITE / VERIFY(10) with a block under 10 bytes, which must never pass
+    for seed in 1..=16u32 {
+        let mode = seed % 4;
         let v: Vec<u8> = bytes(seed, 1 << 18).collect();
-        let (mut d, mut h, mut m) = (Drive::new(), Host::default(), ram());
-        d.insert();
+        let (mut d, mut h) = (Drive::new(), Host::default());
+        let mut m = Disk(ram(), mode == 3);
+        m.0.1 = mode != 2;
+        if mode != 1 {
+            d.insert();
+        }
         for (k, c) in v.chunks_exact(24).enumerate() {
             let len = u32::from(u16::from_le_bytes([c[0], c[1]])) % 8192;
             let mut cb = [0u8; 16];
@@ -1375,7 +1481,12 @@ fn usb_drive_commands() {
             if c[3] % 6 == 0 {
                 cb[0] = 0x7f; // not an opcode the drive has
             }
-            let n = 1 + usize::from(c[18] % 16);
+            let mut n = 1 + usize::from(c[18] % 16);
+            if matches!(cb[0], 0x28 | 0x2a | 0x2f) && c[4] % 2 == 0 {
+                // a block inside the 100-block disk, so the commands the drive accepts are reached
+                cb[2..6].copy_from_slice(&[0, 0, 0, c[5] % 90]);
+                (cb[7], cb[8], n) = (0, 1 + c[6] % 8, 10 + usize::from(c[7] % 7));
+            }
             let mut packet = cbw(k as u32, len, c[19] & 1 == 0, &cb[..n]);
             if c[20] % 16 == 0 {
                 packet[usize::from(c[21]) % 31] ^= c[22] | 1; // a damaged CBW
@@ -1387,10 +1498,25 @@ fn usb_drive_commands() {
                 .collect();
             h.stalled = false;
             let before = d.log.n;
+            let short_rw = matches!(cb[0], 0x28 | 0x2a | 0x2f) && n < 10;
             d.packet(&packet, &mut h, &mut m);
             // every entry this packet logged (the ring keeps the last LOG)
             for i in before.max(d.log.n.saturating_sub(LOG as u32))..d.log.n {
                 let (op, _, _, status, _) = d.log.ring[i as usize % LOG];
+                if matches!(op, 0x28 | 0x2a | 0x2f) {
+                    let pass = status == 0;
+                    assert!(!(short_rw && pass), "a short block passed");
+                    short += usize::from(short_rw);
+                    match mode {
+                        1 => (absent_ok, absent_failed) = (absent_ok + usize::from(pass), absent_failed + 1),
+                        2 if op == 0x2a => {
+                            (protected_ok, protected_failed) =
+                                (protected_ok + usize::from(pass), protected_failed + usize::from(!pass));
+                        }
+                        3 => unsized_ok += usize::from(pass),
+                        _ => {}
+                    }
+                }
                 match (op, status) {
                     (0x28, 0) => reads += 1,
                     (0x2a, 0) => writes += 1,
@@ -1409,8 +1535,10 @@ fn usb_drive_commands() {
                 d.reset();
             }
         }
-        assert_eq!(m.0.len(), 100 * 512, "the disk never grows");
+        assert_eq!(m.0.0.len(), 100 * 512, "the disk never grows");
     }
+    assert_eq!((absent_ok, protected_ok, unsized_ok), (0, 0, 0), "a command passed where the drive refuses");
+    assert!(absent_failed > 0 && protected_failed > 0 && short > 0, "{absent_failed} {protected_failed} {short}");
     assert!(
         reads > 0 && writes > 0 && failed > 0 && refused > 0 && damaged > 0,
         "reached: {reads} {writes} {failed} {refused} {damaged}"
