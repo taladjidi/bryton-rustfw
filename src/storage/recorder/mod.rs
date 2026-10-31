@@ -326,8 +326,10 @@ pub const CHECKPOINT_S: u32 = 60;
 pub const LOW: usize = 512;
 /// Calls of [`Recorder::io`] to wait after an error before trying the card again.
 pub const RETRY: u32 = 100;
-/// Bytes a record message takes at most, with a new definition (and its developer fields) and the trailer after it.
-const RECORD_MAX: usize = 6 + 3 * 10 + 10 + 1 + 27 + 7 + 2;
+/// Bytes a record message takes at most, with a new definition (and its developer fields) and the trailer after it:
+/// the definition's header 6, its 10 fields 3 each, its 3 developer fields and their count 10; the record's header 1,
+/// its fields 25 (fit.rs `RECORD`: 4 + 4 + 4 + 2 + 2 + 4 + 1 + 1 + 2 + 1), Alpha1, RMSSD and ArtPct 7; the CRC 2.
+const RECORD_MAX: usize = 6 + 3 * 10 + 10 + 1 + 25 + 7 + 2;
 /// RR intervals waiting for an `hrv` message ([`Recorder::beat`]): 16 s at 150 bpm, while the buffer has no room.
 pub const BEATS_QUEUED: usize = 40;
 /// Record tag and layout version: change it with any change of [`Rec`]'s layout or of `ride::Ride::to_words`

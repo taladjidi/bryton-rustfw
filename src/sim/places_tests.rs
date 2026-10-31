@@ -43,7 +43,7 @@ fn file(sim: &Sim) -> Option<(u32, Places)> {
 fn settle(sim: &mut Sim, app: &mut App) {
     for _ in 0..200 {
         run(sim, app, 200);
-        if !app.places.dirty {
+        if !app.places.file.dirty {
             return;
         }
     }
@@ -183,7 +183,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
             sim.emmc.rel_param = if reliable { crate::emmc::EN_REL_WR } else { 0 };
             let mut app = App::start(&mut sim, None);
             run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
-            assert!(app.places.loaded, "cut {cut}: read");
+            assert!(app.places.file.loaded, "cut {cut}: read");
             let got = app.places.list;
             if got == old {
                 olds += 1;
@@ -230,7 +230,7 @@ fn damaged_copies() {
     assert_eq!(start(image.clone()).1.places.list.len(), 1, "the other copy");
     image[base + 512 + 20] ^= 1;
     let (mut sim, mut app) = start(image);
-    assert!(app.places.loaded && app.places.list.is_empty(), "neither: none");
+    assert!(app.places.file.loaded && app.places.list.is_empty(), "neither: none");
     app.save_place(&mut sim);
     settle(&mut sim, &mut app);
     assert_eq!(file(&sim).map(|f| f.1.len()), Some(1));

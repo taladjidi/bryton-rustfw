@@ -450,7 +450,8 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
 - **Receiving:** polled (`nrf_recv`), the 16-byte RX FIFO and RTS keep the chip's bytes waiting, so nothing is lost
   on this side however long a pass; how much the chip itself queues meanwhile is not known. So while idle (passes of
   250 ms) a byte ends the sleep at once: CR1.RXFNEIE pends USART2's IRQ 38, enabled in the NVIC only around that
-  sleep (main.rs `wake_on_io`), interrupts masked.
+  sleep (main.rs `wake_on_io`), interrupts masked. A ride's 100 ms pass (`RIDE_POLL_MS`) does not wake on them
+  (`LoopPolicy::begin_sleep`, `bytes`): they wait for the next pass.
 - **Power off:** `sd_power_system_off` (`00 32`), no response; stock sends nothing else first and leaves PA6 /
   PI4 as they are. The next start's reset pulse wakes the chip (nRF52 pin reset; inferred, to see on the unit).
 - **Scanning (API v5 layout, seen on the unit 2026-10-23):** `sd_ble_gap_scan_start` `00 8a 01 [flags]

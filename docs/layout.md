@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->64 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->52 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::new_with`, `App::step`). The app's cell is <!-- n:app -->40 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->52 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -137,6 +137,11 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   settings), the migration from the settings' single bike, the count at a ride scan's end, the part notice, the file
   read and written between rides (before settings.bin; the store in AXI SRAM, main.rs `make_bikes`).
 - `src/storage/bytes.rs`: the bounds-checked little-endian fields (`le16`, `le32`) the unit's own readers share.
+- `src/storage/copies.rs`: what the files of two 512-byte copies share (pages.bin, settings.bin, places.bin, bikes.bin):
+  `newest`, the common header (`seal`, `open`: magic, version, length, sequence, CRC-32) and the app's state of such
+  a file (`Copies`: read, retries, a change waiting, the FAT copies known equal). Pure logic. The app's side (read,
+  compare the FATs, write, the notice) is in `src/app/editor.rs` (`CopyFile`, `load_copies`, `fats_ready`,
+  `save_copy`).
 - `src/training/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
   rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
   rides at one speed, so a plan is one bisection on it). Pure logic;

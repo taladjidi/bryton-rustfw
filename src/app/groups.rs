@@ -140,8 +140,8 @@ pub(crate) struct Gps {
     pub(crate) ano_file: Option<(fat::File, fat::Seek)>,
     /// The power mode the last configuration sent (saver: cyclic tracking).
     pub(crate) saver: bool,
-    /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
-    pub(crate) wait: u8,
+    /// Time left before the receiver is read again while it has nothing, ms ([`GNSS_FILL_MS`], [`GNSS_PVT_WAIT_MS`]).
+    pub(crate) wait: u32,
     /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
     pub(crate) off: bool,
     /// The RTC's offset from UTC and the last position, as kept in backup registers.
@@ -216,7 +216,14 @@ pub(crate) struct Radio {
     pub(crate) gear: Option<u16>,
     /// Gear changes in this ride.
     pub(crate) shifts: u16,
+    /// The sensors announced as lost in this ride (bit per kind), until they are heard again.
+    pub(crate) lost: u8,
+    /// The sensors heard in this ride (bit per kind): only those can be lost.
+    pub(crate) heard: u8,
 }
+
+/// A paired sensor silent this long while a ride records is announced as lost.
+pub(crate) const LOST_MS: u32 = 10_000;
 
 impl Radio {
     /// None heard, with the sensors that were paired at start-up.
@@ -231,7 +238,37 @@ impl Radio {
             scanning: false,
             gear: None,
             shifts: 0,
+            lost: 0,
+            heard: 0,
         }
+    }
+
+    /// The sensors to announce while a ride records, as masks of kinds: `(lost, back)`. A sensor is lost once it was
+    /// heard in this ride and has been silent [`LOST_MS`] (a chip restart included); back when it is heard again.
+    /// Without a ride the marks are cleared, silently.
+    pub(crate) fn lost_event(&mut self, recording: bool) -> (u8, u8) {
+        if !recording {
+            (self.heard, self.lost) = (0, 0);
+            return (0, 0);
+        }
+        let (mut lost, mut back) = (0, 0);
+        for k in [Kind::Hr, Kind::Speed, Kind::Cadence, Kind::SpeedCadence, Kind::Power] {
+            let i = k as usize;
+            let (bit, h) = (1u8 << i, self.heard_ms[i]);
+            if !matches!(self.sensors[i], Sensor::Paired(_)) {
+                (self.heard, self.lost) = (self.heard & !bit, self.lost & !bit);
+            } else if h < sensors::STALE_MS {
+                self.heard |= bit;
+                if self.lost & bit != 0 {
+                    self.lost &= !bit;
+                    back |= bit;
+                }
+            } else if h >= LOST_MS && self.heard & bit != 0 && self.lost & bit == 0 {
+                self.lost |= bit;
+                lost |= bit;
+            }
+        }
+        (lost, back)
     }
 
     /// A ride starts: the channels resting search again at the next pass, from the first rest (a strap put on just
@@ -427,6 +464,30 @@ impl Recording {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sensor_lost_is_said_once_and_back_once() {
+        let mut sensors = [Sensor::Off; Kind::ALL.len()];
+        sensors[Kind::Hr as usize] = Sensor::Paired(SensorId { device: 1, trans: 1 });
+        sensors[Kind::Power as usize] = Sensor::Paired(SensorId { device: 2, trans: 1 });
+        let mut r = Radio::new(sensors);
+        let (hr, pw) = (1u8 << Kind::Hr as u8, 1u8 << Kind::Power as u8);
+        r.heard_ms[Kind::Hr as usize] = LOST_MS + 1; // silent before the ride: not lost
+        assert_eq!(r.lost_event(true), (0, 0));
+        r.heard_ms = [0; Kind::ALL.len()];
+        assert_eq!(r.lost_event(true), (0, 0), "heard");
+        r.heard_ms = [5_000; Kind::ALL.len()];
+        assert_eq!(r.lost_event(true), (0, 0), "5 s");
+        r.heard_ms = [LOST_MS; Kind::ALL.len()];
+        assert_eq!(r.lost_event(true), (hr | pw, 0), "10 s: both, in one event");
+        assert_eq!(r.lost_event(true), (0, 0), "once");
+        r.heard_ms[Kind::Hr as usize] = 0;
+        assert_eq!(r.lost_event(true), (0, hr), "back");
+        assert_eq!(r.lost_event(true), (0, 0), "back once");
+        r.heard_ms[Kind::Hr as usize] = u32::MAX; // a chip restart, then silence
+        assert_eq!(r.lost_event(true), (hr, 0));
+        assert_eq!((r.lost_event(false), r.lost, r.heard), ((0, 0), 0, 0), "no ride: cleared silently");
+    }
 
     #[test]
     fn a_higher_banner_stays_and_the_lower_waits() {

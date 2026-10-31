@@ -43,39 +43,18 @@ pub const LEFT_M: u32 = 2 * places::NEAR_M;
 pub(crate) struct PlaceStore {
     /// The places saved.
     pub(crate) list: places::Places,
-    /// The file was read (or is not there).
-    pub(crate) loaded: bool,
-    tries: u8,
+    /// The file's state.
+    pub(crate) file: copies::Copies,
     /// Seconds since the reads gave up: one more read a minute ([`RETRY_S`]).
     idle_s: u8,
-    /// A change waits to be written.
-    pub(crate) dirty: bool,
-    /// The FAT copies are known equal (else compared before the write, from `sync`).
-    pub(crate) sound: bool,
-    pub(crate) sync: u32,
-    /// The newest copy's sequence number.
-    seq: u32,
     /// The place the barometer was calibrated at, until the rider leaves it.
     at: Option<u8>,
-    /// The file is not on the card whole: nothing written until a ride has started (module doc).
-    no_file: bool,
 }
 
 impl PlaceStore {
     /// Nothing read.
     pub(crate) const fn new() -> Self {
-        PlaceStore {
-            list: places::Places::new(),
-            loaded: false,
-            tries: 0,
-            idle_s: 0,
-            dirty: false,
-            sound: false,
-            sync: 0,
-            seq: 0,
-            at: None,
-            no_file: false,
-        }
+        PlaceStore { list: places::Places::new(), file: copies::Copies::new(), idle_s: 0, at: None }
     }
 }
 
@@ -86,68 +65,45 @@ impl App {
         if self.emmc.lent() {
             return;
         }
-        let st = self.places;
+        let st = self.places.file;
         if !st.loaded && st.tries < LOAD_TRIES && (self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS) {
             self.load_places(b);
         }
         let settled = self.ride_settled();
-        self.places.no_file &= settled; // a ride's start makes the file: tried again once it is over
-        if !(self.card_writable && self.places.loaded && self.places.dirty && !self.places.no_file && settled) {
-            return;
+        self.places.file.no_file &= settled; // a ride's start makes the file: tried again once it is over
+        let st = self.places.file;
+        if self.card_writable && st.loaded && st.dirty && !st.no_file && settled && self.fats_ready(b, CopyFile::Places)
+        {
+            self.save_places(b);
         }
-        if !self.places.sound {
-            match Self::sync_fats_step(&mut self.emmc, b, &mut self.places.sync) {
-                Some(false) => return, // the FAT copies compared over the next passes first
-                Some(true) => self.fats_equal(),
-                None => {}
-            }
-        }
-        self.save_places(b);
     }
 
     /// Reads `\Rustfw\places.bin`: its newest whole copy, or none saved when there is no file or no whole copy.
     #[inline(never)] // its 1 KB buffer in its own frame
     fn load_places(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
-        let read = self.read_copies(b, PLACES_FILE, &mut file);
-        if read.is_err() && read != Err(fat::Error::NotFound) {
-            self.places.tries = self.places.tries.saturating_add(1);
-            return;
-        }
-        let sound = read == Ok(1024) && !self.fats_suspect;
-        let st = &mut self.places;
-        (st.loaded, st.sound, st.no_file) = (true, sound, read != Ok(1024));
-        if let Some((seq, list)) = read.ok().filter(|&n| n == 1024).and_then(|_| places::Places::newest(&file)) {
-            (st.seq, st.list) = (seq, list);
+        if let Some((seq, list)) =
+            self.load_copies(b, CopyFile::Places, &mut file).filter(|&w| w).and_then(|_| places::Places::newest(&file))
+        {
+            (self.places.file.seq, self.places.list) = (seq, list);
         }
     }
 
     /// Writes the places over the file's older copy (never made here: module doc).
     fn save_places(&mut self, b: &mut impl Board) {
-        self.places.dirty = false; // once: a failure is said, and tried again at the next change
-        let seq = self.places.seq.wrapping_add(1);
-        let sector = self.places.list.to_sector(seq);
-        match self.write_copy(b, PLACES_FILE, seq % 2, &sector, false) {
-            None => {}
-            Some(Ok(())) => (self.places.seq, self.places.sound) = (seq, true),
-            // nothing written: after the next ride's start
-            Some(Err(fat::Error::NotFound)) => (self.places.dirty, self.places.no_file) = (true, true),
-            Some(Err(_)) => {
-                self.fats_unsure(); // compared again first
-                self.notice("PLACES NOT SAVED");
-            }
-        }
+        let seq = self.places.file.seq.wrapping_add(1);
+        self.save_copy(b, CopyFile::Places, seq, &self.places.list.to_sector(seq));
     }
 
     /// The places may be changed: the file read first (now, if it was not); else why not, said.
     pub(crate) fn places_ready(&mut self, b: &mut impl Board) -> bool {
-        if !self.emmc.lent() && !self.places.loaded {
+        if !self.emmc.lent() && !self.places.file.loaded {
             self.load_places(b);
         }
-        if !self.places.loaded {
+        if !self.places.file.loaded {
             self.say(if self.emmc.lent() { "USB DRIVE ON" } else { "PLACES NOT READ" });
         }
-        self.places.loaded
+        self.places.file.loaded
     }
 
     /// SAVE PLACE: here, with the barometer's altitude when its calibration is fresh, else the receiver's when good
@@ -162,7 +118,7 @@ impl App {
         let Some(k) = self.places.list.add(p.lat, p.lon, baro.or(self.alt_for_cal())) else {
             return self.say("PLACES FULL");
         };
-        self.places.dirty = self.card_writable;
+        self.places.file.dirty = self.card_writable;
         // its altitude the barometer's: nothing to calibrate; else (the receiver's, or none) the barometer takes it here
         self.places.at = baro.and(u8::try_from(k).ok());
         let mut l = Line::<16>::new();
@@ -178,17 +134,17 @@ impl App {
     /// DELETE in a place's menu (confirmed).
     pub(crate) fn delete_place(&mut self, k: usize) {
         self.places.list.remove(k);
-        (self.places.dirty, self.places.at) = (self.card_writable, None);
+        (self.places.file.dirty, self.places.at) = (self.card_writable, None);
         self.say("PLACE DELETED");
     }
 
     /// Once a second: stopped at a place with an altitude, the barometer reads it (module doc).
     pub(crate) fn places_second(&mut self) {
         let st = &mut self.places;
-        if !st.loaded && st.tries >= LOAD_TRIES {
+        if !st.file.loaded && st.file.tries >= LOAD_TRIES {
             st.idle_s = st.idle_s.saturating_add(1);
             if st.idle_s >= RETRY_S {
-                (st.tries, st.idle_s) = (LOAD_TRIES - 1, 0); // step_places reads once more
+                (st.file.tries, st.idle_s) = (LOAD_TRIES - 1, 0); // step_places reads once more
             }
         }
         let Some(p) = self.gps.pvt.filter(|p| p.good() && p.h_acc_mm <= H_ACC_MM) else { return };
@@ -270,7 +226,7 @@ impl App {
         }
         let mm = (i32::from(self.settings.alt_m) - ALT_MENU_OFFSET) * 1000;
         self.places.list.set_alt(k, Some(mm));
-        (self.places.dirty, self.places.at) = (self.card_writable, None);
+        (self.places.file.dirty, self.places.at) = (self.card_writable, None);
         self.say("PLACE ALTITUDE SET");
     }
 }

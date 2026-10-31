@@ -336,8 +336,34 @@ fn idle_overview_searching() {
     assert_consistent(&sim, &app);
 }
 
+/// With a fix, after each NAV-PVT the receiver is read again just before the next one, not every 200 ms (review of
+/// 2026-10-31, finding 10), at 20 passes a second and at a ride's 10: about one read of idle fill a second besides the
+/// PVT's, and the fix still lands within its second (never older than a second and a read's wait).
+#[test]
+fn gnss_read_waits_for_the_next_pvt() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 20_000); // powered, configured, fixed
+    assert!(app.gps.sent >= 5 && app.gps.ano.done(), "nothing left to send");
+    for pass in [POLL_MS, RIDE_POLL_MS] {
+        let (g, end, mut oldest) = (sim.gnss.got.len(), sim.ms + 60_000, 0);
+        while sim.ms < end {
+            app.step(&mut sim);
+            oldest = oldest.max(app.gps.pvt_ms);
+            sim.sleep = (pass, 0);
+            sim.delay_ms(pass);
+        }
+        let spi = (sim.gnss.got.len() - g) as f64 / 32.0 / 60.0;
+        std::println!("{pass} ms passes: {spi:.1} GNSS transfers/s, fix at most {oldest} ms old");
+        assert!(spi <= 5.5, "{spi:.1} GNSS transfers/s at {pass} ms passes (8.8 before)");
+        assert!(oldest < 1000 + crate::GNSS_FILL_MS + pass, "a fix {oldest} ms old at {pass} ms passes");
+        assert!(app.gps.pvt.is_some_and(|p| p.good()));
+    }
+}
+
 /// The buses the CPU polls through on every pass, idle on the overview with the automatic backlight: the GNSS
-/// receiver read every pass only while it sends (else every [`crate::GNSS_IDLE_PASSES`]), the light sensor one
+/// receiver read every pass only while it sends (else after [`crate::GNSS_FILL_MS`]), the light sensor one
 /// transaction a reading (its data, not its status first). Measured 2026-10-26: 8.8 SPI4 transfers a second (23.0
 /// when read every pass), 4.3 I2C4 transactions (8.3 with the status read).
 #[test]
@@ -357,7 +383,7 @@ fn idle_bus_budgets() {
             "fix {fix:?}: {spi:.1} GNSS transfers/s, {reads:.1} light readings/s, {i2c:.1} I2C4 transactions/s"
         );
         assert!(spi <= 10.0, "{spi:.1} GNSS transfers/s");
-        assert!((reads - 4.0).abs() < 0.1, "the light four times a second: {reads:.1}");
+        assert!((reads - 2.0).abs() < 0.1, "the light twice a second: {reads:.1}");
         assert!(i2c <= 4.5, "{i2c:.1} I2C4 transactions/s");
         assert_eq!(app.gps.pvt.is_some_and(|p| p.good()), fix.is_some(), "the fix read all the same");
     }

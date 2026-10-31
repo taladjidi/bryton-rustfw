@@ -3160,8 +3160,7 @@ fn each_record_is_later_than_the_last() {
 }
 
 /// [`RECORD_MAX`]: the longest record (the first, its definition with every field and the developer fields, the
-/// trailer after it) fits in it, with the formula's two bytes to spare (its 27 data bytes are 25), and a buffer
-/// that has just run low (under [`LOW`]) still has room for it.
+/// trailer after it) takes exactly that, and a buffer that has just run low (under [`LOW`]) still has room for it.
 #[test]
 fn the_longest_record_fits_in_record_max() {
     let mut r = Recorder::of(Kind::Full);
@@ -3169,7 +3168,7 @@ fn the_longest_record_fits_in_record_max() {
     let before = r.writer.data_len();
     r.second(&Sample { trainer: None, ..sample(100) }, words(100));
     let used = (r.writer.data_len() - before) as usize + 2; // the trailer (CRC) after it
-    assert_eq!(used + 2, RECORD_MAX, "the longest record");
+    assert_eq!(used, RECORD_MAX, "the longest record");
     const { assert!(RECORD_MAX < LOW, "room for a record once the buffer runs low") };
     assert_eq!(r.dropped, 0);
 }

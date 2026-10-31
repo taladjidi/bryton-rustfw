@@ -132,7 +132,7 @@ fn pages_of(s: &Saved) -> Vec<Page> {
 impl App {
     /// The pages' file not written yet (the tests' check that an open editor writes nothing).
     fn file_untouched_since_start(&self, _sim: &Sim) -> bool {
-        self.store.seq == 0
+        self.store.file.seq == 0
     }
 }
 
@@ -579,7 +579,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
             // the next write (the FAT copies compared first when the file was not whole) leaves a clean volume
             edit(&mut app, &mut sim, 7);
             run(&mut sim, &mut app, 30_000);
-            assert!(!app.store.dirty, "cut {cut}: written");
+            assert!(!app.store.file.dirty, "cut {cut}: written");
             let lost = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
             assert!(lost <= 2, "cut {cut}: {lost} clusters lost");
             if got == old {
@@ -667,7 +667,7 @@ fn a_change_in_a_paused_ride_survives_a_switch_off() {
     let (sim2, app2) = reboot(&mut sim);
     assert_eq!(app2.pages()[0], a, "the change kept through the switch-off");
     assert_eq!(app2.pages()[1..3], app.pages()[1..3]);
-    assert!(app2.store.dirty, "the file to be written once the resumed ride is saved");
+    assert!(app2.store.file.dirty, "the file to be written once the resumed ride is saved");
     assert_eq!(file(&sim2).unwrap().pages[0], b);
 }
 
@@ -1168,6 +1168,8 @@ fn the_pages_menu_edits_the_set_it_names() {
     let label = |app: &App, i| app.menu_row(Menu::Pages, i).map(|(l, ..)| std::string::String::from(l.as_str()));
     assert_eq!((label(&app, 0).as_deref(), label(&app, 1).as_deref()), (Some("ROAD PAGES"), Some("INDOOR PAGES")));
     assert_eq!((app.rows(Menu::Pages), label(&app, 2).as_deref()), (6, Some("MTB PAGES")));
+    let tail: std::vec::Vec<_> = (3..6).map(|i| label(&app, i).unwrap_or_default()).collect();
+    assert_eq!(tail, ["AUTO SCROLL", "QUICK STATUS", "QUICK FIELDS"], "the rows after the page sets");
     press(&mut sim, &mut app, Key::Start);
     assert_eq!(app.screen(), Screen::Menu(Menu::PageList(ride::Profile::Indoor), 0));
     assert!(app.pages_set == ride::Profile::Indoor, "the editor works on the indoor set");

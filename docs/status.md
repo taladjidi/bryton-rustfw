@@ -6,6 +6,12 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **The 100 ms ride pass without the Nordic wake (2026-10-31, app/device.rs `RIDE_POLL_MS`)**: sim and a 10 s
+  profile only; needed before a ride build. Still to see: a ride with HR, power, cadence and speed plus the phone
+  connected, the ANT broadcasts per channel over 60 s against about 4.06 Hz per sensor (`tools/dev.py info`'s radio
+  counters), the watcher's resyncs and resets at 0, a sensor search started mid-ride still pairing, backlight AUTO
+  following a light change within 2 s and THEME AUTO switching after 30 s, and a ride over two checkpoints restarted
+  mid-ride (four buttons) then saved.
 - **A card that answers late at boot (2026-10-31, app/riding.rs `step_recorder`)**: sim only. Still to see: a ride
   recording over a checkpoint, the unit restarted (four buttons) with the card failing at the boot (no way to force
   that on the unit yet: a RAM run whose first eMMC commands fail, `tools/dev.py poke` on the card's clock, or a dev
@@ -574,6 +580,12 @@ A feature not listed here was seen on the unit.
 
 - **A card that never answers keeps the unit on** (auto off held) until the battery runs out; the ride stays on the
   card. Owner to decide whether to allow auto off past `GIVE_UP` (storage/recorder/mod.rs).
+- **The only lap of a ride without laps averages the auto-paused seconds too** (found 2026-10-31, not a fault of
+  the dropped seconds as first thought): with no LAP pressed, the end's lap message takes the session's values
+  (storage/fit.rs `Writer::end`: "the only lap is the ride"), whose heart rate, cadence and power average every
+  record, while a lap of a ride with laps averages the moving records only (`this_lap`). A 62 s test ride showed
+  138 bpm in its lap against 139 over its moving records. Owner to decide whether the single lap should be
+  `this_lap` too (its sums survive a resume since `lap_words`).
 - **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps

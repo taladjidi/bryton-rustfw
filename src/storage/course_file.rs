@@ -319,6 +319,11 @@ impl Courses {
         self.course.clear();
     }
 
+    /// A course is being read to follow ([`Courses::load`]).
+    pub fn loading(&self) -> bool {
+        matches!(self.job, Job::Load { .. })
+    }
+
     /// Lengths are still being measured.
     pub fn measuring(&self) -> bool {
         matches!(self.job, Job::Measure { .. })

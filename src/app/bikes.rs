@@ -46,20 +46,10 @@ const LOAD_TRIES: u8 = 3;
 pub struct BikeStore {
     /// The bikes.
     pub(crate) list: bikes::Bikes,
-    /// The file was read (or is not there).
-    pub(crate) loaded: bool,
-    tries: u8,
-    /// A change waits to be written.
-    pub(crate) dirty: bool,
-    /// The FAT copies are known equal (else compared before the write, from `sync`).
-    pub(crate) sound: bool,
-    pub(crate) sync: u32,
-    /// The newest copy's sequence number.
-    seq: u32,
+    /// The file's state.
+    pub(crate) file: copies::Copies,
     /// The revision of the scan's list last counted (`history::Index::rev`).
     pub(crate) seen_rev: u32,
-    /// The file is not on the card whole: nothing written until a ride has started (module doc).
-    no_file: bool,
 }
 
 impl Default for BikeStore {
@@ -71,17 +61,7 @@ impl Default for BikeStore {
 impl BikeStore {
     /// Nothing read.
     pub const fn new() -> Self {
-        BikeStore {
-            list: bikes::Bikes::new(),
-            loaded: false,
-            tries: 0,
-            dirty: false,
-            sound: false,
-            sync: 0,
-            seq: 0,
-            seen_rev: 0,
-            no_file: false,
-        }
+        BikeStore { list: bikes::Bikes::new(), file: copies::Copies::new(), seen_rev: 0 }
     }
 }
 
@@ -98,43 +78,45 @@ impl App {
 
     /// The bikes, once their file is read.
     pub(crate) fn bikes(&self) -> Option<&bikes::Bikes> {
-        self.bikes.as_deref().filter(|s| s.loaded).map(|s| &s.list)
+        self.bikes.as_deref().filter(|s| s.file.loaded).map(|s| &s.list)
     }
 
     /// A change to the bikes waits to be written (the settings wait for it: module doc), the file there.
     pub(crate) fn bikes_due(&self) -> bool {
-        self.bikes.as_deref().is_some_and(|s| s.loaded && s.dirty && !s.no_file)
+        self.bikes.as_deref().is_some_and(|s| s.file.loaded && s.file.dirty && !s.file.no_file)
     }
 
     /// The file read when the settings' is, the active bike kept as the settings, the rides counted at a scan's end,
     /// the file written when a change waits and no ride is open.
     #[inline(never)]
     pub(crate) fn step_bikes(&mut self, b: &mut impl Board) {
-        let Some(st) = self.bikes.as_deref().copied() else { return };
+        let Some(st) = self.bikes.as_deref().map(|s| s.file) else { return };
         if self.emmc.lent() {
             return;
         }
-        if !st.loaded && st.tries < LOAD_TRIES && self.settings_store.loaded && !self.rec.resume_pending {
+        if !st.loaded && st.tries < LOAD_TRIES && self.settings_store.file.loaded && !self.rec.resume_pending {
             self.load_bikes(b);
         }
         // a ride named over a day ahead is left out (a clock set wrong then); nothing counted without a clock
         let done = self.stock.status() == stock::Status::Done && self.date.0 >= 2020;
-        let (y, mo, d, h, mi, _) = from_epoch_s(epoch_s(self.rec_time().0) + 86_400);
+        let count = done && self.bikes.as_deref().is_some_and(|s| s.seen_rev != self.stock.index.rev); // not every pass
+        let (y, mo, d, h, mi, _) =
+            if count { from_epoch_s(epoch_s(self.rec_local()) + 86_400) } else { Default::default() };
         let (gear, writable) = (bikes::Gear::of(&self.settings), self.card_writable);
         let index = &self.stock.index;
         let settled = self.ride_settled();
-        let Some(st) = self.bikes.as_deref_mut().filter(|s| s.loaded) else { return };
-        st.no_file &= settled; // a ride's start makes the file: tried again once it is over
+        let Some(st) = self.bikes.as_deref_mut().filter(|s| s.file.loaded) else { return };
+        st.file.no_file &= settled; // a ride's start makes the file: tried again once it is over
         if st.list.active().gear != gear {
             st.list.active_mut().gear = gear; // an edit in BIKE
-            st.dirty |= writable;
+            st.file.dirty |= writable;
         }
         let mut due = None;
         if done && st.seen_rev != index.rev {
             st.seen_rev = index.rev;
             let rides = (0..history::RIDES).map_while(|i| index.get(i)).map(|r| (r.start, r.file.cluster, r.dist_m));
             if st.list.count(rides, (y, mo, d, h, mi)) {
-                st.dirty |= writable;
+                st.file.dirty |= writable;
                 due = st.list.due();
             }
         }
@@ -142,18 +124,9 @@ impl App {
         if let Some(p) = due {
             self.part_notice(&st.list, p);
         }
-        if !(writable && st.dirty && !st.no_file && settled) {
-            return;
+        if writable && st.file.dirty && !st.file.no_file && settled && self.fats_ready(b, CopyFile::Bikes) {
+            self.save_bikes(b);
         }
-        if !st.sound {
-            let Some(at) = self.bikes.as_deref_mut().map(|s| &mut s.sync) else { return };
-            match Self::sync_fats_step(&mut self.emmc, b, at) {
-                Some(false) => return, // the FAT copies compared over the next passes first
-                Some(true) => self.fats_equal(),
-                None => {}
-            }
-        }
-        self.save_bikes(b);
     }
 
     /// "CHAIN 3000 KM: SERVICE": part `p` of the active bike is past its interval.
@@ -171,8 +144,7 @@ impl App {
     #[inline(never)] // its 1 KB buffer in its own frame
     fn load_bikes(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
-        let read = self.read_copies(b, BIKES_FILE, &mut file);
-        let sound = read == Ok(1024) && !self.fats_suspect;
+        let Some(whole) = self.load_copies(b, CopyFile::Bikes, &mut file) else { return };
         let gear = bikes::Gear::of(&self.settings);
         let (odo, writable) = (self.settings.odo_m, self.card_writable);
         // the rides from a minute before now on are the bikes' (one started as the file was read counts), or from a
@@ -189,14 +161,9 @@ impl App {
         let mark = if self.date.0 >= 2020 { (y, mo, d, h, mi) } else { (0, 0, 0, 0, 0) };
         let idle = !open;
         let Some(st) = self.bikes.as_deref_mut() else { return };
-        if read.is_err() && read != Err(fat::Error::NotFound) {
-            st.tries = st.tries.saturating_add(1);
-            return;
-        }
-        (st.loaded, st.sound, st.no_file) = (true, sound, read != Ok(1024));
-        match read.ok().filter(|&n| n == 1024).and_then(|_| bikes::Bikes::newest(&file)) {
-            Some((seq, list)) => (st.seq, st.list) = (seq, list),
-            None => (st.list, st.dirty) = (bikes::Bikes::migrate(gear, odo, mark), writable),
+        match whole.then(|| bikes::Bikes::newest(&file)).flatten() {
+            Some((seq, list)) => (st.file.seq, st.list) = (seq, list),
+            None => (st.list, st.file.dirty) = (bikes::Bikes::migrate(gear, odo, mark), writable),
         }
         let list = st.list;
         // a ride open: the settings' gear stays (a change made during it), step_bikes gives it to the active bike
@@ -211,27 +178,10 @@ impl App {
 
     /// Writes the bikes over the file's older copy (never made here: module doc).
     fn save_bikes(&mut self, b: &mut impl Board) {
-        let Some(st) = self.bikes.as_deref_mut() else { return };
-        st.dirty = false; // once: a failure is said, and tried again at the next change
-        let seq = st.seq.wrapping_add(1);
+        let Some(st) = self.bikes.as_deref() else { return };
+        let seq = st.file.seq.wrapping_add(1);
         let sector = st.list.to_sector(seq);
-        match self.write_copy(b, BIKES_FILE, seq % 2, &sector, false) {
-            None => {}
-            Some(Ok(())) => {
-                if let Some(st) = self.bikes.as_deref_mut() {
-                    (st.seq, st.sound) = (seq, true);
-                }
-            }
-            Some(Err(fat::Error::NotFound)) => {
-                if let Some(st) = self.bikes.as_deref_mut() {
-                    (st.dirty, st.no_file) = (true, true); // nothing written: after the next ride's start
-                }
-            }
-            Some(Err(_)) => {
-                self.fats_unsure(); // compared again first
-                self.notice("BIKES NOT SAVED");
-            }
-        }
+        self.save_copy(b, CopyFile::Bikes, seq, &sector);
     }
 
     /// The bikes may be changed: the file read first (now, if it was not); else why not, said.
@@ -242,7 +192,7 @@ impl App {
             self.say("END THE RIDE FIRST");
             return false;
         }
-        if !self.emmc.lent() && !st.loaded && self.settings_store.loaded {
+        if !self.emmc.lent() && !st.file.loaded && self.settings_store.file.loaded {
             self.load_bikes(b);
         }
         let loaded = self.bikes().is_some();
@@ -256,7 +206,7 @@ impl App {
     fn bikes_changed(&mut self) {
         let writable = self.card_writable;
         if let Some(st) = self.bikes.as_deref_mut() {
-            st.dirty |= writable;
+            st.file.dirty |= writable;
         }
     }
 

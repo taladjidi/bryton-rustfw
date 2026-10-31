@@ -489,7 +489,9 @@ fn map_zoom_with_a_course() {
     }
     let level = app.map_zoom.expect("zoomed in");
     let mut views = 0;
-    for _ in 0..12 {
+    // ten minutes on the course, then on past its end (course_route, 8 m/s) until the view follows the rider: the
+    // view that follows holds a pixel of the course or none, by when in its second the fix is read (2026-10-31)
+    for k in 0..12 {
         let view = app.map_view(0);
         run(&mut sim, &mut app, 60_000);
         let v = app.map_view(0).unwrap();
@@ -497,10 +499,13 @@ fn map_zoom_with_a_course() {
         assert_eq!(v.mpp16, map::mpp16(level));
         let (x, y) = v.px(area, app.track.pos().unwrap());
         assert!(x >= area.0 && x < area.0 + area.2 && y >= area.1 && y < area.1 + area.3, "the arrow on the map");
+        assert_consistent(&sim, &app);
+        if k >= 10 {
+            continue; // past the course's end
+        }
         let course = sim.screen.iter().filter(|&&p| p == map::COURSE).count();
         // presence only: the count moved from 83 to 281 px between runs of this test (the track covers part of it)
         assert!(course > 0, "the course drawn in view: {course} px");
-        assert_consistent(&sim, &app);
     }
     assert!(views > 0, "the view follows the rider");
     sim.save("map_zoom_course");

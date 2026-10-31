@@ -12,7 +12,7 @@ const BIG: Style = Style { scale: 6, ..VALUE };
 /// Rows of the head box: the top line, the big line (60 px) and the small line under it.
 const TOP_Y: u32 = 3;
 const BIG_Y: u32 = TOP_Y + 18;
-const SUB_Y: u32 = BIG_Y + 61;
+const SUB_Y: u32 = BIG_Y + 60; // the plot's first row is the one under it: a redrawn line must not reach it
 /// The card's top.
 const NAME_Y: u32 = crate::ui::PAGE_Y + 4;
 /// Characters in the big line.
@@ -29,6 +29,8 @@ pub struct Head<'a> {
     pub ink: u16,
     /// The small grey line under it: "VS PR", "TO THE TOP".
     pub sub: &'a str,
+    /// The sub line's colour (0: grey): the climb's current grade in its grade colour.
+    pub sub_ink: u16,
     /// Keeps the colour the box shows when the delta is within 2 s: the colour flips between ahead and behind at the
     /// line, and each flip would redraw every character of the delta.
     pub keep: bool,
@@ -52,7 +54,11 @@ impl Head<'_> {
         for (w, b) in big.iter_mut().skip(pad).zip(self.big.bytes()) {
             *w = b;
         }
-        HeadShown { prints: [crate::fnv_str(1, self.top), crate::fnv_str(3, self.sub)], big, ink: self.ink }
+        HeadShown {
+            prints: [crate::fnv_str(1, self.top), crate::fnv_str(u32::from(self.sub_ink) | 3 << 16, self.sub)],
+            big,
+            ink: self.ink,
+        }
     }
 }
 
@@ -123,7 +129,15 @@ pub fn update_head(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), old:
         text::draw_in(c, &LABEL, x + 8, y + TOP_Y, inner, Align::Centre, h.top);
     }
     if new.prints[1] != old.prints[1] {
-        text::draw_in(c, &Style { fg: GREY, ..LABEL }, x + 8, y + SUB_Y, inner, Align::Centre, h.sub);
+        text::draw_in(
+            c,
+            &Style { fg: if h.sub_ink == 0 { GREY } else { h.sub_ink }, ..LABEL },
+            x + 8,
+            y + SUB_Y,
+            inner,
+            Align::Centre,
+            h.sub,
+        );
     }
     let big = Style { fg: ink, ..BIG };
     let cw = big.width("8");
@@ -213,7 +227,7 @@ mod tests {
     fn a_delta_within_two_seconds_keeps_its_colour() {
         let bx = (0, crate::ui::PAGE_Y, W, 98);
         fn k<'a>(d: &'a (Line<8>, u16), keep: bool) -> Head<'a> {
-            Head { top: "NAME", big: d.0.as_str(), ink: d.1, sub: "VS PR", keep }
+            Head { top: "NAME", big: d.0.as_str(), ink: d.1, sub: "VS PR", sub_ink: 0, keep }
         }
         // the same steps drawn twice: kept, and with the colour flipping
         let (mut f, mut g) = (Frame::new(), Frame::new());
@@ -240,7 +254,7 @@ mod tests {
             f.face = face;
             let (a, b) = (head(-69), head(-68));
             fn h<'a>(name: &'a str, d: &'a (Line<8>, u16)) -> Head<'a> {
-                Head { top: name, big: d.0.as_str(), ink: d.1, sub: "VS RECENT", keep: false }
+                Head { top: name, big: d.0.as_str(), ink: d.1, sub: "VS RECENT", sub_ink: 0, keep: false }
             }
             draw_head(&mut f, bx, &h(name, &a));
             let before = f.filled();

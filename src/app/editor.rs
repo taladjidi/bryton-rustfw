@@ -68,28 +68,55 @@ const LOAD_TRIES: u8 = 3;
 /// `\Rustfw\pages.bin`, read and to be written.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PageStore {
-    /// Read, or known not to be there (no file, no volume). A failed read leaves it false: tried again, and no page
-    /// changes until then (the next write needs the newest copy's number, and the pages beyond the registers' three).
-    pub(crate) loaded: bool,
-    /// Reads that failed (I/O), the passes' retries stopping at [`LOAD_TRIES`].
-    pub(crate) tries: u8,
-    /// The pages changed since the file was written.
-    pub(crate) dirty: bool,
+    /// The file's state (no page changes until it is `loaded`: the next write needs the newest copy's number, and the
+    /// pages beyond the registers' three; the passes' retries stop at [`LOAD_TRIES`]).
+    pub(crate) file: copies::Copies,
     /// The registers hold the changed pages already ([`App::hold_pages`]).
     pub(crate) held: bool,
     /// At the start, the registers said they were newer than the file ([`PAGES_NEWER`]).
     pub(crate) newer: bool,
-    /// The newest copy's number.
-    pub(crate) seq: u32,
     /// The registers of the first ride pages at the start, before the first start's import could write them
     /// ([`PAGES_NEWER`] taken out).
     pub(crate) boot: [u32; 2 * REG_PAGES],
-    /// The file was read whole (1024 bytes): written over in place, one sector, no FAT sector touched. Else the next
-    /// write creates or grows it, and a cut in an earlier one may have left the FAT copies different in a sector,
-    /// so they are made equal first ([`fat::Fat::sync_fats_from`], spread over passes, as the scan's cache does).
-    pub(crate) sound: bool,
-    /// FAT sectors compared so far.
-    pub(crate) sync: u32,
+}
+
+/// A file of two copies ([`copies`]) the app keeps in its own folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyFile {
+    Pages,
+    Settings,
+    Places,
+    Bikes,
+}
+
+impl CopyFile {
+    const ALL: [CopyFile; 4] = [CopyFile::Pages, CopyFile::Settings, CopyFile::Places, CopyFile::Bikes];
+
+    /// Its name in the folder.
+    fn name(self) -> &'static str {
+        match self {
+            CopyFile::Pages => page::FILE,
+            CopyFile::Settings => SETTINGS_FILE,
+            CopyFile::Places => PLACES_FILE,
+            CopyFile::Bikes => BIKES_FILE,
+        }
+    }
+
+    /// Its writer makes it when it is missing (pages, settings); bikes.bin and places.bin are made at a ride's start
+    /// only (recorder/mod.rs `make_kept`), so no write between rides touches `\Rustfw`'s directory sector.
+    fn makes(self) -> bool {
+        matches!(self, CopyFile::Pages | CopyFile::Settings)
+    }
+
+    /// The notice when a write of it failed.
+    fn not_saved(self) -> &'static str {
+        match self {
+            CopyFile::Pages => "PAGES NOT SAVED",
+            CopyFile::Settings => "SETTINGS NOT SAVED",
+            CopyFile::Places => "PLACES NOT SAVED",
+            CopyFile::Bikes => "BIKES NOT SAVED",
+        }
+    }
 }
 
 impl PageStore {
@@ -141,7 +168,7 @@ impl App {
     /// file is behind them.
     pub(crate) fn save_page_registers(&self, b: &mut impl Board) {
         let mut words = register_words(&self.pages, self.page_count);
-        if self.store.dirty {
+        if self.store.file.dirty {
             words[1] |= PAGES_NEWER;
         }
         for (r, w) in PAGE_BKP.iter().take(REG_PAGES).flatten().zip(words) {
@@ -155,7 +182,7 @@ impl App {
     pub(crate) fn pages_changed(&mut self, b: &mut impl Board) {
         self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         if self.card_writable {
-            (self.store.dirty, self.store.held) = (true, false);
+            (self.store.file.dirty, self.store.held) = (true, false);
         } else {
             self.save_page_registers(b);
         }
@@ -163,7 +190,7 @@ impl App {
 
     /// The file can be written in the next passes: read, not lent, no ride open, the editor closed.
     fn pages_writable_soon(&self) -> bool {
-        self.store.loaded && !self.emmc.lent() && self.edit.is_none() && self.ride_settled()
+        self.store.file.loaded && !self.emmc.lent() && self.edit.is_none() && self.ride_settled()
     }
 
     /// Changed pages the file does not have yet go to the registers now, marked [`PAGES_NEWER`]: lossy (the first
@@ -171,7 +198,7 @@ impl App {
     /// (the module doc: which pages win at the next start). Called when the file must wait (a ride, the editor, the
     /// drive) and at a switch-off.
     pub(crate) fn hold_pages(&mut self, b: &mut impl Board) {
-        if self.card_writable && self.store.dirty && !self.store.held {
+        if self.card_writable && self.store.file.dirty && !self.store.held {
             self.save_page_registers(b);
             self.store.held = true;
         }
@@ -188,18 +215,15 @@ impl App {
         if self.emmc.lent() {
             return;
         }
-        let due = self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS || self.store.dirty;
-        if !self.store.loaded && self.store.tries < LOAD_TRIES && due {
+        let due = self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS || self.store.file.dirty;
+        if !self.store.file.loaded && self.store.file.tries < LOAD_TRIES && due {
             self.load_pages(b);
         }
-        if self.card_writable && self.store.dirty && self.pages_writable_soon() {
-            if !self.store.sound {
-                match Self::sync_fats_step(&mut self.emmc, b, &mut self.store.sync) {
-                    Some(false) => return, // the FAT copies compared over the next passes first
-                    Some(true) => self.fats_equal(),
-                    None => {}
-                }
-            }
+        if self.card_writable
+            && self.store.file.dirty
+            && self.pages_writable_soon()
+            && self.fats_ready(b, CopyFile::Pages)
+        {
             self.save_pages(b);
         }
     }
@@ -224,23 +248,98 @@ impl App {
         Some(false)
     }
 
-    /// Both FAT copies compared equal: neither file's next write compares them again.
+    /// Both FAT copies compared equal: no file's next write compares them again.
     pub(crate) fn fats_equal(&mut self) {
-        (self.store.sound, self.settings_store.sound, self.places.sound, self.fats_suspect) = (true, true, true, false);
-        if let Some(st) = self.bikes.as_deref_mut() {
-            st.sound = true;
+        for f in CopyFile::ALL {
+            if let Some(st) = self.copies(f) {
+                st.sound = true;
+            }
+        }
+        self.fats_suspect = false;
+    }
+
+    /// A write failed (a FAT sector may differ between the copies): every file's next write compares them first.
+    pub(crate) fn fats_unsure(&mut self) {
+        for f in CopyFile::ALL {
+            if let Some(st) = self.copies(f) {
+                (st.sound, st.sync) = (false, 0);
+            }
+        }
+        self.fats_suspect = true; // and a file read whole later does not say they are equal
+    }
+
+    /// The state of file `f` (None: the bikes were given no memory).
+    pub(crate) fn copies(&mut self, f: CopyFile) -> Option<&mut copies::Copies> {
+        match f {
+            CopyFile::Pages => Some(&mut self.store.file),
+            CopyFile::Settings => Some(&mut self.settings_store.file),
+            CopyFile::Places => Some(&mut self.places.file),
+            CopyFile::Bikes => self.bikes.as_deref_mut().map(|s| &mut s.file),
         }
     }
 
-    /// A write failed (a FAT sector may differ between the copies): both files' next writes compare them first.
-    pub(crate) fn fats_unsure(&mut self) {
-        (self.store.sound, self.store.sync) = (false, 0);
-        (self.settings_store.sound, self.settings_store.sync) = (false, 0);
-        (self.places.sound, self.places.sync) = (false, 0);
-        if let Some(st) = self.bikes.as_deref_mut() {
-            (st.sound, st.sync) = (false, 0);
+    /// Reads file `f` into `file`: Some(whole) once read or known not there, None when the read failed (tried again,
+    /// [`copies::Copies::read`]).
+    pub(crate) fn load_copies(&mut self, b: &mut impl Board, f: CopyFile, file: &mut [u8; 1024]) -> Option<bool> {
+        let read = self.read_copies(b, f.name(), file);
+        let suspect = self.fats_suspect;
+        let st = self.copies(f)?;
+        let whole = st.read(read, f == CopyFile::Pages, suspect);
+        if let Some(whole) = whole.filter(|_| !f.makes()) {
+            st.no_file = !whole; // written once a ride's start has made it
         }
-        self.fats_suspect = true; // and a file read whole later does not say they are equal
+        whole
+    }
+
+    /// File `f` may be written now: the FAT copies known equal, else compared over the next passes first (from its
+    /// `sync`); true too when they cannot be (the write then says why).
+    pub(crate) fn fats_ready(&mut self, b: &mut impl Board, f: CopyFile) -> bool {
+        let Some(st) = self.copies(f).copied() else { return false };
+        if st.sound {
+            return true;
+        }
+        let mut at = st.sync;
+        let r = Self::sync_fats_step(&mut self.emmc, b, &mut at);
+        if let Some(st) = self.copies(f) {
+            st.sync = at;
+        }
+        match r {
+            Some(false) => false,
+            Some(true) => {
+                self.fats_equal();
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// `sector`, copy number `seq`, written over file `f`'s older copy (the file created with both if needed and
+    /// [`CopyFile::makes`] it), its change no longer waiting: Some(true) written, Some(false) failed (said, and the
+    /// FAT copies compared before the next write), None no volume (a card stock never formatted, the tests' blank
+    /// one: nothing to say), or no whole file that is not made here (the change waits for a ride's start: `no_file`).
+    pub(crate) fn save_copy(&mut self, b: &mut impl Board, f: CopyFile, seq: u32, sector: &[u8; 512]) -> Option<bool> {
+        if let Some(st) = self.copies(f) {
+            st.dirty = false; // once: a failure is said, and tried again at the next change
+        }
+        let r = self.write_copy(b, f.name(), seq % 2, sector, f.makes())?;
+        match r {
+            Ok(()) => {
+                if let Some(st) = self.copies(f) {
+                    (st.seq, st.sound) = (seq, true);
+                }
+            }
+            Err(fat::Error::NotFound) if !f.makes() => {
+                if let Some(st) = self.copies(f) {
+                    (st.dirty, st.no_file) = (true, true); // nothing written: after the next ride's start
+                }
+                return None;
+            }
+            Err(_) => {
+                self.fats_unsure();
+                self.notice(f.not_saved());
+            }
+        }
+        Some(r.is_ok())
     }
 
     /// `\Rustfw\<name>`, a file of two 512-byte copies (pages.bin, settings.bin), read into `file`: Ok(1024) when it
@@ -289,7 +388,7 @@ impl App {
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
     /// is made to the file's pages, not to the registers' copy (which would then be written over the file's).
     pub(crate) fn ensure_pages(&mut self, b: &mut impl Board) {
-        if !self.emmc.lent() && !self.store.loaded {
+        if !self.emmc.lent() && !self.store.file.loaded {
             self.load_pages(b);
         }
     }
@@ -298,7 +397,7 @@ impl App {
     pub(crate) fn pages_ready(&mut self, b: &mut impl Board) -> bool {
         self.ensure_pages(b);
         let why = match () {
-            _ if self.store.loaded => return true,
+            _ if self.store.file.loaded => return true,
             _ if self.emmc.lent() => "USB DRIVE ON",
             _ => "PAGES NOT READ",
         };
@@ -310,18 +409,12 @@ impl App {
     #[inline(never)] // its 1 KB buffer in its own frame
     fn load_pages(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
-        let read = self.read_copies(b, page::FILE, &mut file);
-        if read == Err(fat::Error::Io) {
-            self.store.tries = self.store.tries.saturating_add(1);
-            return; // tried again: a write now would not know the newest copy's number
-        }
-        self.store.loaded = true;
-        self.store.sound = read == Ok(1024) && !self.fats_suspect;
-        let Some(s) = read.ok().filter(|&n| n == 1024).and_then(|_| Saved::newest(&file)) else {
-            self.store.dirty |= self.store.newer; // no file: the registers' pages written as the first
+        let Some(whole) = self.load_copies(b, CopyFile::Pages, &mut file) else { return };
+        let Some(s) = whole.then(|| Saved::newest(&file)).flatten() else {
+            self.store.file.dirty |= self.store.newer; // no file: the registers' pages written as the first
             return;
         };
-        self.store.seq = s.seq;
+        self.store.file.seq = s.seq;
         let boot = self.store.boot;
         let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| (i < s.count).then_some(s.pages[i]));
         let mut more_in = s.more;
@@ -345,7 +438,7 @@ impl App {
                     *slot = page;
                 }
             }
-            self.store.dirty = true;
+            self.store.file.dirty = true;
         } else if boot != s.words {
             self.save_page_registers_from(b, &s); // cut between the file and the registers: put right
         }
@@ -387,14 +480,13 @@ impl App {
     /// Writes the pages over the file's older copy (created with both if needed), then the registers.
     #[inline(never)] // its 1 KB buffer in its own frame
     fn save_pages(&mut self, b: &mut impl Board) {
-        self.store.dirty = false; // once: a failure is said, and tried again at the next change
         let mut was = [0; 2 * REG_PAGES];
         for (w, r) in was.iter_mut().zip(PAGE_BKP.iter().take(REG_PAGES).flatten()) {
             *w = b.backup_read(*r);
         }
         was[1] &= !PAGES_NEWER;
         let s = Saved {
-            seq: self.store.seq.wrapping_add(1),
+            seq: self.store.file.seq.wrapping_add(1),
             pages: core::array::from_fn(|i| self.pages[i]),
             count: self.page_count,
             words: register_words(&self.pages, self.page_count),
@@ -404,18 +496,9 @@ impl App {
             mtb: Some(self.mtb),
             meta: self.sw.meta,
         };
-        // no volume (a card stock never formatted, the tests' blank one): the registers only, nothing to say
-        let Some(r) = self.write_copy(b, page::FILE, s.seq % 2, &s.to_sector(), true) else {
-            return self.save_page_registers(b);
-        };
-        match r {
-            Ok(()) => (self.store.seq, self.store.sound) = (s.seq, true),
-            Err(_) => {
-                self.fats_unsure(); // compared again before the next write
-                self.notice("PAGES NOT SAVED");
-            }
-        }
-        self.save_page_registers(b); // after the file (module doc), and also when it failed: three pages kept
+        // no volume: the registers only; else after the file (module doc), and also when it failed: three pages kept
+        self.save_copy(b, CopyFile::Pages, s.seq, &s.to_sector());
+        self.save_page_registers(b);
     }
 
     // -----------------------------------------------------------------------------------------------------------

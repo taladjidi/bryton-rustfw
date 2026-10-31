@@ -4148,67 +4148,133 @@ fn settings_file() {
     assert!(with_smooth > 100 && wild_smooth > 100, "POWER SMOOTH {with_smooth} read, {wild_smooth} out of range");
 }
 
-/// The zones, SEX, BIRTH YEAR and HEIGHT bytes of `\Rustfw\settings.bin` (data 123..150, with MAX HR FROM AGE), built by structure: the two
-/// flags each right or out of form, the ten bounds rising (the form ZONES writes), unsorted, zero or cut short, the
-/// year and height in and out of range, the length anywhere from 123 to 150. No panic; whatever is read is what the
-/// module doc says (custom zones only from whole, rising bounds and a custom flag of 1; the year and height unset out
-/// of range), and the zones every consumer reads rise; and the fuzz reaches custom zones, refused bounds and a cut.
+/// The bytes of `\Rustfw\settings.bin` from ZONES BY on (data 123 to `SETTINGS_LEN`: the zones, SEX, BIRTH YEAR,
+/// HEIGHT, MAX HR FROM AGE, START REMINDER and READY CHECK, CLIMBS, DATE FORMAT, SUNSET ALERT, the Di2 teeth, QUICK
+/// STATUS and its fields, TIME ZONE, MAP, LEVEL STEP, SLOPE SCALE, GNSS SYSTEMS, STEEP DESCENT, BATTERY SAVER), one at a
+/// time set to any value in a copy cut anywhere around them, over the defaults' copy and one with each of them set: no
+/// panic; a byte past the length is not read; a choice byte within it reads as itself where its menu offers it, else
+/// as its default; the zones every consumer reads rise, custom ones only from whole bounds in range, and the set copy's
+/// kept whole when no zone byte changed; the year read as written when whole and in range, else unset; the clock of
+/// any zone and rule is whole quarter hours from UTC. The fuzz reaches, for every byte, a copy cut before it and the
+/// byte taken or refused, for every choice byte and the year both, each BATTERY SAVER mode, and custom zones kept,
+/// refused (a bound out of form) and cut.
 #[test]
-fn settings_file_zone_bytes() {
-    use crate::SettingsCopy;
-    let mut next = xorshift(0x20e5);
-    let (mut custom, mut refused, mut cut, mut years, mut wild_years) = (0u32, 0u32, 0u32, 0u32, 0u32);
-    for _ in 0..60_000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = 123 + (next() % 28) as usize;
-        let age_flag = (next() % 3) as u8;
-        let flags = [(next() % 3) as u8, (next() % 3) as u8]; // 0, 1, or 2 (out of form)
-        let mut up = [0u16; 10];
-        let rising = !next().is_multiple_of(3);
-        let (mut h, mut p) = (40 + (next() % 30) as u16, 50 + (next() % 50) as u16);
-        for (i, v) in up.iter_mut().enumerate() {
-            let at = if i < 4 { &mut h } else { &mut p };
-            *at += 1 + (next() % 30) as u16;
-            *v = if rising { *at } else { (next() % 300) as u16 };
+fn settings_file_bytes() {
+    use crate::{DateFormat, Dst, SETTINGS_LEN, SaverMode, Settings, SettingsCopy, ui::Field};
+    const FROM: usize = 123;
+    const AT: usize = 28; // the data in a copy
+    // the menu's choices for a byte that is one (a flag: 0 or 1), None for the others (zones, year)
+    let choice = |p: usize, v: u8| -> Option<bool> {
+        let below = |n: usize| Some(usize::from(v) < n);
+        match p {
+            123 | 145 | 149..=153 | 158 | 167 => below(2),
+            148 => Some((100..=230).contains(&v)),
+            154 => Some(DateFormat::from_byte(v).is_some()),
+            155 => below(crate::SUNSET_LEAD_MIN.len()),
+            156 => below(crate::CHAINRINGS.len()),
+            157 => below(crate::CASSETTES.len()),
+            159..=164 => below(Field::ALL.len()),
+            165 => Some(u16::from(v) <= crate::TZ_MAX),
+            166 => Some(Dst::from_byte(v).is_some()),
+            168 => below(crate::LEVEL_STEPS.len()),
+            169 => below(crate::SLOPE_SCALES.len()),
+            170 => below(crate::gnss::SYSTEMS.len()),
+            171 => below(crate::STEEP_DESCENT_PCT.len()),
+            172 => Some(SaverMode::from_byte(v).is_some()),
+            _ => None,
         }
-        let year = if next().is_multiple_of(4) { (next() % 3000) as u16 } else { 1920 + (next() % 101) as u16 };
-        let height = (next() % 256) as u8;
-        let mut bytes = std::vec![flags[0], flags[1]];
-        bytes.extend(up.iter().flat_map(|v| v.to_le_bytes()));
-        bytes.push((next() % 2) as u8);
-        bytes.extend(year.to_le_bytes());
-        bytes.push(height);
-        bytes.push(age_flag);
-        sec[28 + 123..28 + 123 + 27].copy_from_slice(&bytes);
+    };
+    let sector = |settings: Settings| SettingsCopy { seq: 1, words: [0; 4], settings }.to_sector();
+    let read = |mut sec: [u8; 512], len: usize| {
         sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
         let crc = crate::inflate::crc32(sec[..508].iter().copied());
         sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
-        let z = st.zones().upper();
-        assert!(z[..4].windows(2).all(|w| w[0] < w[1]) && z[4..].windows(2).all(|w| w[0] < w[1]), "{z:?} rises");
-        let whole = len >= 125 + 20;
-        let want_custom = whole && flags[1] == 1 && rising;
-        assert_eq!(st.zone_custom, want_custom, "len {len}, flag {}, rising {rising}", flags[1]);
-        if want_custom {
-            assert_eq!(st.zones().upper(), up);
-            custom += 1;
-        } else {
-            refused += u32::from(whole && flags[1] == 1);
-            cut += u32::from(!whole);
+        SettingsCopy::from_sector(&sec).expect("a whole copy").settings
+    };
+    let d = Settings::from_word(0);
+    let set = Settings {
+        zones_lthr: true,
+        zone_custom: true,
+        zone_up: [100, 120, 140, 160, 90, 130, 170, 210, 250, 300],
+        female: true,
+        birth_year: 1984,
+        height_cm: 178,
+        max_hr_age: true,
+        start_reminder: false,
+        climbs_medium: true,
+        date_fmt: DateFormat::Ymd,
+        sunset_alert: 2,
+        chainrings: 1,
+        cassette: 2,
+        quick_status: false,
+        tz: 60,
+        dst: Dst::Eu,
+        map_up: true,
+        level_step: 2,
+        slope_scale: 1,
+        gnss_systems: 3,
+        steep_descent: 2,
+        saver: SaverMode::Auto,
+        ..d
+    };
+    assert_eq!(read(sector(set), SETTINGS_LEN), set, "the set copy reads whole");
+    let dflt = sector(d);
+    let mut next = xorshift(0x5e7b);
+    let (mut cut, mut taken, mut refused) = ([0u32; SETTINGS_LEN], [0u32; SETTINGS_LEN], [0u32; SETTINGS_LEN]);
+    let (mut custom, mut custom_refused, mut custom_cut) = (0u32, 0u32, 0u32);
+    let mut saver = [0u32; 3]; // each BATTERY SAVER mode read as itself
+    for (k, base) in [d, set].into_iter().enumerate() {
+        let full = sector(base);
+        for _ in 0..40_000 {
+            let cut_at = FROM - 3 + (next() as usize) % (SETTINGS_LEN - FROM + 3);
+            let len = if next().is_multiple_of(2) { SETTINGS_LEN } else { cut_at }; // whole, or cut anywhere
+            let p = FROM + (next() as usize) % (SETTINGS_LEN - FROM);
+            let v = [next() % 3, next() % 12, next()][(next() % 3) as usize] as u8; // flags, choices, anything
+            let mut sec = full;
+            sec[AT + p] = v;
+            let st = read(sec, len);
+            let back = sector(st);
+            let z = st.zones().upper();
+            assert!(z[..4].windows(2).all(|w| w[0] < w[1]) && z[4..].windows(2).all(|w| w[0] < w[1]), "{z:?} rises");
+            assert!(!st.zone_custom || (len >= 145 && Settings::zone_bounds_ok(&st.zone_up) && z == st.zone_up));
+            let year = u16::from_le_bytes([sec[AT + 146], sec[AT + 147]]);
+            let want_year = if len >= 148 && (1920..=2020).contains(&year) { year } else { 0 };
+            assert_eq!(st.birth_year, want_year, "len {len}, year {year}");
+            if k == 1 && len >= 145 && !(124..145).contains(&p) {
+                assert!(st.zone_custom && st.zone_up == set.zone_up, "byte {p}: the set copy's custom zones kept");
+            }
+            assert!(st.height_cm == 0 || (100..=230).contains(&st.height_cm), "{}", st.height_cm);
+            if let Some(zone) = st.zone_min() {
+                let utc = 1_700_000_000 + i64::from(next() % 400_000_000);
+                let off = crate::local_time(utc, zone, st.dst) - utc;
+                assert!(off % 900 == 0 && off.abs() <= 15 * 3600, "{zone} {:?}: {off}", st.dst);
+            }
+            if p >= len {
+                assert_eq!(st, read(full, len), "byte {p} past a {len}-byte copy");
+                cut[p] += 1;
+            } else {
+                if let Some(ok) = choice(p, v) {
+                    assert_eq!(back[AT + p], if ok { v } else { dflt[AT + p] }, "byte {p} = {v}");
+                }
+                taken[p] += u32::from(back[AT + p] == v && v != full[AT + p]);
+                if let Some(n) = saver.get_mut(usize::from(v)).filter(|_| p == 172 && st.saver as u8 == v) {
+                    *n += 1;
+                }
+                refused[p] += u32::from(back[AT + p] != v);
+            }
+            custom += u32::from(st.zone_custom);
+            custom_refused += u32::from(k == 1 && len >= 145 && (125..145).contains(&p) && !st.zone_custom);
+            custom_cut += u32::from(k == 1 && len < 145);
         }
-        assert_eq!(st.zones_lthr, len > 123 && flags[0] == 1);
-        if len >= 148 {
-            let ok = (1920..=2020).contains(&year);
-            assert_eq!(st.birth_year, if ok { year } else { 0 });
-            years += u32::from(ok);
-            wild_years += u32::from(!ok);
-        } else {
-            assert_eq!(st.birth_year, 0, "cut before the year");
-        }
-        assert_eq!(st.max_hr_age, len >= 150 && age_flag == 1);
-        assert_eq!(st.height_cm, if len >= 149 && (100..=230).contains(&height) { u16::from(height) } else { 0 });
     }
-    assert!(custom > 1000 && refused > 500 && cut > 1000 && years > 1000 && wild_years > 100);
+    for p in FROM..SETTINGS_LEN {
+        let (c, t, r) = (cut[p], taken[p], refused[p]);
+        assert!(c > 50 && t + r > 50, "byte {p}: cut {c}, taken {t}, refused {r}");
+        assert!(choice(p, 0).is_none() || (t > 20 && r > 20), "byte {p}: taken {t}, refused {r}");
+    }
+    assert!(taken[146] > 20 && refused[146] > 20, "BIRTH YEAR: taken {}, refused {}", taken[146], refused[146]);
+    assert!(saver.iter().all(|&n| n > 20), "BATTERY SAVER modes read: {saver:?}");
+    assert!(custom > 1000 && custom_refused > 100 && custom_cut > 1000, "{custom} {custom_refused} {custom_cut}");
 }
 
 /// The ZONES menu's edits (`Settings::step` on `Setting::Zone`, ZONES BY, RESET, and FTP, MAX HR and LTHR moving under
@@ -4368,7 +4434,7 @@ fn settings_decision() {
             assert!(k.number().unwrap().0.contains(&*m.number_mut(k).unwrap()), "seed {seed}: {k:?}");
         }
         // written: the file has the settings, the registers the same words
-        assert!(!app.settings_store.dirty, "seed {seed}");
+        assert!(!app.settings_store.file.dirty, "seed {seed}");
         let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
         let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
         let v = crate::fat::tests::read_all(&mut fat, &mut d, "Rustfw/settings.bin").unwrap();
@@ -5206,33 +5272,6 @@ fn sun_times_anywhere() {
     assert!(rose > 0 && rose < total, "the sun up and the polar days both reached: {rose} of {total}");
 }
 
-/// START REMINDER and READY CHECK (settings.bin data 150, 151): any length of file and any bytes read as the module
-/// doc says (a byte of 0 or 1 is the setting, a byte of another value or none its default ON); the fuzz reaches OFF,
-/// ON, a byte out of form and a file cut before and between the two.
-#[test]
-fn settings_file_start_cue_bytes() {
-    use crate::SettingsCopy;
-    let mut next = xorshift(0x5ca7);
-    let (mut off, mut on, mut wild, mut cut) = (0u32, 0u32, 0u32, 0u32);
-    for _ in 0..20_000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = 148 + (next() % 5) as usize; // 148..=152
-        let bytes = [(next() % 4) as u8, (next() % 4) as u8];
-        sec[28 + 150..28 + 152].copy_from_slice(&bytes);
-        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
-        let crc = crate::inflate::crc32(sec[..508].iter().copied());
-        sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
-        let want = |k: usize| if len > 150 + k && bytes[k] < 2 { bytes[k] == 1 } else { true };
-        assert_eq!((st.start_reminder, st.ready_check), (want(0), want(1)), "len {len}, bytes {bytes:?}");
-        off += u32::from(!st.start_reminder) + u32::from(!st.ready_check);
-        on += u32::from(len > 150 && bytes[0] == 1);
-        wild += u32::from(len > 150 && bytes[0] > 1);
-        cut += u32::from(len <= 150 || (len == 151));
-    }
-    assert!(off > 1000 && on > 1000 && wild > 1000 && cut > 1000, "{off} {on} {wild} {cut}");
-}
-
 /// The fault log (storage/faultlog.rs): the line of any marker word, and an append to a log as anything may have left
 /// it on the card (any size in its entry, right or wrong for its chain, any bytes in it): never a panic; an append
 /// ends the log with the line, within the cap; none fails (a size its chain cannot hold starts the log again). Created,
@@ -5417,167 +5456,6 @@ fn lap_lists() {
     );
 }
 
-/// SUNSET ALERT (settings.bin byte 155, after DATE FORMAT): any length from 152 to 157 and any byte read as the module
-/// doc says (a byte under 4 is the choice, another value or a file cut before it reads OFF). The fuzz reaches a choice,
-/// a wild byte and a file cut before the byte.
-#[test]
-fn settings_file_sunset_byte() {
-    use crate::SettingsCopy;
-    let mut next = xorshift(0x5a1e);
-    let (mut choice, mut wild, mut short) = (0u32, 0u32, 0u32);
-    for _ in 0..20_000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = 152 + (next() % 6) as usize; // 152..=157
-        let byte = (next() % 9) as u8; // 0..=3 the choices, 4..=8 wild
-        sec[28 + 155] = byte;
-        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
-        let crc = crate::inflate::crc32(sec[..508].iter().copied());
-        sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
-        let want = if len > 155 && byte < 4 { usize::from(byte) } else { 0 };
-        assert_eq!(st.sunset_alert, want, "len {len}, byte {byte}");
-        choice += u32::from(len > 155 && byte < 4);
-        wild += u32::from(len > 155 && byte >= 4);
-        short += u32::from(len <= 155);
-    }
-    assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
-}
-
-/// QUICK STATUS (settings.bin bytes 158 to 164, after the Di2 teeth): any length from 150 to 169, the flag byte 0, 1 or
-/// wild and each field byte in range or 108 and over. The flag reads as the other flags do (wild: the default ON), a
-/// field is `Field::ALL[v]` or its default when the file is cut before it or the byte is out of range. The fuzz reaches
-/// in-range and wild fields, a wild flag and files cut before the flag and inside the fields.
-#[test]
-fn settings_file_quick_status_bytes() {
-    use crate::{QUICK_FIELDS, SettingsCopy, ui::Field};
-    let mut next = xorshift(0x9c1a);
-    let (mut good, mut wild, mut wild_flag, mut cut) = (0u32, 0u32, 0u32, 0u32);
-    for _ in 0..20_000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = 150 + (next() % 20) as usize;
-        let flag = [0u8, 1, 2 + (next() % 200) as u8][(next() % 3) as usize];
-        let mut bytes = [0u8; 6];
-        for b in bytes.iter_mut() {
-            *b = if next().is_multiple_of(3) { 108 + (next() % 100) as u8 } else { (next() % 108) as u8 };
-        }
-        sec[28 + 158] = flag;
-        sec[28 + 159..28 + 165].copy_from_slice(&bytes);
-        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
-        let crc = crate::inflate::crc32(sec[..508].iter().copied());
-        sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
-        let want_flag = if len > 158 && flag < 2 { flag == 1 } else { true };
-        assert_eq!(st.quick_status, want_flag, "len {len}, flag {flag}");
-        for (k, &b) in bytes.iter().enumerate() {
-            let want = if len > 159 + k { Field::ALL.get(usize::from(b)).copied() } else { None };
-            assert_eq!(st.quick_page.fields[k], want.unwrap_or(QUICK_FIELDS[k]), "len {len}, field {k} byte {b}");
-            good += u32::from(want.is_some());
-            wild += u32::from(len > 159 + k && want.is_none());
-        }
-        wild_flag += u32::from(len > 158 && flag >= 2);
-        cut += u32::from(len <= 158 || len < 165);
-    }
-    assert!(good > 1000 && wild > 1000 && wild_flag > 1000 && cut > 1000, "{good} {wild} {wild_flag} {cut}");
-}
-
-/// CHAINRINGS and CASSETTE (settings.bin bytes 156 and 157): any length from 155 to 159 and any bytes read as the
-/// module doc says (in range is the choice, anything else or a cut file OFF). Reaches both, a wild byte, a cut file.
-#[test]
-fn settings_file_gear_bytes() {
-    use crate::SettingsCopy;
-    let mut next = xorshift(0x9ea4);
-    let (mut choice, mut wild, mut short) = (0u32, 0u32, 0u32);
-    for _ in 0..20_000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = 155 + (next() % 5) as usize; // 155..=159
-        let (a, b) = ((next() % 12) as u8, (next() % 12) as u8);
-        sec[28 + 156] = a;
-        sec[28 + 157] = b;
-        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
-        let crc = crate::inflate::crc32(sec[..508].iter().copied());
-        sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
-        let ok = |v: u8, n: usize| usize::from(v) < n;
-        let want_a = if len > 156 && ok(a, crate::CHAINRINGS.len()) { usize::from(a) } else { 0 };
-        let want_b = if len > 157 && ok(b, crate::CASSETTES.len()) { usize::from(b) } else { 0 };
-        assert_eq!((st.chainrings, st.cassette), (want_a, want_b), "len {len}, bytes {a} {b}");
-        choice += u32::from(want_a > 0 && want_b > 0);
-        wild += u32::from(len > 157 && !ok(b, crate::CASSETTES.len()));
-        short += u32::from(len <= 157);
-    }
-    assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
-}
-
-/// TIME ZONE and SUMMER TIME (settings.bin bytes [`TZ_AT`] and the next, after SUNSET ALERT): any length around
-/// them and any bytes read as the module doc says (a zone up to `TZ_MAX` and a rule under 3 are kept, another byte or a
-/// file cut before it reads CLOCK or OFF), and the shown clock of every zone and rule is a whole number of quarter
-/// hours from UTC, within a day. The fuzz reaches kept zones, kept rules, wild bytes and cut files.
-#[test]
-fn settings_file_time_zone_bytes() {
-    use crate::{Dst, SettingsCopy, TZ_MAX};
-    let mut next = xorshift(0x7a2e);
-    let (mut zones, mut rules, mut wild, mut short) = (0u32, 0u32, 0u32, 0u32);
-    for _ in 0..20_000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = TZ_AT - 2 + (next() % 6) as usize;
-        let (tz, dst) = ((next() % 128) as u8, (next() % 6) as u8);
-        sec[28 + TZ_AT..28 + TZ_AT + 2].copy_from_slice(&[tz, dst]);
-        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
-        let crc = crate::inflate::crc32(sec[..508].iter().copied());
-        sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
-        let keep_tz = len > TZ_AT && u16::from(tz) <= TZ_MAX;
-        let keep_dst = len > TZ_AT + 1 && dst < 3;
-        assert_eq!(st.tz, if keep_tz { u16::from(tz) } else { 0 }, "len {len}, byte {tz}");
-        assert_eq!(st.dst, if keep_dst { Dst::from_byte(dst).unwrap() } else { Dst::Off }, "len {len}, byte {dst}");
-        if let Some(zone) = st.zone_min() {
-            let utc = 1_700_000_000 + i64::from(next() % 400_000_000);
-            let off = crate::local_time(utc, zone, st.dst) - utc;
-            assert!(off % 900 == 0 && off.abs() <= 15 * 3600, "{zone} {:?}: {off}", st.dst);
-        }
-        zones += u32::from(keep_tz && tz > 0);
-        rules += u32::from(keep_dst && dst > 0);
-        wild += u32::from(len > TZ_AT + 1 && (u16::from(tz) > TZ_MAX || dst >= 3));
-        short += u32::from(len <= TZ_AT);
-    }
-    assert!(zones > 1000 && rules > 1000 && wild > 1000 && short > 1000, "{zones} {rules} {wild} {short}");
-}
-
-/// LEVEL STEP and SLOPE SCALE (settings bytes 168, 169) and STEEP DESCENT (171): random bytes, in range and wild, files of
-/// 168 to 172 bytes;
-/// the indexes read always lie inside their tables. The fuzz reaches kept and wild bytes.
-#[test]
-fn settings_file_trainer_bytes() {
-    use crate::{LEVEL_STEPS, SLOPE_SCALES, SettingsCopy};
-    let mut next = xorshift(0x1e7e);
-    let (mut kept, mut wild, mut steep_kept, mut steep_wild) = (0u32, 0u32, 0u32, 0u32);
-    for _ in 0..20_000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let len = 168 + (next() % 5) as usize;
-        let c = if next().is_multiple_of(2) { (next() % 4) as u8 } else { next() as u8 };
-        sec[28 + 171] = c;
-        let (a, b) = (
-            if next().is_multiple_of(2) { (next() % 3) as u8 } else { next() as u8 },
-            if next().is_multiple_of(2) { (next() % 4) as u8 } else { next() as u8 },
-        );
-        sec[28 + 168..28 + 170].copy_from_slice(&[a, b]);
-        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
-        let crc = crate::inflate::crc32(sec[..508].iter().copied());
-        sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
-        assert!(st.level_step < LEVEL_STEPS.len() && st.slope_scale < SLOPE_SCALES.len());
-        assert!(st.steep_descent < crate::STEEP_DESCENT_PCT.len());
-        steep_kept += u32::from(len > 171 && usize::from(c) < crate::STEEP_DESCENT_PCT.len());
-        steep_wild += u32::from(len > 171 && usize::from(c) >= crate::STEEP_DESCENT_PCT.len());
-        kept += u32::from(len > 168 && usize::from(a) < LEVEL_STEPS.len());
-        wild += u32::from(len > 169 && usize::from(b) >= SLOPE_SCALES.len());
-    }
-    assert!(
-        kept > 1000 && wild > 1000 && steep_kept > 500 && steep_wild > 500,
-        "{kept} {wild} {steep_kept} {steep_wild}"
-    );
-}
-
 /// LEVEL mode under random keys and LEVEL STEPs: the level stays 1 to 20 and the brake at most 100 %.
 #[test]
 fn trainer_level_steps() {
@@ -5598,9 +5476,6 @@ fn trainer_level_steps() {
     }
     assert!(lo > 100 && hi > 100, "{lo} {hi}");
 }
-
-/// Where TIME ZONE is in the settings data.
-const TZ_AT: usize = 165;
 
 /// The two-finger decode (touch.rs `points`, `Recogniser::feed2`): random 7-byte slot pairs through `points`, and
 /// random landings, moves and lifts of two fingers through the recogniser. Never a panic; once a pinch has been
@@ -5968,38 +5843,6 @@ fn bikes_files() {
     }
     std::println!("bikes files reached: {reach:?}");
     assert!(reach.iter().all(|&n| n > 20), "{reach:?}");
-}
-
-/// BATTERY SAVER's settings byte (app/settings_file.rs, byte 172): any byte value, in files cut before it or whole,
-/// reads as one of the three modes and the same one as its position says; the counts assert each path was reached.
-#[test]
-fn battery_saver_byte() {
-    use crate::{SaverMode, SettingsCopy};
-    let mut next = xorshift(0x5a7e);
-    let (mut modes, mut wild, mut short) = ([0u32; 3], 0u32, 0u32);
-    for _ in 0..5000 {
-        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
-        let byte = if next().is_multiple_of(2) { (next() % 3) as u8 } else { next() as u8 };
-        sec[28 + 172] = byte;
-        let cut = !next().is_multiple_of(4);
-        if !cut {
-            sec[6..8].copy_from_slice(&172u16.to_le_bytes());
-        }
-        let crc = crate::inflate::crc32(sec[..508].iter().copied());
-        sec[508..].copy_from_slice(&crc.to_le_bytes());
-        let read = SettingsCopy::from_sector(&sec).expect("a whole copy").settings.saver;
-        if !cut {
-            assert_eq!(read, SaverMode::Off, "a copy ending before the byte");
-            short += 1;
-        } else if byte < 3 {
-            assert_eq!(read as u8, byte);
-            modes[usize::from(byte)] += 1;
-        } else {
-            assert_eq!(read, SaverMode::Off, "byte {byte}");
-            wild += 1;
-        }
-    }
-    assert!(modes.iter().all(|&n| n > 300) && wild > 300 && short > 300, "{modes:?} {wild} {short}");
 }
 
 /// OpenStreetMap packs (storage/osm.rs, read by ui/tiles.rs `load`): the synthetic packs with random bytes changed

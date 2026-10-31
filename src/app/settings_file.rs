@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (173 now, with BATTERY SAVER at 172, STEEP DESCENT at 171, GNSS SYSTEMS at 170, LEVEL STEP and SLOPE SCALE at 168, 169, MAP at 167, TIME ZONE and SUMMER TIME at 165, 166, CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 158 and its six fields at 159..164, the Di2 teeth at 156 and 157, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (`SETTINGS_LEN` now, with BATTERY SAVER at 172, STEEP DESCENT at 171, GNSS SYSTEMS at 170, LEVEL STEP and SLOPE SCALE at 168, 169, MAP at 167, TIME ZONE and SUMMER TIME at 165, 166, CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 158 and its six fields at 159..164, the Di2 teeth at 156 and 157, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -40,6 +40,7 @@
 //! No file (the first start of a build with it), or no whole copy: the registers' settings are written as its first
 //! copy, once (the migration). A build that may not write the card reads the file but never writes it.
 
+use crate::copies::{self, CRC_AT};
 use crate::text::Face;
 use crate::*;
 use menu::Setting;
@@ -51,7 +52,11 @@ const MAGIC: &[u8; 4] = b"RSET";
 const VERSION: u16 = 1;
 const WORDS_AT: usize = 12;
 const DATA_AT: usize = 28;
-const CRC_AT: usize = 508;
+
+/// Bytes of settings this build lays out (the length its copies say, module doc): a new setting appends its bytes and
+/// raises it (`SettingsCopy::data` lays out exactly this many, a test says so); a copy holds up to 480.
+pub(crate) const SETTINGS_LEN: usize = 173;
+const _: () = assert!(DATA_AT + SETTINGS_LEN <= CRC_AT);
 
 /// The numbers kept, in the file's order (after the wheel): never reordered, a new one appended at the end of the
 /// layout (after the choices).
@@ -104,15 +109,27 @@ impl SettingsCopy {
     /// assert_eq!(SettingsCopy::from_sector(&sector), None, "damaged");
     /// ```
     pub fn to_sector(&self) -> [u8; 512] {
-        let s = self.settings;
+        let (data, n, _) = self.data();
         let mut out = [0u8; 512];
-        let mut data = [0u8; 192];
-        let mut n = 0;
+        for (o, w) in out[WORDS_AT..DATA_AT].chunks_exact_mut(4).zip(self.words) {
+            o.copy_from_slice(&w.to_le_bytes());
+        }
+        out[DATA_AT..CRC_AT].copy_from_slice(&data);
+        copies::seal(&mut out, MAGIC, VERSION, n as u16, self.seq);
+        out
+    }
+
+    /// The settings' bytes as a copy holds them (module doc), how many, and how many did not fit (none: a test lays
+    /// out every field and checks it, and that they are `SETTINGS_LEN`).
+    fn data(&self) -> ([u8; CRC_AT - DATA_AT], usize, usize) {
+        let s = self.settings;
+        let mut data = [0u8; CRC_AT - DATA_AT];
+        let (mut n, mut dropped) = (0, 0);
         let mut put = |bytes: &[u8]| {
             for &b in bytes {
-                if let Some(d) = data.get_mut(n) {
-                    *d = b;
-                    n += 1;
+                match data.get_mut(n) {
+                    Some(d) => (*d, n) = (b, n + 1),
+                    None => dropped += 1,
                 }
             }
         };
@@ -162,32 +179,15 @@ impl SettingsCopy {
         put(&[s.gnss_systems as u8]);
         put(&[s.steep_descent as u8]);
         put(&[s.saver as u8]);
-        out[..4].copy_from_slice(MAGIC);
-        out[4..6].copy_from_slice(&VERSION.to_le_bytes());
-        out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
-        out[8..12].copy_from_slice(&self.seq.to_le_bytes());
-        for (o, w) in out[WORDS_AT..DATA_AT].chunks_exact_mut(4).zip(self.words) {
-            o.copy_from_slice(&w.to_le_bytes());
-        }
-        out[DATA_AT..DATA_AT + n].copy_from_slice(&data[..n]);
-        let crc = inflate::crc32(out[..CRC_AT].iter().copied());
-        out[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
-        out
+        (data, n, dropped)
     }
 
     /// From a sector [`SettingsCopy::to_sector`] wrote; None if it is not one (never written, damaged, another
     /// version). A short one (an earlier build's) gives the defaults for the settings past its end, one out of its
     /// range the default for that setting.
     pub fn from_sector(sec: &[u8; 512]) -> Option<SettingsCopy> {
-        let le16 = |at: usize| crate::storage::bytes::le16(sec, at);
         let le32 = |at: usize| crate::storage::bytes::le32(sec, at);
-        let len = usize::from(le16(6)?);
-        if sec.get(..4)? != MAGIC
-            || le16(4)? != VERSION
-            || le32(CRC_AT)? != inflate::crc32(sec[..CRC_AT].iter().copied())
-        {
-            return None;
-        }
+        let (len, seq) = copies::open(sec, MAGIC, VERSION)?;
         let mut data = sec.get(DATA_AT..CRC_AT)?.get(..len)?.iter().copied();
         let d = Settings::from_word(0);
         let mut s = d;
@@ -326,16 +326,12 @@ impl SettingsCopy {
         // BATTERY SAVER (byte 172, after STEEP DESCENT): a file without it, or a byte out of range, reads OFF
         s.saver = data.next().and_then(SaverMode::from_byte).unwrap_or(d.saver);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
-        Some(SettingsCopy { seq: le32(8)?, words, settings: s })
+        Some(SettingsCopy { seq, words, settings: s })
     }
 
     /// The newer of the file's two copies that check out (its 1024 bytes), if any.
     pub fn newest(file: &[u8; 1024]) -> Option<SettingsCopy> {
-        let copy = |k: usize| SettingsCopy::from_sector(file.get(512 * k..512 * (k + 1))?.try_into().ok()?);
-        match (copy(0), copy(1)) {
-            (Some(a), Some(b)) => Some(if b.seq > a.seq { b } else { a }),
-            (a, b) => a.or(b),
-        }
+        copies::newest(file, SettingsCopy::from_sector, |c| c.seq)
     }
 }
 
@@ -374,14 +370,9 @@ const LOAD_TRIES: u8 = 3;
 /// `\Rustfw\settings.bin`, read and to be written.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SettingsStore {
-    /// Read, or known not to be there (no file, no volume).
-    pub(crate) loaded: bool,
-    /// Reads that failed (I/O).
-    pub(crate) tries: u8,
-    /// The settings changed since the file was written (the registers have them already: [`App::save_misc`]).
-    pub(crate) dirty: bool,
-    /// The newest copy's number.
-    pub(crate) seq: u32,
+    /// The file's state (`dirty`: the settings changed since the file was written; the registers have them already,
+    /// [`App::save_misc`]).
+    pub(crate) file: copies::Copies,
     /// After a failed write: `gps.ms` before which it is not tried again (at most once a minute).
     pub(crate) retry_ms: u32,
     /// At the start, register 11 held no settings of this firmware's: the file wins.
@@ -396,10 +387,6 @@ pub(crate) struct SettingsStore {
     pub(crate) theme_set: bool,
     /// DAY THEME or NIGHT THEME was picked: the file's names do not win (as THEME's).
     pub(crate) names_set: bool,
-    /// The file was read whole: written over in place (as `PageStore::sound`).
-    pub(crate) sound: bool,
-    /// FAT sectors compared so far.
-    pub(crate) sync: u32,
     /// The totals (m, s) of the ride the recorder is saving, set when it is ended, and of the one ended behind it (a
     /// ride held while the last one's save is pending): each is added to the trips once, when its own save is done.
     pub(crate) saving: Option<(u32, u32)>,
@@ -448,7 +435,7 @@ impl SettingsStore {
     /// Register `k`'s word ([`Settings::register_words`]' order) is written: the file read, the registers lost at
     /// the start (this firmware's to set again), or a change made it differ from the start's.
     pub(crate) fn writes(&self, k: usize, word: u32) -> bool {
-        self.loaded || !matches!(self.boot[0] >> 24, 0xa5..=0xac) || self.boot_words.get(k) != Some(&word)
+        self.file.loaded || !matches!(self.boot[0] >> 24, 0xa5..=0xac) || self.boot_words.get(k) != Some(&word)
     }
 }
 
@@ -529,43 +516,36 @@ impl App {
             return;
         }
         // when pages.bin is read (the card not touched at boot), or at once for a change
-        let due = self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS || self.settings_store.dirty;
-        let st = self.settings_store;
+        let due = self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS || self.settings_store.file.dirty;
+        let st = self.settings_store.file;
         if !st.loaded && (st.tries < LOAD_TRIES || st.dirty) && due {
             self.load_settings(b);
         }
         self.pay_trips();
         let st = self.settings_store;
         // bikes.bin first (app/bikes.rs: after a cut between the two writes, it is the newer)
-        if !(self.card_writable
-            && st.loaded
-            && st.dirty
+        if self.card_writable
+            && st.file.loaded
+            && st.file.dirty
             && self.ride_settled()
             && self.gps.ms >= st.retry_ms
-            && !self.bikes_due())
+            && !self.bikes_due()
+            && self.fats_ready(b, CopyFile::Settings)
         {
-            return;
+            self.save_settings(b);
         }
-        if !st.sound {
-            match Self::sync_fats_step(&mut self.emmc, b, &mut self.settings_store.sync) {
-                Some(false) => return, // the FAT copies compared over the next passes first
-                Some(true) => self.fats_equal(),
-                None => {}
-            }
-        }
-        self.save_settings(b);
     }
 
     /// A saved ride's totals go to TRIP 1, TRIP 2 and the ODOMETER, once the file is read (its values are the base) and
     /// never during a ride: the settings are only written to the card between rides. A discarded ride never gets here.
     fn pay_trips(&mut self) {
         let st = &mut self.settings_store;
-        if !(st.due != (0, 0) && st.loaded) {
+        if !(st.due != (0, 0) && st.file.loaded) {
             return;
         }
         let (m, s) = core::mem::take(&mut st.due);
         if m != 0 || s != 0 {
-            st.dirty |= self.card_writable;
+            st.file.dirty |= self.card_writable;
             self.settings.add_ride(m, s);
         }
     }
@@ -574,27 +554,24 @@ impl App {
     #[inline(never)] // its 1 KB buffer in its own frame
     pub(crate) fn load_settings(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
-        let read = self.read_copies(b, SETTINGS_FILE, &mut file);
+        let read = self.load_copies(b, CopyFile::Settings, &mut file);
         let regs = registers(b);
         let st = &mut self.settings_store;
-        if read.is_err() && read != Err(fat::Error::NotFound) {
+        let Some(whole) = read else {
             // tried again (a write now would not know the newest copy's number, and "no file" would write a first
             // copy beside a newer one), at the next change once the passes gave up: the registers keep the change
             // meanwhile, and win over the file once it is read
-            st.tries = st.tries.saturating_add(1);
-            st.dirty = false;
+            st.file.dirty = false;
             return;
-        }
-        st.loaded = true;
-        st.sound = read == Ok(1024) && !self.fats_suspect;
-        let Some(c) = read.ok().filter(|&n| n == 1024).and_then(|_| SettingsCopy::newest(&file)) else {
-            st.dirty = self.card_writable; // the migration: the registers' settings as the first copy
+        };
+        let Some(c) = whole.then(|| SettingsCopy::newest(&file)).flatten() else {
+            st.file.dirty = self.card_writable; // the migration: the registers' settings as the first copy
             if self.card_writable && self.settings.register_words() != regs {
                 self.write_settings_registers(b); // an earlier build's words: this build's, as the copy has them
             }
             return;
         };
-        st.seq = c.seq;
+        st.file.seq = c.seq;
         // the registers lost: the file's whole; else each register that changed since the copy gives its fields
         let (merged, took) = if st.lost { (c.settings, [false; 4]) } else { c.settings.with_registers(c.words, regs) };
         let was = self.settings;
@@ -605,7 +582,7 @@ impl App {
         let now = Settings { day_theme: names.day_theme, night_theme: names.night_theme, ..pick };
         let themes = |s: &Settings| (s.theme, s.auto_theme, s.day_theme, s.night_theme);
         // the file gets the registers' fields, or words that say what the registers now hold, or the theme picked
-        st.dirty = self.card_writable
+        st.file.dirty = self.card_writable
             && (took.contains(&true) || merged.register_words() != c.words || themes(&now) != themes(&c.settings));
         self.settings = Settings {
             alt_m: was.alt_m,
@@ -637,24 +614,12 @@ impl App {
 
     /// Writes the settings over the file's older copy (the file created with both if needed).
     fn save_settings(&mut self, b: &mut impl Board) {
-        self.settings_store.dirty = false; // a failure is said, and tried again a minute later (below)
-        let st = self.settings_store;
-        let c = SettingsCopy {
-            seq: st.seq.wrapping_add(1),
-            words: self.settings.register_words(),
-            settings: self.settings,
-        };
-        // no volume (a card stock never formatted, the tests' blank one): the registers only, nothing to say
-        match self.write_copy(b, SETTINGS_FILE, c.seq % 2, &c.to_sector(), true) {
-            None => {}
-            Some(Ok(())) => (self.settings_store.seq, self.settings_store.sound) = (c.seq, true),
-            Some(Err(_)) => {
-                self.fats_unsure(); // compared again first
-                self.notice("SETTINGS NOT SAVED");
-                // still not in the file (a GRAVEL to ROAD change is lost to a reset until it is): tried again
-                self.settings_store.dirty = true;
-                self.settings_store.retry_ms = self.gps.ms.saturating_add(60_000);
-            }
+        let seq = self.settings_store.file.seq.wrapping_add(1);
+        let c = SettingsCopy { seq, words: self.settings.register_words(), settings: self.settings };
+        if self.save_copy(b, CopyFile::Settings, seq, &c.to_sector()) == Some(false) {
+            // still not in the file (a GRAVEL to ROAD change is lost to a reset until it is): tried a minute later
+            self.settings_store.file.dirty = true;
+            self.settings_store.retry_ms = self.gps.ms.saturating_add(60_000);
         }
     }
 }
@@ -718,6 +683,27 @@ mod tests {
         assert_eq!(SettingsCopy::newest(&[0; 1024]), None);
     }
 
+    /// Every setting, each at its largest, is laid out whole: `SETTINGS_LEN` bytes, none dropped (a new setting that
+    /// does not raise `SETTINGS_LEN`, or one past the copy's 480 bytes, fails here, never silently in the file).
+    #[test]
+    fn every_setting_fits_the_copy() {
+        let s = Settings {
+            trip_m: [u32::MAX; 2],
+            trip_s: [u32::MAX; 2],
+            odo_m: u32::MAX,
+            limits: [u16::MAX; alerts::LIMITS],
+            zone_up: [u16::MAX; 10],
+            birth_year: u16::MAX,
+            lthr: u16::MAX,
+            theme: [b'Z'; 12],
+            day_theme: [b'Z'; 12],
+            night_theme: [b'Z'; 12],
+            ..some()
+        };
+        let (_, n, dropped) = SettingsCopy { seq: u32::MAX, words: [u32::MAX; 4], settings: s }.data();
+        assert_eq!((n, dropped), (SETTINGS_LEN, 0));
+    }
+
     /// A copy of an earlier build (shorter) gives the defaults past its end; one of a later build (longer) the
     /// settings this build knows; a value out of range its default; another version nothing.
     #[test]
@@ -725,7 +711,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 173);
+        assert_eq!(len, SETTINGS_LEN);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -846,7 +832,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 173);
+        assert_eq!(usize::from(u16::from_le_bytes([sec[6], sec[7]])), SETTINGS_LEN);
         assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
         let back = SettingsCopy::from_sector(&sec).unwrap().settings;
         assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
@@ -914,7 +900,7 @@ mod day_night_file_tests {
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 173);
+        assert_eq!(usize::from(u16::from_le_bytes([sec[6], sec[7]])), SETTINGS_LEN);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -938,7 +924,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 173);
+        assert_eq!(usize::from(u16::from_le_bytes([sec[6], sec[7]])), SETTINGS_LEN);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -972,7 +958,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 173);
+        assert_eq!(usize::from(u16::from_le_bytes([sec[6], sec[7]])), SETTINGS_LEN);
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -1014,7 +1000,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 173);
+        assert_eq!(usize::from(u16::from_le_bytes([sec[6], sec[7]])), SETTINGS_LEN);
         assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| {

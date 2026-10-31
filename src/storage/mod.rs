@@ -4,6 +4,7 @@
 
 pub mod bikes;
 pub mod bytes;
+pub mod copies;
 pub mod course_file;
 pub mod fat;
 pub mod faultlog;

@@ -838,12 +838,7 @@ impl Saved {
 
     /// The newer of the file's two copies that check out (its 1024 bytes), if any.
     pub fn newest(file: &[u8; 1024]) -> Option<Saved> {
-        let copy =
-            |k: usize| -> Option<Saved> { Saved::from_sector(file.get(512 * k..512 * (k + 1))?.try_into().ok()?) };
-        match (copy(0), copy(1)) {
-            (Some(a), Some(b)) => Some(if b.seq > a.seq { b } else { a }),
-            (a, b) => a.or(b),
-        }
+        crate::copies::newest(file, Saved::from_sector, |s| s.seq)
     }
 }
 
