@@ -5,7 +5,8 @@ A panic marks the fault and resets the unit (hw.rs `default_handler`), so AGENTS
 that can fail on the firmware path. This reads the release ELF with `llvm-objdump -d -C -l` from the toolchain (which
 ships no llvm-symbolizer): each call or branch to a panic entry (core::panicking, the slice index fails, unwrap /
 expect, the panic handler) is a site. Its line is the `core::panic::Location` the call passes (a movw / movt pair
-a few instructions before, pointing at a static in .rodata: file, line); with none, the line-table entry the objdump
+a few instructions before, pointing at a static in .rodata: file, line; src/ or a patched crate's vendor/<crate>/src/,
+which the Location names by its absolute path); with none, the line-table entry the objdump
 prints before it (the innermost frame), or `?` when that is in core (no llvm-symbolizer is shipped to walk the
 inlined frames).
 Kinds: bounds, unwrap, overflow, explicit, trap (a `udf`). The summary lists the sites per folder and the sites in
@@ -35,12 +36,13 @@ BRANCH = re.compile(r'b(?:lx?)?(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|l
 
 
 def location(rd, recent):
-    """'src/x.rs:LINE' from the first Location static that a movw / movt pair in `recent` (reg -> [lo, hi]) points to;
+    """'src/x.rs:LINE' (or 'vendor/<crate>/src/x.rs:LINE') from the first Location static that a movw / movt pair in `recent` (reg -> [lo, hi]) points to;
     rd(addr, n) reads the image. A Location is {file ptr, file len, line, column}, 4 bytes each."""
     for lo, hi in recent.values():
         if lo is not None and hi is not None:
             ptr, n, line, _ = struct.unpack('<4I', rd((hi << 16) | lo, 16) or bytes(16))
-            m = re.fullmatch(rb'(src/[\w/.-]+\.rs)', (rd(ptr, n) or b'') if n < 200 else b'')
+            name = ((rd(ptr, n) or b'') if n < 300 else b'').removeprefix(str(ROOT).encode() + b'/')
+            m = re.fullmatch(rb'((?:vendor/[\w.-]+/)?src/[\w/.-]+\.rs)', name)
             if m:
                 return f'{m.group(1).decode()}:{line}'
     return None
@@ -53,7 +55,7 @@ def sites(text, rd=lambda a, n: None):
     out, fn, loc, recent = [], '', '?', {}
     for line in text.splitlines():
         if line.startswith('; '):
-            m = re.match(rf'^; {re.escape(str(ROOT))}/(src/[^:]+):(\d+)', line)
+            m = re.match(rf'^; {re.escape(str(ROOT))}/((?:vendor/[^/:]+/)?src/[^:]+):(\d+)', line)
             loc = f'{m.group(1)}:{m.group(2)}' if m else '?'
             continue
         m = re.match(r'^[0-9a-f]+ <(.*)>:$', line)
@@ -116,7 +118,7 @@ def report(found, deny):
         out.append(f'{sum(c.values()):5}  ' + ' '.join(f'{k}={n}' for k, n in sorted(c.items())) + f'  {f}')
     out.append('')
     out += [f'{f}:{n}  {k}  in {fn}' for f, n, k, fn in rows]
-    folders = collections.Counter(re.sub(r'^(src/\w+)/.*', r'\1', f) for f, *_ in rows)
+    folders = collections.Counter(re.sub(r'^(src/\w+|vendor/[\w.-]+)/.*', r'\1', f) for f, *_ in rows)
     out += ['', f'total sites: {len(rows)}'] + [f'  {f}: {n}' for f, n in sorted(folders.items())]
     bad = [(f, n, k, fn) for f, n, k, fn in rows if k == 'bounds' and any(f.startswith(d) for d in deny)]
     out.append(f'bounds sites in indexing_slicing-denied files: {len(bad)}')
@@ -134,15 +136,25 @@ def selftest():
         'd0000004: \tbhi.w\t0xd0009010 <core::option::unwrap_failed::h01>', f'; {ROOT}/src/storage/fit.rs:9',
         'd0000008: \tbl\t0xd0009020 <core::panicking::panic_const::panic_const_add_overflow>',
         'd000000c: \tbl\t0xd0009030 <core::fmt::write>', 'd0000010: \tbic\tr0, r1', 'd0000012: \tudf\t#254',
-        'd0000014: \tb\t0xd0009040 <core::slice::index::slice_end_index_len_fail>'])
-    mem = {0xd0000100: struct.pack('<4I', 0xd0000200, 11, 77, 5), 0xd0000200: b'src/ui/t.rs'}
+        'd0000014: \tb\t0xd0009040 <core::slice::index::slice_end_index_len_fail>',
+        'd0000016: \tmovw\tr3, #0x300', 'd0000018: \tmovt\tr3, #0xd000',
+        'd000001a: \tbl\t0xd0009000 <core::panicking::panic_bounds_check::h7761f4e897d698b2>',
+        'd000001c: \tmovw\tr3, #0x400', 'd000001e: \tmovt\tr3, #0xd000',
+        'd0000020: \tbl\t0xd0009000 <core::panicking::panic_bounds_check::h7761f4e897d698b2>'])
+    vend, reg = f'{ROOT}/vendor/usb-device/src/bus.rs'.encode(), b'/r/registry/src/i/usb-device-0.3.2/src/bus.rs'
+    mem = {0xd0000100: struct.pack('<4I', 0xd0000200, 11, 77, 5), 0xd0000200: b'src/ui/t.rs',
+           0xd0000300: struct.pack('<4I', 0xd0000500, len(vend), 198, 1), 0xd0000500: vend,
+           0xd0000400: struct.pack('<4I', 0xd0000600, len(reg), 3, 1), 0xd0000600: reg}
     got = sites(text, lambda a, n: mem.get(a))
     assert got == [('bounds', 'app::step', 'src/ui/t.rs:77'), ('unwrap', 'app::step', '?'),
                    ('overflow', 'app::step', 'src/storage/fit.rs:9'), ('trap', 'app::step', 'src/storage/fit.rs:9'),
+                   ('bounds', 'app::step', 'src/storage/fit.rs:9'),
+                   ('bounds', 'app::step', 'vendor/usb-device/src/bus.rs:198'),
                    ('bounds', 'app::step', 'src/storage/fit.rs:9')], got
+    assert report(got[5:6], [])[1]['folders'] == {'vendor/usb-device': 1}
     txt, js = report(got[:2], ['src/storage/fit.rs'])
     assert js['total'] == 2 and js['denied_bounds'] == [] and 'bounds=1' in txt, txt
-    txt, js = report(got[3:], ['src/storage/'])
+    txt, js = report(got[3:5], ['src/storage/'])
     assert js['denied_bounds'] == [{'file': 'src/storage/fit.rs', 'line': 9}], js
     print('panics.py selftest ok')
 

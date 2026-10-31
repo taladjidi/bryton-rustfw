@@ -56,7 +56,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->799 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->797 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
@@ -266,6 +266,12 @@ libraries that already do it; use or adapt them when they fit (no_std, no heap, 
   - Each new one needs a reason and must be a well-known embedded crate (embassy, heapless, embedded-hal).
   - Its own `unsafe` is part of what we trust.
   - `cargo deny check` in check.sh (when installed) checks advisories and licences, and warns on duplicate crate versions (deny.toml).
+  - **The three USB crates are patched copies** (`vendor/`, Cargo.toml `[patch.crates-io]`): their 47 panic sites
+    (indexing, `expect`, `assert!`, `RefCell` borrows) reset the unit when reached with a cable in, so each became an
+    `Err` or a harmless clamp, the behaviour on well-formed traffic unchanged. `vendor/PATCHES.md` lists every site and
+    how to refresh a copy when a version changes (copy the registry's folder whole, apply the sites again,
+    `tools/panics.py` must name none of them). Upstream's text, not ours: lint.py's dashes check skips `vendor/`, the
+    layout guard greps `src` only, and their `unsafe` stays part of what we trust.
   - **gzip is our own** (`src/storage/inflate.rs`): `miniz_oxide` was not taken (its Zlib licence is not in
     `deny.toml`, it needs `adler2`, its decoder wants the whole compressed tile in RAM). The need is one small reader,
     tested against Python's gzip and fuzzed, that pulls bytes from the card as `ign::lz4` does.
