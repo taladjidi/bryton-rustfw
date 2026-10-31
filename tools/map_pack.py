@@ -6,6 +6,7 @@ API result: no dependency (pyosmium is not installed here, and a bounding box is
     curl -o area.json --data-urlencode data@q.ql https://overpass-api.de/api/interpreter
     tools/map_pack.py pack --osm area.json --bbox LON0,LAT0,LON1,LAT1 --out OUTDIR [--zooms 11-14]
     tools/map_pack.py selftest
+    tools/map_pack.py fixture --out test-data/osm   # the synthetic area the Rust tests draw
 
 Copy OUTDIR's files to `\\Rustfw\\Maps\\osm\\` on the unit's drive (docs/install.md, OSM part). The data is
 (c) OpenStreetMap contributors, ODbL (openstreetmap.org/copyright): `pack` writes ATTRIB.TXT next to the packs, and the
@@ -266,7 +267,8 @@ def read_pack(b):
         ho, hl, po, pl = struct.unpack_from('<IIII', b, 16 + 16 * i)
         if ho == 0:
             continue
-        assert ho >= DATA and ho + hl <= len(b) and po + pl <= len(b)
+        assert ho >= DATA and po >= DATA and ho % 4 == 0 and po % 4 == 0
+        assert ho + hl <= len(b) and po + pl <= len(b)
         (n,) = struct.unpack_from('<I', b, ho)
         assert hl == 4 + 10 * n
         fs = []
@@ -283,16 +285,19 @@ def parse_zooms(s):
     return list(range(int(a), int(b or a) + 1))
 
 
-def selftest():
-    # a made-up area round 0 N 0 E, 5 km wide: three tiles at zoom 14 (2.4 km each), the south one empty
-    bbox = (0.001, -0.060, 0.050, -0.001)
+BBOX = (0.001, -0.060, 0.050, -0.001)
+
+
+def synthetic():
+    """A made-up Overpass result round 0 N 0 E, 5 km wide: three tiles of zoom 14 a side (2.4 km each), the
+    south one empty. The Rust tests (src/ui/tiles.rs, test-data/osm) draw the committed `fixture` of it."""
 
     def way(tags, pts):
         return {'type': 'way', 'tags': tags, 'geometry': [{'lon': x, 'lat': y} for x, y in pts]}
 
     lake = [(0.010, -0.010), (0.020, -0.010), (0.020, -0.020), (0.010, -0.020), (0.010, -0.010)]
     isle = [(0.013, -0.013), (0.013, -0.017), (0.017, -0.017), (0.017, -0.013), (0.013, -0.013)]
-    data = {'elements': [
+    return {'elements': [
         way({'highway': 'motorway'}, [(0.002, -0.030), (0.048, -0.032)]),  # crosses two tiles
         way({'highway': 'track'}, [(0.002, -0.005), (0.030, -0.005)]),
         way({'highway': 'path', 'tunnel': 'yes'}, [(0.005, -0.002), (0.005, -0.038)]),
@@ -306,6 +311,19 @@ def selftest():
             {'type': 'way', 'role': 'outer', 'geometry': [{'lon': x, 'lat': y} for x, y in lake]},
             {'type': 'way', 'role': 'inner', 'geometry': [{'lon': x, 'lat': y} for x, y in isle]}]},
     ]}
+
+
+def tiles_rust_roads():
+    """ROADS_SHOWN as src/ui/tiles.rs has it."""
+    import re
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'ui', 'tiles.rs')).read()
+    m = re.search(r'const ROADS_SHOWN: \[u16; \d+\] = \[([^\]]*)\];', src)
+    return [int(v, 0) for v in m.group(1).replace('\n', ' ').split(',') if v.strip()]
+
+
+def selftest():
+    bbox, data = BBOX, synthetic()
+    assert tiles_rust_roads() == ROADS_SHOWN, 'ROADS_SHOWN differs from src/ui/tiles.rs'
     feats = features(data)
     assert len(feats) == 9 + 1, len(feats)  # eight ways kept, the lake and its island
     files, dropped = build(feats, bbox, [11, 12, 13, 14])
@@ -349,7 +367,21 @@ def selftest():
         for name, b in files.items():
             assert open(os.path.join(d, name), 'rb').read() == b
         assert 'OpenStreetMap contributors' in open(os.path.join(d, 'ATTRIB.TXT')).read()
+    # the committed fixture (test-data/osm, which the Rust tests read) equals a fresh one
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'test-data', 'osm')
+    with tempfile.TemporaryDirectory() as d:
+        fixture(d)
+        fresh = sorted(os.listdir(d))
+        assert fresh == sorted(os.listdir(here)), (fresh, sorted(os.listdir(here)))
+        for n in fresh:
+            assert open(os.path.join(d, n), 'rb').read() == open(os.path.join(here, n), 'rb').read(), n
     print('map_pack selftest ok:', len(files), 'packs,', sum(len(b) for b in files.values()), 'bytes')
+
+
+def fixture(out):
+    """The synthetic area at zoom 14 only (test-data/osm)."""
+    files, _ = build(features(synthetic()), BBOX, [14])
+    write(files, out)
 
 
 def write(files, out):
@@ -373,9 +405,12 @@ def main():
             p.add_argument('--out', required=True)
             p.add_argument('--zooms', default='11-14')
     sub.add_parser('selftest')
+    sub.add_parser('fixture').add_argument('--out', required=True)
     a = ap.parse_args()
     if a.cmd == 'selftest':
         return selftest()
+    if a.cmd == 'fixture':
+        return fixture(a.out)
     bbox = tuple(float(v) for v in a.bbox.split(','))
     if len(bbox) != 4 or not (bbox[0] < bbox[2] and bbox[1] < bbox[3]):
         sys.exit('--bbox wants LON0,LAT0,LON1,LAT1 with west < east and south < north')

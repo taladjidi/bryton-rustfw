@@ -5784,11 +5784,14 @@ fn battery_saver_byte() {
 /// tiles whose features are all dropped, headers accepted and refused).
 #[test]
 fn osm_packs() {
-    use crate::osm::{self, tests::fixture};
+    use crate::osm::{
+        self,
+        tests::{fixture, python_fixture},
+    };
     let mut noise = bytes(41, 1 << 22);
     let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
     let (mut accepted, mut refused, mut kept, mut dropped, mut head_ok, mut head_bad) = (0, 0, 0, 0, 0, 0);
-    for (_, good) in fixture() {
+    for (_, good) in fixture().into_iter().chain(python_fixture()) {
         for _ in 0..400 {
             let mut bad = good.clone();
             for _ in 0..next() % 10 {
@@ -5828,4 +5831,37 @@ fn osm_packs() {
     }
     assert!(accepted > 100 && refused > 100 && kept > 100 && dropped > 10, "{accepted} {refused} {kept} {dropped}");
     assert!(head_ok > 20 && head_bad > 20, "headers {head_ok} accepted, {head_bad} refused");
+}
+
+/// A view rendered over a pack with random bytes changed in its header, index and first blobs (and cut short): the
+/// whole path (`Osm::find`, `header_ok`, `entry`, `InPack::read`, `load`) never panics, and both outcomes are
+/// reached: renders the packs drew, and renders that left it to stock (a damaged header, a tile outside).
+#[test]
+fn osm_renders_over_damaged_packs() {
+    use crate::osm::tests::fixture;
+    use crate::tiles::tests::{OSM_VIEW, render_over};
+    let mut noise = bytes(43, 1 << 20);
+    let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+    let (mut by_osm, mut by_stock, mut with_features) = (0, 0, 0);
+    for _ in 0..150 {
+        let mut packs = fixture();
+        let pack = &mut packs[1].1;
+        for _ in 0..1 + next() % 6 {
+            let at = match next() % 3 {
+                0 => next() as usize % 16,
+                1 => 16 + next() as usize % 300,
+                _ => 4112 + next() as usize % (pack.len() - 4112),
+            };
+            pack[at] = next() as u8;
+        }
+        if next() % 4 == 0 {
+            let cut = 4112 + next() as usize % (pack.len() - 4112);
+            pack.truncate(cut);
+        }
+        let (osm, features) = render_over(&packs, OSM_VIEW);
+        by_osm += u32::from(osm);
+        by_stock += u32::from(!osm);
+        with_features += u32::from(features > 0);
+    }
+    assert!(by_osm > 10 && by_stock > 10 && with_features > 10, "{by_osm} {by_stock} {with_features}");
 }

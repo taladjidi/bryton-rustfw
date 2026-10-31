@@ -154,6 +154,12 @@ pub(crate) mod tests {
         ]
     }
 
+    /// The pack `tools/map_pack.py fixture` made (test-data/osm: its synthetic area near 0 N 0 E, zoom 14; the pack
+    /// tool's selftest checks it equals a fresh build): files (name, bytes).
+    pub fn python_fixture() -> Vec<(String, Vec<u8>)> {
+        std::vec![(String::from("OSM14_512_512.PAK"), include_bytes!("../../test-data/osm/OSM14_512_512.PAK").to_vec())]
+    }
+
     #[test]
     fn index_and_header() {
         let (n, bytes) = &fixture()[1];
