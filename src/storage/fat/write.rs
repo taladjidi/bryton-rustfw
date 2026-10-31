@@ -377,16 +377,16 @@ impl Fat {
         buf: &[u8],
     ) -> Result<(), Error> {
         let n = u32::try_from(buf.len() / SECTOR).map_err(|_| Error::Corrupt)?;
-        if n == 0 || !buf.len().is_multiple_of(SECTOR) {
-            return Err(Error::Corrupt);
+        if n == 0 || self.spc == 0 || !buf.len().is_multiple_of(SECTOR) {
+            return Err(Error::Corrupt); // spc 0 would never advance
         }
         let end = sector.checked_add(n).ok_or(Error::Corrupt)?;
         self.grow(d, h, end.div_ceil(self.spc))?;
-        let mut c = self.nth(d, h.first, sector / self.spc)?;
+        let mut c = self.nth(d, h.first, sector.checked_div(self.spc).unwrap_or(0))?;
         let mut at = sector;
         let mut done = 0;
         while at < end {
-            let in_cluster = at % self.spc;
+            let in_cluster = at.checked_rem(self.spc).unwrap_or(0);
             if done > 0 && in_cluster == 0 {
                 c = self.next(d, c)?.ok_or(Error::Corrupt)?;
             }
@@ -406,8 +406,8 @@ impl Fat {
         sector: u32,
         buf: &mut [u8; SECTOR],
     ) -> Result<(), Error> {
-        let c = self.nth(d, h.first, sector / self.spc)?;
-        self.read(d, self.lba(c) + sector % self.spc, buf)
+        let c = self.nth(d, h.first, sector.checked_div(self.spc).unwrap_or(0))?;
+        self.read(d, self.lba(c) + sector.checked_rem(self.spc).unwrap_or(0), buf)
     }
 
     /// Sets `h`'s size and write time in its entry; then, if the chain is longer than the size needs (a resume
@@ -419,7 +419,7 @@ impl Fat {
         size: u32,
         time: (u16, u16),
     ) -> Result<(), Error> {
-        let need = size.div_ceil(self.spc * SECTOR_U32).max(1);
+        let need = size.div_ceil((self.spc * SECTOR_U32).max(1)).max(1);
         if need > h.clusters {
             return Err(Error::Corrupt);
         }
@@ -455,7 +455,7 @@ impl Fat {
     /// Cuts `h`'s chain after the clusters `size` bytes need (at least one) and frees the rest: its size already
     /// that, or no entry at all ([`Fat::chain`]).
     pub fn trim(&mut self, d: &mut impl DiskWrite, h: &mut Handle, size: u32) -> Result<(), Error> {
-        let need = size.div_ceil(self.spc * SECTOR_U32).max(1);
+        let need = size.div_ceil((self.spc * SECTOR_U32).max(1)).max(1);
         if need < h.clusters {
             let keep = self.nth(d, h.first, need - 1)?;
             let mut rest = self.next(d, keep)?;
@@ -516,7 +516,7 @@ impl Fat {
     /// An 8.3 name for `name` that nothing in `dir` has: 8 characters of a hash of the long name (so no `~N`
     /// numbering to search), and the extension's first 3 letters or digits.
     fn alias(&mut self, d: &mut impl Disk, dir: File, name: &str) -> Result<[u8; 11], Error> {
-        let ext = name.rfind('.').map_or("", |i| name.get(i + 1..).unwrap_or(""));
+        let ext = crate::storage::rfind_ascii(name, b'.').map_or("", |i| name.get(i + 1..).unwrap_or(""));
         let mut short = [b' '; 11];
         for (s, c) in short[8..].iter_mut().zip(ext.bytes().filter(u8::is_ascii_alphanumeric)) {
             *s = c.to_ascii_uppercase();
@@ -763,7 +763,7 @@ impl Fat {
 
     /// The sector before `lba` in the folder whose chain starts at `dir` (None at its start, or `dir` unknown).
     fn dir_sector_before(&mut self, d: &mut impl Disk, dir: u32, lba: u32) -> Result<Option<u32>, Error> {
-        let c = lba.checked_sub(self.data_start).map_or(0, |x| x / self.spc + 2);
+        let c = lba.checked_sub(self.data_start).map_or(0, |x| x.checked_div(self.spc).unwrap_or(0) + 2);
         if !self.valid(c) || dir == 0 {
             return Ok(None);
         }

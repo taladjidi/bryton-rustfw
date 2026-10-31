@@ -174,7 +174,7 @@ fn older(a: &[u8], b: &[u8]) -> bool {
 fn keep<T: Copy>(oldest: &mut [Option<T>; OLDEST], e: T, name: fn(&T) -> &[u8]) {
     let Some(at) = oldest.iter().position(|o| o.is_none_or(|o| older(name(&e), name(&o)))) else { return };
     // at < OLDEST: the rides from `at` on move one place down, the last one falls off
-    oldest.copy_within(at..OLDEST - 1, at + 1);
+    crate::storage::move_within(oldest, at..OLDEST - 1, at + 1);
     if let Some(slot) = oldest.get_mut(at) {
         *slot = Some(e);
     }

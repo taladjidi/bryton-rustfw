@@ -8,7 +8,7 @@ use super::menu_tests::to_row;
 use super::tests::run; // not the parent's `run`, which the glob would give
 use super::tests::*;
 use super::*;
-use crate::ui::{Field, Rec};
+use crate::ui::{Field, Rec, UsbDot};
 
 /// No zone colour is near the menu's orange (`ui::ACCENT`: selection, info banners) or the alarm red (`ui::RED`):
 /// a zone must never look like a banner (UI review 2, P3).
@@ -616,6 +616,55 @@ fn a_sensor_lost_mid_ride_is_announced_once() {
     sim.nordic.sensors.push(strap);
     run(&mut sim, &mut app, 30_000);
     assert!(!app.notes.text.as_str().contains("LOST"), "{}", app.notes.text.as_str());
+}
+
+/// Whether the panel's status strip is the strip `app` holds, drawn whole.
+fn strip_shown(sim: &Sim, app: &App) -> bool {
+    let mut f = crate::ui::tests::Frame::new();
+    crate::ui::draw_strip(&mut f, &app.strip);
+    let n = (crate::ui::W * crate::ui::STRIP_H) as usize;
+    f.px.get(..n) == sim.screen.get(..n)
+}
+
+/// Passes until `holds` (at most two minutes), the strip uncovered (a banner over it is drawn whole when it goes),
+/// then the strip on the panel within one more pass.
+fn strip_follows(sim: &mut Sim, app: &mut App, what: &str, holds: impl Fn(&App) -> bool) {
+    let end = sim.ms + 120_000;
+    while sim.ms < end && !(holds(app) && app.area().0 == 0) {
+        run(sim, app, 1); // one pass
+    }
+    assert!(holds(app) && app.area().0 == 0, "{what}: not in the strip, or covered: {:?} {:?}", app.strip, app.area());
+    if !strip_shown(sim, app) {
+        run(sim, app, 1);
+    }
+    assert!(holds(app) && strip_shown(sim, app), "{what}: the strip on the panel is not the one held");
+}
+
+/// The status strip follows each of its inputs within a pass of the app taking it in: the RTC's minute, the battery,
+/// the USB dot, a GPS fix, Start and a lost sensor (finding 7 of docs/review-2026-10-31.md: what it is drawn from).
+#[test]
+fn the_strip_follows_each_input_within_a_pass() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image(); // a card to record on: the running dot, not the cross
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    strip_follows(&mut sim, &mut app, "the start", |_| true);
+    strip_follows(&mut sim, &mut app, "the minute", |a| a.strip.time == (9, 1));
+    let before = app.strip.battery;
+    sim.battery_mv = Some(3800);
+    strip_follows(&mut sim, &mut app, "the battery", |a| a.strip.battery != before);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    assert!(strip_shown(&sim, &app), "the USB dot: drawn at once");
+    sim.gnss.fix = Some(7000);
+    strip_follows(&mut sim, &mut app, "a fix", |a| a.strip.gps.is_some_and(|g| g > 0));
+    app.press(&mut sim, Press::Short(Key::Page)); // the first ride page
+    app.press(&mut sim, Press::Short(Key::Start));
+    strip_follows(&mut sim, &mut app, "Start", |a| a.strip.rec == Rec::Running);
+    run(&mut sim, &mut app, 20_000); // the strap heard in this ride
+    sim.nordic.sensors.clear();
+    strip_follows(&mut sim, &mut app, "the lost strap", |a| a.strip.lost);
 }
 
 /// A tap on a graph shows the next plot (power, heart rate, W' balance, DFA alpha1, elevation) until the unit is

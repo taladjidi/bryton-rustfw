@@ -70,7 +70,8 @@ impl Hrtss {
     /// was counted.
     pub fn score(&self, lthr: u16, max_hr: u16, female: bool) -> Option<u32> {
         let at_lthr = weight(lthr, max_hr, female).filter(|_| lthr > 0)?;
-        (self.sum > 0).then(|| (self.sum * 100 / (3600 * at_lthr.max(1))).min(u64::from(u32::MAX)) as u32)
+        (self.sum > 0)
+            .then(|| (self.sum * 100).checked_div(3600 * at_lthr.max(1)).unwrap_or(0).min(u64::from(u32::MAX)) as u32)
     }
 }
 

@@ -11,6 +11,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::needless_pass_by_ref_mut)]
+#![cfg_attr(
+    not(test),
+    deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable)
+)]
 
 mod app;
 pub mod drivers;
@@ -733,8 +737,13 @@ impl App {
         if self.strip.rec == Rec::NotSaving && matches!(was, Rec::Running | Rec::Paused) {
             self.alarm("NOT SAVING"); // a ride that stops being recorded must be seen, once
         }
-        self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
-        t = self.timed(b, Sec::Strip, t);
+        let drawn = self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
+        let now = b.cycles();
+        self.prof.add(Sec::Strip, now.wrapping_sub(t).wrapping_sub(drawn));
+        if drawn != 0 {
+            self.prof.add(Sec::StripDraw, drawn);
+        }
+        t = now;
         self.pair_asked(b);
         self.live.tick(pass_ms);
         self.radio.tick(pass_ms);

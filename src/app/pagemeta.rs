@@ -95,7 +95,8 @@ impl App {
         let which = self.view_set();
         let m = if up { n.wrapping_sub(1) } else { n + 1 };
         let (pages, count, more) = self.set_mut(which);
-        if n >= *count || m >= *count {
+        let len = pages.len().min(more.len()).min(*count);
+        if n >= len || m >= len {
             return;
         }
         pages.swap(n, m);

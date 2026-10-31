@@ -88,20 +88,31 @@ impl Parser {
     }
 }
 
+/// One CFG-VALSET item into a 5-byte `chunk`: the key (4 bytes, little endian), then its 1-byte value.
+fn put_item(chunk: &mut [u8], key: u32, value: u8) {
+    if let Some((k, v)) = chunk.split_at_mut_checked(4) {
+        k.copy_from_slice(&key.to_le_bytes());
+        if let Some(x) = v.first_mut() {
+            *x = value;
+        }
+    }
+}
+
 /// A UBX frame for `payload` (at most 24 bytes here), padded with 0xff to a multiple of 4 bytes (the SPI
 /// transfers move 4 bytes at a time; the receiver ignores 0xff).
 pub fn frame(class: u8, id: u8, payload: &[u8]) -> [u8; 32] {
     let mut f = [0xff; 32];
     let n = payload.len().min(24);
     f[..6].copy_from_slice(&[0xb5, 0x62, class, id, n as u8, 0]);
-    f[6..6 + n].copy_from_slice(&payload[..n]);
+    f.iter_mut().skip(6).zip(payload.iter().take(n)).for_each(|(o, &x)| *o = x);
     let (mut a, mut b) = (0u8, 0u8);
-    for &x in &f[2..6 + n] {
+    for &x in f.iter().skip(2).take(4 + n) {
         a = a.wrapping_add(x);
         b = b.wrapping_add(a);
     }
-    f[6 + n] = a;
-    f[7 + n] = b;
+    if let Some([x, y]) = f.get_mut(6 + n..8 + n) {
+        (*x, *y) = (a, b);
+    }
     f
 }
 
@@ -128,9 +139,8 @@ pub fn config(saver: bool) -> [u8; 32] {
     p[..4].copy_from_slice(&[0, 0x01, 0, 0]); // version 0, layers: RAM
     let keys =
         [(MSGOUT_UBX_NAV_PVT_SPI, 1), (SPIOUTPROT_NMEA, 0), (ANA_USE_ANA, 1), (PM_OPERATEMODE, 2 * u8::from(saver))];
-    for (i, (key, value)) in keys.iter().enumerate() {
-        p[4 + 5 * i..8 + 5 * i].copy_from_slice(&key.to_le_bytes());
-        p[8 + 5 * i] = *value;
+    for (chunk, (key, value)) in p.get_mut(4..).unwrap_or_default().chunks_exact_mut(5).zip(keys) {
+        put_item(chunk, key, value);
     }
     frame(0x06, 0x8a, &p)
 }
@@ -164,9 +174,8 @@ pub fn systems(choice: usize) -> [u8; 32] {
     };
     let mut p = [0u8; 24];
     p[..4].copy_from_slice(&[0, 0x01, 0, 0]); // version 0, layers: RAM
-    for (i, (key, v)) in KEYS.iter().zip(on).enumerate() {
-        p[4 + 5 * i..8 + 5 * i].copy_from_slice(&key.to_le_bytes());
-        p[8 + 5 * i] = v;
+    for (chunk, (&key, v)) in p.get_mut(4..).unwrap_or_default().chunks_exact_mut(5).zip(KEYS.iter().zip(on)) {
+        put_item(chunk, key, v);
     }
     frame(0x06, 0x8a, &p)
 }
@@ -382,8 +391,10 @@ pub fn pvt(class: u8, id: u8, p: &[u8]) -> Option<Pvt> {
     if (class, id) != (0x01, 0x07) || p.len() < 92 {
         return None;
     }
-    let u16_at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
-    let i32_at = |i: usize| i32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+    let p: &[u8; 92] = p.get(..92)?.try_into().ok()?;
+    let at = |i: usize| p.get(i).copied().unwrap_or(0);
+    let u16_at = |i: usize| u16::from_le_bytes([at(i), at(i + 1)]);
+    let i32_at = |i: usize| i32::from_le_bytes([at(i), at(i + 1), at(i + 2), at(i + 3)]);
     Some(Pvt {
         utc: (u16_at(4), p[6], p[7], p[8], p[9], p[10]),
         time_ok: p[11] & 0x07 == 0x07,

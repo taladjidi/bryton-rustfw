@@ -176,14 +176,14 @@ pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top
                 if h > 0 {
                     time.push_u32(h);
                     time.push_str(":");
-                    time.push_str(super::DIGITS[(m / 10) as usize]);
-                    time.push_str(super::DIGITS[(m % 10) as usize]);
+                    time.push_str(super::digit(m / 10));
+                    time.push_str(super::digit(m));
                 } else {
                     time.push_u32(m);
                 }
                 time.push_str(":");
-                time.push_str(super::DIGITS[(sec / 10) as usize]);
-                time.push_str(super::DIGITS[(sec % 10) as usize]);
+                time.push_str(super::digit(sec / 10));
+                time.push_str(super::digit(sec));
             }
             None => time.push_str("--"),
         }
@@ -227,7 +227,7 @@ impl Card {
         card.title.push_str(crate::MONTHS.get(usize::from(mo).wrapping_sub(1)).copied().unwrap_or(""));
         card.title.push_str(" ");
         for k in [h / 10, h % 10, 10, mi / 10, mi % 10] {
-            card.title.push_str(if k == 10 { ":" } else { super::DIGITS[usize::from(k % 10)] });
+            card.title.push_str(if k == 10 { ":" } else { super::digit(u32::from(k)) });
         }
         let num = |v: Option<u32>| {
             let mut l = Line::<10>::new();

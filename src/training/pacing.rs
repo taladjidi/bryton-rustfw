@@ -173,7 +173,7 @@ pub fn plan(secs: &[Sec], r: &Rider) -> Plan {
     }
     let mass = if r.mass.is_finite() { r.mass.max(1.0) } else { 1.0 };
     let w_full = if r.w_full.is_finite() { r.w_full.max(0.0) } else { 0.0 };
-    let budget = if r.budget.is_finite() { r.budget.clamp(0.0, w_full) } else { 0.0 };
+    let budget = if r.budget.is_finite() { r.budget.max(0.0).min(w_full) } else { 0.0 };
     let hi = cp + w_full / 60.0;
     // per section: length, k, speeds at CP and at the highest power (the clamps of the power band)
     let mut sec = [(0f32, 0f32, 0f32, 0f32); MAX];
@@ -196,7 +196,7 @@ pub fn plan(secs: &[Sec], r: &Rider) -> Plan {
             } else if v >= v_top {
                 (hi, len / v_top)
             } else {
-                ((v * (k + a * v * v) / ETA).clamp(cp, hi), len * inv)
+                ((v * (k + a * v * v) / ETA).max(cp).min(hi), len * inv)
             };
             *w = pw;
             (work, total) = (work + (pw - cp) * t, total + t);

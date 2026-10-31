@@ -172,13 +172,16 @@ impl App {
             _ => return,
         };
         let text = |stats: [Option<u16>; 2]| {
-            core::array::from_fn::<_, 2, _>(|k| {
+            let mut figures = names.iter().zip(stats);
+            core::array::from_fn::<_, 2, _>(|_| {
                 let mut l = Line::<10>::new();
-                l.push_str(names[k]);
-                l.push_str(" ");
-                match stats[k] {
-                    Some(v) => l.push_u32(u32::from(v)),
-                    None => l.push_str("--"),
+                if let Some((name, stat)) = figures.next() {
+                    l.push_str(name);
+                    l.push_str(" ");
+                    match stat {
+                        Some(v) => l.push_u32(u32::from(v)),
+                        None => l.push_str("--"),
+                    }
                 }
                 l
             })
@@ -186,8 +189,9 @@ impl App {
         let (lines, was) = (text(g.stats), old.map(|o| text(o.stats)));
         // each figure that changed, with what it was (its characters redrawn alone when the length stays)
         let line = |k: usize| {
-            let was = was.as_ref().map(|w| w[k].as_str());
-            (old.map(|o| o.stats[k]) != Some(g.stats[k])).then(|| (was.unwrap_or(""), lines[k].as_str()))
+            let (now, stat) = (lines.get(k)?, g.stats.get(k)?);
+            let was = was.as_ref().and_then(|w| w.get(k)).map(|l| l.as_str());
+            (old.and_then(|o| o.stats.get(k).copied()) != Some(*stat)).then(|| (was.unwrap_or(""), now.as_str()))
         };
         ui::draw_graph_stats(c, bx, graph_title(g.plot), [line(0), line(1)]);
     }
@@ -235,7 +239,7 @@ impl App {
         };
         let (low, high) = g.scale;
         let height = u32::from(v).saturating_sub(low) * h / high.saturating_sub(low).max(1);
-        (height.clamp(1, h), color)
+        (height.max(1).min(h), color)
     }
 
     /// A graph's scale, bottom and top, in its plot's units: power from 0 to twice the FTP, heart rate from half the
@@ -371,7 +375,11 @@ impl App {
         // the whole course's range, 30 m at least, so a flat course stays flat
         let (lo, hi) = c.course.range_dm();
         let hi = hi.max(lo + 300);
-        let h = ((i64::from(alt - lo) * i64::from(a.3)) / i64::from(hi - lo)).clamp(1, i64::from(a.3)) as u32;
+        let h = (i64::from(alt - lo) * i64::from(a.3))
+            .checked_div(i64::from(hi - lo))
+            .unwrap_or(0)
+            .max(1)
+            .min(i64::from(a.3)) as u32;
         let color = match (p.rider.is_some_and(|r| k < r), climb) {
             (true, _) => ui::DARK,
             (false, true) => ui::grade_color(grade),
@@ -408,7 +416,11 @@ impl App {
         };
         let grade = (h1 - h0) * 100 / g1.saturating_sub(g0).clamp(1, i32::MAX as u32) as i32;
         let hi = hi.max(lo + 300);
-        let h = ((i64::from(m - lo) * i64::from(a.3)) / i64::from(hi - lo)).clamp(1, i64::from(a.3)) as u32;
+        let h = (i64::from(m - lo) * i64::from(a.3))
+            .checked_div(i64::from(hi - lo))
+            .unwrap_or(0)
+            .max(1)
+            .min(i64::from(a.3)) as u32;
         ui::progress_column(p.rider, k, a.3, (h, ui::grade_color(grade)))
     }
 

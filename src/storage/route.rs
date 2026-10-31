@@ -219,7 +219,9 @@ impl Sort {
                 if key(v, root) >= key(v, child) {
                     return;
                 }
-                v.swap(root, child); // both below `end`, which is at most v.len()
+                if root < v.len() && child < v.len() {
+                    v.swap(root, child);
+                }
                 root = child;
             }
         }
@@ -236,7 +238,9 @@ impl Sort {
                 2 if self.end <= 1 => self.phase = 3,
                 2 => {
                     self.end -= 1;
-                    v.swap(0, self.end); // end < n
+                    if self.end < v.len() {
+                        v.swap(0, self.end);
+                    }
                     down(v, 0, self.end);
                     steps = steps.saturating_sub(1);
                 }

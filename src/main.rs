@@ -14,6 +14,10 @@
 #![no_std]
 #![no_main]
 #![deny(unsafe_code)] // only hw.rs may use unsafe
+#![cfg_attr(
+    not(test),
+    deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unreachable)
+)]
 
 mod board;
 
@@ -596,7 +600,7 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
         let k = left.min(hw::DMA_WORDS);
         let ready = match d.buf(cur) {
             Some(b) if k > 0 => {
-                for w in &mut b[..k] {
+                for w in b.iter_mut().take(k) {
                     *w = run.pair();
                 }
                 left -= k;
@@ -609,12 +613,12 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
         {
             let Some(rest) = d.stop().map(|rest| rest.min(n)) else { return Err(None) };
             if let Some(b) = d.buf(i) {
-                b[n - rest..n].iter().for_each(|&w| spi_word(w));
+                b.get(n - rest..n).unwrap_or(&[]).iter().for_each(|&w| spi_word(w));
             }
             if let Some((j, m)) = ready
                 && let Some(b) = d.buf(j)
             {
-                b[..m].iter().for_each(|&w| spi_word(w));
+                b.iter().take(m).for_each(|&w| spi_word(w));
             }
             return Err(Some(left));
         }
@@ -624,7 +628,7 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
         if !dma_go(d, i, n, false) {
             // not started (the stream is idle here, so not expected): these words by the CPU, and the rest
             if let Some(b) = d.buf(i) {
-                b[..n].iter().for_each(|&w| spi_word(w));
+                b.iter().take(n).for_each(|&w| spi_word(w));
             }
             return Err(Some(left));
         }
@@ -911,19 +915,26 @@ fn nrf_send(data: &[u8]) {
     }
 }
 
-/// Reads what has arrived, and while bytes keep coming waits up to 200 us for the next one: reading frees the FIFO,
-/// RTS lets the chip go on (16 bytes take 160 us at 1 Mbaud), so a burst of events comes in one call instead of 16
-/// bytes per main loop pass. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
+/// Reads what has arrived, and while bytes keep coming waits for the next one as long as
+/// [`bryton_rustfw::nrf_wait_cycles`] says (20 us, or 200 us after a full FIFO), so a long burst comes in one call
+/// instead of 16 bytes per main loop pass. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
 fn nrf_recv(buf: &mut [u8]) -> usize {
     let mut n = 0;
+    let mut run = 0; // bytes read with no empty poll between them: a byte off the wire comes alone (10 us each)
+    let mut gap = false;
     let mut last = cycles();
-    while n < buf.len() {
+    while let Some(slot) = buf.get_mut(n) {
         if rd(U_ISR) & ISR_RXFNE != 0 {
-            buf[n] = rd(U_RDR) as u8;
+            *slot = rd(U_RDR) as u8;
             n += 1;
+            run = if gap { 1 } else { run + 1 };
+            gap = false;
             last = cycles();
-        } else if n == 0 || cycles().wrapping_sub(last) > CPU_HZ / 5000 {
-            break;
+        } else {
+            if n == 0 || cycles().wrapping_sub(last) > bryton_rustfw::nrf_wait_cycles(run, CPU_HZ) {
+                break;
+            }
+            gap = true;
         }
     }
     wr(U_ICR, 0xf); // an overrun cannot happen with RTS, but never let an error flag stop reception
@@ -1005,7 +1016,7 @@ fn beep(hz: u32) {
         return;
     }
     let clk = tim1_hz();
-    let psc = clk / (hz * 65_536); // smallest prescaler that keeps the period in 16 bits
+    let psc = clk.checked_div(hz * 65_536).unwrap_or(0); // smallest prescaler that keeps the period in 16 bits
     let arr = (clk / (psc + 1) / hz).clamp(2, 65_536) - 1;
     wr(TIM1, 0);
     wr(TIM1 + 0x28, psc); // PSC
@@ -1127,8 +1138,8 @@ fn gnss_init() {
 /// Exchanges `buf` with the receiver in place (its length a multiple of 4); gives up on a stuck SPI (0xff back).
 fn gnss_transfer(buf: &mut [u8]) {
     pin_set(GNSS_CS.0, GNSS_CS.1, false);
-    for chunk in buf.chunks_exact_mut(4) {
-        let out = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for chunk in buf.as_chunks_mut::<4>().0 {
+        let out = u32::from_le_bytes(*chunk);
         let ok = wait_us(100, || rd(SPI4 + 0x14) & (1 << 1) != 0) && {
             wr(SPI4 + 0x20, out); // TXDR
             wait_us(100, || rd(SPI4 + 0x14) & 1 != 0) // RXP: 32 bits at 4 MHz take 8 us
@@ -1295,7 +1306,7 @@ fn emmc_write(index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
     };
     let limit = (100 + len / 512).min(10_000) * (CPU_HZ / 1000); // 100 ms + 1 ms a block
     let t0 = cycles();
-    let mut words = buf.chunks_exact(4);
+    let mut words = buf.as_chunks::<4>().0.iter();
     let mut next = words.next();
     let result = loop {
         let sta = rd(SD_STA);
@@ -1309,7 +1320,7 @@ fn emmc_write(index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
         if sta & STA_TXFIFOF == 0
             && let Some(w) = next
         {
-            wr(SD_FIFO, u32::from_le_bytes([w[0], w[1], w[2], w[3]])); // the word's lowest byte goes out first
+            wr(SD_FIFO, u32::from_le_bytes(*w)); // the word's lowest byte goes out first
             next = words.next();
             continue;
         }
@@ -1669,6 +1680,8 @@ const STOP: u32 = match option_env!("DIAG_STOP") {
     None => 0,
 };
 
+// const evaluation: an index past the end fails the build (and `i < b.len()` guards it)
+#[allow(clippy::indexing_slicing)]
 const fn parse_u32(s: &str) -> u32 {
     let b = s.as_bytes();
     let (mut i, mut n) = (0, 0);

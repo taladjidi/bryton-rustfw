@@ -403,7 +403,7 @@ impl Ahead {
     pub fn grade_ahead(&self, d: u32) -> Option<i32> {
         let to = d.saturating_add(crate::course::AHEAD_M).min(self.len_m());
         let len = to.checked_sub(d).filter(|&l| l >= 20)?;
-        Some((self.alt_at(to)? - self.alt_at(d)?) * 100 / len as i32)
+        ((self.alt_at(to)? - self.alt_at(d)?) * 100).checked_div(len as i32)
     }
 
     /// The position of the trace `d` m from its start.

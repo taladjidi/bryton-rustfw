@@ -227,7 +227,7 @@ impl Index {
             return;
         }
         let end = self.len.min(RIDES - 1);
-        self.rides.copy_within(at..end, at + 1);
+        crate::storage::move_within(&mut self.rides, at..end, at + 1);
         if let Some(slot) = self.rides.get_mut(at) {
             *slot = r;
         }
@@ -239,7 +239,7 @@ impl Index {
         let kept = self.rides.get(..self.len).unwrap_or(&[]);
         let same = |r: &Ride| (r.file.cluster, r.file.size, r.start) == (file.cluster, file.size, start);
         if let Some(i) = kept.iter().position(same) {
-            self.rides.copy_within(i + 1..self.len, i);
+            crate::storage::move_within(&mut self.rides, i + 1..self.len, i);
             self.len -= 1;
             self.rev = self.rev.wrapping_add(1);
         }
@@ -396,7 +396,7 @@ impl Past {
         }
         let (low, high) = self.scale;
         let height = v.saturating_sub(low) * h / high.saturating_sub(low).max(1);
-        (height.clamp(1, h), crate::ui::GREY)
+        (height.max(1).min(h), crate::ui::GREY)
     }
 }
 
@@ -433,16 +433,24 @@ impl Samples {
     }
 
     fn push(&mut self, a: u16) {
+        /// Every other entry kept, packed to the front.
+        fn halve<T: Copy>(a: &mut [T]) {
+            for i in 0..a.len() / 2 {
+                if let Some(x) = a.get(2 * i).copied()
+                    && let Some(s) = a.get_mut(i)
+                {
+                    *s = x;
+                }
+            }
+        }
         let k = self.k;
         self.k = k.wrapping_add(1);
         if !k.is_multiple_of(self.every) {
             return;
         }
         if self.len == SAMPLES {
-            for i in 0..SAMPLES / 2 {
-                self.v[i] = self.v[2 * i];
-                self.d[i] = self.d[2 * i];
-            }
+            halve(&mut self.v);
+            halve(&mut self.d);
             self.len = SAMPLES / 2;
             self.every = self.every.saturating_mul(2);
         }

@@ -6,10 +6,15 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **The radio receive's short wait (2026-10-31, main.rs `nrf_recv`, review finding 8)**: seen at the desk only (no
+  sensors there: the chip's own traffic, about 40 frames a minute; frames, resyncs and resets read by `tools/dev.py
+  peek` of a temporary diagnostic, none of either before or after). Still to see, before a ride build: a ride with the
+  owner's sensors, `tools/dev.py info` at the start and after 60 s: each kind's count after `ant` (HR, SPEED, CAD,
+  SPD+CAD, POWER...) grown by about 4 a second per sensor, `resyncs` and `radio resets` unchanged.
 - **The 100 ms ride pass without the Nordic wake (2026-10-31, app/device.rs `RIDE_POLL_MS`)**: sim and a 10 s
   profile only; needed before a ride build. Still to see: a ride with HR, power, cadence and speed plus the phone
-  connected, the ANT broadcasts per channel over 60 s against about 4.06 Hz per sensor (`tools/dev.py info`'s radio
-  counters), the watcher's resyncs and resets at 0, a sensor search started mid-ride still pairing, backlight AUTO
+  connected, the ANT broadcasts per kind over 60 s against about 4.06 Hz per sensor (`tools/dev.py info`'s `ant` counts),
+  its `resyncs` and `radio resets` unchanged, a sensor search started mid-ride still pairing, backlight AUTO
   following a light change within 2 s and THEME AUTO switching after 30 s, and a ride over two checkpoints restarted
   mid-ride (four buttons) then saved.
 - **A card that answers late at boot (2026-10-31, app/riding.rs `step_recorder`)**: sim only. Still to see: a ride

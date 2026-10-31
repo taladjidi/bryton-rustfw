@@ -228,12 +228,15 @@ impl Remote {
 
     /// Its name in the menu.
     pub fn name(self) -> &'static str {
-        ["NONE", "NEXT PAGE", "PREV PAGE", "LAP", "START", "PLAY", "NEXT TRK", "PREV TRK"][self as usize]
+        ["NONE", "NEXT PAGE", "PREV PAGE", "LAP", "START", "PLAY", "NEXT TRK", "PREV TRK"]
+            .get(self as usize)
+            .copied()
+            .unwrap_or("")
     }
 
     /// The action numbered `n` (its low 3 bits).
     pub fn from_bits(n: u32) -> Remote {
-        Self::ALL[(n & 7) as usize]
+        Self::ALL.get((n & 7) as usize).copied().unwrap_or(Remote::None)
     }
 
     /// The action stock's sensor ini keeps as `n` for a Di2 press (`leftpress`...: 0 none, 1 lap, 2 start / stop,
