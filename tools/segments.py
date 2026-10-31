@@ -40,7 +40,6 @@ import struct
 import sys
 import tempfile
 import time
-import urllib.error
 from pathlib import Path
 
 try:
@@ -818,7 +817,7 @@ def synth_ride(path, day, lead, shared, speed, back=False, off=0, detour=None):
     xs += [(shared + 1500 * i / 300, lead * 1500 * i / 300) for i in range(1, 301)]  # lead-out
     if back:
         xs = xs[::-1]  # the same road, the other way
-    pts, d, t = [], 0.0, []
+    pts, d = [], 0.0
     for k, (x, y) in enumerate(xs):
         if k:
             d += math.hypot(x - xs[k - 1][0], y - xs[k - 1][1])
