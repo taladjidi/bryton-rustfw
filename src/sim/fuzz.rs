@@ -5429,7 +5429,7 @@ fn climbs_done_views() {
 /// `\Rustfw\mga.ubx` (drivers/mga.rs `Ano`): a file the computer put on the volume, read a sector at a time. Built
 /// from real MGA-ANO frames of several days, with frames of other classes and ids, flipped bytes (bad checksums),
 /// cut frames, wrong lengths, noise and a short last sector; the reader must never panic, and every frame it gives
-/// must be a whole MGA-ANO of the wanted day with a good checksum. The counts assert the fuzz reached the reader:
+/// must be a whole MGA-ANO dated up to the wanted day with a good checksum. The counts assert the fuzz reached the reader:
 /// frames given, files that gave none, frames damaged or of another class on purpose.
 #[test]
 fn offline_assist_file() {
@@ -5440,8 +5440,9 @@ fn offline_assist_file() {
         let mut r = xorshift(seed * 7919);
         let day = (26u8, 10u8, 20 + (r() % 4) as u8);
         let mut file: Vec<u8> = Vec::new();
-        for _ in 0..r() % 120 {
-            let d = (day.0, day.1, 20 + (r() % 4) as u8);
+        let count = r() % 120;
+        for i in 0..count {
+            let d = (day.0, day.1, 20 + (i * 4 / count.max(1)) as u8); // in date order, as the service writes it
             let mut f = ano((r() % 4) as u8, (r() % 40) as u8, d).to_vec();
             match r() % 8 {
                 0 => {
@@ -5461,7 +5462,7 @@ fn offline_assist_file() {
             file.extend(f);
         }
         let mut a = Ano::new();
-        a.start((2026, day.1, day.2));
+        a.start((2026, day.1, day.2), 0);
         let mut n = 0;
         while !a.done() {
             while let Some(f) = a.take() {
@@ -5470,7 +5471,7 @@ fn offline_assist_file() {
                 assert_eq!(whole.len(), 1, "one whole frame with a good checksum");
                 let (c, i, q) = &whole[0];
                 assert_eq!((*c, *i, q.len()), (0x13, 0x20, 76));
-                assert_eq!((q[4], q[5], q[6]), day, "the wanted day");
+                assert!((q[4], q[5], q[6]) <= day, "never a date after today");
                 n += 1;
             }
             if let Some((off, buf)) = a.want() {

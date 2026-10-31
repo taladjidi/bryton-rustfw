@@ -28,8 +28,13 @@ fn with_file(bytes: &[u8]) -> Vec<u8> {
 /// A unit started on `image`, run well past the receiver's start-up; today in UTC (the RTC runs on UTC + 2 h) as
 /// year since 2000, month, day.
 fn unit(image: Vec<u8>, systems: usize) -> (Sim, App, (u8, u8, u8)) {
+    unit_with(image, systems, Some(8)) // the RTC's offset from UTC learnt at an earlier fix
+}
+
+fn unit_with(image: Vec<u8>, systems: usize, offset: Option<i8>) -> (Sim, App, (u8, u8, u8)) {
     let mut sim = Sim::new(9, 0, 0);
     sim.own_settings();
+    [sim.backup[17], sim.backup[18]] = crate::gnss::Aid { offset_15min: offset, pos: None }.to_words();
     sim.emmc.image = image;
     let mut app = App::start(&mut sim, None);
     app.settings.gnss_systems = systems;
@@ -79,8 +84,8 @@ fn todays_offline_messages_go_to_the_receiver_paced() {
         for sv in 1..=32u8 {
             file.extend(ano(0, sv, (probe.0, probe.1, day)));
         }
+        file.extend(ano(2, 7, (probe.0, probe.1, day))); // the file is in date order
     }
-    file.extend(ano(2, 7, (probe.0, probe.1, probe.2)));
     let (sim, app, today) = unit(with_file(&file), 0);
     assert_eq!(today, probe);
     let got = &sim.gnss.ano;
@@ -115,4 +120,42 @@ fn a_missing_stale_or_damaged_file_sends_nothing_and_is_not_a_problem() {
         assert!(sim.gnss.ano.is_empty(), "{name}");
         assert!(app.gps.ano.done(), "{name}: given up");
     }
+}
+
+/// GPS POWER and GNSS change in the same pass: both frames go out; a GNSS change during a ride waits for its end.
+#[test]
+fn both_changes_go_out_and_the_systems_wait_for_the_ride_to_end() {
+    let (mut sim, mut app, _) = unit(crate::fat::tests::image(), 0);
+    sim.gnss.signals.clear();
+    app.settings.gnss_systems = 2;
+    app.settings.gps_power = GpsPower::Saver;
+    app.gps.resys = true;
+    app.gps.reconfig = true;
+    run(&mut sim, &mut app, 500);
+    assert_eq!(on(&sim), [1, 1, 0, 0], "the systems");
+    assert_eq!(sim.gnss.pm_mode, 2, "and the power mode");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 2000);
+    sim.gnss.signals.clear();
+    app.settings.gnss_systems = 1;
+    app.gps.resys = true;
+    run(&mut sim, &mut app, 2000);
+    assert!(sim.gnss.signals.is_empty(), "not while recording");
+    app.press(&mut sim, Press::Short(Key::Start)); // paused
+    app.end_ride();
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(on(&sim), [1, 0, 0, 0], "at the ride's end");
+}
+
+/// Without a learnt offset the RTC's date may be a day off UTC: tomorrow's messages are taken too.
+#[test]
+fn without_an_offset_a_day_of_slack() {
+    let probe = unit(crate::fat::tests::image(), 0).2;
+    let mut file = Vec::new();
+    for day in [probe.2, probe.2 + 1] {
+        file.extend(ano(0, 1, (probe.0, probe.1, day)));
+    }
+    let days = |offset| unit_with(with_file(&file), 0, offset).0.gnss.ano.iter().map(|a| a.5).collect::<Vec<_>>();
+    assert_eq!(days(Some(8)), [probe.2]);
+    assert_eq!(days(None), [probe.2 + 1]);
 }

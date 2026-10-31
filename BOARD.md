@@ -650,7 +650,9 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
 - **GNSS systems** (this firmware, GNSS SYSTEMS): UBX-CFG-VALSET to the RAM layer with CFG-SIGNAL-GPS_ENA 0x1031001f,
   GAL_ENA 0x10310021, BDS_ENA 0x10310022, GLO_ENA 0x10310025 (u-blox M10 SPG 5.10 interface description
   UBX-21035062, CFG-SIGNAL; ids cross-checked with pyubx2's `ubxtypes_configdb.py`; the receiver is an M10, so the
-  M8's UBX-CFG-GNSS does not apply). Sent after the configuration at power-up and again when the setting changes.
+  M8's UBX-CFG-GNSS does not apply). Sent with the configuration at power-up and again when the setting changes, between rides only (inferred: a change
+  may restart the receiver's GNSS engine and lose the fix; not checked in UBX-21035062). DEFAULT is GPS + Galileo +
+  BeiDou B1I, the MAX-M10S data sheet's (UBX-20035208 R08, table 15); it is sent too, in the RAM layer, unconfirmed.
   Not read back on the unit yet (status.md).
 - **AssistNow Offline**: after the time and position, the firmware streams the UBX-MGA-ANO messages (class 0x13,
   id 0x20, 84 bytes) dated today from `\Rustfw\mga.ubx` (written by `tools/assist.py`), one every 100 ms, without

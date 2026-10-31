@@ -136,15 +136,18 @@ pub fn config(saver: bool) -> [u8; 32] {
 }
 
 /// The GNSS SYSTEMS choices ([`systems`]'s argument): the receiver's default (GPS, Galileo and BeiDou B1I; stock leaves
-/// it so), GPS alone, GPS and Galileo, GPS, Galileo and GLONASS. The M10 tracks at most three systems at once; the
-/// data sheet (MAX-M10S UBX-20035208 R08, table 15) puts GPS alone at 7.5 mA tracking, GPS + Galileo at 8, and the
-/// default at 9.5 (continuous, 3 V, 1 Hz).
+/// it so), GPS alone, GPS and Galileo, GPS, Galileo and GLONASS. The default set is the MAX-M10S data sheet's
+/// (UBX-20035208 R08, table 15: "GPS + Galileo + BeiDou B1I"); that stock left it so is seen on the unit (BOARD.md
+/// 13), but the set in force is not read back, so `systems(0)` is sent anyway (RAM layer) and is inferred to change
+/// nothing. Currents, MAX-M10S table 15, as docs/power.md GNSS receiver: GPS + Galileo draws 1.6 mA less than the
+/// default, GPS alone 2.2 mA less (estimates from the module's, not this board's).
 pub const SYSTEMS: [&str; 4] = ["DEFAULT", "GPS", "GPS+GAL", "GPS+GAL+GLO"];
 
 /// UBX-CFG-VALSET to the RAM layer: which GNSS the receiver tracks, by [`SYSTEMS`] index (the CFG-SIGNAL-GPS_ENA,
 /// GAL_ENA, BDS_ENA and GLO_ENA keys of u-blox's M10 SPG 5.10 interface description UBX-21035062, CFG-SIGNAL; key
 /// ids 0x1031001f, 0x10310021, 0x10310022, 0x10310025, cross-checked with pyubx2's `ubxtypes_configdb.py`). The
-/// receiver restarts its GNSS engine when they change. SBAS and QZSS are left as they are.
+/// receiver may restart its GNSS engine when they change (inferred: UBX-21035062's CFG-SIGNAL text was not
+/// checked for it), so the app sends them between rides only. SBAS and QZSS are left as they are.
 ///
 /// ```
 /// use bryton_rustfw::gnss::systems;

@@ -180,17 +180,27 @@ impl App {
         let saver = self.gnss_saver();
         let config = gnss::config(saver);
         let changed = core::mem::take(&mut self.gps.reconfig) || saver != self.gps.saver;
-        let resys = core::mem::take(&mut self.gps.resys);
         if self.gps.sent == 0 || changed {
             self.gps.saver = saver;
         }
+        // a change of GNSS SYSTEMS waits for the end of a ride (the receiver may drop its fix while it changes
+        // satellite systems: inferred, see gnss::systems); it goes with a power mode change if both are due
+        let resys = self.gps.resys && self.ride.state() == ride::State::Idle;
         if self.gps.sent > 0 && (changed || resys) {
-            return Some(one(if changed { config } else { gnss::systems(self.settings.gnss_systems) }));
+            let sys = gnss::systems(self.settings.gnss_systems);
+            self.gps.resys &= !resys;
+            if changed && resys {
+                let mut m = one(config);
+                m.0[32..64].copy_from_slice(&sys);
+                return Some((m.0, 2));
+            }
+            return Some(one(if changed { config } else { sys }));
         }
         loop {
             self.gps.sent = self.gps.sent.saturating_add(1);
             match self.gps.sent {
                 1 => {
+                    self.gps.resys = false; // sent with the configuration
                     // both in one pass: the start-up takes no longer than before the systems were sent
                     let (mut m, sys) = (one(config), gnss::systems(self.settings.gnss_systems));
                     m.0[32..64].copy_from_slice(&sys);
@@ -203,7 +213,9 @@ impl App {
                     let (tr, dr) = b.rtc();
                     let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
                     let utc = from_epoch_s(epoch_s((y, mo, d, h, m, s)) - i64::from(offset) * 900);
-                    self.gps.ano.start((utc.0, utc.1, utc.2)); // the day's orbits follow the position
+                    // without the learnt offset the RTC's date may be a day off UTC: a day of slack
+                    self.gps.ano.start((utc.0, utc.1, utc.2), u8::from(self.gps.aid.offset_15min.is_none()));
+                    self.gps.ano_file = None;
                     return Some(one(gnss::mga_time(utc, acc_s)));
                 }
                 3 => {
@@ -237,10 +249,14 @@ impl App {
             }
             let (at, buf) = self.gps.ano.want()?;
             let mut d = emmc::Volume(&mut self.emmc, b);
+            let file = &mut self.gps.ano_file;
             let n = fat::Fat::mount(&mut d)
                 .and_then(|mut fat| {
-                    let f = fat.open(&mut d, mga::FILE)?;
-                    fat.read_at(&mut d, &f, at, buf)
+                    let (f, seek) = match file {
+                        Some(fs) => fs,
+                        None => file.insert((fat.open(&mut d, mga::FILE)?, fat::Seek::new())),
+                    };
+                    fat.read_from(&mut d, f, at, buf, seek)
                 })
                 .unwrap_or(0);
             self.gps.ano.filled(n);

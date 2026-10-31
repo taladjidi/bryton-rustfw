@@ -135,6 +135,9 @@ pub(crate) struct Gps {
     /// AssistNow Offline: the card's file being read and sent ([`mga::Ano`]), and the passes to wait between messages.
     pub(crate) ano: mga::Ano,
     pub(crate) ano_gap: u8,
+    /// The open `mga.ubx` and where the last read ended (one open, then reads from there: no walk of the FAT chain
+    /// from the start for each sector).
+    pub(crate) ano_file: Option<(fat::File, fat::Seek)>,
     /// The power mode the last configuration sent (saver: cyclic tracking).
     pub(crate) saver: bool,
     /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
@@ -167,6 +170,7 @@ impl Gps {
             resys: false,
             ano: mga::Ano::new(),
             ano_gap: 0,
+            ano_file: None,
             saver: false,
             wait: 0,
             off: false,

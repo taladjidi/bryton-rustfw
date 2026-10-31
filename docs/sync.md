@@ -165,9 +165,9 @@ u-blox Thingstream account gives an AssistNow token. Keep it outside the reposit
 (`UBLOX_ASSISTNOW_TOKEN`) or in `~/.config/bryton-rustfw/assist.json` (`{"token": "..."}`, `chmod 600`). Then, with
 the unit mounted as a drive:
 
-    python3 tools/assist.py            # downloads a week of predictions, keeps today's on, copies to \Rustfw\mga.ubx
+    python3 tools/assist.py            # downloads a week of predictions for GPS, Galileo and BeiDou (the receiver's default set), copies to \Rustfw\mga.ubx
 
-The file lasts the week; run it again from time to time (weekly is enough). The token is never printed or written to the
+Add `--gnss gps,gal,glo` only with BIKE > GNSS set to GPS+GAL+GLO. The file is kept in date order (the firmware stops reading at a date past today). It lasts the week; run it again from time to time (weekly is enough). The token is never printed or written to the
 unit. Stock's own file is `\System\mgaoffline.ubx`, which its phone app downloads; this firmware reads its own copy and
 never touches stock's.
 

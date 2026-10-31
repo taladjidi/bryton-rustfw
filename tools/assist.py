@@ -3,7 +3,7 @@
 them on the mounted unit as \\Rustfw\\mga.ubx, which the firmware streams to the receiver at its start (the messages
 of that day only; src/drivers/mga.rs).
 
-    python3 tools/assist.py [--volume /Volumes/BRYTON] [--gnss gps,gal,glo] [--weeks 1] [--days 1]
+    python3 tools/assist.py [--volume /Volumes/BRYTON] [--gnss gps,gal,bds] [--weeks 1] [--days 1]
     python3 tools/assist.py selftest        # no network (check.sh)
 
 The token is the rider's: u-blox's Thingstream portal (free plan) gives one for AssistNow. It is read from the
@@ -16,12 +16,13 @@ format=mga;period=<weeks>;resolution=<days>. The query is inferred from u-blox's
 (the portal's documentation is the authority; a changed parameter shows as an HTTP error here, not on the unit). The
 answer is a concatenation of UBX-MGA-ANO messages (class 0x13, id 0x20, 76-byte payload: type, version, svId,
 gnssId, year since 2000, month, day, reserved, 64 data bytes, 4 reserved; u-blox M10 SPG 5.10 interface
-description UBX-21035062). This tool keeps the whole frames with a good checksum dated from today on, and nothing
-else, so the file on the unit stays small (the firmware reads at most 512 KB of it). It copies the file with a
+description UBX-21035062). This tool keeps the whole frames with a good checksum from the newest date up to today on, in date order (the
+firmware relies on it: it stops reading at a date past the one it sends), and nothing else, so the file on the unit stays small (the firmware reads at most 512 KB of it). It copies the file with a
 temporary name, reads it back and compares it, and only then renames it (the USB link can drop).
 """
 import argparse
 import datetime
+import fcntl
 import json
 import os
 import sys
@@ -82,24 +83,41 @@ def frames(data):
 
 
 def trim(data, today):
-    """The frames dated `today` (a datetime.date) or later, in the file's order."""
-    return b''.join(f for (y, mo, d), f in frames(data) if (y, mo, d) >= (today.year, today.month, today.day))
+    """The frames from the newest date up to `today` (a datetime.date) on, sorted by date (stable: the order within a
+    date is the service's). A 2 or 3 day resolution has no message dated today itself."""
+    fs = sorted(frames(data), key=lambda x: x[0])
+    t = (today.year, today.month, today.day)
+    best = max((d for d, _ in fs if d <= t), default=None)
+    if best is None or (today - datetime.date(*best)).days > 3:  # as the firmware: older than a 3 day resolution is stale
+        return b''
+    return b''.join(f for d, f in fs if d >= best)
 
 
 def put(volume, data):
-    """Writes Rustfw/mga.ubx under `volume` through a temporary name, compares it read back, then renames."""
+    """Writes Rustfw/mga.ubx under `volume` through a temporary name, flushes the OS cache, compares it read back, then
+    renames. The temporary file is removed on any failure, and a stale one from an earlier run is cleaned first."""
     folder = os.path.join(volume, 'Rustfw')
     os.makedirs(folder, exist_ok=True)
     tmp, final = os.path.join(folder, 'mga.tmp'), os.path.join(folder, 'mga.ubx')
-    with open(tmp, 'wb') as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    with open(tmp, 'rb') as f:
-        if f.read() != data:
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    try:
+        with open(tmp, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        if hasattr(os, 'sync'):
+            os.sync()
+        with open(tmp, 'rb') as f:
+            if hasattr(fcntl, 'F_NOCACHE'):
+                fcntl.fcntl(f.fileno(), fcntl.F_NOCACHE, 1)  # macOS: read it from the drive, not the cache
+            if f.read() != data:
+                raise OSError('the copy read back differently: not used')
+        os.replace(tmp, final)
+    except BaseException:
+        if os.path.exists(tmp):
             os.remove(tmp)
-            raise OSError('the copy read back differently: not used')
-    os.replace(tmp, final)
+        raise
     return final
 
 
@@ -141,8 +159,34 @@ def selftest():
             raise AssertionError(args)
         except ValueError:
             pass
-    os.environ['UBLOX_ASSISTNOW_TOKEN'] = ' abc '
-    assert token() == 'abc'
+    # 3-day resolution: dates 20, 23, 26; on the 25th the 23rd on, in date order
+    shuffled = b''.join(ano(1, 26 - 3 * k, (2026, 10, 26 - 3 * k)) for k in range(3))
+    kept3 = trim(shuffled, dt.date(2026, 10, 25))
+    assert [d for d, _ in frames(kept3)] == [(2026, 10, 23), (2026, 10, 26)], frames(kept3)
+    # the token: environment first; the private file only if mode 0600; never printed
+    import io
+    import contextlib
+    global CONFIG
+    os.environ.pop('UBLOX_ASSISTNOW_TOKEN', None)
+    out = io.StringIO()
+    with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        CONFIG = os.path.join(td, 'assist.json')
+        assert token() is None, 'no file'
+        with open(CONFIG, 'w') as f:
+            json.dump({'token': 't'}, f)
+        os.chmod(CONFIG, 0o644)
+        assert token() is None, 'readable by others'
+        os.chmod(CONFIG, 0o600)
+        assert token() == 't'
+        os.environ['UBLOX_ASSISTNOW_TOKEN'] = ' abc '
+        assert token() == 'abc'
+        # a stale temporary file is cleaned and a failed copy leaves none
+        os.makedirs(os.path.join(td, 'v', 'Rustfw'))
+        stale = os.path.join(td, 'v', 'Rustfw', 'mga.tmp')
+        open(stale, 'wb').write(b'old')
+        put(os.path.join(td, 'v'), kept)
+        assert not os.path.exists(stale)
+    assert 'abc' not in out.getvalue() and '"t"' not in out.getvalue(), 'the token is never printed'
     print('assist.py selftest ok')
 
 
@@ -150,7 +194,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('cmd', nargs='?', default='fetch', choices=['fetch', 'selftest'])
     ap.add_argument('--volume', help='the mounted BRYTON volume (default /Volumes/BRYTON if there; else out/mga.ubx)')
-    ap.add_argument('--gnss', default='gps,gal,glo', help='systems asked for (default gps,gal,glo)')
+    ap.add_argument('--gnss', default='gps,gal,bds', help='systems asked for: the receiver\'s default set (add glo for GPS+GAL+GLO)')
     ap.add_argument('--weeks', type=int, default=1, help='weeks of predictions, 1 to 5 (default 1)')
     ap.add_argument('--days', type=int, default=1, help='days between predictions, 1 to 3 (default 1)')
     a = ap.parse_args()
