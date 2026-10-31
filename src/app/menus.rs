@@ -228,6 +228,7 @@ impl App {
                 let n = self.plan.calendar.iter().count().max(1);
                 match i {
                     _ if i == n => Some(Row::RampTest),
+                    _ if i == n + 1 => Some(Row::RideCourse),
                     0 if self.plan.calendar.get(0).is_none() => Some(Row::Empty("NONE PLANNED")),
                     _ => self.plan.calendar.get(i).map(|_| Row::Workout(i)),
                 }
@@ -539,6 +540,7 @@ impl App {
                 push_hm(&mut value, self.plan.workout.total_s());
                 color = ui::GREEN;
             }
+            Row::RideCourse => value.push_str("SIM"),
             Row::RampTest => {
                 value.push_str("FTP ");
                 value.push_u32(u32::from(self.settings.ftp));
@@ -777,6 +779,7 @@ impl App {
             Some(Row::Course(k)) => self.follow_course(k),
             Some(Row::WorkoutStart) => self.start_workout(0),
             Some(Row::RampTest) => self.start_ramp(),
+            Some(Row::RideCourse) => self.pick_course(b),
             Some(Row::Step(k)) => self.start_workout(k),
             Some(Row::Drive) if self.emmc.lent() => self.drive_off(),
             Some(Row::Drive) => {

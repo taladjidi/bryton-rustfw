@@ -572,6 +572,8 @@ pub enum Row {
     WorkoutStart,
     /// The FTP ramp test (ramp.rs, app/ramp.rs): Select starts it, with a trainer heard.
     RampTest,
+    /// RIDE A COURSE (app/courses.rs): Select lists the courses; the one picked is ridden on the trainer.
+    RideCourse,
     /// Step `n` of the workout shown: Select starts the workout from it.
     Step(usize),
     /// Course `n` of the list ([`crate::storage::course_file::List`]): Select follows it, or stops following it.
@@ -640,6 +642,7 @@ impl Row {
             Row::Stock(r) => r.label(),
             Row::WorkoutStart => "START",
             Row::RampTest => "RAMP TEST",
+            Row::RideCourse => "RIDE A COURSE",
             Row::Phone(r) => r.label(),
             Row::Pick(field) => field.label(),
             Row::Ride(r) => match r {

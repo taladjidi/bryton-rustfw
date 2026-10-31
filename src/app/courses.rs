@@ -43,6 +43,7 @@ impl App {
     #[inline(never)]
     pub(crate) fn open_courses(&mut self, b: &mut impl Board) {
         let Some(c) = self.courses.as_deref_mut() else { return self.say("NO COURSE") };
+        c.ride_it = false;
         if c.open(&mut emmc::Volume(&mut self.emmc, b)).is_err() || c.list.is_empty() {
             self.say("NO COURSE");
         }
@@ -55,17 +56,79 @@ impl App {
         // another map (the course in or out of the fit): fitted until "+", not a zoom from before that waited for
         // the fit to grow (review)
         (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
-        if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) {
+        if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) && !c.ride_it {
             return self.stop_course();
         }
+        c.base_m = None;
         c.load(k);
         self.say("READING COURSE");
+    }
+
+    /// Backing out of COURSES ends a pending RIDE A COURSE: the next course followed is an ordinary one.
+    pub(crate) fn drop_ride_it(&mut self) {
+        if let (Screen::Menu(Menu::Courses, _), Some(c)) = (self.screen, self.courses.as_deref_mut()) {
+            c.ride_it = false;
+        }
+    }
+
+    /// RIDE A COURSE (WORKOUTS): lists the courses; the one picked is ridden on the trainer ([`App::begin_virtual`]).
+    pub(crate) fn pick_course(&mut self, b: &mut impl Board) {
+        if !self.trainer_heard() {
+            return self.say("NEEDS TRAINER");
+        }
+        if self.workout_running() {
+            return self.say("WORKOUT RUNNING");
+        }
+        self.open_courses(b);
+        if let Some(c) = self.courses.as_deref_mut() {
+            c.ride_it = true;
+        }
+    }
+
+    /// The course picked is loaded: the ride starts if none runs (indoor, the trainer being heard), and the rider is
+    /// placed on the course by the ride's distance (the trainer's speed) from here ([`App::virtual_course_second`]).
+    fn begin_virtual(&mut self) {
+        self.ftms_retry();
+        if self.ride.state() == ride::State::Idle {
+            self.start_pause();
+        }
+        self.choose_profile();
+        let dist = self.ride.dist_m();
+        if let Some(c) = self.courses.as_deref_mut() {
+            (c.at, c.base_m) = (course::Tracker::new(), Some(dist));
+        }
+    }
+
+    /// Once a second in a virtual ride: the ride's distance, from the trainer's speed, is the place on the course (no fix indoors), and the
+    /// course's end says DONE once, with the distance and the time. The ride goes on; the trainer is let go by the
+    /// grade (none in the last 20 m).
+    pub(crate) fn virtual_course_second(&mut self) {
+        // no longer an indoor ride (the trainer silent for TRAINER_QUIET_S, or set by hand): the GPS places the rider
+        let (dist, timer) = (self.ride.dist_m(), self.ride.timer_s());
+        let off = self.ride.state() == ride::State::Idle || !self.indoors();
+        let Some(c) = self.courses.as_deref_mut() else { return };
+        let Some(base) = c.base_m else { return };
+        if c.on.is_none() || off {
+            return c.base_m = None;
+        }
+        let (len, before) = (c.course.len_m(), c.at.along_m);
+        c.at.along_m = dist.saturating_sub(base).min(len);
+        c.at.off_m = Some(0);
+        if before < len && c.at.along_m == len {
+            let mut l = Line::<20>::new();
+            l.push_str("DONE ");
+            ui::card::push_km(&mut l, len);
+            l.push_str(" KM ");
+            push_duration(&mut l, timer, false);
+            self.say_as(l.as_str(), Banner::Ride);
+            self.tones.play(&Self::STEP_TONE);
+        }
     }
 
     /// Stops following the course (its row in COURSES, STOP FOLLOWING in the ride menu); the map fits again.
     pub(crate) fn stop_course(&mut self) {
         let Some(c) = self.courses.as_deref_mut().filter(|c| c.on.is_some()) else { return };
-        c.on = None;
+        (c.on, c.base_m) = (None, None);
         (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
         self.say("COURSE OFF");
     }
@@ -114,6 +177,9 @@ impl App {
         match c.step(&mut emmc::Volume(&mut self.emmc, b), Self::COURSE_BYTES) {
             storage::course_file::Progress::Loaded(true) => {
                 self.say("COURSE ON");
+                if self.courses.as_deref_mut().is_some_and(|c| core::mem::take(&mut c.ride_it)) {
+                    self.begin_virtual();
+                }
                 // from the list, the course page (as stock's route details lead to riding); a rider who has gone
                 // elsewhere while it was read stays there
                 if matches!(self.screen, Screen::Menu(Menu::Courses, _)) {
@@ -121,7 +187,12 @@ impl App {
                     self.show(b);
                 }
             }
-            storage::course_file::Progress::Loaded(false) => self.say("NOT A COURSE"),
+            storage::course_file::Progress::Loaded(false) => {
+                if let Some(c) = self.courses.as_deref_mut() {
+                    c.ride_it = false;
+                }
+                self.say("NOT A COURSE")
+            }
             _ => {}
         }
         // the named points along the course: a bounded step of a scan, once the course is on (an extra)

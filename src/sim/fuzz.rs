@@ -1756,7 +1756,18 @@ fn menu_tree_by_chance() {
             }
             let (in_menu, avg) = (matches!(app.screen(), Screen::Menu(..)), app.settings.wkt_avg);
             let snap = (app.sw.meta, app.pages);
+            // RIDE A COURSE needs a trainer heard: for the one press on the workout list only (a trainer heard mid
+            // walk would change other screens between two redraws)
+            let heard = seed % 4 == 0 && matches!(app.screen(), Screen::Menu(Menu::Workouts, _));
+            if heard {
+                app.radio.heard_ms[crate::sensors::Kind::Trainer as usize] = 0;
+            }
             app.input(&mut sim, i);
+            if heard {
+                app.radio.heard_ms[crate::sensors::Kind::Trainer as usize] = u32::MAX;
+            }
+            *reached.entry("ride a course picked".into()).or_default() +=
+                u32::from(app.courses.as_deref().is_some_and(|c| c.ride_it));
             if matches!(app.screen(), Screen::End(_)) && b % 4 != 0 {
                 // SAVE most times, as Start held (or END RIDE, asked) did before the end-ride screen: a ride ended
                 // now and then leaves the walk the menus off a ride (the end-ride screen: end_ride_screen_by_chance)
@@ -1829,6 +1840,7 @@ fn menu_tree_by_chance() {
         }
     }
     std::println!("reached: {reached:?}; {acts} stored by an act, {rides} ride cards");
+    assert!(reached["ride a course picked"] > 0, "pick_course reached: {reached:?}");
     let all = [
         "Main",
         "Settings",

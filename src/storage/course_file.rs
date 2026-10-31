@@ -266,6 +266,10 @@ pub struct Courses {
     pub at: Tracker,
     /// The course followed (its file); None: none.
     pub on: Option<File>,
+    /// RIDE A COURSE was chosen: the next course loaded starts a trainer ride on it (app/courses.rs).
+    pub ride_it: bool,
+    /// Some: a virtual ride on the course, from this ride distance (m); the trainer's distance places the rider.
+    pub base_m: Option<u32>,
     job: Job,
 }
 
@@ -278,7 +282,15 @@ impl Default for Courses {
 impl Courses {
     /// Nothing listed or followed.
     pub const fn new() -> Self {
-        Courses { list: List::new(), course: Course::new(), at: Tracker::new(), on: None, job: Job::Idle }
+        Courses {
+            list: List::new(),
+            course: Course::new(),
+            at: Tracker::new(),
+            on: None,
+            ride_it: false,
+            base_m: None,
+            job: Job::Idle,
+        }
     }
 
     /// Lists the course files (their folders only: quick); their lengths are measured by the next steps.

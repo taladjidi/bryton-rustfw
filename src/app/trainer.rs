@@ -114,7 +114,7 @@ impl App {
             .courses
             .as_deref()
             .filter(|c| c.on.is_some() && self.ride.state() != ride::State::Idle)
-            .and_then(|c| c.course.grade_ahead(self.ride.dist_m()))
+            .and_then(|c| c.course.grade_ahead(self.ride.dist_m().saturating_sub(c.base_m.unwrap_or(0))))
             .map(|g| {
                 (g * 10 * i32::from(SLOPE_SCALES.get(self.settings.slope_scale).copied().unwrap_or(100)) / 100)
                     .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16

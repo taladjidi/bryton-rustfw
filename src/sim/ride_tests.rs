@@ -211,7 +211,7 @@ fn empty_workouts_say_so_in_a_row() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0));
-    assert_eq!(app.rows(Menu::Workouts), 2, "the row that says none, and the ramp test");
+    assert_eq!(app.rows(Menu::Workouts), 3, "the row that says none, the ramp test and RIDE A COURSE");
     let (label, _, color) = app.menu_row(Menu::Workouts, 0).unwrap();
     assert_eq!((label.as_str(), color), ("NONE PLANNED", ui::GREY));
     run(&mut sim, &mut app, 6000);

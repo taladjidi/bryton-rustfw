@@ -1537,3 +1537,119 @@ fn a_lap_on_the_trainer_screen_redraws_the_target_at_once() {
     // what the panel was told equals what the screen means now (the LAP banner over the top is not the trainer's)
     assert_eq!(app.tlink.shown, app.with_trainer_now(ui::trainer::shown));
 }
+
+/// WORKOUTS > RIDE A COURSE > the hill: the ride starts indoors on the trainer, which gets the course grades; the
+/// course page tracks the trainer distance; the end says DONE once with the length and the time.
+#[test]
+fn ride_a_course_from_the_workout_list() {
+    let (mut sim, mut app) = unit();
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    run(&mut sim, &mut app, 4000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    super::tests::to_row(&mut sim, &mut app, Row::RideCourse);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..super::tests::hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 200_000);
+    assert_eq!(app.screen(), Screen::Ride(COURSE));
+    assert!(app.indoors(), "an indoor ride");
+    assert!(commands(&sim).iter().any(|p| p[0] == 0x33), "the course grades go to the trainer");
+    let (len, along) = app.on_course().map(|(c, at)| (c.len_m(), at.along_m)).unwrap();
+    assert!(along > 1000 && along < len, "placed by the trainer distance: {along} of {len}");
+    sim.save("trainer_ride_a_course");
+    let mut done = 0;
+    for _ in 0..400 {
+        run(&mut sim, &mut app, 10_000);
+        done += usize::from(app.notes.text.as_str().starts_with("DONE "));
+    }
+    assert!(done > 0, "DONE said: {:?}", app.notes.text.as_str());
+    assert!(app.on_course().is_some_and(|(_, at)| at.along_m >= len));
+    assert_eq!(commands(&sim).last().map(|p| p[0]), Some(0x30), "the trainer is let go at the end");
+}
+
+/// WORKOUTS > RIDE A COURSE > the hill, then `secs` seconds of the ride.
+fn ride_the_hill(secs: u64) -> (Sim, App) {
+    let (mut sim, mut app) = unit();
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    run(&mut sim, &mut app, 4000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    super::tests::to_row(&mut sim, &mut app, Row::RideCourse);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..super::tests::hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, secs * 1000);
+    (sim, app)
+}
+
+/// RIDE A COURSE without a trainer heard says so and lists nothing.
+#[test]
+fn ride_a_course_needs_a_trainer() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.pick_course(&mut sim);
+    assert_eq!(app.notes.text.as_str(), "NEEDS TRAINER");
+    assert!(!matches!(app.screen(), Screen::Menu(Menu::Courses, _)));
+}
+
+/// A pause holds the rider's place; a trainer silent past TRAINER_QUIET_S ends the indoor ride, so the virtual one:
+/// the place stays, the GPS matcher is not fed (no OFF COURSE), the course stays followed.
+#[test]
+fn a_pause_and_a_dropout_leave_the_place() {
+    let (mut sim, mut app) = ride_the_hill(100);
+    assert!(app.courses.as_deref().unwrap().base_m.is_some());
+    let at = |app: &App| app.on_course().unwrap().1.along_m;
+    let a = at(&app);
+    app.press(&mut sim, Press::Short(Key::Start)); // paused
+    run(&mut sim, &mut app, 20_000);
+    assert_eq!(at(&app), a, "paused");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 10_000);
+    let b = at(&app);
+    assert!(b > a);
+    sim.nordic.sensors.clear(); // the trainer goes silent
+    run(&mut sim, &mut app, 150_000 /* past TRAINER_QUIET_S, 120 s */);
+    let c = app.courses.as_deref().unwrap();
+    assert!(!app.indoors() && c.base_m.is_none(), "back to ROAD, the virtual ride over");
+    assert!(c.on.is_some() && at(&app) >= b && at(&app) < b + 100, "the place stays: {} from {b}", at(&app));
+    assert_ne!(app.notes.text.as_str(), "OFF COURSE");
+}
+
+/// A course followed from COURSES (not RIDE A COURSE) is the GPS matcher's: no virtual base.
+#[test]
+fn an_outdoor_follow_has_no_virtual_base() {
+    let (mut sim, mut app) = unit();
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    run(&mut sim, &mut app, 1000);
+    app.open_courses(&mut sim);
+    for _ in 0..100 {
+        app.step(&mut sim);
+    }
+    app.follow_course(super::tests::hill(&app));
+    run(&mut sim, &mut app, 4000);
+    let c = app.courses.as_deref().unwrap();
+    assert!(c.on.is_some() && c.base_m.is_none() && !c.ride_it);
+}
+
+/// A reset mid course resumes the ride, not the course (a known limit, status.md).
+#[test]
+fn a_reset_mid_course_resumes_the_ride_only() {
+    let (mut sim, app) = ride_the_hill(100);
+    assert!(app.ride.state() != ride::State::Idle);
+    let (mut sim2, mut app2) = restart(&mut sim);
+    app2.set_course_memory(crate::storage::course_file::tests::memory());
+    run(&mut sim2, &mut app2, 5000);
+    assert!(app2.courses.as_deref().unwrap().on.is_none() && app2.courses.as_deref().unwrap().base_m.is_none());
+}
