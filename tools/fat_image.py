@@ -21,7 +21,7 @@ then the sectors (fat.rs tests expand it).
 
 usage (on a Mac): tools/fat_image.py
 """
-import math, os, shutil, struct, subprocess, tempfile
+import importlib.util, math, os, shutil, struct, subprocess, tempfile
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'test-data', 'fat32.sparse')
 # layers
@@ -107,14 +107,11 @@ def fill(m):
     shutil.rmtree(os.path.join(m, '.fseventsd'), ignore_errors=True)
 
 
-def fit_crc(data, crc=0):
-    """FIT's CRC-16 (fit.rs `crc`)."""
-    t = [0x0000, 0xcc01, 0xd801, 0x1400, 0xf001, 0x3c00, 0x2800, 0xe401,
-         0xa001, 0x6c00, 0x7800, 0xb401, 0x5000, 0x9c01, 0x8801, 0x4400]
-    for b in data:
-        for nib in (b & 0xf, b >> 4):
-            crc = (crc >> 4) ^ t[crc & 0xf] ^ t[nib]
-    return crc
+# sync.py's FIT CRC, loaded as tools/segments.py loads it (sync.py guards its main()).
+_spec = importlib.util.spec_from_file_location('sync', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sync.py'))
+_sync = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_sync)
+fit_crc = _sync.fit_crc
 
 
 def fit_ride(start, secs, power, dist_m, compressed=False, gap=None, track=None, enhanced=False, ascent=None):

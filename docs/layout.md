@@ -136,6 +136,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   by a mark of the newest counted. Pure logic. `src/app/bikes.rs`: BIKES' menu rows, ACTIVE BIKE (its gear into the
   settings), the migration from the settings' single bike, the count at a ride scan's end, the part notice, the file
   read and written between rides (before settings.bin; the store in AXI SRAM, main.rs `make_bikes`).
+- `src/storage/bytes.rs`: the bounds-checked little-endian fields (`le16`, `le32`) the unit's own readers share.
 - `src/training/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
   rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
   rides at one speed, so a plan is one bisection on it). Pure logic;

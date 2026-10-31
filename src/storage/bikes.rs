@@ -294,8 +294,8 @@ impl Bikes {
     /// assert_eq!(Bikes::from_sector(&s), None);
     /// ```
     pub fn from_sector(s: &[u8; 512]) -> Option<(u32, Bikes)> {
-        let le16 = |a: usize| Some(u16::from_le_bytes(s.get(a..a + 2)?.try_into().ok()?));
-        let le32 = |a: usize| Some(u32::from_le_bytes(s.get(a..a + 4)?.try_into().ok()?));
+        let le16 = |a: usize| crate::storage::bytes::le16(s, a);
+        let le32 = |a: usize| crate::storage::bytes::le32(s, a);
         if s.get(..4)? != MAGIC
             || le16(4)? != VERSION
             || le32(CRC_AT)? != crate::inflate::crc32(s.get(..CRC_AT)?.iter().copied())

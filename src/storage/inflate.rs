@@ -456,6 +456,7 @@ impl Inflater {
 }
 
 /// Inflates the gzip member in `src` into `out` in one go: the length written. The trailer's CRC and size are checked.
+#[cfg(test)]
 pub fn gunzip(src: &mut impl Iterator<Item = u8>, out: &mut Scratch<'_>) -> Result<usize, Error> {
     let mut inf = Inflater::new();
     loop {

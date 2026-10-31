@@ -959,16 +959,6 @@ pub fn power_color(z: u8) -> u16 {
     ZONE_COLORS[usize::from(z.clamp(1, 7) - 1)]
 }
 
-/// The colour of the power zone of `w` watts at an FTP of `ftp`.
-pub fn power_zone_color(w: u16, ftp: u16) -> u16 {
-    power_color(power_zone(w, ftp))
-}
-
-/// The colour of the heart-rate zone of `bpm` at a maximum of `max`.
-pub fn hr_zone_color(bpm: u16, max: u16) -> u16 {
-    hr_color(hr_zone(bpm, max))
-}
-
 /// The seconds the ride spent in each heart-rate zone and each power zone: the moving seconds with a reading. The app
 /// keeps it (not the recovery record), so a Start or a resume starts it from zero, as the laps do.
 ///
