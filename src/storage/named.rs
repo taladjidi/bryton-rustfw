@@ -185,6 +185,12 @@ impl Pois {
         self.list.get(..self.n).unwrap_or(&[])
     }
 
+    /// Course points looked at so far.
+    #[cfg(test)]
+    pub fn collected(&self) -> usize {
+        usize::from(self.scan.pt)
+    }
+
     /// The scan has ended (found or not).
     pub fn done(&self) -> bool {
         self.scan.phase == DONE
