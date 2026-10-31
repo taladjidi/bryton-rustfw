@@ -347,7 +347,8 @@ impl<const N: usize> Line<N> {
         self.push_str(core::str::from_utf8(&digits[i..]).unwrap_or(""));
     }
 
-    /// Appends `v` mod 100 as two digits ("07", "42"): clocks, dates and the menus' values.
+    /// Appends `v` mod 100 as two digits ("07", "42"): clocks, dates and the menus' values. It prints the value mod 100,
+    /// so a two-digit field such as a valid day, month, hour or minute is never wider than two characters.
     pub fn push_2d(&mut self, v: u32) {
         self.push_str(super::DIGITS[(v / 10 % 10) as usize]);
         self.push_str(super::DIGITS[(v % 10) as usize]);

@@ -923,6 +923,10 @@ mod tests {
             l
         };
         assert_eq!([t(12_345, false).as_str(), t(12_345, true).as_str(), t(0, true).as_str()], ["12.3", "7.6", "0.0"]);
+        assert_eq!(
+            [t(0, false).as_str(), t(14_455, false).as_str(), t(123_456, false).as_str()],
+            ["0.0", "14.4", "123.4"]
+        );
     }
 }
 
