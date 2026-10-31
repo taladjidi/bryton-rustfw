@@ -303,3 +303,16 @@ interval went in once per power-meter broadcast: 38 instead of 19 in the test `e
 with a power meter and the strap may carry duplicate hrv messages, and their DFA a1 and RMSSD are skewed. Fixed in the
 sensor names branch: the intervals are taken once per message, and only from the strap. Rides before the fix are not
 re-read; the next ride checks the count.
+
+## 2026-10-31: a card that failed at boot dropped the ride's resume after one retry (main, fixed)
+
+Found on the host (not on the unit): a ride open, the unit reset, the eMMC not answering at the boot. The boot tried
+to reopen the ride, failed and waited its 5 s (`RETRY` passes) to try again; the pass that ended that wait tried
+nothing and returned `Nothing`, and `step_recorder` took that for "no ride to resume": `resume_pending` went false and
+the `RIDE_BKP` marker was cleared, whether the card answered again or not. The ride was never reopened, the screen
+said only NOT SAVING, and the next boot resumed nothing. Nothing was lost on the card: the ride's file in
+`\Rustfw\Rides` kept every record to its last checkpoint and its recovery record still said "recording", so Start
+within an hour resumed it (an older one was saved as it was); without Start the ride stayed out of `\Activities`, the
+unit could switch off as idle, and the drive was not lent writable. Fix (app/riding.rs `step_recorder`, `step_full`):
+a pass that was waiting keeps the resume pending; only a try that finds no ride clears it. Test:
+`the_card_answers_late_at_boot_without_start` (the card back after 2 s, 5 s and 60 s, a further reset, the save).

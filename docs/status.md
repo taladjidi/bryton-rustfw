@@ -6,6 +6,12 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **A card that answers late at boot (2026-10-31, app/riding.rs `step_recorder`)**: sim only. Still to see: a ride
+  recording over a checkpoint, the unit restarted (four buttons) with the card failing at the boot (no way to force
+  that on the unit yet: a RAM run whose first eMMC commands fail, `tools/dev.py poke` on the card's clock, or a dev
+  build that refuses the first tries), and without Start the ride coming back paused with RIDE RESUMED once the card
+  answers, the marker kept (`tools/dev.py peek` of RTC backup register 30) until then.
+
 - **Three bikes and part wear (src/storage/bikes.rs, src/app/bikes.rs)**: sim only. Still to see: the first start making
   BIKE 1 from the settings' wheel and ODOMETER (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
   switching the wheel and weight (the speed from a wheel sensor follows); a ride saved, then within a minute its distance

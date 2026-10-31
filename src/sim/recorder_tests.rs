@@ -279,6 +279,55 @@ fn start_while_the_card_failed_at_boot() {
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
+/// The card failed at the boot, which had a ride to reopen, and answered again a little later without Start being
+/// pressed (2026-10-31): the ride left open is reopened at its checkpoint as at any boot, its marker kept until then,
+/// and saved whole at the end. Before the fix the marker was cleared and the ride left in `\Rustfw\Rides`.
+#[test]
+fn the_card_answers_late_at_boot_without_start() {
+    for late_ms in [2000, 5000, 60_000] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 1000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let name = crate::recorder::ride_name(app.rec_time().0);
+        run(&mut sim, &mut app, 90_000);
+        let timer = app.ride.timer_s();
+        let (mut sim, mut app) = {
+            sim.emmc.dead = true;
+            let mut sim2 = Sim::new(9, 3, 0);
+            sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+            sim2.backup = sim.backup;
+            sim2.emmc.dead = true; // already at App::start
+            let app = App::start(&mut sim2, None);
+            (sim2, app)
+        };
+        run(&mut sim, &mut app, late_ms);
+        assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "{late_ms} ms: the marker kept while the card is down");
+        sim.emmc.dead = false;
+        run(&mut sim, &mut app, 15_000);
+        let notes: Vec<_> = app.notes.list.iter().map(|n| n.as_str()).collect();
+        assert!(notes.iter().any(|n| n.ends_with("RIDE RESUMED")), "{late_ms} ms: {notes:?}");
+        assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "{late_ms} ms: the ride open again");
+        assert_eq!(app.ride.state(), ride::State::Paused, "{late_ms} ms");
+        assert!(app.ride.timer_s() + 60 >= timer, "{late_ms} ms");
+        // a further reset before the save: it comes back again
+        let (mut sim, mut app) = reboot(&mut sim, 5);
+        run(&mut sim, &mut app, 1000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{late_ms} ms: {}", app.notes.list[0].as_str());
+        save_ride(&mut sim, &mut app); // end
+        run(&mut sim, &mut app, 2000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{late_ms} ms: {}", app.notes.list[0].as_str());
+        assert_eq!(sim.backup[RIDE_BKP], 0);
+        let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+        let times = record_times(&sim.emmc.image, &path);
+        assert!(times.len() + 60 >= timer as usize, "{late_ms} ms: the ride whole");
+        // its full copy too, resumed after the clean one
+        assert_eq!(record_times(&sim.emmc.image, &std::format!("Rustfw/{path}")), times, "{late_ms} ms");
+        assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    }
+}
+
 /// Reliable write (emmc.rs) on a card that offers it: every write is CMD23 with bit 31 then CMD25, never a plain
 /// one. So a cut tears nothing: at every sector of a ride's first 75 s, the reboot finds a clean volume and the
 /// ride at its last checkpoint (the root directory's sector included, which a plain write could lose).
