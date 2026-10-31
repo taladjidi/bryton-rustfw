@@ -10,7 +10,9 @@ prints before it (the innermost frame), or `?` when that is in core (no llvm-sym
 inlined frames).
 Kinds: bounds, unwrap, overflow, explicit, trap (a `udf`). The summary lists the sites per folder and the sites in
 files that deny clippy::indexing_slicing outside tests (there should be no bounds site). LTO can merge identical
-panic calls into one site, so a line may stand for several.
+panic calls into one site, so a line may stand for several. Sites inside the panic handler or hw.rs's fault path
+(HANDLER: its own reset loop, which branches to itself) are the handler, not a way into it: left out of the count
+and the tables, and named on their own line ("panic handler: N sites, excluded").
 
     panics.py [ELF]            the report (default: the release ELF); exit 0 always
     panics.py [ELF] --json F   also write it as JSON to F
@@ -31,6 +33,8 @@ KINDS = [('panic_bounds_check', 'bounds'), ('core::slice::index::slice_', 'bound
          ('unwrap_failed', 'unwrap'), ('expect_failed', 'unwrap'),
          ('div_by_zero', 'overflow'), ('rem_by_zero', 'overflow'), ('_overflow', 'overflow'),
          ('core::panicking::', 'explicit'), ('rust_begin_unwind', 'explicit'), ('board::hw::panic', 'explicit')]
+# enclosing functions whose sites are the panic handler itself (hw.rs: `panic`, `default_handler`, `fault`, `mark`)
+HANDLER = ('rust_begin_unwind', 'board::hw::panic', 'default_handler', 'board::hw::fault', 'board::hw::mark')
 BRANCH = re.compile(r'b(?:lx?)?(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)?(?:\.[wn])?')
 
 
@@ -106,7 +110,10 @@ def denied():
 
 
 def report(found, deny):
-    """Text report: by file, every site, the summary; and the same as a dict."""
+    """Text report: by file, every site, the summary; and the same as a dict. The panic handler's own sites
+    (HANDLER) are only counted, on their own line."""
+    own = [s for s in found if any(h in s[1] for h in HANDLER)]
+    found = [s for s in found if s not in own]
     rows = sorted((loc.rsplit(':', 1)[0], int(loc.rsplit(':', 1)[1]) if ':' in loc else 0, k, fn) for k, fn, loc in found)
     by = collections.defaultdict(collections.Counter)
     for f, _, k, _ in rows:
@@ -118,10 +125,11 @@ def report(found, deny):
     out += [f'{f}:{n}  {k}  in {fn}' for f, n, k, fn in rows]
     folders = collections.Counter(re.sub(r'^(src/\w+)/.*', r'\1', f) for f, *_ in rows)
     out += ['', f'total sites: {len(rows)}'] + [f'  {f}: {n}' for f, n in sorted(folders.items())]
+    out.append(f'panic handler: {len(own)} sites, excluded')
     bad = [(f, n, k, fn) for f, n, k, fn in rows if k == 'bounds' and any(f.startswith(d) for d in deny)]
     out.append(f'bounds sites in indexing_slicing-denied files: {len(bad)}')
     out += [f'  {f}:{n} in {fn}' for f, n, _, fn in bad]
-    return '\n'.join(out), {'total': len(rows), 'files': {f: dict(c) for f, c in by.items()}, 'folders': dict(folders),
+    return '\n'.join(out), {'total': len(rows), 'handler': len(own), 'files': {f: dict(c) for f, c in by.items()}, 'folders': dict(folders),
                             'sites': [dict(file=f, line=n, kind=k, function=fn) for f, n, k, fn in rows],
                             'denied_bounds': [dict(file=f, line=n) for f, n, *_ in bad]}
 
@@ -144,6 +152,9 @@ def selftest():
     assert js['total'] == 2 and js['denied_bounds'] == [] and 'bounds=1' in txt, txt
     txt, js = report(got[3:], ['src/storage/'])
     assert js['denied_bounds'] == [{'file': 'src/storage/fit.rs', 'line': 9}], js
+    txt, js = report(got[:2] + [('explicit', '__rustc::rust_begin_unwind', 'src/board/hw.rs:74')], [])
+    assert js['total'] == 2 and js['handler'] == 1 and 'hw.rs' not in txt, txt
+    assert 'panic handler: 1 sites, excluded' in txt, txt
     print('panics.py selftest ok')
 
 
