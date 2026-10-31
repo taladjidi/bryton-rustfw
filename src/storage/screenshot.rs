@@ -16,8 +16,9 @@
 //! ```
 //!
 //! **Write order** (AGENTS.md, golden rule: the card is shared with the ride): the free space is checked first (the
-//! file and the recorder's [`FULL_RESERVE`], FSInfo's count; none known: nothing written), then the folder made if
-//! missing (the root's directory written once, as for `\Activities`), then the file's clusters and pixels as a chain
+//! file and the recorder's [`FULL_RESERVE`], FSInfo's count; none known: nothing written), then the folder looked up
+//! (it must exist: stock ships `\Screenshot`, and it is never made here, since the root's directory sector holds
+//! `\Activities` and `\System` and a picture must not write it), then the file's clusters and pixels as a chain
 //! no entry names yet, and only then its entry, whole, with its size ([`Fat::link`]). So a power cut leaves either
 //! no file (a lost chain, which a computer's fsck turns into a `.CHK` and nothing else minds: `fat::write`) or the
 //! whole picture, never a partial file. A write of the pixels that fails frees the chain ([`Fat::free_chain`]); a
@@ -29,7 +30,8 @@ use crate::fat::{DiskWrite, Error, Fat, File};
 use crate::recorder::FULL_RESERVE;
 use crate::ui::{H, W};
 
-/// The folder, in the root (stock's).
+/// The folder, in the root (stock's). It must exist: stock ships it and this firmware never makes it (the root's
+/// directory sector holds `\Activities` and `\System`), so a missing folder refuses the shot.
 pub const DIR: &str = "Screenshot";
 
 /// Bytes before the pixels: the two headers and the three masks.
@@ -134,15 +136,15 @@ pub struct Shot {
 }
 
 impl Shot {
-    /// Room checked, the folder made if missing, `name` free in it: [`Error::Refused`] when the card has not the
-    /// file's room and [`FULL_RESERVE`] left (FSInfo's count; unknown counts as none); None when the name is taken
-    /// (a shot in the same second).
-    pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, name: &str, t: (u16, u16)) -> Result<Option<Shot>, Error> {
+    /// Room checked, the folder found (never made: [`Error::NotFound`] when it is missing, nothing written), `name`
+    /// free in it: [`Error::Refused`] when the card has not the file's room and [`FULL_RESERVE`] left (FSInfo's count;
+    /// unknown counts as none); None when the name is taken (a shot in the same second).
+    pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, name: &str) -> Result<Option<Shot>, Error> {
         let free = fat.free_clusters(d)?.map_or(0, u64::from) * u64::from(fat.cluster_bytes());
         if free < u64::from(SIZE) + FULL_RESERVE {
             return Err(Error::Refused);
         }
-        let dir = fat.ensure_dir(d, fat.root(), DIR, t)?;
+        let dir = fat.open(d, DIR)?;
         match fat.find(d, dir, name) {
             Err(Error::NotFound) => Ok(Some(Shot { dir, h: Handle::default() })),
             Ok(_) => Ok(None),
