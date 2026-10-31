@@ -38,10 +38,7 @@ fn workout_from_the_calendar() {
     let row = |app: &App, m, i| {
         app.menu_row(m, i).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str())).unwrap_or_default()
     };
-    assert_eq!(
-        [0, 1, 2].map(|i| row(&app, Menu::Workouts, i)),
-        ["23/10/2026 0:01", "25/10/2026 1:30", "RAMP TEST FTP 200"]
-    );
+    assert_eq!([0, 1, 2].map(|i| row(&app, Menu::Workouts, i)), ["23/10 0:01", "25/10 1:30", "RAMP TEST FTP 200"]);
     run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);
     sim.save("workout_list");

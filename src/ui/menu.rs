@@ -630,7 +630,7 @@ impl Row {
             Row::ActiveBike => "ACTIVE BIKE",
             Row::BikeOdo(_) => "ODOMETER",
             Row::Part(_, p) => crate::bikes::PART_NAMES.get(p).copied().unwrap_or("PART"),
-            Row::PartEvery(..) => "SERVICE EVERY",
+            Row::PartEvery(..) => "SERVICE", // "SERVICE EVERY" left no gap before "OFF"
             Row::PartReset(..) => "RESET",
             Row::Drive => "USB DRIVE",
             Row::GiveUpSave => "GIVE UP SAVE",

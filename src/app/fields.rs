@@ -242,6 +242,26 @@ pub(crate) fn date_numbers((y, m, d): (u16, u8, u8), fmt: crate::DateFormat) -> 
     l
 }
 
+/// The date without the year, "23/10", "10/23" or "10-23": the workout rows, where a profile graph takes the room.
+pub(crate) fn date_short((_, m, d): (u16, u8, u8), fmt: crate::DateFormat) -> Line<14> {
+    let (a, b, sep) = match fmt {
+        crate::DateFormat::Dmy => (d, m, "/"),
+        crate::DateFormat::Mdy => (m, d, "/"),
+        crate::DateFormat::Ymd => (m, d, "-"),
+    };
+    let mut l = Line::new();
+    for (i, v) in [a, b].into_iter().enumerate() {
+        if i == 1 {
+            l.push_str(sep);
+        }
+        if v < 10 {
+            l.push_str("0");
+        }
+        l.push_u32(u32::from(v));
+    }
+    l
+}
+
 /// The date's numbers in the format, two digits for the day and the month.
 fn push_numbers(l: &mut Line<14>, (y, m, d): (u16, u8, u8), fmt: crate::DateFormat) {
     let two = |l: &mut Line<14>, v: u8| {
@@ -930,6 +950,15 @@ mod date_format_tests {
     }
 
     /// The overview, the phone and the ride card keep the month's name, whatever DATE FORMAT says.
+    #[test]
+    fn date_short_has_no_year() {
+        use crate::DateFormat::{Dmy, Mdy, Ymd};
+        assert_eq!([Dmy, Mdy, Ymd].map(|f| date_short((2026, 1, 3), f).as_str().len()), [5, 5, 5]);
+        assert_eq!(date_short((2026, 11, 3), Dmy).as_str(), "03/11");
+        assert_eq!(date_short((2026, 11, 3), Mdy).as_str(), "11/03");
+        assert_eq!(date_short((2026, 11, 3), Ymd).as_str(), "11-03");
+    }
+
     #[test]
     fn date_text_keeps_the_month_name() {
         assert_eq!(date_text((2026, 10, 23)).as_str(), "FRI 23 OCT");
