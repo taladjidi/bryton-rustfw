@@ -45,13 +45,6 @@ pub fn draw_date(c: &mut impl Canvas, date: &str) {
     draw_cog(c); // after the date: its box ends the row
 }
 
-/// The longest start of `s` that fits `w` in `style`, whole characters.
-fn fit<'a>(style: &Style, s: &'a str, w: u32) -> &'a str {
-    let end =
-        s.char_indices().map(|(i, ch)| i + ch.len_utf8()).take_while(|&e| style.width(s.get(..e).unwrap_or("")) <= w);
-    s.get(..end.last().unwrap_or(0)).unwrap_or("")
-}
-
 /// Bars side by side from `x`, `colw` px each, on the baseline `y + h`: a bar is a byte of a workout's profile
 /// ([`unpack_bar`]: a height in 1/[`PROF_H`] of `h`, a colour), 0 for none; neighbours alike are one fill. The area
 /// is cleared before.
@@ -98,7 +91,7 @@ pub fn draw_today(c: &mut impl Canvas, card: Today) {
         Today::Planned(name, length, prof, done) => {
             draw_done(c, done);
             text::draw(c, &LABEL, x + w - 6, y + 3, Align::Right, length);
-            text::draw(c, &LABEL, tx, y + 23, Align::Left, fit(&LABEL, name, tw));
+            text::draw(c, &LABEL, tx, y + 23, Align::Left, LABEL.fit(name, tw));
             draw_profile_bars(c, (x + 4, y + 46, h - 51), (w - 8) / prof.len().max(1) as u32, prof);
         }
         Today::Rest => {
@@ -231,13 +224,7 @@ fn notice_fit<'a>(style: &Style, text: &'a str, w: u32) -> &'a str {
     if word.chars().count() >= 4 {
         return word;
     }
-    let cut = t
-        .char_indices()
-        .map(|(i, _)| i)
-        .chain(core::iter::once(t.len()))
-        .take_while(|&i| style.width(t.get(..i).unwrap_or("")) <= w)
-        .last();
-    t.get(..cut.unwrap_or(0)).unwrap_or("")
+    style.fit(t, w)
 }
 
 /// Text lines the notification detail shows at once.

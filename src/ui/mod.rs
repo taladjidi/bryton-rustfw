@@ -217,6 +217,13 @@ pub fn draw_changed_chars(c: &mut impl Canvas, style: &Style, x: u32, y: u32, ol
 /// One-digit strings, to build numbers without core::fmt.
 pub const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
+/// A canvas that draws nothing: a screen's fingerprints (what it shows) without a panel.
+pub(crate) struct NullCanvas;
+impl Canvas for NullCanvas {
+    fn fill(&mut self, _: u32, _: u32, _: u32, _: u32, _: u16) {}
+    fn blit(&mut self, _: u32, _: u32, _: u32, _: u32, _: &mut dyn FnMut(u32, u32) -> u16) {}
+}
+
 /// The device list's title: "3 NEARBY", with "..." while the scan runs.
 pub fn draw_nearby(c: &mut impl Canvas, count: usize, scanning: bool) {
     let mut line = text::Line::<16>::new();
@@ -266,13 +273,10 @@ pub const LIST_ROWS: usize = ((H - LIST_Y) / LIST_ROW) as usize;
 /// redraw); 1 for a row with no device.
 fn list_print(d: Option<&crate::nrf::Device>) -> u32 {
     let Some(d) = d else { return 1 };
-    let mut h = 0x811c_9dc5u32;
     let bucket = (i32::from(d.rssi) >> 2).to_le_bytes();
     let maker = d.maker.unwrap_or("").as_bytes();
-    for &x in d.name().as_bytes().iter().chain(&[0]).chain(maker).chain(&d.addr).chain(&bucket) {
-        h = (h ^ u32::from(x)).wrapping_mul(0x0100_0193);
-    }
-    h
+    let h = crate::fnv_str(0x811c_9dc5, d.name());
+    crate::fnv(crate::fnv(crate::fnv(h, maker), &d.addr), &bucket)
 }
 
 /// The fingerprints of the rows [`draw_list`] would draw now.
@@ -400,8 +404,8 @@ pub fn lines<'a>(style: &Style, text: &'a str, w: u32) -> (&'a str, &'a str) {
     match text.char_indices().rev().find(|&(i, ch)| ch == ' ' && fits(i)).map(|(i, _)| i) {
         Some(i) => (text.get(..i).unwrap_or(""), text.get(i + 1..).unwrap_or("")),
         None => {
-            let i = text.char_indices().map(|(i, _)| i).take_while(|&i| fits(i)).last().unwrap_or(0);
-            (text.get(..i).unwrap_or(""), text.get(i..).unwrap_or(""))
+            let head = style.fit(text, w);
+            (head, text.get(head.len()..).unwrap_or(""))
         }
     }
 }

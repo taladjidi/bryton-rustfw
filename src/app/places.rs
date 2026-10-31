@@ -222,7 +222,7 @@ impl App {
             value.push_u32(m);
             value.push_str(" M ");
         } else {
-            ui::card::push_km(value, m.saturating_add(50).min(999_999)); // to the nearest 100 m
+            crate::push_trip(value, m.saturating_add(50).min(999_999), false); // to the nearest 100 m
             value.push_str(" KM ");
         }
         value.push_str(POINTS.get(usize::from(point_of(i32::from(deg) * 100_000))).copied().unwrap_or(""));
