@@ -315,7 +315,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).
 - `src/sim/tests.rs` keeps the shared helpers (`run`, `assert_consistent`, `back`, `KEY`, `STRAP`...) and the boot, key, touch,
   banner, light and misc tests; the rest is by concern: `stock_tests.rs` (the overview's totals, STOCK DATA, fitness, ride
-  history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `storage_tests.rs` (STORAGE and ABOUT: the card's figures, its oldest ride), `menu_tests.rs` (the menu
+  history and delete), `walk_tests.rs` (the screen walk: every menu screen by keys, metric and imperial, a ride started; text cut by its box fails, `text::clips`; writes target/sim/walk/ and its paths.json), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `storage_tests.rs` (STORAGE and ABOUT: the card's figures, its oldest ride), `menu_tests.rs` (the menu
   tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `start_cue_tests.rs` (the start reminder and the ready card), `ride_tests.rs` (zone colours and bar,
   live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
   `assist_tests.rs` (GNSS SYSTEMS and the AssistNow Offline messages to the receiver), `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`), `laps_tests.rs` (a past ride's lap list) and `perf_tests.rs` (time budgets of a pass, a menu, idle).

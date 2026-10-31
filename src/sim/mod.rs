@@ -1598,6 +1598,8 @@ mod storage_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod walk_tests;
+#[cfg(test)]
 mod workout_tests;
 
 mod ble_sim;

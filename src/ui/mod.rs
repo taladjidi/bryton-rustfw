@@ -604,6 +604,14 @@ pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, va
     let note = value.is_empty() && value_color == GREY;
     let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, if note { GREY } else { WHITE }) };
     let name_w = menu_label_w(label, value);
+    #[cfg(test)]
+    if !value.is_empty() && LABEL.width(label) + LABEL.width(value) + LABEL.width(" ") / 2 > NEARBY.2 {
+        let mut both = text::Line::<64>::new();
+        both.push_str(label);
+        both.push_str(" | ");
+        both.push_str(value);
+        text::clips::note("menu_gap", both.as_str(), NEARBY.2);
+    }
     let ty = y + (row - 1 - LABEL.height()) / 2;
     c.fill(0, y, W, ty - y, bg);
     c.fill(0, ty, NEARBY.0, LABEL.height(), bg);

@@ -955,9 +955,7 @@ impl Settings {
                 l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
                 l.push_str(" S");
             }
-            Setting::AutoLap => {
-                l.push_str(["OFF", "BY DISTANCE", "BY TIME"].get(self.auto_lap).copied().unwrap_or("OFF"))
-            }
+            Setting::AutoLap => l.push_str(["OFF", "DISTANCE", "TIME"].get(self.auto_lap).copied().unwrap_or("OFF")),
             Setting::LiveSegments => l.push_str(if self.live_segments { "ON" } else { "OFF" }),
             Setting::SegTarget => l.push_str(SEGMENT_TARGETS.get(self.seg_target).copied().unwrap_or("AUTO")),
             Setting::Sound => l.push_str(if self.sound { "ON" } else { "OFF" }),
