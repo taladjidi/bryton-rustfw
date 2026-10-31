@@ -888,16 +888,17 @@ fn gauge_fields() {
     let bx = crate::ui::field_box(1, crate::ui::RIDE_H, 0).unwrap();
     let vb = crate::ui::value_box(bx, true);
     assert!(crate::ui::box_scale(vb.2, vb.3) >= 5, "a 1-field page draws big digits in its ring");
-    let Some(Drawn::Dial(_, _, _, level)) = app.drawn.first().copied() else { panic!("the ring first") };
+    let Some(Drawn::Dial(_, _, level)) = app.drawn.first().copied() else { panic!("the ring first") };
     assert!(level > 0, "the power moves the ring");
     sim.save("gauge_ring_full");
     let (px0, ms0) = (sim.pixels, sim.ms);
     run(&mut sim, &mut app, 60_000);
     let px_s = (sim.pixels - px0) * 1000 / (sim.ms - ms0);
     std::println!("power ring, 1-field page: {px_s} panel px/s, the plain value {plain} (the box whole is 50 000 px)");
-    // measured 12 269 px/s with 0 to 60 W of noise a second (10 steps, and a zone change repaints the lit arc), against 1 188
-    // for the plain value and 50 000 for the box whole; 410 px for a 2-step move in the unit test (dial.rs)
-    assert!(px_s < 20_000, "{px_s} px/s: only the arc that moved and the digits");
+    // measured about 4 980 px/s with 0 to 60 W of noise a second (each step has its own zone colour and the digits stay
+    // white, so a zone change repaints nothing: first 12 269 with the lit arc repainted, 10 134 with zone-coloured
+    // digits), against 1 190 for the plain value and 50 000 for the box whole; 410 px for a 2-step move (dial.rs)
+    assert!(px_s < 6_000, "{px_s} px/s: only the arc that moved and the digits");
     assert_consistent(&sim, &app);
 
     app.press(&mut sim, Press::Short(Key::Page));

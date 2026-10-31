@@ -11,7 +11,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   a reset-resume.
 
 - **Gauge fields (ui/dial.rs: POWER RING, HR RING, CAD BAR)**: sim only. Still to see: the time awake per loop with a power
-  ring on a 1-field page against the plain value (the sim sends 12 000 px/s against 1 200 with 0 to 60 W of noise a
+  ring on a 1-field page against the plain value (the sim sends 5 000 px/s against 1 200 with 0 to 60 W of noise a
   second; the box whole is 50 000 px), the ring's look in the sun (LIGHT, OUTDOOR), the digits inside it at the 2 x 2 size.
 
 A feature not listed here was seen on the unit.

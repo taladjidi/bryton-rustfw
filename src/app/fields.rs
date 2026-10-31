@@ -324,6 +324,19 @@ impl App {
         self.sun.and_then(|(_, t)| t)
     }
 
+    /// The colour of each step of gauge field `f`'s ring: the zone of the reading at its place on the scale.
+    pub(crate) fn dial_colors(&self, f: Field) -> ui::DialColors {
+        let zones = self.settings.zones();
+        let (full, hr) = match f.dial() {
+            Some((Field::Hr, _)) => (u32::from(self.settings.max_hr), true),
+            _ => (u32::from(self.settings.ftp) * 3 / 2, false),
+        };
+        core::array::from_fn(|i| {
+            let v = ((2 * i as u32 + 1) * full / (2 * ui::RING_STEPS)) as u16;
+            if hr { zones.hr_color(v) } else { zones.power_color(v) }
+        })
+    }
+
     /// Gauge field `f` in box `bx` now: its value, the value's colour, the gauge's (its zone's, else white) and the
     /// steps lit: the reading over its full scale (150 % of FTP, the maximum heart rate, 120 rpm).
     pub(crate) fn dial_now(&self, f: Field, bx: (u32, u32, u32, u32)) -> Drawn {
@@ -334,8 +347,8 @@ impl App {
             _ => (self.live.shown(Metric::Cadence).map(u32::from), 120),
         };
         let level = reading.map_or(0, |v| v.min(full) * ui::dial_steps(bx, ring) / full.max(1));
-        let color = Some(self.field_bar(f)).filter(|&c| c != ui::BLACK).unwrap_or(ui::WHITE);
-        Drawn::Dial(self.field_text(f), self.field_color(f), color, level)
+        let fg = self.field_color(f); // white: a zone's colour on the digits would repaint them whole at each zone change
+        Drawn::Dial(self.field_text(f), fg, level)
     }
 
     /// The text of ride field `f` now ("--" without a value).

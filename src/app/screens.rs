@@ -73,8 +73,8 @@ pub(crate) enum Drawn {
     Print(u32),
     /// A value, its colour and its zone bar's (BLACK: none).
     Value(Line<8>, u16, u16),
-    /// A gauge field: the value, its colour, the gauge's colour and the steps lit.
-    Dial(Line<8>, u16, u16, u32),
+    /// A gauge field: the value, its colour (the zone's) and the steps lit.
+    Dial(Line<8>, u16, u32),
     /// A map.
     Map(map::Shown),
     /// A graph.
@@ -382,8 +382,9 @@ impl App {
                         let a = ui::graph_area(bx);
                         ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
                     }
-                    Drawn::Dial(text, fg, color, level) => {
-                        ui::draw_dial(c, bx, f.dial().is_some_and(|d| d.1), text.as_str(), fg, color, level);
+                    Drawn::Dial(text, fg, level) => {
+                        let cols = self.dial_colors(f);
+                        ui::draw_dial(c, bx, f.dial().is_some_and(|d| d.1), &cols, text.as_str(), fg, level);
                     }
                     Drawn::Value(text, fg, _) => ui::draw_field_value(c, bx, text.as_str(), fg),
                     _ => {}
@@ -684,17 +685,18 @@ impl App {
                     }
                     None => Drawn::Head(was), // the segment just ended: the page leaves at this pass
                 },
-                (Widget::Field(f), Drawn::Dial(t, fg, color, level)) => {
+                (Widget::Field(f), Drawn::Dial(t, fg, level)) => {
                     let now = self.dial_now(f, bx);
-                    if let (Drawn::Dial(nt, nfg, ncolor, nlevel), true) = (now, now != old) {
+                    if let (Drawn::Dial(nt, nfg, nlevel), true) = (now, now != old) {
                         let p = &mut Panel(b, self.area(), self.look());
                         let ring = f.dial().is_some_and(|d| d.1);
                         ui::update_dial(
                             p,
                             bx,
                             ring,
-                            (t.as_str(), fg, color, level),
-                            (nt.as_str(), nfg, ncolor, nlevel),
+                            &self.dial_colors(f),
+                            (t.as_str(), fg, level),
+                            (nt.as_str(), nfg, nlevel),
                         );
                     }
                     now
