@@ -127,8 +127,13 @@ def main():
                    'echo "instructions"', 'cpu ExecutedInstructions']
     script += ['cpu PC', 'quit']
     with open(log, 'w') as f:
-        subprocess.run([a.renode, '--disable-gui', '--console', '-e', '; '.join(script)], stdout=f,
-                       stderr=subprocess.STDOUT, check=True, cwd=ROOT)
+        # Bounded: Renode hangs now and then on a loaded machine (2026-10-31) and a gate would wait for ever.
+        limit = float(os.environ.get('RENODE_TIMEOUT', 300))
+        try:
+            subprocess.run([a.renode, '--disable-gui', '--console', '-e', '; '.join(script)], stdout=f,
+                           stderr=subprocess.STDOUT, check=True, cwd=ROOT, timeout=limit)
+        except subprocess.TimeoutExpired:  # run() kills the child before raising
+            sys.exit(f'renode: timed out after {limit:g} s (RENODE_TIMEOUT)')
 
     stream, dc, usb, after_usb, pc, counts, counting = [], 0, 0, 0, None, [], False
     for line in open(log, errors='replace'):
