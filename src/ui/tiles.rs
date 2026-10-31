@@ -91,9 +91,9 @@ const TILE_PX: f64 = 362.0;
 const M_PER_E7: f64 = 0.011_132;
 
 /// RGB565 of 8-bit red, green, blue.
-#[allow(clippy::cast_possible_truncation)] // 5 + 6 + 5 bits of 8-bit inputs: the value fits 16 bits
+#[allow(clippy::cast_possible_truncation)] // each input is masked to 8 bits, so 5 + 6 + 5 bits: the value fits 16 bits
 const fn rgb(r: u32, g: u32, b: u32) -> u16 {
-    ((r >> 3) << 11 | (g >> 2) << 5 | b >> 3) as u16
+    (((r & 0xff) >> 3) << 11 | ((g & 0xff) >> 2) << 5 | (b & 0xff) >> 3) as u16
 }
 
 /// Stock's colours (STORAGE_AND_MAPS.md 4.6).

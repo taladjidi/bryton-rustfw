@@ -206,8 +206,9 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     }
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
+        let k = nz(k);
         let w = u32::from(g.advance) * k;
-        c.blit(x, y, w, style.height(), &mut |px, py| shade(&palette, font.coverage(g, px / nz(k), py / nz(k))));
+        c.blit(x, y, w, style.height(), &mut |px, py| shade(&palette, font.coverage(g, px / k, py / k)));
         x += w;
     }
     width
@@ -225,6 +226,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
     let mut x = x;
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
+        let k = nz(k);
         let w = (u32::from(g.advance) * k).min(right.saturating_sub(x));
         #[cfg(test)]
         if w < u32::from(g.advance) * k && g.w > 0 {
@@ -233,7 +235,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
         if w == 0 {
             break;
         }
-        c.blit(x, y, w, style.height(), &mut |px, py| shade(&palette, font.coverage(g, px / nz(k), py / nz(k))));
+        c.blit(x, y, w, style.height(), &mut |px, py| shade(&palette, font.coverage(g, px / k, py / k)));
         x += w;
     }
     x
@@ -246,6 +248,7 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
     let face = c.face();
     let ((_, a, ka), (font, g, k)) = (pick(style, face, old), pick(style, face, new));
+    let k = nz(k);
     // each glyph's ink box in screen pixels from the cell's corner (the two may be drawn at different factors)
     let boxes = [(a, ka), (g, k)].map(|(g, k)| {
         (
@@ -270,9 +273,7 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     for (a, p) in palette.iter_mut().enumerate() {
         *p = blend(fg, bg, u8::try_from(a).unwrap_or(15));
     }
-    c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
-        shade(&palette, font.coverage(g, (px + x0) / nz(k), (py + y0) / nz(k)))
-    });
+    c.blit(left, y + y0, w, y1 - y0, &mut |px, py| shade(&palette, font.coverage(g, (px + x0) / k, (py + y0) / k)));
 }
 
 /// Draws `s` in a box `w` wide from `x` (aligned inside it) and paints the rest of the box with the background, so a
