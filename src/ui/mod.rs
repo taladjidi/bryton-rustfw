@@ -1006,6 +1006,7 @@ pub(crate) mod tests {
             rec: Rec::Idle,
             locked: false,
             more: false,
+            saver: false,
         };
         let next = Strip { time: (10, 0), blink: false, rec: Rec::Running, ..strip };
         let (mut a, mut b) = (Frame::new(), Frame::new());
@@ -1028,6 +1029,7 @@ pub(crate) mod tests {
             rec: Rec::Paused,
             locked: false,
             more: false,
+            saver: false,
         };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);

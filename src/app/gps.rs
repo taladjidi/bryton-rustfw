@@ -269,6 +269,9 @@ impl App {
         if self.ride.state() != ride::State::Idle && self.profile == ride::Profile::Mtb {
             return false; // off road: continuous tracking whatever GPS POWER says (the owner, 2026-10-27)
         }
+        if self.saver_on() {
+            return true; // BATTERY SAVER: cyclic tracking (docs/power.md), whatever GPS POWER says
+        }
         match self.settings.gps_power {
             GpsPower::Auto => self.gps.auto.saver(),
             GpsPower::Full => false,

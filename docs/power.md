@@ -150,6 +150,23 @@ sheets, at their test conditions), none was measured on the unit.
   while riding): about 0.1 mA and 0.01 mA (recalled from their data sheets): nothing to gain.
 
 
+## Battery saver (SYSTEM > BATTERY SAVER)
+
+OFF, ON, or AUTO (on once at 20 % or less, off at the charger). It reads existing knobs and changes no setting (app/device.rs
+`App::saver_on`), so OFF restores everything. **Savings are estimates from the tables above, none measured.**
+
+| Knob | While ON | Estimated saving |
+|------|----------|------------------|
+| GPS | cyclic tracking as GPS POWER SAVER (app/gps.rs `gnss_saver`; an MTB ride stays continuous) | about 4.8 mA over FULL; nothing over AUTO's fast and straight stretches |
+| Backlight level | at most 30 % | 60 to 18 mA from 100 %, 36 to 18 mA from 60 %, nothing in AUTO daylight (1 %) |
+| Backlight time-out | at most 10 s (never off, 30 s and 60 s become 10 s) | up to the lit level (18 to 60 mA) for each second the unit sits unwatched |
+| Redraw | map, graphs and profiles of a ride page every 5 s (app/screens.rs `update_page`); fields and the strip each second; an input at once | well under 1 mA (inferred: the CPU is awake 1.3 % on a ride page) |
+| GNSS systems | not used: cyclic tracking draws 5 mA with GPS alone or with three systems (table above) | 0 |
+| Phone link | not used: no scan; advertising is already 1 s | under 0.01 mA |
+
+The recording is outside it: 1 s samples and the checkpoints are unchanged (a sim test compares the card's commands with it on and off).
+To measure: the same ride ON and OFF, the battery's percent after an hour (docs/status.md). Per profile (ride profiles' settings) is open.
+
 ## The main loop while idle (2026-10-28)
 
 - **Measured overnight before** (owner, on battery, the overview, backlight off): 12.2 h cost about 41 % of the

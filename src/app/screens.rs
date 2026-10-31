@@ -652,12 +652,20 @@ impl App {
         // Everything but the map follows the readings of the second (the pages show one reading a second, bars and
         // the workout move by the second); between seconds only an input (it acts at once) or the map needs a look.
         let due = core::mem::take(&mut self.value_due) || self.light.idle_ms < 1000;
+        let slow = self.saver_on() && self.light.idle_ms >= 1000;
         let widgets = self.widgets(); // built once a pass
         let first = widgets.clone().position(|(_, w)| w == Widget::Field(Field::Map));
         let selected = if let Screen::Edit(_, k) = self.screen { Some(k) } else { None };
         for (i, (bx, w)) in widgets.enumerate() {
             let Some(&old) = self.drawn.get(i) else { break };
             if !due && !matches!(old, Drawn::Map(_)) {
+                continue;
+            }
+            // BATTERY SAVER: the map, graphs and profiles look again every SAVER_REDRAW_S seconds, at once on an input
+            if slow
+                && !self.seconds.is_multiple_of(SAVER_REDRAW_S)
+                && matches!(old, Drawn::Map(_) | Drawn::Graph(_) | Drawn::Profile(_))
+            {
                 continue;
             }
             let now = match (w, old) {

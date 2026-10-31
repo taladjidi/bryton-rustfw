@@ -90,6 +90,16 @@ pub const BATTERY_MS: u32 = 10_000;
 /// BATTERY LOW is said at this charge, percent, or below (not while charging).
 pub(crate) const LOW_BATTERY_PERCENT: u8 = 15;
 
+/// BATTERY SAVER AUTO turns on at this charge, percent, or below (not while charging).
+pub const BATTERY_SAVER_PERCENT: u8 = 20;
+
+/// The saver's backlight: the level is capped at this percent, and the time-out at this many seconds.
+const SAVER_LIGHT_PERCENT: u8 = 30;
+const SAVER_LIGHT_S: u32 = 10;
+
+/// The saver slows the redraw of the map and the graphs to one in this many seconds.
+pub(crate) const SAVER_REDRAW_S: u8 = 5;
+
 /// How often the barometer is read while riding (or averaging for a calibration); app/barometer.rs.
 pub const BARO_RIDE_MS: u32 = 1000;
 
@@ -105,6 +115,11 @@ pub const LIGHT_MS: u32 = 250;
 /// one reading a second, the mean the switch checks ([`ui::theme::DayNight`]). The switch is decided and drawn while the
 /// screen is off too: it costs one reading a second, and the theme on the panel is the one for when the screen returns.
 pub const THEME_LIGHT_MS: u32 = 1000;
+
+/// True at the saver's threshold or below.
+fn low_for_saver(p: Option<u8>) -> bool {
+    p.is_some_and(|p| p <= BATTERY_SAVER_PERCENT)
+}
 
 impl App {
     /// The battery, every [`BATTERY_MS`]: the charge and the charger for the strip, "BATTERY LOW" once at
@@ -130,7 +145,27 @@ impl App {
             self.alarm_notice("BATTERY LOW");
         }
         self.told_low = low;
+        // AUTO: on at the threshold (once: it stays on), off when the charger comes
+        let before = self.saver_auto;
+        if charging {
+            self.saver_auto = false;
+        } else if low_for_saver(self.strip.battery) {
+            self.saver_auto = true;
+        }
+        if before != self.saver_auto && self.settings.saver == SaverMode::Auto {
+            self.notice(if self.saver_auto { "BATTERY SAVER ON" } else { "BATTERY SAVER OFF" });
+        }
         false
+    }
+
+    /// BATTERY SAVER in force now: ON, or AUTO once the charge fell to [`BATTERY_SAVER_PERCENT`] (until the charger).
+    /// Every knob reads this and applies on top of its setting, so OFF gives the settings back as they were.
+    pub(crate) fn saver_on(&self) -> bool {
+        match self.settings.saver {
+            SaverMode::Off => false,
+            SaverMode::On => true,
+            SaverMode::Auto => self.saver_auto,
+        }
     }
 
     /// The computer dropped the USB device and the board reconnected it: counted (read it with `tools/dev.py peek`) and
@@ -165,13 +200,19 @@ impl App {
 
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.
     pub(crate) fn update_light(&mut self, b: &mut impl Board) {
-        let timeout_ms = LIGHT_TIMEOUTS_S.get(self.settings.light_timeout).copied().unwrap_or(0) * 1000;
+        let saver = self.saver_on();
+        self.strip.saver = saver;
+        let mut timeout_ms = LIGHT_TIMEOUTS_S.get(self.settings.light_timeout).copied().unwrap_or(0) * 1000;
+        if saver && (timeout_ms == 0 || timeout_ms > SAVER_LIGHT_S * 1000) {
+            timeout_ms = SAVER_LIGHT_S * 1000; // never off, or long: 10 s
+        }
         let on = timeout_ms == 0 || self.light.idle_ms < timeout_ms || self.light.wake;
         let level = match LIGHT_LEVELS.get(self.settings.light_level) {
             _ if !on => 0,
             Some(&l) => l,
             None => self.light.auto_level,
         };
+        let level = if saver { level.min(SAVER_LIGHT_PERCENT) } else { level };
         if level != self.light.shown {
             self.light.shown = level;
             b.backlight(level);
