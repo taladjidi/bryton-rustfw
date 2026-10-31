@@ -23,6 +23,8 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
     tools/profile.py --run        # run a build from RAM, then scripted scenarios (idle, pages, menu, a ride
                                   # discarded), a markdown table each
+    tools/walk.py --build out/IMG.bin   # the unit walk: the simulator's screen walk replayed by key, unit vs sim
+                                  # contact sheets in target/walk/ (gitignored: shots may show the owner's position)
 
 - **The profiler** (`src/link/prof.rs`, always on): `App::step`'s sections (`App::timed`, one DWT read each) and the
   main loop's own (touch, input, USB), each its calls, cycles and longest run; the panel's pixels and the eMMC's
