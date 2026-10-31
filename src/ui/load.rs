@@ -7,7 +7,7 @@ use crate::load::{Day, SHOWN};
 use text::{Align, Line, Style, draw, draw_in};
 
 /// The plot's left, top, columns (two a day) and rows.
-pub const PLOT: (u32, u32, u32, u32) = (40, LIST_Y + 24, 2 * SHOWN as u32, 120);
+pub const PLOT: (u32, u32, u32, u32) = (50, LIST_Y + 24, 2 * SHOWN as u32, 120);
 const STRIP_Y: u32 = PLOT.1 + PLOT.3 + 4;
 const STRIP_H: u32 = 8;
 const READ_Y: u32 = STRIP_Y + STRIP_H + 4;
@@ -102,8 +102,8 @@ pub fn draw_plot(c: &mut impl Canvas, d: &[Day; SHOWN]) {
             bg
         }
     });
-    // half size: "-100" fits the 38 px left of the plot, where 2x text keeps only "-10"
-    let small = Style { scale: 1, ..Style { fg: GREY, ..LABEL } };
+    // 2x: "-999" takes 48 px, the margin left of the plot
+    let small = Style { fg: GREY, ..LABEL };
     let mut mark = |v: i32, y: u32| {
         let mut l = Line::<12>::new();
         if v < 0 {
@@ -113,9 +113,13 @@ pub fn draw_plot(c: &mut impl Canvas, d: &[Day; SHOWN]) {
         draw_in(c, &small, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
     };
     mark(ax.hi, PLOT.1);
-    mark(0, PLOT.1 + zero.saturating_sub(4).min(PLOT.3 - 7));
+    // 14 px tall: the 0 mark is left out where it would touch the top or bottom one
+    let zy = zero.saturating_sub(7).min(PLOT.3 - 14);
+    if zy >= 14 && (ax.lo >= 0 || zy + 14 <= PLOT.3 - 14) {
+        mark(0, PLOT.1 + zy);
+    }
     if ax.lo < 0 {
-        mark(ax.lo, PLOT.1 + PLOT.3 - 7);
+        mark(ax.lo, PLOT.1 + PLOT.3 - 14);
     }
 }
 
@@ -162,9 +166,33 @@ mod tests {
     /// "-100" (a negative axis label) fits the box left of the plot at its size, and draws without leaving the screen.
     #[test]
     fn negative_axis_labels_fit() {
-        assert!(Style { scale: 1, ..LABEL }.width("-100") <= PLOT.0 - 2);
+        assert!(LABEL.width("-999") <= PLOT.0 - 2 && LABEL.width("999") <= PLOT.0 - 2);
         let mut f = Frame::new();
-        draw_plot(&mut f, &days(|_| (0, 0, -100)));
+        draw_plot(&mut f, &days(|_| (0, 0, -999)));
+    }
+
+    /// Whether the plot draws a 0 label: the axis margin differs from one with only the top and bottom labels.
+    fn zero_label_drawn(d: &[Day; SHOWN], top: &str, bottom: &str) -> bool {
+        let mut f = Frame::new();
+        draw_plot(&mut f, d);
+        let mut g = Frame::new();
+        let s = Style { fg: GREY, ..LABEL };
+        draw_in(&mut g, &s, 0, PLOT.1, PLOT.0 - 2, Align::Right, top);
+        draw_in(&mut g, &s, 0, PLOT.1 + PLOT.3 - 14, PLOT.0 - 2, Align::Right, bottom);
+        (0..PLOT.1 + PLOT.3).any(|y| (0..PLOT.0 - 2).any(|x| f.at(x, y) != g.at(x, y)))
+    }
+
+    /// The 0 label is left out where it would touch the top or bottom label (zero row near either end).
+    #[test]
+    fn zero_label_hidden_next_to_an_end_label() {
+        assert!(!zero_label_drawn(&days(|_| (0, 0, -999)), "20", "-1000"));
+        assert!(!zero_label_drawn(&days(|_| (50, 50, -10)), "50", "-10"));
+    }
+
+    /// With room on both sides (zero row mid-plot) the 0 label is drawn.
+    #[test]
+    fn zero_label_shown_mid_plot() {
+        assert!(zero_label_drawn(&days(|_| (50, 50, -50)), "50", "-50"));
     }
 
     #[test]
