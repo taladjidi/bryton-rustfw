@@ -604,7 +604,13 @@ impl App {
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {
+            if ev == ride::Event::Start {
+                self.ride_curve.reset();
+            }
             self.recorder(ev);
+        }
+        if self.ride.state() == ride::State::Running {
+            self.ride_curve.sample(self.ride.timer_s(), input.power);
         }
         if self.ride.state() == ride::State::Running {
             self.auto_lap();

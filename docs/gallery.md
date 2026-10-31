@@ -77,6 +77,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | Start held while paused: RESUME, SAVE (selected), DISCARD, big enough for gloves (sim) | DISCARD asks once more; the ride is moved to `\Rustfw\Discarded`, never erased (sim) | The ride's card when it ends: map, profile, numbers (sim) |
 | ![History](img/history_list.png) | ![A past ride](img/history.png) | ![FITNESS](img/fitness.png) |
 | History: stock's rides, newest first (sim) | A past ride's card, read from its file; DELETE in red asks first (sim) | HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) |
+| ![Power curve](img/power-curve.png) | ![Power curve, LIGHT](img/power-curve-light.png) |  |
+| HISTORY > FITNESS > POWER CURVE: the 90 days' bests (orange) and this ride's (green) on a log axis from 1 s to 1 h, CP and W', the cursor reading 5 MIN (sim) | The same in LIGHT (sim) |  |
 | ![Laps of a past ride](img/history_laps.png) | ![No laps](img/history_no_laps.png) |  |
 | A past ride's LAPS: number, time, distance, speed, power and heart rate per lap, from its `lap` messages (sim; the sim's ride has no speed or sensors) | A ride with no lap messages (sim) |  |
 

@@ -2,6 +2,7 @@
 //! through [`Canvas`] only, so it knows nothing about the panel protocol (panel.rs) or the board.
 
 pub mod card;
+pub mod curve;
 pub mod fonts;
 pub mod map;
 pub mod media;

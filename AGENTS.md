@@ -56,14 +56,14 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->741 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->746 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
   overflow reaches it: main.rs `stack_check`); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails
   when a function's frame passes its budget: keep big buffers in their own non-inlined function, never in main's. AXI
-  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->58 KB<!-- /n --> left; link.x
+  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->55 KB<!-- /n --> left; link.x
   says what is where); a static there must start as all zeros (an `Option` of a reference or a struct with a bool niche
   does not) or it lands in `.data`, in DTCM. The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road
   ahead inflates tiles into.
@@ -133,7 +133,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
   - `App`'s fields are parts, not flags: a concern with several fields is a sub-struct with its own `new` and its
     small pure methods (`app/groups.rs`). A new concern with three or more fields gets its own. `App` must stay
-    under the size budget (`tests::app_size_budget`, 64 KB; it lives in AXI SRAM).
+    under the size budget (`tests::app_size_budget`, 68 KB; it lives in AXI SRAM).
 - `Rect` (`contains`, `grown`) is the one hit-test: a touch is tested against a `Rect`, never with its own range checks.
 - Menus are data (`src/ui/menu.rs`): a new setting is a `Setting` variant, its row in a table, and its arms in
   `Settings::text` / `cycle` / `step`: never a row number. Back pops a screen stack (`App::open` / `close`).

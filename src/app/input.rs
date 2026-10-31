@@ -155,6 +155,8 @@ pub enum Screen {
     Trainer,
     /// The power meter calibration (app/powercal.rs).
     PowerCal,
+    /// The POWER CURVE (app/curve.rs), the cursor on duration `k` ([`power_curve::DURATIONS`]).
+    Curve(usize),
     /// The ramp test's result, APPLY or keep (app/ramp.rs).
     RampResult,
     /// ABOUT: the version, the commit, Ferris.
@@ -402,6 +404,7 @@ impl App {
             Screen::Laps(_) => self.input_laps(b, i),
             Screen::RampResult => self.input_ramp(b, i, shown),
             Screen::PowerCal => self.input_powercal(b, i, shown),
+            Screen::Curve(_) => self.input_curve(b, i),
             Screen::Trainer => self.input_trainer(b, i, shown),
             Screen::SegmentResult => self.input_segment(b, i, recording, graph_hit, shown),
             Screen::Edit(..) => self.editor_input(b, i),

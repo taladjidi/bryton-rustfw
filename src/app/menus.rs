@@ -173,6 +173,7 @@ impl App {
                     (Row::Open(Menu::Sensors), true),
                     // the course page has no settings; no page edited while recording (UI review 2, 5.2 point 8)
                     (Row::Open(Menu::Page(n)), n <= OVERVIEW && self.ride.state() != ride::State::Running),
+                    (Row::Ride(RideRow::Curve), self.power_heard()),
                     (Row::Open(Menu::Main), true),
                 ];
                 rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i)
@@ -790,6 +791,7 @@ impl App {
                 self.import_stock(b, false)
             }
             Some(Row::Stock(menu::StockRow::Import)) => {}
+            Some(Row::Stock(menu::StockRow::Curve)) => self.open_curve(),
             Some(Row::Stock(r @ (menu::StockRow::ApplyFtp | menu::StockRow::ApplyWPrime))) => {
                 self.apply_estimate(b, menu, sel, r)
             }
@@ -867,6 +869,7 @@ impl App {
             }
             RideRow::Trainer => self.open(Screen::Trainer),
             RideRow::CalPower => self.open_powercal(),
+            RideRow::Curve => self.open_curve(),
             RideRow::Indoor => self.toggle_indoor(),
         }
     }

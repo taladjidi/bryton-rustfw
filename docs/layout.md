@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->61 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->58 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->64 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->55 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -105,6 +105,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   sums over a ring, integers only; `training/ride.rs` keeps max heart rate and the climbing (VAM, grade). Pure logic.
 - `src/ui/card.rs`: a ride's card once it has ended, and for each past ride: its map, elevation profile and ten
   numbers. Drawn once, when shown.
+- `src/ui/curve.rs`: the POWER CURVE screen's drawing: the log time axis, the plot in one blit, the cursor's strip and
+  readout. `src/app/curve.rs`: its screen, inputs and this ride's curve ([`power_curve::Rolling`] fed a second at a time).
 - `src/ui/media.rs`: the media player screen: what the phone says is playing (AMS), a progress bar, touch buttons,
   each part in its own fixed box.
 - `src/ui/quick.rs`: the quick panel's geometry and drawing (app/quick.rs decides what each box says).
@@ -289,7 +291,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
   `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`), `laps_tests.rs` (a past ride's lap list) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
-  zero offset), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
+  zero offset), `curve_tests.rs` (the power curve screen), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
   counted while riding, a system that goes silent.

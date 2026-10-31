@@ -623,6 +623,7 @@ impl Row {
                 R::StopCourse => "STOP FOLLOWING",
                 R::Trainer => "TRAINER CONTROL",
                 R::CalPower => "CALIBRATE POWER",
+                R::Curve => "POWER CURVE",
                 R::Indoor => "INDOOR",
             },
             Row::BtFound(_)
@@ -657,6 +658,8 @@ pub enum RideRow {
     Trainer,
     /// Opens the power meter calibration screen (app/powercal.rs).
     CalPower,
+    /// Opens the power curve screen (app/curve.rs).
+    Curve,
     /// INDOOR ON / OFF: the ride's profile by hand (app/profile.rs).
     Indoor,
 }
@@ -710,6 +713,8 @@ pub const PHONE: [PhoneRow; 6] = {
 pub enum StockRow {
     /// Select reads every ride (a scan spread over the passes); the value shows how far.
     Scan,
+    /// Select opens the power curve (app/curve.rs).
+    Curve,
     /// Critical power from the last 90 days' power curve.
     Cp,
     /// W'.
@@ -751,6 +756,7 @@ impl StockRow {
     pub fn label(self) -> &'static str {
         match self {
             StockRow::Scan => "READ RIDES",
+            StockRow::Curve => "POWER CURVE",
             StockRow::Cp => "CP",
             StockRow::WPrime => "W'",
             StockRow::Fit => "CP FIT",
@@ -773,10 +779,11 @@ impl StockRow {
 }
 
 /// The fitness menu (HISTORY > FITNESS): what stock's rides give. Their settings' import is in SYSTEM.
-pub const FITNESS: [StockRow; 17] = {
+pub const FITNESS: [StockRow; 18] = {
     use StockRow::*;
     [
         Scan,
+        Curve,
         Cp,
         WPrime,
         Fit,

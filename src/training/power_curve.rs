@@ -347,6 +347,37 @@ mod tests {
         assert_eq!(r.best[12], ((10 * 400 + 3590 * 200) / 3600) as u16); // an hour
     }
 
+    /// The incremental bests against a brute-force scan of every window, on synthetic series (a seeded wobble with
+    /// surges): exact up to 20 minutes, and the 30 and 60 minute ones within the 10-second block rule (module doc:
+    /// under 1 % of the best, here a few watts).
+    #[test]
+    fn rolling_matches_brute_force() {
+        for seed in 1..=4u32 {
+            let mut p = [0u16; 4500];
+            let mut x = seed.wrapping_mul(2_654_435_761);
+            for (t, v) in p.iter_mut().enumerate() {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let surge = if (t / 300 + seed as usize).is_multiple_of(4) { 150 } else { 0 };
+                *v = (120 + surge + (x >> 24) % 160) as u16;
+            }
+            let mut r = Rolling::new();
+            for (t, &w) in p.iter().enumerate() {
+                r.sample(t as u32, Some(w));
+            }
+            for (i, &d) in DURATIONS.iter().enumerate() {
+                let d = usize::from(d);
+                let brute =
+                    p.windows(d).map(|w| w.iter().map(|&v| u32::from(v)).sum::<u32>() / d as u32).max().unwrap();
+                let got = u32::from(r.best[i]);
+                if d <= 1200 {
+                    assert_eq!(got, brute, "seed {seed}, {d} s");
+                } else {
+                    assert!(got <= brute && brute - got <= 6, "seed {seed}, {d} s: {got} vs {brute}");
+                }
+            }
+        }
+    }
+
     /// A pause ends the efforts; a dropout too; a short gap is filled; samples out of order are skipped.
     #[test]
     fn gaps() {

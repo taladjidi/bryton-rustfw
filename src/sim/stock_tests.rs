@@ -139,7 +139,7 @@ fn stock_data_menu() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Stock, 0));
     let value = |app: &App, i| std::string::String::from(app.menu_row(Menu::Stock, i).unwrap().1.as_str());
-    assert_eq!(value(&app, 1), "--", "the scan HISTORY started is not done");
+    assert_eq!(value(&app, 2), "--", "the scan HISTORY started is not done");
     app.press(&mut sim, Press::Short(Key::Start));
     let (t0, cmds0) = (sim.ms, sim.emmc.cmds.len());
     while app.stock.status() == crate::stock::Status::Running {
@@ -154,7 +154,7 @@ fn stock_data_menu() {
     let rows = [S::Scan, S::WeekKm, S::AllKm].map(at);
     assert_eq!(rows.map(|i| value(&app, i)), ["4", "19", "37"].map(std::string::String::from));
     let cp = crate::power_curve::fit_cp(&app.stock.out.curve).unwrap();
-    assert_eq!(value(&app, 1), std::format!("{} W", cp.cp));
+    assert_eq!(value(&app, 2), std::format!("{} W", cp.cp));
     run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);
     sim.save("stock");

@@ -8,6 +8,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **The power curve screen (app/curve.rs, ui/curve.rs, HISTORY > FITNESS > POWER CURVE and the ride menu)**: sim only.
+  To check on the unit: the 90-day curve after the scan, the green curve growing during a ride with the meter, the
+  cursor by Page and by tap, both ends of the axis legible, and the redraw cost of opening it (`tools/dev.py info`).
+
 - **Torque effectiveness and pedal smoothness (drivers/sensors.rs page 0x13, the TE L/R and PS L/R fields)**: sim only.
   The owner's Sigeyi spider PM may not send page 0x13 at all, so its fields would stay "--" for a whole ride. To check:
   pair it, pedal for a few minutes with the TE L/R box on screen; a value means it sends 0x13, "--" all ride means it

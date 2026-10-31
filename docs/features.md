@@ -555,6 +555,17 @@ built from the FIT files it finds, so the ride goes from it too (inferred). A po
 nothing: `\Rustfw\delete.rec` says what is being moved, and the next start finishes it (tested by cutting the
 power after every sector written).
 
+**POWER CURVE** (HISTORY > FITNESS > POWER CURVE, and in the ride menu while a power meter is heard): the best average power for 13
+durations from 1 s to 1 h on a log time axis (1 s, 5 s, 15 s, 30 s, 1, 2, 3, 5, 8, 12, 20, 30 min, 1 h). In orange the
+last 90 days' curve from stock's rides (what FITNESS's scan keeps and CP and W' are fitted on, empty until the scan has
+run; there is no all-time curve), in green this ride's, computed as the ride goes (one sample a second into 13 running
+sums over two rings of 3 KB: no rescan of the file; a ride resumed after a reset starts it again). CP and W' of the
+fit show above the plot ("CP --" without). A white mark under the plot is the cursor and the lines under it read
+the duration, "5 MIN 310 W" for the 90 days and for the ride ("--" where not held): Page steps it round, Lap steps
+back (while riding Start and Lap stay the ride's), a tap on the plot picks the nearest duration, Back leaves. The
+plot is drawn when the screen opens, and again while a ride runs when its curve changed (at most every 5 s); the
+cursor redraws only its strip and readout. Colours are the theme roles (docs/gallery.md, DARK and LIGHT).
+
 ## Laps
 
 - **AUTO LAP** (SETTINGS > BIKE): OFF (the default), BY DISTANCE or BY TIME, with LAP EVERY 1 to 50 km (5) or 1 to 60 min (10). An auto lap is the Lap key's lap (`Ride::lap`, the same recorder event), so the FIT file holds the same lap message; it does not move a workout on. Only while the ride runs.

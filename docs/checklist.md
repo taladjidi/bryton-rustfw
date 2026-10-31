@@ -125,6 +125,7 @@ Others
 - [x] ANT+ beat-to-beat intervals for HRV (patch P8, Garmin): sim
 - [x] ANT+ speed, cadence, speed and cadence (stock, all): sim
 - [x] ANT+ power (stock, all): sim
+- [~] Power curve screen: the 90-day curve and this ride's over it, CP and W', a cursor by key and tap (FITNESS, ride menu): sim; not yet seen on the unit
 - [~] Power meter calibration: zero offset, auto zero (stock, Garmin, Wahoo, Karoo): sim; not yet seen on the unit
 - [~] Sensor pairing menu: pair, forget (stock, all): unit; one sensor per kind; the maker's short name in the row (ANT+ common page 80): sim
 - [ ] Sensor pool: several of a kind, switch when another is found (stock, Garmin)
