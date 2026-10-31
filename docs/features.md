@@ -470,7 +470,7 @@ MENU
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, THEME
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER),
-     |             BIKES > ACTIVE BIKE, BIKE 1 to 3 > ODOMETER, a part > SERVICE, RESET
+     |             BIKES > ACTIVE BIKE, BIKE 1 to 3 > ODO, a part > SERVICE, RESET
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >,
                    SCREENSHOT
  +- PLACES >       SAVE PLACE, then the favourite places (distance and bearing from here) -> ALTITUDE (typed), DELETE
@@ -1060,8 +1060,8 @@ before the limits (an earlier build's) reads them OFF. A later build appends its
 UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trips and the odometer as five u32 (TRIP 1 m
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
 C, AUTO and zeros. REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
-DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; CHAINRINGS and CASSETTE are 156 and 157;
-QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP is 167, LEVEL STEP and SLOPE SCALE 168 and 169, GNSS SYSTEMS 170, STEEP DESCENT the last (171; 172 in
+DATE FORMAT are 152 to 154; SUNSET is byte 155 and reads OFF when missing; CHAINRINGS and CASSETTE are 156 and 157;
+QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP is 167, LEVEL STEP and SLOPE SCALE 168 and 169, GNSS SYSTEMS 170, STEEP DESC the last (171; 172 in
 all); they read CLOCK, OFF and the defaults when missing.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
