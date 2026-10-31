@@ -52,6 +52,7 @@ use crate::fat::{self, Disk, Fat, File, Seek};
 use crate::fonts::PIXEL;
 use crate::ign;
 use crate::map::{Rect, View, cos_q16, rot_cs};
+use crate::osm;
 use crate::text::{self, Align, Line};
 use crate::ui::{self, Canvas};
 
@@ -151,6 +152,8 @@ pub struct Stats {
     pub ign_tiles: u32,
     /// IGN tiles drawn.
     pub ign: bool,
+    /// The vector tiles drawn came from the OpenStreetMap packs ([`crate::osm`]), not stock's cache.
+    pub osm: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -176,6 +179,8 @@ pub struct Basemap {
     map: bool,
     /// The IGN packs and the IGN tiles held.
     ign: Ign,
+    /// The OpenStreetMap packs.
+    osm: Osm,
     /// The last view change's cost.
     pub stats: Stats,
 }
@@ -198,6 +203,14 @@ struct Ign {
     /// The tiles held (Slot::feats unused), and the clock of their use.
     tiles: [Slot; RASTERS],
     tick: u32,
+}
+
+/// The OpenStreetMap packs ([`crate::osm`]): their folder once looked for (Some(None): none), and the packs looked
+/// for last.
+struct Osm {
+    dir: Option<Option<File>>,
+    packs: [Pack; 2],
+    next: usize,
 }
 
 /// A tile in the packs: its pack's place in [`Ign::packs`], and its (offset, length) there.
@@ -247,6 +260,7 @@ impl Basemap {
                 tiles: [Slot { key: (0, 0, 0), feats: 0, used: 0 }; RASTERS],
                 tick: 0,
             },
+            osm: Osm { dir: None, packs: [Pack { key: (0, 0, 0), file: None, seek: Seek::new() }; 2], next: 0 },
             stats: Stats {
                 tiles_read: 0,
                 bytes_read: 0,
@@ -256,6 +270,7 @@ impl Basemap {
                 zoom: 0,
                 ign_tiles: 0,
                 ign: false,
+                osm: false,
             },
         }
     }
@@ -346,8 +361,12 @@ impl Basemap {
     ) -> Result<bool, fat::Error> {
         let Some(fat) = self.fat.as_mut() else { return Ok(false) };
         // the zoom: the view's own, else a coarser one whose tile under the centre is cached
-        let mut found = None;
+        let mut found = None; // (zoom, whether the OpenStreetMap packs have it)
         for z in (frame.zoom.saturating_sub(FALLBACK).max(1)..=frame.zoom).rev() {
+            if self.osm.find(fat, d, (z, frame.centre_tile(z).0, frame.centre_tile(z).1))?.is_some() {
+                found = Some((z, true));
+                break;
+            }
             if self.dirs.is_none_or(|(dz, _)| dz != z) {
                 let dir = |fat: &mut Fat, d: &mut _, hp| {
                     let mut p = Line::<32>::new();
@@ -367,15 +386,21 @@ impl Basemap {
             let (x, y) = frame.centre_tile(z);
             match fat.find(d, hdir, tile_name(x, y).as_str()) {
                 Ok(_) => {
-                    found = Some(z);
+                    found = Some((z, false));
                     break;
                 }
                 Err(fat::Error::Io) => return Err(fat::Error::Io),
                 Err(_) => {}
             }
         }
-        let (Some(z), Some((_, Some((hdir, pdir))))) = (found, self.dirs) else { return Ok(false) };
-        self.stats.zoom = z;
+        let Some((z, osm)) = found else { return Ok(false) };
+        // OpenStreetMap's packs serve the whole view once they have its centre tile (tiles past their edge draw
+        // empty); else stock's files of this zoom, which the search above just looked at
+        let dirs = match self.dirs {
+            Some((_, Some(dirs))) if !osm => Some(dirs),
+            _ => None,
+        };
+        (self.stats.zoom, self.stats.osm) = (z, osm);
         // the tiles on screen: 2 x 2 around the centre's, up to SLOTS of the 3 x 3 when the view is turned (at 45 degrees
         // five overlap the map)
         let (cx, cy) = frame.centre_tile(z);
@@ -414,9 +439,16 @@ impl Basemap {
             let (feats, _) = feats.as_chunks_mut::<4>();
             self.slots[s] = Slot { key: (0, 0, 0), feats: 0, used: self.tick };
             let name = tile_name(x, y);
-            let got = match (fat.find(d, hdir, name.as_str()), fat.find(d, pdir, name.as_str())) {
-                (Ok(h), Ok(p)) => load(&mut OnCard { fat, d, h, p }, feats, pts, io, &mut self.stats),
-                (Err(e), _) | (_, Err(e)) => Err(e),
+            let got = match (dirs, self.osm.find(fat, d, (z, x, y))) {
+                (_, Err(e)) => Err(e),
+                (_, Ok(Some((f, e)))) => load(&mut InPack { fat, d, f, e }, feats, pts, io, &mut self.stats),
+                (None, Ok(None)) => Ok(0), // past the edge of the packed area
+                (Some((hdir, pdir)), Ok(None)) => {
+                    match (fat.find(d, hdir, name.as_str()), fat.find(d, pdir, name.as_str())) {
+                        (Ok(h), Ok(p)) => load(&mut OnCard { fat, d, h, p }, feats, pts, io, &mut self.stats),
+                        (Err(e), _) | (_, Err(e)) => Err(e),
+                    }
+                }
             };
             let feats = match got {
                 Ok(k) => k,
@@ -464,6 +496,50 @@ fn tile_name(x: u32, y: u32) -> Line<24> {
     l.push_u32(y);
     l.push_str("_0.bin");
     l
+}
+
+impl Osm {
+    /// Tile (`z`, `x`, `y`)'s file and blobs in the packs; None: no pack has it. A pack is opened once (its absence
+    /// remembered too).
+    fn find(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl Disk,
+        (z, x, y): (u8, u32, u32),
+    ) -> Result<Option<(File, osm::Entry)>, fat::Error> {
+        if self.dir.is_none() {
+            self.dir = Some(match fat.open(d, osm::DIR) {
+                Ok(f) if f.dir => Some(f),
+                Err(fat::Error::Io) => return Err(fat::Error::Io),
+                _ => None,
+            });
+        }
+        let Some(Some(dir)) = self.dir else { return Ok(None) };
+        let key = (z, x / osm::BLOCK, y / osm::BLOCK);
+        let file = match self.packs.iter().position(|p| p.key == key) {
+            Some(i) => self.packs.get(i).and_then(|p| p.file),
+            None => {
+                let file = match fat.find(d, dir, osm::name(z, x, y).as_str()) {
+                    Ok(f) => {
+                        let mut h = [0u8; 16];
+                        (fat.read_at(d, &f, 0, &mut h)? == h.len() && osm::header_ok(&h, z, x, y)).then_some(f)
+                    }
+                    Err(fat::Error::Io) => return Err(fat::Error::Io),
+                    Err(_) => None,
+                };
+                let i = self.next % self.packs.len();
+                self.next = i + 1;
+                if let Some(p) = self.packs.get_mut(i) {
+                    *p = Pack { key, file, seek: Seek::new() };
+                }
+                file
+            }
+        };
+        let Some(f) = file else { return Ok(None) };
+        let mut e = [0u8; 16];
+        let n = fat.read_at(d, &f, osm::entry_at(x, y), &mut e)?;
+        Ok(if n == e.len() { osm::entry(e, f.size).map(|e| (f, e)) } else { None })
+    }
 }
 
 impl Ign {
@@ -742,6 +818,27 @@ impl<D: Disk> Pair for OnCard<'_, D> {
     fn read(&mut self, p: bool, offset: u32, buf: &mut [u8]) -> Result<usize, fat::Error> {
         let f = if p { self.p } else { self.h };
         self.fat.read_at(self.d, &f, offset, buf)
+    }
+}
+
+/// A tile's two blobs in an OpenStreetMap pack, as the H and P files `load` reads.
+struct InPack<'a, D: Disk> {
+    fat: &'a mut Fat,
+    d: &'a mut D,
+    f: File,
+    e: osm::Entry,
+}
+
+impl<D: Disk> Pair for InPack<'_, D> {
+    fn size(&self, p: bool) -> u32 {
+        if p { self.e.plen } else { self.e.hlen }
+    }
+    fn read(&mut self, p: bool, offset: u32, buf: &mut [u8]) -> Result<usize, fat::Error> {
+        let (base, len) = if p { (self.e.p, self.e.plen) } else { (self.e.h, self.e.hlen) };
+        // never past the blob: the next one is another tile's
+        let n = len.saturating_sub(offset).min(u32::try_from(buf.len()).unwrap_or(u32::MAX)) as usize;
+        let at = base.checked_add(offset).ok_or(fat::Error::Corrupt)?;
+        self.fat.read_at(self.d, &self.f, at, buf.get_mut(..n).ok_or(fat::Error::Corrupt)?)
     }
 }
 
@@ -1489,6 +1586,112 @@ pub(crate) mod tests {
             fat.set_size(&mut d, &mut h, len, t).unwrap();
         }
         d.0
+    }
+
+    /// The test volume (stock's synthetic tiles too) with these OpenStreetMap packs in `\Rustfw\Maps\osm`.
+    pub fn image_with_osm(packs: &[(std::string::String, std::vec::Vec<u8>)]) -> std::vec::Vec<u8> {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let t = fat::write::dos_time((2026, 10, 31, 12, 0, 0));
+        let mut dir = fat.root();
+        for name in ["Rustfw", "Maps", "osm"] {
+            dir = fat.ensure_dir(&mut d, dir, name, t).unwrap();
+        }
+        for (name, bytes) in packs {
+            let mut bytes = bytes.clone();
+            let len = bytes.len() as u32;
+            bytes.resize(bytes.len().div_ceil(fat::SECTOR) * fat::SECTOR, 0);
+            let mut h = fat.create(&mut d, dir, name, t).unwrap();
+            fat.write_sectors(&mut d, &mut h, 0, &bytes).unwrap();
+            fat.set_size(&mut d, &mut h, len, t).unwrap();
+        }
+        d.0
+    }
+
+    /// A tile's H and P bytes through `load`: the features kept (the fuzz's entry to the pack reader).
+    pub fn load_blobs(h: &[u8], p: &[u8]) -> usize {
+        struct Slices<'a>(&'a [u8], &'a [u8]);
+        impl Pair for Slices<'_> {
+            fn size(&self, p: bool) -> u32 {
+                u32::try_from(if p { self.1.len() } else { self.0.len() }).unwrap_or(u32::MAX)
+            }
+            fn read(&mut self, p: bool, offset: u32, buf: &mut [u8]) -> Result<usize, fat::Error> {
+                let src = if p { self.1 } else { self.0 };
+                let s = src.get(offset as usize..).ok_or(fat::Error::Corrupt)?;
+                let n = s.len().min(buf.len());
+                buf[..n].copy_from_slice(&s[..n]);
+                Ok(n)
+            }
+        }
+        let (mut feats, mut pts) = (vec![[0u16; 4]; FEATS], vec![0u16; PTS * 2]);
+        load(&mut Slices(h, p), &mut feats, &mut pts, &mut [0u8; IO], &mut Stats::default()).unwrap_or(0)
+    }
+
+    /// OpenStreetMap packs (synthetic, built here): every kind of feature in its colour, the lake's island a hole,
+    /// the tunnel not drawn; tiles of the pack held, stock's tiles where the pack has no tile at the view's zoom,
+    /// and what a view costs next to stock's (printed).
+    #[test]
+    fn draws_osm_packs() {
+        let mut d = Ram(image_with_osm(&crate::osm::tests::fixture()), 0);
+        let mut b = basemap();
+        // zoom 14 at 3 m a pixel, centred on tile (8192, 8192)'s middle, south-east of the origin (2446 m a tile)
+        let v = View { cx: 1223, cy: -1223, mpp16: 48, rot: 0 };
+        let t0 = std::time::Instant::now();
+        b.render(&mut d, AREA, v, ORIGIN);
+        let took = t0.elapsed();
+        std::println!("osm: {:?} in {took:?}, {} sector reads", b.stats, d.1);
+        assert!(b.stats.osm && b.stats.zoom == 14 && !b.stats.ign, "{:?}", b.stats);
+        let Layer::Map(px) = b.layer(AREA, v, ORIGIN) else { panic!("no map") };
+        save(px, AREA, "osm_z14_3m");
+        let at = |v: View, px: &[u16], t: (u32, u32), u, w| {
+            let (x, y) = Frame::new(v, ORIGIN, AREA.2, AREA.3).proj(14, t.0, t.1).at(u, w);
+            assert!((0..i64::from(AREA.2)).contains(&x) && (0..i64::from(AREA.3)).contains(&y), "off screen {x},{y}");
+            px[(y * i64::from(AREA.2) + x) as usize]
+        };
+        let se = (8192, 8192);
+        assert_eq!(at(v, px, se, 1750, 2300), WATER, "the lake");
+        assert_eq!(at(v, px, se, 2000, 2150), BACKGROUND, "the island");
+        assert_eq!(at(v, px, se, 2500, 2200), BACKGROUND, "the tunnel is not drawn");
+        assert_eq!(at(v, px, se, 1600, 2200), CYCLEWAY, "the cycleway");
+        assert_eq!(at(v, px, se, 1800, 2600), UNPAVED, "the track");
+        assert_eq!(at(v, px, se, 2000, 1400), RAIL, "the rail line");
+        assert_eq!(at(v, px, se, 2000, 1695), MOTORWAY, "the motorway");
+        // held tiles are not read again
+        let reads = d.1;
+        b.render(&mut d, AREA, View { cx: 1300, ..v }, ORIGIN);
+        assert!(b.stats.tiles_read == 0 && d.1 - reads <= 2, "held: only the centre tile's index entry is read");
+        // the tile to the west
+        let v = View { cx: -1223, ..v };
+        b.render(&mut d, AREA, v, ORIGIN);
+        let Layer::Map(px) = b.layer(AREA, v, ORIGIN) else { panic!("no map") };
+        save(px, AREA, "osm_z14_3m_west");
+        assert_eq!(at(v, px, (8191, 8192), 1600, 1500), WATER, "the river");
+        assert_eq!(at(v, px, (8191, 8192), 2500, 2000), MINOR, "the residential road");
+        // 8 m a pixel (zoom 13, then 12): the pack has neither, stock's zoom 12 tiles are drawn
+        let v12 = View { cx: -2000, cy: -700, mpp16: 128, rot: 0 };
+        let t0 = std::time::Instant::now();
+        b.render(&mut d, AREA, v12, ORIGIN);
+        std::println!("stock: {:?} in {:?}", b.stats, t0.elapsed());
+        assert!(!b.stats.osm && b.stats.zoom == 12 && b.stats.features > 5, "{:?}", b.stats);
+    }
+
+    /// A pack whose index and blobs are damaged (random bytes over a few of them): no panic, the view still renders.
+    #[test]
+    fn damaged_osm_pack() {
+        let clean = crate::osm::tests::fixture();
+        let v = View { cx: 1223, cy: -1223, mpp16: 48, rot: 0 };
+        for (seed, off) in [(1u32, 0usize), (2, 16 + 16 * 17), (3, 4112), (4, 4112 + 40), (5, 4112 + 90)] {
+            let mut packs = clean.clone();
+            let mut x = seed;
+            for byte in packs[1].1.iter_mut().skip(off).take(24) {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                *byte = (x >> 16) as u8;
+            }
+            let mut d = Ram(image_with_osm(&packs), 0);
+            let mut b = basemap();
+            b.render(&mut d, AREA, v, ORIGIN);
+            assert!(matches!(b.layer(AREA, v, ORIGIN), Layer::Map(_) | Layer::NoMap), "seed {seed}");
+        }
     }
 
     /// Pixel (`x`, `y`) of the area lies in IGN tile (`z`, `tx`, `ty`) at the tile's pixel (i, j): None outside it.

@@ -262,7 +262,14 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
 
 - **Now:** stock's cached tiles (`\Map\Data\Temp`), read only. They exist only where stock has drawn. The full
   region maps stock downloads (`\MAP\MapData\<region>`) were empty on the unit.
-- **Next:** our own packs, made on the computer from **OpenStreetMap** with planetiler's OpenMapTiles profile, written
+- **OpenStreetMap packs (done, sim; not yet seen on the unit):** `tools/map_pack.py` builds packs for a bounding box
+  from an Overpass JSON (no dependency, no planetiler), `src/storage/osm.rs` documents the format, and `ui/tiles.rs`
+  draws them with stock's tile code (roads by class, tracks and paths, cycleways, rail, water; no setting: the pack
+  is used at a zoom where it has the tile under the view's centre, else stock's, IGN first). Left: a Geofabrik
+  `.pbf` reader (pyosmium is not installed here; a state-size extract would need a streaming pass), lakes made of
+  several ways, place names and POIs (water points, summits), a lower zoom limit for a whole country, an on-screen
+  settings choice (STOCK / IGN / OSM) if the automatic order is not enough.
+- **Original plan, kept for a larger area:** our own packs, made on the computer from **OpenStreetMap** with planetiler's OpenMapTiles profile, written
   in the same record format `src/ui/tiles.rs` already draws (stock's maps use the same schema). One file per zoom 10
   tile holding zooms 10 to 14 (341 tiles: a 32-byte header, an index of offset and length, 4-byte aligned records),
   copied over USB mass storage. A tool, `tools/map_pack.py`, with no new dependency (sqlite3 is in Python's

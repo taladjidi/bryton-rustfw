@@ -5777,3 +5777,55 @@ fn battery_saver_byte() {
     }
     assert!(modes.iter().all(|&n| n > 300) && wild > 300 && short > 300, "{modes:?} {wild} {short}");
 }
+
+/// OpenStreetMap packs (storage/osm.rs, read by ui/tiles.rs `load`): the synthetic packs with random bytes changed
+/// in the header, the index and the blobs, and cut short; every index entry through `entry`, every one it accepts
+/// through `load`: no panic, and each case reached (entries accepted and refused, tiles that keep features and
+/// tiles whose features are all dropped, headers accepted and refused).
+#[test]
+fn osm_packs() {
+    use crate::osm::{self, tests::fixture};
+    let mut noise = bytes(41, 1 << 22);
+    let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+    let (mut accepted, mut refused, mut kept, mut dropped, mut head_ok, mut head_bad) = (0, 0, 0, 0, 0, 0);
+    for (_, good) in fixture() {
+        for _ in 0..400 {
+            let mut bad = good.clone();
+            for _ in 0..next() % 10 {
+                // mostly where the structure is: the header, the first index entries and the first blobs
+                let at = match next() % 4 {
+                    0 => next() as usize % 16,
+                    1 => next() as usize % 600,
+                    _ => 4112 + next() as usize % (bad.len() - 4112),
+                };
+                bad[at] = next() as u8;
+            }
+            bad.truncate(if next() % 4 == 0 { next() as usize % (bad.len() + 1) } else { bad.len() });
+            if bad.len() < 16 {
+                continue;
+            }
+            let h: [u8; 16] = bad[..16].try_into().unwrap();
+            if osm::header_ok(&h, 14, 8192, 8192) || osm::header_ok(&h, 14, 8191, 8192) {
+                head_ok += 1;
+            } else {
+                head_bad += 1;
+            }
+            for i in 0..256usize {
+                let Some(e) = bad.get(16 + 16 * i..32 + 16 * i) else { break };
+                let Some(e) = osm::entry(e.try_into().unwrap(), bad.len() as u32) else {
+                    refused += 1;
+                    continue;
+                };
+                accepted += 1;
+                let blob = |off: u32, len: u32| bad[off as usize..(off + len) as usize].to_vec();
+                if crate::tiles::tests::load_blobs(&blob(e.h, e.hlen), &blob(e.p, e.plen)) > 0 {
+                    kept += 1;
+                } else {
+                    dropped += 1;
+                }
+            }
+        }
+    }
+    assert!(accepted > 100 && refused > 100 && kept > 100 && dropped > 10, "{accepted} {refused} {kept} {dropped}");
+    assert!(head_ok > 20 && head_bad > 20, "headers {head_ok} accepted, {head_bad} refused");
+}

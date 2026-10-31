@@ -27,8 +27,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   main loop (not measured: one H read of 500 bytes and at most 8 P reads a pass by construction; `tools/dev.py info` on the unit). Missing for more: stock caches only the tiles its screens showed,
   so a course through a region it never drew has no names; filling the cache, or reading the names from the map
   files' vector tiles (`\Map\MapData`, gzip MVT, `route.rs` reads the same files), would be a new reader. Water points
-  and shops: stock's `poi` classes (4.5) have no drinking water, and `tools/map_pack.py` does not exist yet (our own
-  OpenStreetMap packs, phase 5): it would need to write `natural=peak|saddle`, `mountain_pass` and
+  and shops: stock's `poi` classes (4.5) have no drinking water, and `tools/map_pack.py` does not write them yet (it draws roads, paths, rail and water only): it would need to write `natural=peak|saddle`, `mountain_pass` and
   `amenity=drinking_water` with names and elevation into a pack the unit reads.
 - **CLIMBS DONE (app/climbs_done.rs)**: sim only. Still to see: a real climb of a followed course or the road ahead
   listed at its top with a plausible time and VAM, the banner, the average power and heart rate, the list empty after
@@ -469,6 +468,11 @@ A feature not listed here was seen on the unit.
   about 45 sectors of tile data per tile, at most 6 tiles, so about 150 KB a view change, as stock's basemap; the
   decoding is 87 us a tile on the computer, about 3 to 6 ms on the unit with the D-cache off, inferred), the
   "(c) IGN" corner, the 2.1 MB map memory zeroed at boot.
+- **OpenStreetMap packs** (`\Rustfw\Maps\osm`, `tools/map_pack.py`): sim only, on a synthetic area. Still to see: a
+  pack of the owner's own area made from an Overpass extract and copied over USB (docs/install.md), drawn at zoom 14
+  with its tracks and paths and at 13 and 11 to 12 with the roads, the time of a view change (in the sim it reads one
+  index sector and the tile's blobs, a few hundred bytes to a few KB a tile, against stock's cache files), a lake
+  assembled from several ways (not drawn: the tool takes closed ways only), a pack larger than a block (several files).
 - **Sensors other than the heart-rate strap:** speed, cadence, power (the decoders follow the ANT+ profiles,
   checked against openant).
 - **The automatic backlight by eye:** stock's curve exactly (its setting 1: 8 % in the dark, 20 % at dusk, 30 % to
