@@ -103,7 +103,6 @@ fields of one kind into one step. Settings these need go in the settings file (T
   the Page key acting on the press (patch P14);
 - ~~start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start~~ done, sim (features.md "Start reminder and ready check");
 - workouts: ~~the next-step strip instead of a popup (patch P3), two targets per step~~ done, sim (features.md);
-- zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;
 - ~~the heart rate strap's battery (ANT+ page 7); sensor names~~ done, sim (features.md); Di2 hood button actions and the media remote done earlier, gear teeth by presets done, sim (teeth from the Di2 itself open, status.md);
 - ~~zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power~~ done, sim (features.md "Zones");
 - ~~screenshots saved to `\Screenshot\` (critical: a card write), the debug log after a fault (critical)~~ done, sim
@@ -200,8 +199,7 @@ The golden rule (AGENTS.md) depends on this whole phase.
    with DFA a1 (`Alpha1`) and RMSSD as developer fields for Intervals.icu (docs/sync.md, "Why two files").
    `tools/sync.py` uploads them from the computer and brings the planned workouts back. Next: a run against the
    real services; the phone app (section 9).
-4. Settings file (phase 1's store moves here). Open, and now wanted: the 32 backup registers are full (docs/status.md,
-   features.md "Settings registers"), so a setting added needs a file to free them, two copies with a CRC.
+4. ~~Settings file~~ done, see T0 at the top (`\Rustfw\settings.bin`, on the unit; features.md, Settings).
 5. USB mass storage: rides off and courses, workouts and maps on, with no phone app. The recorder and the FAT
    writer stop while the computer owns the volume.
 
@@ -211,11 +209,11 @@ Done (features.md, Power, HRV and the power curve): the ride metrics, W' balance
 rides with EST FTP / APPLY, the ride's CP / W' latched at its start, the power meter's calibration, the bike weight,
 the live DFA a1 and RMSSD fields, the HRV messages in the full copy, HRVT1 and HRVT2.
 
-- Next: torque pages (0x11, 0x12) and torque effectiveness / pedal smoothness (page 0x13). One FTP only: a CP setting
+- Next: torque pages (0x11, 0x12). Torque effectiveness and pedal smoothness (page 0x13) are done, sim (features.md). One FTP only: a CP setting
   apart from it, and indoor-only copies of the FTP, are dropped.
 - Alerts on the buzzer and a banner: HR and power limits, eat and drink reminders by time, distance or kJ (stock
   has six kinds).
-- Auto lap; ride history and totals for the overview.
+- ~~Auto lap~~ done, sim (features.md, Laps); ~~ride history and totals for the overview~~ done, sim (features.md, History).
 - ~~Power smoothing on the big power value, kept across restarts (patch P5).~~ Done, sim (POWER SMOOTH in BIKE).
 - **Open: the DFA a1 artifact filter.** The live filter drops a beat more than 5 % from the previous kept one (hrv.rs). Compare it
   with Domestique's method (median of the neighbours, a 20 % rule, an R^2 >= 0.95 gate on the window) on a ride
@@ -234,7 +232,7 @@ mountain), with what off-road riding needs:
 - Climbs ahead and the climb pacer on tracks and paths (the road classes stock's routing ignores are where MTB rides).
 - Touch: larger targets and the touch lock by default while moving (gloves, mud); keys first.
 - Later: suspension or dropper data if the sensors exist (ANT+ / BLE), and a descent flow field.
-Done 2026-10-27 (owner's choices): the profile by hand in BIKE > PROFILE (INDOOR still wins from the trainer heard), sub_sport mountain kept in the recovery record, continuous GNSS during an MTB ride, auto-pause under 2 km/h for 5 s, a set of 4 pages (PAGES > MTB PAGES), climbs ahead following paths (stock's speed class 1). Still to do: touch for gloves and mud, a higher-resolution map track, descent and moving-time fields, suspension and dropper data.
+Done 2026-10-27 (owner's choices): the profile by hand in BIKE > PROFILE (INDOOR still wins from the trainer heard), sub_sport mountain kept in the recovery record, continuous GNSS during an MTB ride, auto-pause under 2 km/h for 5 s, a set of 4 pages (PAGES > MTB PAGES), climbs ahead following paths (stock's speed class 1). Still to do: touch for gloves and mud, a higher-resolution map track, suspension and dropper data (~~descent and moving-time fields~~ done, :93 and :122).
 
 ## 4b. History and training load
 
@@ -247,7 +245,7 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
 - **Power curve screen:** the mean-maximal power from 1 s to 60 min over the season and all time, with the date of
   each best.
 - **Training load:** daily TSS, fitness (CTL: 42-day average), fatigue (ATL: 7-day), form (TSB: CTL - ATL), the ramp
-  rate, weekly TSS against a target. Not built.
+  rate, weekly TSS against a target. Built, sim (features.md, TRAINING LOAD); still open: the ramp rate and the weekly TSS target.
 - **Fields for the overview and the pages:** this week's load as one bar a day (coloured by intensity), a progress
   bar of the week (TSS or distance against the target), form as a number with its state (fresh, neutral, tired),
   fitness as a sparkline of the last weeks.
@@ -293,7 +291,7 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
 - **Done (sim):** climbs without a course, from stock's routing maps (climbs_ahead.rs, BIKE > CLIMBS AHEAD); the
   climb pacer on a followed course (pacing.rs, the TOP field: constant-speed closed form from CP, W' and the weights);
   the CLIMB page, opened once at a climb's start (profile by grade, gain, length, grade).
-- **Next:** the way back to the course drawn, navigate to the start, reverse a course.
+- **Done:** the way back (BACK TO START) and reverse a course, sim (features.md). **Next:** navigating to the start of a course is a straight line only (sim); routing is open.
 - **Open: live segments without Strava**, from the rider's own rides: a segment found in a past ride (a climb, a
   stretch ridden often), the time against the best, on a field, with no service in between.
 - **Open: stock's Climb Challenge**, compared with our climbs ahead on the same ride (the climbs found, their
