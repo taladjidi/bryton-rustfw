@@ -431,7 +431,7 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 13] = [
+    let words: [&[u8]; 14] = [
         b"peek ",
         b"poke ",
         b"load ",
@@ -439,6 +439,7 @@ fn dev_link_input() {
         b"0x4",
         b"\n",
         b"shot\n",
+        b"where\n",
         b"bat\n",
         b"sector ",
         b"emmc\n",

@@ -20,6 +20,7 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
                                   # ./dev.py peek 0x580040c4 reads 0xfa0000nn within a minute
                                   # find / bench / mapbench / wtest: see ./dev.py -h
     ./dev.py prof [--reset] [--watch 5]   # the profiler: per section of the pass, calls/s, mean / max us, % of wall time
+    ./dev.py where                # the screen and the cursor row's label (read-only)
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
     tools/profile.py --run        # run a build from RAM, then scripted scenarios (idle, pages, menu, a ride
                                   # discarded), a markdown table each
@@ -28,7 +29,8 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
                                   # Only for a build WITHOUT EMMC_WRITE (what check.sh builds): dev.py run loads into
                                   # RAM, but the image's own writes still happen in an EMMC_WRITE build. Build it from
                                   # the main checkout (a worktree lacks ant_key.bin / di2_key.bin: sensor screens show
-                                  # NO KEY). Start is pressed only in static menus; --rides adds the ride pages.
+                                  # NO KEY). Before each Start it asks the unit `where` its cursor is and moves it to the row by name;
+                                  # --rides adds the ride pages.
 
 - **The profiler** (`src/link/prof.rs`, always on): `App::step`'s sections (`App::timed`, one DWT read each) and the
   main loop's own (touch, input, USB), each its calls, cycles and longest run; the panel's pixels and the eMMC's

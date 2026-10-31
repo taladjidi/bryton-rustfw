@@ -18,18 +18,17 @@ sheet-N.png (six pairs a sheet, labelled), summary.txt and summary.json (every p
 or failed, with the reason). The shots can show the owner's position or map: never copy them into the
 repository.
 
-Safety, enforced here (refuse). Replay is positional and the unit's data-dependent menus (sensors, places, bikes,
-history, the ride menu...) have other rows than the simulator's, so a Start is only ever pressed inside a static menu
-(MAIN, SETTINGS, ME, ZONES, DISPLAY, BIKE, ALERTS, PAGES, DI2 KEYS: the const tables, src/sim/walk_tests.rs
-`static_menu`). A path is walked only if:
+Safety, enforced here. Before every Start that the simulator pressed in a menu, the walk asks the unit where its cursor
+is (dev.py `where`: `TITLE|row/rows|LABEL`), checks the title is the expected one, moves the cursor by Page (then Lap)
+until the row label is the one the simulator pressed on (bounded by the row count), and refuses the Start when that live
+label has a DENY word. So data-dependent menus (sensors, history, workouts, the ride menu...) are walked when the target
+row exists on the unit, and the path is refused ("row not on the unit") when it does not. A path is walked only if:
 - its keys are page / lap / start / back / "page --long" and no word of its name is on DENY;
-- the simulator did not mark it "dyn" (a Start pressed inside a data-dependent menu) and no ancestor of its name
-  (`a/b/c` -> a, b) is a non-static menu: entering a dynamic menu from a static parent is fine, going into it is not;
 - it is not a ride path (RIDE PAGE n, RIDE MENU: Start on the overview), unless --rides (only with a build without
   EMMC_WRITE). After a ride path the ride is discarded (home, the ride page, END, DISCARD, >= 0.5 s between keys) and
   `info` must say `ride idle`, else the walk stops;
 - after each Start that opens a menu with more Starts to come, the title band of the unit's shot must match the
-  simulator's (thresholded mask): on a mismatch the path is aborted and the unit sent home (drift check).
+  simulator's (thresholded mask): on a mismatch the path is aborted and the unit sent home (second layer).
 The paths hold no setting change (the simulator's walk takes no shot while it cycles a setting); imperial paths (IMP) and
 date-format overviews are skipped since showing them needs a setting change. -o must be under target/ or outside
 the repository.
@@ -47,8 +46,6 @@ KEYS = ('page', 'lap', 'start', 'back', 'page --long')
 DENY = ('SAVE', 'SCREENSHOT', 'FORMAT', 'RESET', 'DELETE', 'FORGET', 'UPDATE', 'FIRMWARE', 'IMPORT', 'ERASE',
         'DRIVE', 'GIVE', 'APPLY', 'PAIR', 'TRAINER', 'COURSE', 'RAMP', 'START', 'ADD PAGE', 'ACTIVE BIKE', 'SERVICE',
         'INDOOR', 'LIGHT', 'CAL', 'MOVE', 'SHOW', 'RENAME', 'END', 'DISCARD', 'FROM GPS')
-# the menus a Start may be pressed in (titles, as menu_title names them; the root "MET MAIN" reads as MAIN)
-STATIC = ('MAIN', 'SETTINGS', 'ME', 'ZONES', 'DISPLAY', 'BIKE', 'ALERTS', 'PAGES', 'DI2 KEYS')
 SETTLE = 0.5
 BAND = (20, 24, 220, 50)       # the title band under the status strip (x0, y0, x1, y1), static text
 DRIFT = 0.25                   # fraction of the lit pixels that may differ (antialias, colours)
@@ -56,19 +53,18 @@ FAULT = '0x580040c4'
 PER_SHEET, COLS = 6, 3
 
 
+def denied(text):
+    """The DENY word in a screen name or a row label, or None."""
+    words = ' ' + ' '.join(w for w in re.split(r'[^A-Z0-9]+', text.upper()) if w) + ' '
+    return next((d for d in DENY if f' {d} ' in words), None)
+
+
 def refuse(entry):
     """Why a path must not run on the unit, or None."""
     name = entry['name']
-    up = name.upper()
-    words = ' ' + ' '.join(w for w in re.split(r'[^A-Z0-9]+', up) if w) + ' '
-    for d in DENY:
-        if f' {d} ' in words:
-            return f'name has {d}'
-    if entry.get('dyn', True):
-        return 'a Start inside a data-dependent menu'
-    for a in name.split('/')[:-1]:
-        if re.sub(r'^(MET|IMP) ', '', a) not in STATIC:
-            return f'ancestor {a} is not a static menu'
+    d = denied(name)
+    if d:
+        return f'name has {d}'
     bad = [k for k in entry['keys'] if k not in KEYS]
     if bad:
         return f'unknown key {bad[0]!r}'
@@ -110,6 +106,39 @@ def png_image(png):
     import io
     from PIL import Image
     return Image.open(io.BytesIO(png)) if isinstance(png, bytes) else Image.open(png)
+
+
+def parse_where(answer):
+    """`where T|i/n|L` -> (title, index, rows, label); `where OVERVIEW` -> ('OVERVIEW', 0, 0, ''); None if odd."""
+    if not answer.startswith('where '):
+        return None
+    t = answer[6:].split('|')
+    if len(t) == 3 and re.fullmatch(r'\d+/\d+', t[1]):
+        i, n = t[1].split('/')
+        return t[0], int(i), int(n), t[2]
+    return (t[0], 0, 0, '') if len(t) == 1 else None
+
+
+def navigate(ask, press_key, step):
+    """Puts the unit's cursor on the row `step` names, by name. `ask()` is the `where` answer, `press_key(k)` a
+    key. None when there (and the live label is not denied), else (outcome, reason)."""
+    w = parse_where(ask())
+    if w is None or w[0] != step['title'] or not w[2]:
+        return 'drift-abort', f'the unit shows {w and w[0]!r}, not {step["title"]}'
+    for k in ('page', 'lap'):  # Page walks the list (it wraps); Lap is the fallback
+        for _ in range(w[2]):
+            if w[3] == step['row']:
+                break
+            press_key(k)
+            w = parse_where(ask())
+            if w is None or w[0] != step['title']:
+                return 'drift-abort', f'the unit left {step["title"]} while the cursor moved'
+        if w[3] == step['row']:
+            break
+    if w[3] != step['row']:
+        return 'refused', 'row not on the unit'
+    d = denied(w[3])
+    return ('refused', f'row {w[3]} has {d}') if d else None
 
 
 def press(s, k):
@@ -280,14 +309,23 @@ def main():
             home(s)
             aborted = None
             checks = dict(drift_checks(e))
+            refused = None
             for i, k in enumerate(e['keys']):
+                step = e['steps'][i]
+                if 'title' in step:
+                    refused = navigate(lambda: dev.command(s, 'where'), lambda x: press(s, x), step)
+                    if refused:
+                        break
                 press(s, k)
                 if i in checks:
                     sim = sim_bmp(by_name[checks[i]]['n']) if checks[i] in by_name else None
                     if sim is None or not same_title(png_image(dev.shot(s)), sim):
                         aborted = f'after key {i} ({k}) the screen is not {checks[i]}'
                         break
-            if aborted:
+            if refused:
+                home(s)
+                outcome = refused
+            elif aborted:
                 home(s)
                 outcome = ('drift-abort', aborted)
             else:
@@ -348,11 +386,32 @@ def main():
 def selftest():
     import tempfile
     from PIL import Image
-    ok = lambda name, keys=('start',), dyn=False: {'n': 1, 'name': name, 'keys': list(keys), 'dyn': dyn}
+    ok = lambda name, keys=('start',): {'n': 1, 'name': name, 'keys': list(keys)}
     assert refuse(ok('MET MAIN/SETTINGS/ME')) is None
-    assert refuse(ok('MET MAIN/SENSORS/PHONE')) == 'ancestor SENSORS is not a static menu'
-    assert refuse(ok('MET MAIN/SENSORS')) is None  # entering a dynamic menu from a static parent is fine
-    assert refuse(ok('MET MAIN/SETTINGS/ME', dyn=True)) == 'a Start inside a data-dependent menu'
+    assert refuse(ok('MET MAIN/SENSORS/PHONE')) is None  # data-dependent menus are walked by row name
+    # navigate by name against a fake unit: a 4-row menu, the cursor on row 0
+    class Fake:
+        def __init__(self, rows, title='SENSORS'):
+            self.rows, self.title, self.i, self.keys = rows, title, 0, []
+        def ask(self):
+            return f'where {self.title}|{self.i}/{len(self.rows)}|{self.rows[self.i]}'
+        def key(self, k):
+            self.keys.append(k)
+            self.i = (self.i + (1 if k == 'page' else -1)) % len(self.rows)
+    st = lambda row, title='SENSORS': {'key': 'start', 'title': title, 'row': row}
+    f = Fake(['A', 'B', 'C', 'D'])
+    assert navigate(f.ask, f.key, st('C')) is None and f.i == 2 and f.keys == ['page', 'page']
+    f = Fake(['A', 'B', 'C', 'D'])
+    assert navigate(f.ask, f.key, st('A')) is None and f.keys == []
+    f = Fake(['A', 'B', 'C', 'D'])
+    assert navigate(f.ask, f.key, st('Z')) == ('refused', 'row not on the unit') and len(f.keys) <= 8
+    f = Fake(['A', 'B', 'FORGET SENSOR'])
+    assert navigate(f.ask, f.key, st('FORGET SENSOR')) == ('refused', 'row FORGET SENSOR has FORGET')
+    f = Fake(['A'], title='MENU')
+    assert navigate(f.ask, f.key, st('A'))[0] == 'drift-abort' and f.keys == []
+    assert navigate(lambda: 'where OVERVIEW', print, st('A'))[0] == 'drift-abort'
+    assert parse_where('where SENSORS|3/7|HEART RATE') == ('SENSORS', 3, 7, 'HEART RATE')
+    assert parse_where('where RIDE 2') == ('RIDE 2', 0, 0, '') and parse_where('err x') is None
     assert refuse(ok('MET MAIN/PLACES/ADD PAGE')) and refuse(ok('MET MAIN/PAGES/ACTIVE BIKE'))
     assert refuse(ok('MET RIDE MENU/LIGHT')) and refuse(ok('MET MAIN/SETTINGS/DISPLAY/CAL'))
     assert ride_state('x, auto off held 1, ride idle') == 'idle' and ride_state('x') == '?'

@@ -75,6 +75,24 @@ fn info_answers() {
     );
 }
 
+/// `where` names the screen, the cursor row and the row count, as the menus draw them.
+#[test]
+fn where_names_the_cursor_row() {
+    let (mut sim, mut app) = app_at(1, 2, 3);
+    let ask = |app: &App| {
+        let mut pc = Pc::default();
+        Session::new().feed(b"where\n", app, Stats::default(), &mut pc);
+        std::string::String::from_utf8(pc.got).unwrap()
+    };
+    assert_eq!(ask(&app), "where OVERVIEW\n");
+    app.press(&mut sim, Press::Long(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Page));
+    let Screen::Menu(m, i) = app.screen() else { panic!("{:?}", app.screen()) };
+    let label = app.menu_row(m, i).unwrap().0;
+    assert_eq!(ask(&app), format!("where MENU|{i}/{}|{}\n", app.rows(m), label.as_str()));
+    assert_eq!(i, 1);
+}
+
 /// The screenshot (rendered row by row from the app's state) must equal what the panel shows.
 #[test]
 fn shot_equals_the_panel() {

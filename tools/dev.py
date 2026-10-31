@@ -3,6 +3,7 @@
 plugged in: the dot at the top right turns green when the link is ready.
 
   dev.py info                     version and uptime
+  dev.py where                    the screen, cursor row and label: where TITLE|row/rows|LABEL (read-only)
   dev.py bat                      battery history, one reading a minute (the last 4 hours)
   dev.py shot [-o shot.png]       one screenshot
   dev.py watch [-i 1] [-n 0]      continuous screenshots into target/shots/NNNNN.png (Ctrl-C to stop)
@@ -294,6 +295,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('info')
+    sub.add_parser('where', help='the screen, the cursor row and its label: where TITLE|row/rows|LABEL (read-only)')
     sub.add_parser('bat', help='battery history: one reading a minute, the last 4 hours')
     sub.add_parser('reset')
     p = sub.add_parser('key', help='press a key (the app acts as if it was pressed): key page [--long]')
@@ -381,7 +383,7 @@ def main():
                     r = line(s)
             elif a.cmd == 'wtest':
                 print(command(s, f'wtest {a.lba}'))
-            elif a.cmd in ('info', 'reset', 'drive', 'stackfault'):
+            elif a.cmd in ('info', 'where', 'reset', 'drive', 'stackfault'):
                 print(command(s, a.cmd))
             elif a.cmd == 'peek':
                 first = command(s, f'peek {a.addr} {a.n}')

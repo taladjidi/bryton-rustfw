@@ -305,6 +305,28 @@ impl App {
         (0..MAX_ROWS).take_while(|&i| self.row(menu, i).is_some()).count()
     }
 
+    /// The dev link's `where` answer: `TITLE|row/rows|LABEL` in a menu (row counted from 0), `OVERVIEW`, `RIDE n` or
+    /// `SCREEN name` otherwise. Read-only: built from what drawing computes, nothing is stored.
+    pub(crate) fn where_text(&self) -> Line<48> {
+        use core::fmt::Write;
+        let mut l = Line::new();
+        let _ = match self.screen {
+            Screen::Main => l.write_str("OVERVIEW"),
+            Screen::Ride(n) => write!(l, "RIDE {n}"),
+            Screen::Menu(m, i) => {
+                let label = self.menu_row(m, i).map_or(Line::<16>::new(), |r| r.0);
+                write!(l, "{}|{i}/{}|{}", menu_title(m), self.rows(m), label.as_str())
+            }
+            s => {
+                let mut name = Line::<24>::new();
+                let _ = write!(name, "{s:?}");
+                let n = name.as_str();
+                write!(l, "SCREEN {}", n.split('(').next().unwrap_or(n))
+            }
+        };
+        l
+    }
+
     /// Menu row `i` of `menu`: label, value, value colour; None past the last row.
     pub(crate) fn menu_row(&self, menu: Menu, i: usize) -> Option<(Line<16>, Line<12>, u16)> {
         use menu::{Reading, Row};
