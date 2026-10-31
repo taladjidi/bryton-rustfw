@@ -1598,6 +1598,7 @@ fn the_profile_row_shows_commute() {
     assert_eq!(app.settings.profile, Some(crate::ride::Profile::Commute));
     run(&mut sim, &mut app, 500);
     sim.save("menu-bike-profile");
+}
 
 /// WORKOUTS > RIDE A COURSE > the hill: the ride starts indoors on the trainer, which gets the course grades; the
 /// course page tracks the trainer distance; the end says DONE once with the length and the time.
