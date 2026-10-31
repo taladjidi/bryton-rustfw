@@ -43,7 +43,7 @@ fn file(sim: &Sim) -> Option<(u32, Places)> {
 fn settle(sim: &mut Sim, app: &mut App) {
     for _ in 0..200 {
         run(sim, app, 200);
-        if !app.places.dirty {
+        if !app.places.file.dirty {
             return;
         }
     }
@@ -53,7 +53,7 @@ fn settle(sim: &mut Sim, app: &mut App) {
 /// SAVE PLACE from the main menu, then a restart 1.2 km away: PLACES lists it with its distance and which way.
 #[test]
 fn a_saved_place_is_listed_after_a_restart() {
-    let mut sim = unit(9, crate::fat::tests::image());
+    let mut sim = unit(9, crate::recorder::tests::kept_card());
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
     app.press(&mut sim, Press::Long(Key::Page));
@@ -90,12 +90,38 @@ fn a_saved_place_is_listed_after_a_restart() {
     assert_eq!(file(&sim).map(|f| f.1.len()), Some(0), "the deletion written");
 }
 
+/// The review of 2026-10-31, finding 1: on a card without places.bin a place saved is never written between rides
+/// (it would make the file in `\Rustfw`'s directory sector): kept in memory until a ride's start has made the file,
+/// then written once that ride is saved.
+#[test]
+fn places_wait_for_a_ride_to_make_their_file() {
+    let mut sim = unit(9, crate::fat::tests::image());
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
+    app.save_place(&mut sim);
+    assert_eq!(app.places.list.len(), 1);
+    run(&mut sim, &mut app, 60_000);
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    assert!(read_all(&mut fat, &mut d, "Rustfw/places.bin").is_err(), "never made between rides");
+    assert!(app.places.file.dirty, "waiting");
+    app.start_pause();
+    run(&mut sim, &mut app, 70_000);
+    app.start_pause();
+    app.end_ride();
+    run(&mut sim, &mut app, 30_000);
+    settle(&mut sim, &mut app);
+    let (_, saved) = file(&sim).expect("written after the ride");
+    assert_eq!(saved.get(0).map(|p| (p.lat, p.lon)), Some((FIX_LAT, FIX_LON)));
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
 /// A place's altitude typed by hand in its menu; at the next ride's start there the barometer is calibrated to it
 /// (not to the receiver's average, nor kept on the standard day), marked as a place's; a place saved during the ride
 /// is written once the ride is saved, never while it is open.
 #[test]
 fn a_ride_start_at_a_place_calibrates_to_its_altitude() {
-    let mut sim = unit(9, crate::fat::tests::image());
+    let mut sim = unit(9, crate::recorder::tests::kept_card());
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
     app.save_place(&mut sim);
@@ -152,7 +178,7 @@ fn a_ride_start_at_a_place_calibrates_to_its_altitude() {
 fn a_cut_at_every_sector_reads_old_or_new() {
     for (writes, reliable) in [(1, false), (2, false), (1, true), (2, true)] {
         let setup = || {
-            let mut sim = unit(9, crate::fat::tests::image());
+            let mut sim = unit(9, crate::recorder::tests::kept_card());
             if reliable {
                 sim.emmc.rel_param = crate::emmc::EN_REL_WR;
             }
@@ -183,7 +209,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
             sim.emmc.rel_param = if reliable { crate::emmc::EN_REL_WR } else { 0 };
             let mut app = App::start(&mut sim, None);
             run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
-            assert!(app.places.loaded, "cut {cut}: read");
+            assert!(app.places.file.loaded, "cut {cut}: read");
             let got = app.places.list;
             if got == old {
                 olds += 1;
@@ -209,7 +235,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
 /// save writes a first copy.
 #[test]
 fn damaged_copies() {
-    let mut sim = unit(9, crate::fat::tests::image());
+    let mut sim = unit(9, crate::recorder::tests::kept_card());
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 3000);
     app.save_place(&mut sim);
@@ -230,7 +256,7 @@ fn damaged_copies() {
     assert_eq!(start(image.clone()).1.places.list.len(), 1, "the other copy");
     image[base + 512 + 20] ^= 1;
     let (mut sim, mut app) = start(image);
-    assert!(app.places.loaded && app.places.list.is_empty(), "neither: none");
+    assert!(app.places.file.loaded && app.places.list.is_empty(), "neither: none");
     app.save_place(&mut sim);
     settle(&mut sim, &mut app);
     assert_eq!(file(&sim).map(|f| f.1.len()), Some(1));

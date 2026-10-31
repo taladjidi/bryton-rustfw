@@ -61,7 +61,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Course](img/course.png) | ![Course profile](img/course-profile.png) | ![Course fields](img/course-fields.png) |
 | A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead, the climb pacer's TOP field (sim) |
 | ![Courses](img/courses.png) | ![CLIMB page](img/climb-page.png) | ![Peaks along the course](img/course-poi.png) |
-| Courses on the card: stock's routes, FIT, GPX (sim) | The CLIMB page, opened when the climb starts: the climb's title (length, grade) and the gain left in metres, its profile by grade with the part done dark and the rider white, the climb coach's gauge, the elapsed time and the distance left (sim, made-up road) | The profile names the next peak or col (title: name and elevation) and marks each one with a cyan column; NEXT POI is the distance to it (sim, made-up names on synthetic tiles) |
+| Courses on the card: stock's routes, FIT, GPX (sim) | The CLIMB page, opened when the climb starts: the climb's title (length, grade), the gain left in metres and the grade under the rider in its grade colour, its profile by grade with the part done dark and the rider white, the climb coach's gauge, the elapsed time and the distance left (sim, made-up road) | The profile names the next peak or col (title: name and elevation) and marks each one with a cyan column; NEXT POI is the distance to it (sim, made-up names on synthetic tiles) |
 
 | ![Steep descent](img/steep-descent.png) | | |
 | STEEP DESC 10 %: the banner 300 m before a 12 % drop, and the DESCENT AHEAD field counting down (sim, made-up course) | | |
@@ -214,3 +214,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|
 | ![Reversed course](img/course-reversed.png) | ![To the start](img/course-to-start.png) |
 | The synthetic hill followed backwards (COURSE > REVERSE COURSE): the profile runs downhill, the first turn is a right (sim) | Off the start: NEXT TURN shows the way to it, a compass point and the distance (N390M), until the course is joined (sim) |
+
+## A sensor lost mid-ride
+
+| |
+|:-:|
+| ![Sensor lost](img/sensor-lost.png) |
+| The strap went silent for 10 s while the ride records: "HR LOST" once (a red banner), the strip's BLE turns red until it is heard again ("HR BACK"). A ride that stops being saved shows a red cross after the time and a "NOT SAVING" banner (sim) |

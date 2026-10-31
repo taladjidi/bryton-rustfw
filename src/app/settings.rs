@@ -1488,7 +1488,7 @@ impl App {
     /// (app/settings_file.rs).
     pub(crate) fn save_misc(&mut self, b: &mut impl Board) {
         self.write_settings_registers(b);
-        self.settings_store.dirty |= self.card_writable;
+        self.settings_store.file.dirty |= self.card_writable;
         self.settings_store.lost = false; // the rider's change: the registers hold it, a late read must not undo it
     }
 

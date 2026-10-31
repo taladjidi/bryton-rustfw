@@ -4,7 +4,7 @@
 //! of the panel, so the whole app (power-up sequence, drawing protocol, clock, keys, power off) runs in
 //! `cargo test-host`. Rule: logic goes here, `main.rs` only moves bytes and reads pins (AGENTS.md).
 //!
-//! This file holds the [`Board`] trait and [`App`]: its state, [`App::start`] and the main loop's pass
+//! This file holds the [`Board`] trait and [`App`]: its state, [`App::new_with`] and [`App::begin`] and the main loop's pass
 //! ([`App::step`]). The rest of the app is in `app/`, one `impl App` per concern (app/mod.rs lists them).
 
 #![no_std]
@@ -27,7 +27,8 @@ pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, mga, nrf
 pub use link::{dev, msc, phone, prof, usbsnap};
 pub use nav::{altitude, climbs_ahead, course, places, segment, segment_match, sun};
 pub use storage::{
-    bikes, fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds, trash, volume,
+    bikes, copies, fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds,
+    trash, volume,
 };
 pub use training::{
     alerts, hrtss, hrv, hrvt, load, pacing, power, power_curve, power_match, ramp, ride, trainer, workout,
@@ -374,8 +375,9 @@ pub struct App {
     /// read) is time those samples already counted.
     touch_sampled: bool,
     /// The scan of stock's rides (the stock data menu, the overview's totals), over its cache when main.rs gives
-    /// it one ([`App::set_scan_cache`]).
-    stock: stock::Scan,
+    /// it one ([`App::set_scan_cache`]). 13 KB in its own cell beside the app in AXI SRAM (main.rs `make_stock_scan`),
+    /// so the app stays under its size budget and its copy on the stack at start-up shrinks with it.
+    stock: &'static mut stock::Scan,
     /// [`Board::awake_us`] at the start of the last pass: the work since, plus the sleep ([`Board::last_sleep`]),
     /// is the time a held key counts.
     awake_at: u32,
@@ -383,8 +385,8 @@ pub struct App {
     /// [`MAX_PASS_MS`]); every timer counts it, never a fixed [`POLL_MS`], so a long pass (a slow card) or a
     /// shorter or longer sleep (stop mode) keeps them right.
     dt_ms: u32,
-    /// The card of the past ride shown ([`Screen::Past`]).
-    past: history::Past,
+    /// The card of the past ride shown ([`Screen::Past`]): 11 KB in its own cell (main.rs `make_past`), as `stock`.
+    past: &'static mut history::Past,
     /// The card's survey for STORAGE (app/survey.rs).
     survey: volume::Survey,
     /// A ride's delete the last run may have left unfinished: looked for when the scan of the rides first runs
@@ -437,22 +439,36 @@ pub struct App {
 
 impl App {
     /// Panel up, backlight on, the Nordic chip started (BLE, then ANT with `ant_key` and the paired sensors), the
-    /// settings read, the first ride page drawn.
+    /// settings read, the first ride page drawn. Tests only: the parts the firmware keeps in their own cells (main.rs)
+    /// are leaked boxes here.
+    #[cfg(test)]
     pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
         Self::start_with(b, ant_key, None)
     }
 
     /// [`App::start`] with Shimano's network key too (`di2_key`: the Di2 channel, sensors.rs).
+    #[cfg(test)]
     pub fn start_with(b: &mut impl Board, ant_key: Option<[u8; 8]>, di2_key: Option<[u8; 8]>) -> Self {
-        let mut app = Self::new_with(b, ant_key, di2_key);
+        extern crate std;
+        let stock = std::boxed::Box::leak(std::boxed::Box::new(stock::Scan::new()));
+        let past = std::boxed::Box::leak(std::boxed::Box::new(history::Past::new()));
+        let mut app = Self::new_with(b, ant_key, di2_key, stock, past);
         app.begin(b);
         app
     }
 
-    /// The first half of [`App::start_with`]: the panel and the chips started, the state read back. It returns the
+    /// The first half of the start: the panel and the chips started, the state read back. It returns the
     /// app as one struct expression, which the caller can place where it lives (main.rs `make_app`) before
     /// [`App::begin`] runs on it there: a named local returned at the end was one more copy of the app on the stack.
-    pub fn new_with(b: &mut impl Board, ant_key: Option<[u8; 8]>, di2_key: Option<[u8; 8]>) -> Self {
+    /// `stock` and `past` are the scan of stock's rides and the past ride's card, fresh (`new`): their own cells (main.rs),
+    /// outside the app.
+    pub fn new_with(
+        b: &mut impl Board,
+        ant_key: Option<[u8; 8]>,
+        di2_key: Option<[u8; 8]>,
+        stock: &'static mut stock::Scan,
+        past: &'static mut history::Past,
+    ) -> Self {
         panel::init(b);
         play(b, &BEEP_ON);
         let mut rx = nrf::Rx::new();
@@ -569,10 +585,10 @@ impl App {
             touch: touch::Recogniser::default(),
             touch_pending: None,
             touch_sampled: false,
-            stock: stock::Scan::new(),
+            stock,
             awake_at: 0,
             dt_ms: POLL_MS,
-            past: history::Past::new(),
+            past,
             survey: volume::Survey::new(),
             trash_check: false,
             trash_tried: false,
@@ -612,7 +628,7 @@ impl App {
         }
     }
 
-    /// The second half of [`App::start`], on the app in place: what is left on the card and in the backup
+    /// The second half of the start ([`App::new_with`] the first), on the app in place: what is left on the card and in the backup
     /// registers acted on, the first screen drawn, the backlight on.
     pub fn begin(&mut self, b: &mut impl Board) {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
@@ -707,15 +723,34 @@ impl App {
         t = self.timed(b, Sec::Gnss, t);
         // the app's own run time, not the receiver's (switched off on an indoor ride, its clock starts again)
         if up_before < FAULT_CLEAR_MS && self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
-            b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
+            // a minute of running: the next fault is the first in a row again; the line not logged yet keeps its marker
+            let w = b.backup_read(FAULT_BKP);
+            b.backup_write(FAULT_BKP, if self.fault_due.is_some() { w & !0xff } else { 0 });
         }
         self.gps.note_fix();
+        let was = self.strip.rec;
         self.strip.rec = self.rec.mark(&self.ride, self.card_writable);
+        if self.strip.rec == Rec::NotSaving && matches!(was, Rec::Running | Rec::Paused) {
+            self.alarm("NOT SAVING"); // a ride that stops being recorded must be seen, once
+        }
         self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
         t = self.timed(b, Sec::Strip, t);
         self.pair_asked(b);
         self.live.tick(pass_ms);
         self.radio.tick(pass_ms);
+        let (lost, back) = self.radio.lost_event(self.ride.state() != ride::State::Idle);
+        for (mask, word, kind) in [(lost, " LOST", Banner::Alarm), (back, " BACK", Banner::Info)] {
+            let mut l = Line::<32>::new();
+            for k in Kind::ALL.into_iter().filter(|&k| mask & 1 << k as u8 != 0) {
+                l.push_str(if l.as_str().is_empty() { "" } else { ", " });
+                l.push_str(k.short());
+            }
+            if !l.as_str().is_empty() {
+                l.push_str(word);
+                self.say_as(l.as_str(), kind);
+            }
+        }
+        self.strip.lost = self.radio.lost != 0;
         self.reopen_rested(b, pass_ms);
         t = self.timed(b, Sec::Radio, t);
         if !self.emmc.lent() {
@@ -787,13 +822,15 @@ mod tests {
     extern crate std;
     use super::*;
 
-    /// The app's size (printed): it lives in AXI SRAM (main.rs make_app; about 19 KB of the 512 KB free on
-    /// 2026-10-27), and its one temporary copy at start-up is on the stack (123 KB of DTCM: 64 KB here plus main's
-    /// 16 KB fits). Raised from 56 KB at the owner's go (2026-10-27: App was 57 104 B of 57 344).
+    /// The app's size (printed): it lives in AXI SRAM (main.rs make_app; the AXI SRAM left after the cells is
+    /// `tools/numbers.py`'s `axi_free`, 51 628 B on 2026-10-31), and its one temporary copy at start-up is on the stack
+    /// (123 KB of DTCM: 48 KB here plus main's 16 KB fits). Raised from 56 KB at the owner's go (2026-10-27: App was 57 104 B of 57 344); lowered to 48 KB
+    /// when the stock scan and the past ride's card went to their own cells (2026-10-31: 65 520 B to 41 472 B). Over
+    /// it: move the largest parts out the same way (main.rs `make_stock_scan`), print them with `size_of_val`.
     #[test]
     fn app_size_budget() {
         std::println!("App is {} B", core::mem::size_of::<App>());
-        assert!(core::mem::size_of::<App>() < 64 * 1024, "App is {} B", core::mem::size_of::<App>());
+        assert!(core::mem::size_of::<App>() < 48 * 1024, "App is {} B", core::mem::size_of::<App>());
     }
 
     #[test]

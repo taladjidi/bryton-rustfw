@@ -1042,7 +1042,8 @@ STOCK):
   and bearing from here ("1.2 KM NE"); a place's menu types its altitude by hand (from a known elevation) or DELETEs
   it (asked first). Stopped within 30 m of a place with an altitude (a fix of 10 m or better), the barometer is
   calibrated to it, once a visit and again when a ride's start asks for a calibration (it replaces the receiver's 30 s
-  average there). Kept in `\Rustfw\places.bin`, two copies with a CRC, written between rides only.
+  average there). Kept in `\Rustfw\places.bin`, two copies with a CRC, written between rides only (made at a ride's
+  start: on a card without it, a place saved is written after the next ride).
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.
@@ -1172,3 +1173,25 @@ area. A build without EMMC_WRITE=1 offers it write protected.
   (app/clock.rs module doc). The strip, the dates, the ride file's name and the sun's times follow the shown clock.
   Until an offset is learnt, and for the 2 s after a start before the settings file is read, the RTC is shown as is.
 - Still open: the 12 h time format (the strip's layout).
+
+## Boot and the main loop
+
+- **A card that answers late at boot** (app/riding.rs `step_recorder`): a ride left open at boot (its backup register marks
+  it) is not dropped when the card is slow to answer. The recorder waits for the card; without Start, the ride comes back
+  paused with RIDE RESUMED once the card answers, and the marker stays until then. Sim only.
+- **The main loop's policy** (app/loop_policy.rs, host-tested): when the USB link starts (cable in), when an unplug resets
+  the unit (never during a ride or its card work), which wake sources an idle sleep arms, how long each slice is, and how a
+  pass counts in the awake and CPU shares `tools/dev.py info` reports. main.rs keeps the primitives. Seen on the unit from a RAM run.
+- **USB suspend** (board/usb.rs `Link::watch`, link/dev.rs `watch_usb`): when the computer suspends the unit's USB, the link
+  should wake without a new enumeration. Worked out on the host; the sleep is not yet seen on the unit (status.md).
+
+## Ascent
+
+- **The ascent filter** (nav/altitude.rs, ride.rs): the ride's ascent is counted from the barometric altitude after a median of
+  5, a 1/6 average, a slewed reference and a 3 m hysteresis, so noise adds no climbing. Tuned on one real 60 km ride (341 m
+  became 123 m, offline); a ride's ascent against a known climb on the unit is still to check.
+
+## Backup registers
+
+- **Pages moved off backup register 19**: stock reads that register at boot for its last battery voltage. The first start of
+  a build moves the pages to `\Rustfw\pages.bin`, and stock, reinstalled, should keep its voltage as before (expected, not yet seen).

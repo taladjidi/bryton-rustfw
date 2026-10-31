@@ -157,7 +157,7 @@ impl App {
         }
         // the cache written, its FAT comparison first spread over passes in the same time budget (a read-only build
         // skips it: its write would be refused by emmc::Card::write after those reads, for nothing)
-        let t = fat::write::dos_time(self.rec_time().0);
+        let t = fat::write::dos_time(self.rec_local());
         while self.stock.unsaved()
             && self.card_writable
             && self.ride_settled()
@@ -326,9 +326,9 @@ impl App {
         // over pages of this firmware's in \Rustfw\pages.bin (the backup registers lost: a flat backup battery)
         self.ensure_pages(b);
         let mut pages = 0;
-        let ours = quiet && self.store.seq != 0;
+        let ours = quiet && self.store.file.seq != 0;
         // the file not read (lent, a read error): its pages unknown, so stock's are not put over them
-        let known = self.store.loaded;
+        let known = self.store.file.loaded;
         for (k, p) in i.pages.iter().enumerate().filter(|_| !ours && known) {
             if let (Some(p), Some(page)) = (p, self.pages.get_mut(k)) {
                 *page = *p;

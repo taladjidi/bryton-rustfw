@@ -448,6 +448,11 @@ impl DayNight {
     ///     assert_eq!(d.update(1000, 1000), None, "100 lux: day, but not within a minute of the switch");
     /// }
     /// assert_eq!(d.update(1000, 1000), Some(false), "a minute on, and held 30 s: day");
+    /// // a reading every 5 s counts 5 s of hold
+    /// for _ in 0..11 {
+    ///     assert_eq!(d.update(10, 5000), None, "dark: held 5 s more, a minute not up since the switch");
+    /// }
+    /// assert_eq!(d.update(10, 5000), Some(true), "a minute on, held 30 s: night");
     /// ```
     pub fn update(&mut self, lux10: u32, dt_ms: u32) -> Option<bool> {
         self.sum = self.sum.saturating_add(lux10);
@@ -457,6 +462,7 @@ impl DayNight {
             return None;
         }
         let lux = self.sum / self.n.max(1);
+        let secs = self.ms / 1000; // a reading every 5 s (THEME AUTO alone) is 5 s of hold, not 1
         (self.sum, self.n, self.ms) = (0, 0, 0);
         if self.first {
             self.first = false;
@@ -467,13 +473,13 @@ impl DayNight {
             (self.night, self.since, self.held) = (night, 0, 0);
             return Some(night);
         }
-        self.since = self.since.saturating_add(1).min(GAP_S);
+        self.since = self.since.saturating_add(secs).min(GAP_S);
         let other = if self.night { lux > DAY_ABOVE } else { lux < NIGHT_BELOW };
         if !other {
             self.held = 0;
             return None;
         }
-        self.held = self.held.saturating_add(1).min(HOLD_S);
+        self.held = self.held.saturating_add(secs).min(HOLD_S);
         if self.held < HOLD_S || self.since < GAP_S {
             return None;
         }

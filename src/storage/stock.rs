@@ -595,7 +595,7 @@ impl Scan {
     /// reading a ride (nothing without a cache, or while a scan runs).
     pub fn new_day(&mut self, date: (u16, u8, u8)) {
         let (y, m, d) = date;
-        let today = u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0);
+        let today = u16::try_from(crate::days_from_civil(y, m, d)).unwrap_or(0); // every pass: no i64 division
         if today != self.today && self.cache.is_some() && self.shown && self.status != Status::Running {
             if self.over {
                 return self.start(date); // the rides past the cache are not in it: read again

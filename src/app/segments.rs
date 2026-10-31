@@ -703,7 +703,7 @@ impl App {
         let idle = self.ride.state() == ride::State::Idle;
         let due = self.up_ms >= START_AT_MS;
         let settled = self.ride_settled();
-        let (writable, t) = (self.card_writable, fat::write::dos_time(self.rec_time().0));
+        let (writable, t) = (self.card_writable, fat::write::dos_time(self.rec_local()));
         let Some(s) = self.segments.as_deref_mut() else { return };
         let mut d = emmc::Volume(&mut self.emmc, b);
         if settled {

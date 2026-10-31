@@ -5,7 +5,7 @@
 //! rules are tested on the host (docs/review-2026-10-29.md A8).
 
 use crate::dev::Stats;
-use crate::{POLL_MS, TOUCH_MS};
+use crate::{IDLE_POLL_MS, POLL_MS, TOUCH_MS};
 
 /// What main.rs does with the USB cable this pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,13 +23,18 @@ pub enum Cable {
 /// The wake sources of this pass's sleep, besides SysTick, the touch INT and the USB link (always on).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Wake {
-    /// An idle sleep (the pass longer than [`POLL_MS`]): the key lines end it at once, and the Nordic chip's bytes
-    /// if `radio` (main.rs `wake_on_io` around the sleep, `io_edge` in it). Never in a short one: a held key's flag
+    /// A long sleep (the pass longer than [`POLL_MS`]): the key lines end it at once, and the Nordic chip's bytes
+    /// if `bytes` (main.rs `wake_on_io` around the sleep, `io_edge` in it). Never in a short one: a held key's flag
     /// or a waiting byte would end every WFI.
     pub io: bool,
-    /// The app reads the Nordic chip's bytes (`App::radio_up`): they may wake an idle sleep. Otherwise main.rs
-    /// flushes them, so a byte nobody reads neither ends every WFI nor waits stale for the next start.
+    /// The app reads the Nordic chip's bytes (`App::radio_up`). Otherwise main.rs flushes them, so a byte nobody
+    /// reads neither ends every WFI nor waits stale for the next start.
     pub radio: bool,
+    /// The chip's bytes end the sleep: read, and an idle sleep ([`IDLE_POLL_MS`]). Not a ride's pass
+    /// ([`crate::RIDE_POLL_MS`]): the sensors' broadcasts would end nearly every one; our side holds them (RTS and
+    /// the RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11, the enable's 0x20), its BLE and
+    /// serialization queues are not known.
+    pub bytes: bool,
 }
 
 /// What ended one wait of a slice (main.rs checks them after each WFI).
@@ -130,7 +135,7 @@ impl LoopPolicy {
     /// known: it is read as soon as it sends, as before) when the pass is longer than [`POLL_MS`].
     pub fn begin_sleep(&mut self, pass_ms: u32, radio_up: bool) -> Wake {
         self.slept = 0;
-        Wake { io: pass_ms > POLL_MS, radio: radio_up }
+        Wake { io: pass_ms > POLL_MS, radio: radio_up, bytes: radio_up && pass_ms >= IDLE_POLL_MS }
     }
 
     /// The next slice of the pass's sleep, ms, or `None` when the pass has slept `pass_ms` (read again each slice: a
@@ -260,10 +265,12 @@ mod tests {
     #[test]
     fn idle_arms_the_keys_and_the_radio_only_when_read() {
         let mut p = LoopPolicy::new(HZ, MAX);
-        assert_eq!(p.begin_sleep(IDLE, true), Wake { io: true, radio: true });
-        assert_eq!(p.begin_sleep(IDLE, false), Wake { io: true, radio: false });
-        assert_eq!(p.begin_sleep(POLL_MS, true), Wake { io: false, radio: true });
-        assert_eq!(p.begin_sleep(TOUCH_MS, false), Wake { io: false, radio: false });
+        assert_eq!(p.begin_sleep(IDLE, true), Wake { io: true, radio: true, bytes: true });
+        assert_eq!(p.begin_sleep(IDLE, false), Wake { io: true, radio: false, bytes: false });
+        // a ride's pass: the keys end it, the sensors' bytes wait in the FIFO for the next pass
+        assert_eq!(p.begin_sleep(crate::RIDE_POLL_MS, true), Wake { io: true, radio: true, bytes: false });
+        assert_eq!(p.begin_sleep(POLL_MS, true), Wake { io: false, radio: true, bytes: false });
+        assert_eq!(p.begin_sleep(TOUCH_MS, false), Wake { io: false, radio: false, bytes: false });
     }
 
     #[test]

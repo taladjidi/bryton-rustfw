@@ -6,6 +6,12 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **The 100 ms ride pass without the Nordic wake (2026-10-31, app/device.rs `RIDE_POLL_MS`)**: sim and a 10 s
+  profile only; needed before a ride build. Still to see: a ride with HR, power, cadence and speed plus the phone
+  connected, the ANT broadcasts per channel over 60 s against about 4.06 Hz per sensor (`tools/dev.py info`'s radio
+  counters), the watcher's resyncs and resets at 0, a sensor search started mid-ride still pairing, backlight AUTO
+  following a light change within 2 s and THEME AUTO switching after 30 s, and a ride over two checkpoints restarted
+  mid-ride (four buttons) then saved.
 - **A card that answers late at boot (2026-10-31, app/riding.rs `step_recorder`)**: sim only. Still to see: a ride
   recording over a checkpoint, the unit restarted (four buttons) with the card failing at the boot (no way to force
   that on the unit yet: a RAM run whose first eMMC commands fail, `tools/dev.py poke` on the card's clock, or a dev
@@ -13,7 +19,8 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   answers, the marker kept (`tools/dev.py peek` of RTC backup register 30) until then.
 
 - **Three bikes and part wear (src/storage/bikes.rs, src/app/bikes.rs)**: sim only. Still to see: the first start making
-  BIKE 1 from the settings' wheel and ODO (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
+  BIKE 1 from the settings' wheel and ODO (`\Rustfw\bikes.bin` written once, after the next ride if the file was not
+  there: a ride's start makes it, review 2026-10-31 finding 1; settings.bin untouched); ACTIVE BIKE
   switching the wheel and weight (the speed from a wheel sensor follows); a ride saved, then within a minute its distance
   on the active bike and its parts; a power cut right after "RIDE SAVED" counting the ride once at the next start; a
   part's SERVICE passed and its notice at the start; the scan's time to count on the unit's card (70 rides).
@@ -109,7 +116,7 @@ A feature not listed here was seen on the unit.
 
 - **Live segments, detection (app/segments.rs, step S3; no effort written)**: sim only. Still to see: the index built
   from `\Rustfw\Segments\` on the card 5 s after the start (no pass slower), the load at a start, the events (`dev.py` reads
-  them), no lost ride on a segment's start or finish; AXI SRAM has 1.6 KB left.
+  them), no lost ride on a segment's start or finish; AXI SRAM's free space is the live `n:axi_free` marker in docs/layout.md.
 - **Live segments, efforts (app/segments.rs, step S5)**: sim only. Still to see, with an `EMMC_WRITE=1` build: a segment
   ridden faster than its PR, the ride saved, then `\Rustfw\Segments\<id>.pr` and a line of `efforts.csv` written after
   the save only (never during the ride, nothing for a ride discarded), read back on the computer; the next pass over
@@ -169,7 +176,8 @@ A feature not listed here was seen on the unit.
 
 - **The app's state files made at a ride's start (storage/recorder/mod.rs `make_kept`; review S7)**: host tests only
   (a card without them, cut at every sector, plain and torn). On the owner's card the first ride start after this
-  build writes `\Rustfw`'s directory sector once (the six files and `Deleted\Full` created zeroed; the files already
+  build writes `\Rustfw`'s directory sector once (the eight files, bikes.bin and places.bin among them, `Deleted\Full`
+  and `Log` created zeroed: review 2026-10-31 finding 1; the files already
   there are left as they are). Still to see: that start, then `dev.py ls \Rustfw` showing all of them, and the pages,
   the bond and the sensors still read and saved afterwards.
 
@@ -572,6 +580,12 @@ A feature not listed here was seen on the unit.
 
 - **A card that never answers keeps the unit on** (auto off held) until the battery runs out; the ride stays on the
   card. Owner to decide whether to allow auto off past `GIVE_UP` (storage/recorder/mod.rs).
+- **The only lap of a ride without laps averages the auto-paused seconds too** (found 2026-10-31, not a fault of
+  the dropped seconds as first thought): with no LAP pressed, the end's lap message takes the session's values
+  (storage/fit.rs `Writer::end`: "the only lap is the ride"), whose heart rate, cadence and power average every
+  record, while a lap of a ride with laps averages the moving records only (`this_lap`). A 62 s test ride showed
+  138 bpm in its lap against 139 over its moving records. Owner to decide whether the single lap should be
+  `this_lap` too (its sums survive a resume since `lap_words`).
 - **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps

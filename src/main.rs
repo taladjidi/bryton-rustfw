@@ -1697,13 +1697,34 @@ fn checkpoint(n: u32) {
 /// opening a workout (a 17 KB frame more) overflowed into `.bss` (2026-10-24). Not inlined, so the one temporary
 /// copy lives in this frame only while the app starts. `App::new` builds the app as one struct expression and
 /// `App::begin` (drawing, the backup registers) runs on it in place: `App::start` doing both and returning a local
-/// made this frame 107 KB, the split 43 KB (2026-10-24, tools/stack_check.py).
+/// made this frame 107 KB, the split 43 KB (2026-10-24, tools/stack_check.py). Its two largest parts come in their own
+/// cells (`make_stock_scan`, `make_past`), built before it: the app was 65 520 B of its 64 KB budget (2026-10-31).
 #[inline(never)]
-fn make_app(board: &mut S510) -> &'static mut App {
+fn make_app(
+    board: &mut S510,
+    stock: &'static mut bryton_rustfw::stock::Scan,
+    past: &'static mut bryton_rustfw::history::Past,
+) -> &'static mut App {
     static APP: static_cell::StaticCell<App> = static_cell::StaticCell::new();
-    let app = APP.init_with(|| App::new_with(board, ANT_KEY, DI2_KEY));
+    let app = APP.init_with(|| App::new_with(board, ANT_KEY, DI2_KEY, stock, past));
     app.begin(board);
     app
+}
+
+/// The scan of stock's rides (storage/stock.rs `Scan`, about 13 KB), the app's largest part, beside it in AXI SRAM
+/// (link.x `.axibss`): built once on the stack in this frame and moved in, as the thresholds' scan.
+#[inline(never)]
+fn make_stock_scan() -> &'static mut bryton_rustfw::stock::Scan {
+    static SCAN: static_cell::StaticCell<bryton_rustfw::stock::Scan> = static_cell::StaticCell::new();
+    SCAN.init_with(bryton_rustfw::stock::Scan::new)
+}
+
+/// The card of the past ride shown (storage/history.rs `Past`, about 11 KB), beside the app in AXI SRAM (link.x
+/// `.axibss`), as the stock scan.
+#[inline(never)]
+fn make_past() -> &'static mut bryton_rustfw::history::Past {
+    static PAST: static_cell::StaticCell<bryton_rustfw::history::Past> = static_cell::StaticCell::new();
+    PAST.init_with(bryton_rustfw::history::Past::new)
 }
 
 /// The course memory (about 70 KB: the course followed, its list), beside the app in AXI SRAM (link.x `.axibss`).
@@ -1820,7 +1841,7 @@ fn main() -> ! {
     sleep_power_init();
     checkpoint(4);
     let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0), io: (0, 0, 0), dma };
-    let app = make_app(&mut board);
+    let app = make_app(&mut board, make_stock_scan(), make_past());
     // what one profiler section costs (link/prof.rs): two counter reads and an add, the second time (the first
     // fills the I-cache from SDRAM)
     let mut overhead = 0;
@@ -1885,13 +1906,15 @@ fn main() -> ! {
         // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
         // while the finger is down)
         // idle: a longer sleep (App::pass_ms), ended at once by a key or a byte from the Nordic chip, so neither
-        // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before)
+        // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before); a ride's
+        // 100 ms pass by a key only (LoopPolicy::begin_sleep): our side holds the chip's bytes (RTS, the RX FIFO);
+        // the chip's ANT event queue is 32 events (BOARD.md 11), its BLE and serialization queues are not known
         let wake = policy.begin_sleep(app.pass_ms(), app.radio_up());
         if !wake.radio {
             nrf_flush();
         }
         if wake.io {
-            wake_on_io(true, wake.radio);
+            wake_on_io(true, wake.bytes);
         }
         'sleep: loop {
             // a finger down makes the pass POLL_MS again
@@ -1959,7 +1982,7 @@ fn main() -> ! {
                 let w = Woke {
                     touch: touch_edge(),
                     timer: timer_done(),
-                    io: wake.io && io_edge(wake.radio),
+                    io: wake.io && io_edge(wake.bytes),
                     key: press.is_some(),
                     usb: woke,
                 };
