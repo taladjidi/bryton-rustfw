@@ -303,6 +303,11 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 ## 7. USB
 
 - **USB1 OTG_HS (0x40040000) with an external ULPI PHY**, high speed. Pins in section 4, all AF10.
+- **The PHY:** ULPI vendor ID 0x0424, product ID 0x0007 (ULPI registers 0 to 3), Microchip (SMSC) USB33x0, a
+  high-speed PHY (USB3300 or USB3320: inferred, they share the ID). Read on the unit on 2026-10-31 through
+  OTG_GPVNDCTL (0x40040034; Synopsys DWC_otg: RegData 7:0, RegAddr 21:16, RegWr 22, NewRegReq 25, VStsDone 27):
+  write NewRegReq with the address, read back once VStsDone is set. Function Control (reg 4) 0x40 on a high-speed
+  build: the high-speed transceiver selected.
 - PHY enable PA7: high, then 200 ms before the core is used.
 - Clocks: OTG HS and OTG HS ULPI in RCC_AHB1ENR. Kernel clock 48 MHz (stock: PLL3Q; this firmware: HSI48).
 - Needs VOS1 (PWR_D3CR VOS = 3).

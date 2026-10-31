@@ -10,8 +10,8 @@
 - `EMMC_WRITE=1 ./check.sh` (src/main.rs `EMMC_WRITE`): a build that may write the card (rides, settings, the
   drive's write mode). Without it the unit records nothing and the USB drive is read only. Install only a build you
   mean to ride with.
-- `USB_FS=1 ./check.sh` (src/board/usb.rs `FULL_SPEED`): USB at full speed (12 Mbit/s, 64-byte packets) instead of
-  the default high speed. An experiment for the drops (docs/usb.md).
+- `USB_HS=1 ./check.sh` (src/board/usb.rs `FULL_SPEED`): USB at high speed (480 Mbit/s, 512-byte packets) instead
+  of the default full speed (12 Mbit/s, 64-byte packets). An experiment for the drops (docs/usb.md); never install it.
 - `DIAG_STOP=N cargo build --release` (src/main.rs `STOP`): stops at boot stage N, to see where a boot stops
   (docs/devloop.md, layer 6). Diagnostic only.
 

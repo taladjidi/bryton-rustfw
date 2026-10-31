@@ -31,9 +31,9 @@ const GRSTCTL: u32 = OTG_HS + 0x010;
 const DCTL: u32 = OTG_HS + 0x804;
 const DSTS: u32 = OTG_HS + 0x808;
 const DCFG: u32 = OTG_HS + 0x800;
-/// A build with USB_FS=1 runs the link at full speed (12 Mbit/s, 64-byte bulk packets) instead of high speed: an
-/// experiment for the drops (2026-10-24: high-speed transfers dropped, and stock's drive dropped on 2026-10-22).
-const FULL_SPEED: bool = option_env!("USB_FS").is_some();
+/// Full speed (12 Mbit/s, 64-byte bulk packets) unless built with USB_HS=1: high-speed transfers drop on this unit
+/// (docs/usb.md; stock's drive too), full speed held for GBs of copies. The PHY itself does high speed (2026-10-31).
+const FULL_SPEED: bool = option_env!("USB_HS").is_none();
 /// Bulk packet size: 512 at high speed, 64 at full speed (USB 2.0 5.8.3).
 const MPS: usize = if FULL_SPEED { 64 } else { 512 };
 const RCC_AHB1RSTR: u32 = RCC + 0x080;

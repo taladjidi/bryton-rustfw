@@ -1,12 +1,16 @@
 # USB at high speed: the drops
 
 High speed USB drops the link under sustained traffic on this unit, with this firmware and with Bryton's. Full speed holds.
-This page has what is known, what was tried, and what to ask or try next. Last updated 2026-10-28.
+This page has what is known, what was tried, and what to ask or try next. Last updated 2026-10-31.
 
 ## The hardware
 
-- **MCU:** STM32H747 (Cortex-M7 at 200 MHz as the bootloader leaves it; the part allows 480). USB1 **OTG_HS** (0x40040000) with an **external ULPI PHY**. The PHY's
-  part number is not known yet (bryton-S510-mods, ghidra/HARDWARE.md, open questions).
+- **MCU:** STM32H747 (Cortex-M7 at 200 MHz as the bootloader leaves it; the part allows 480). USB1 **OTG_HS** (0x40040000) with an **external ULPI PHY**. **The PHY
+  is a high-speed one** (2026-10-31, read over ULPI through OTG_GPVNDCTL, offset 0x34, from the dev link): vendor ID
+  0x0424 (SMSC, now Microchip), product ID 0x0007, Microchip's USB33x0 family (USB3300 / USB3320; the exact part is
+  inferred, they share the ID). Function Control (ULPI reg 4) read 0x40 with the high-speed build running: XcvrSelect
+  00 (the high-speed transceiver), SuspendM set. macOS enumerates that build at 480 Mbit/s (ioreg Device Speed 2), which
+  needs the PHY's chirp handshake. So high speed is supported by the board; the drops are something else.
 - **ULPI pins, all AF10, very high speed, push-pull, no pull** (BOARD.md 4 and 7; the same as stock's HAL_PCD_MspInit
   0xd0298758):
 
@@ -90,7 +94,7 @@ What the unit saw at a drop, the suspend watch, and the causes ruled out are dat
 
 ## Questions for the board's designer
 
-- **Which ULPI PHY is it**, and what clocks it (its own crystal, the frequency)? Is its 60 MHz clock an output to
+- **Which ULPI PHY is it** (its ID says Microchip USB33x0, see The hardware), and what clocks it (its own crystal, the frequency)? Is its 60 MHz clock an output to
   PA5 (input clock mode)?
 - **ULPI routing:** trace lengths and matching to the clock, series resistors, the reference plane. 60 MHz
   single data rate needs the data valid around the clock edge the STM32 samples on (RM0399, OTG_HS ULPI timing).
@@ -106,9 +110,10 @@ What the unit saw at a drop, the suspend watch, and the causes ruled out are dat
 
 ## Meanwhile
 
-- **The installed build runs USB at full speed** (built with `USB_FS=1`): about 1 MB/s for the drive. The dev link
-  and `tools/dev.py run` work the same.
-- **A high-speed build** is the default `cargo build` (no `USB_FS`), kept for these tests.
+- **Builds run USB at full speed by default** (since 2026-10-31): about 1 MB/s for the drive. The dev link and
+  `tools/dev.py run` work the same. Images from 2026-10-27 to 10-30 were high-speed builds (`USB_FS=1` was the
+  switch then and got left out): a course copy dropped again on 2026-10-31 until a full-speed build ran from RAM.
+- **A high-speed build** is `USB_HS=1`, kept for these tests.
 
 Sources:
 - RM0399 (STM32H745/747/755/757 reference manual), OTG_HS chapter.
