@@ -6,6 +6,11 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **GRAVEL, CX and COMMUTE profiles**: sim only. Still to see: BIKE > PROFILE cycling to them and back to AUTO; a GRAVEL ride
+  (file as gravel_cycling, auto-pause at 3 km/h, continuous tracking), a CX one (cyclocross, never pauses, laps by hand), a
+  COMMUTE one (commuting, no climb warnings, the sunset alert at 30 min with a fix); the unit restarted mid-ride coming back
+  with the same profile and sub_sport; the profile kept in settings.bin across a restart.
+
 - **Phone link: the ATT MTU and the notification's app**: sim only. Still to see with an iPhone: the chip starts with
   the MTU configuration (`sd_ble_cfg_set` 0x23, `nrf::ATT_MTU` 103; if it answers NO_MEM the start drops to the two
   links alone, `Version::mtu` 23), the Exchange MTU Request (GATTC 0x9e, response event 0x3a: 0x9e, 0x3a and 0x23 inferred

@@ -67,8 +67,15 @@ pub const NUMBERS: [Setting; 8] = [
 ];
 
 /// BIKE > PROFILE as its byte is the index.
-const PROFILES: [Option<ride::Profile>; 4] =
-    [None, Some(ride::Profile::Road), Some(ride::Profile::Indoor), Some(ride::Profile::Mtb)];
+const PROFILES: [Option<ride::Profile>; 7] = [
+    None,
+    Some(ride::Profile::Road),
+    Some(ride::Profile::Indoor),
+    Some(ride::Profile::Mtb),
+    Some(ride::Profile::Gravel),
+    Some(ride::Profile::Cx),
+    Some(ride::Profile::Commute),
+];
 
 /// GPS POWER as its byte is the index.
 const GPS_POWERS: [GpsPower; 3] = [GpsPower::Auto, GpsPower::Full, GpsPower::Saver];
@@ -843,6 +850,20 @@ mod day_night_file_tests {
         }
         assert!(SettingsCopy::from_sector(&sec).unwrap().settings.zone_custom, "the good ones are read");
         assert!(o.zones_lthr && o.female, "the rest kept");
+    }
+
+    /// The profile byte (data 27) is the index in [`PROFILES`]: the first four keep their numbers (a file written before
+    /// GRAVEL, CX and COMMUTE reads the same profile), the new ones follow, and each round-trips.
+    #[test]
+    fn the_profile_byte_keeps_old_indexes_and_reads_the_new_profiles() {
+        use ride::Profile::{Commute, Cx, Gravel, Indoor, Mtb, Road};
+        let want = [None, Some(Road), Some(Indoor), Some(Mtb), Some(Gravel), Some(Cx), Some(Commute)];
+        for (i, p) in want.into_iter().enumerate() {
+            let s = Settings { profile: p, ..Settings::from_word(0) };
+            let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+            assert_eq!(sec[28 + 27] as usize, i, "{p:?}");
+            assert_eq!(SettingsCopy::from_sector(&sec).map(|c| c.settings.profile), Some(p));
+        }
     }
 
     /// AUTO LAP, LAP EVERY km and min are kept at data 94, 95, 96 and read back; a file of 44, 66, 69 or 94 bytes reads

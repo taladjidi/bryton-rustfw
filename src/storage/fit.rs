@@ -708,6 +708,10 @@ impl Writer {
                 ride::Profile::Road => 7,
                 ride::Profile::Indoor => 6,
                 ride::Profile::Mtb => 8,
+                // FIT SDK profile, sub_sport: cyclocross 11, gravel_cycling 46, commuting 48
+                ride::Profile::Gravel => 46,
+                ride::Profile::Cx => 11,
+                ride::Profile::Commute => 48,
             },
         ]
     }
@@ -1020,7 +1024,8 @@ impl Writer {
             u32::from(self.crc) | u32::from(self.defined & if self.art { !(1 << L_RECORD) } else { !0 }) << 16,
             u32::from(self.mask)
                 | match self.profile {
-                    ride::Profile::Road => 0,
+                    // GRAVEL, CX and COMMUTE are kept as ROAD: the resume takes them back from BIKE (riding.rs)
+                    ride::Profile::Road | ride::Profile::Gravel | ride::Profile::Cx | ride::Profile::Commute => 0,
                     ride::Profile::Indoor => INDOOR,
                     ride::Profile::Mtb => MTB,
                 }
@@ -1475,7 +1480,7 @@ pub(crate) mod tests {
     /// before it reads as a road ride and defines lap and session again (its file's have no sport).
     #[test]
     fn the_profile_goes_into_the_file_and_the_record() {
-        use ride::Profile::{Indoor, Mtb, Road};
+        use ride::Profile::{Commute, Cx, Gravel, Indoor, Mtb, Road};
         for profile in [Road, Indoor, Mtb] {
             let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
             let (mut w, _) = Writer::start(&mut f, T0).unwrap();
@@ -1496,6 +1501,9 @@ pub(crate) mod tests {
                 Road => 7,
                 Indoor => 6,
                 Mtb => 8,
+                Gravel => 46,
+                Cx => 11,
+                Commute => 48,
             };
             for lap in m.iter().filter(|x| x.0 == 19) {
                 assert_eq!((field(lap, 25), field(lap, 39)), (Some(2), Some(sub)), "lap: cycling, {sub}");

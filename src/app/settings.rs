@@ -877,7 +877,8 @@ impl Settings {
         let wheel = WHEELS.iter().position(|&w| w == self.wheel_mm).unwrap_or(1) as u32;
         (match self.profile {
             None | Some(ride::Profile::Mtb) => 0xa7, // MTB in register 16
-            Some(ride::Profile::Road) => 0xa8,
+            // GRAVEL, CX and COMMUTE are in the file only: the register keeps ROAD (the file wins at boot)
+            Some(ride::Profile::Road | ride::Profile::Gravel | ride::Profile::Cx | ride::Profile::Commute) => 0xa8,
             Some(ride::Profile::Indoor) => 0xa9,
         } + 3 * u32::from(!self.ahead)) << 24
             | u32::from(!self.touch) << 23 // ponytail: the bit FTP / 5 (120 at most) leaves free in a full word
@@ -1057,12 +1058,7 @@ impl Settings {
                 }
                 l.push_u32(m.unsigned_abs());
             }
-            Setting::BikeProfile => l.push_str(match self.profile {
-                None => "AUTO",
-                Some(ride::Profile::Road) => "ROAD",
-                Some(ride::Profile::Indoor) => "INDOOR",
-                Some(ride::Profile::Mtb) => "MTB",
-            }),
+            Setting::BikeProfile => l.push_str(self.profile.map_or("AUTO", ride::Profile::name)),
             Setting::Remote(n) => l.push_str(self.remote.get(usize::from(n)).map_or("", |a| a.name())),
         }
     }
@@ -1137,7 +1133,10 @@ impl Settings {
                     None => Some(ride::Profile::Road),
                     Some(ride::Profile::Road) => Some(ride::Profile::Indoor),
                     Some(ride::Profile::Indoor) => Some(ride::Profile::Mtb),
-                    Some(ride::Profile::Mtb) => None,
+                    Some(ride::Profile::Mtb) => Some(ride::Profile::Gravel),
+                    Some(ride::Profile::Gravel) => Some(ride::Profile::Cx),
+                    Some(ride::Profile::Cx) => Some(ride::Profile::Commute),
+                    Some(ride::Profile::Commute) => None,
                 }
             }
             Setting::Remote(n) => {

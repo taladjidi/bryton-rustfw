@@ -97,6 +97,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::PageList(ride::Profile::Road) => "ROAD PAGES",
         Menu::PageList(ride::Profile::Indoor) => "INDOOR PAGES",
         Menu::PageList(ride::Profile::Mtb) => "MTB PAGES",
+        Menu::PageList(_) => "ROAD PAGES", // GRAVEL, CX and COMMUTE ride the road set (never opened)
         Menu::Settings => "SETTINGS",
         Menu::Me => "ME",
         Menu::Zones => "ZONES",

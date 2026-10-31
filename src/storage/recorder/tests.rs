@@ -396,6 +396,9 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
         Profile::Road => 7,
         Profile::Indoor => 6,
         Profile::Mtb => 8,
+        Profile::Gravel => 46,
+        Profile::Cx => 11,
+        Profile::Commute => 48,
     });
     let img = crate::fat::tests::image();
     let mut full = Card { img: img.clone(), budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };

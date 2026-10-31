@@ -266,7 +266,7 @@ impl App {
 
     /// The receiver's power mode now: GPS POWER, or for AUTO its choice.
     pub(crate) fn gnss_saver(&self) -> bool {
-        if self.ride.state() != ride::State::Idle && self.profile == ride::Profile::Mtb {
+        if self.ride.state() != ride::State::Idle && self.profile.tracks() {
             return false; // off road: continuous tracking whatever GPS POWER says (the owner, 2026-10-27)
         }
         match self.settings.gps_power {

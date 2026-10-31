@@ -86,7 +86,8 @@ impl App {
     /// recorder (`Ride::lap`, then `App::recorder`), without moving a workout on.
     pub(crate) fn auto_lap(&mut self) {
         let (m, s) = self.settings.auto_lap_limits();
-        if self.ride.lap_reached(m, s)
+        if self.ride_profile().auto_lap()
+            && self.ride.lap_reached(m, s)
             && let Some(ev) = self.ride.lap()
         {
             self.recorder(ev);
@@ -488,6 +489,14 @@ impl App {
                 // its profile from the record (an older one: ROAD, automatic), by hand if the rider set it so;
                 // automatic, a trainer silent for TRAINER_QUIET_S after the restart turns it back to ROAD or MTB
                 self.profile = self.rec.clean.profile();
+                if self.profile == ride::Profile::Road {
+                    // the record keeps GRAVEL, CX and COMMUTE as ROAD: BIKE says which
+                    self.profile = self
+                        .settings
+                        .profile
+                        .filter(|p| p.outdoors() && *p != ride::Profile::Mtb)
+                        .unwrap_or(self.profile);
+                }
                 (self.profile_by_hand, self.tlink.quiet_s) = (self.rec.clean.by_hand(), 0);
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
                 self.ride_started = RideStart::new((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
@@ -605,7 +614,10 @@ impl App {
             alt_ref: alt.1,
             alt_corr_mm: self.alt.corr(),
             profile: self.ride_profile(),
-            pause_kmh: AUTO_PAUSE_KMH.get(self.settings.auto_pause).copied().unwrap_or(0),
+            pause_kmh: match AUTO_PAUSE_KMH.get(self.settings.auto_pause).copied().unwrap_or(0) {
+                0 => self.ride_profile().pause_kmh(),
+                k => k,
+            },
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {
@@ -642,7 +654,10 @@ impl App {
             // the sunset alert: the minutes left to today's sunset by the clock the status bar shows (no fix, no times)
             let now = u32::from(self.strip.time.0) * 60 + u32::from(self.strip.time.1);
             let left = super::fields::minutes_to_sunset(now, self.sun_times());
-            let lead = crate::SUNSET_LEAD_MIN.get(self.settings.sunset_alert).copied().unwrap_or(0);
+            let mut lead = crate::SUNSET_LEAD_MIN.get(self.settings.sunset_alert).copied().unwrap_or(0);
+            if self.profile == ride::Profile::Commute {
+                lead = lead.max(30); // home before dark (a choice)
+            }
             let sun = self.alerts.sunset(left, lead);
             self.alert.push(sun);
         } else {

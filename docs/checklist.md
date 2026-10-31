@@ -170,7 +170,7 @@ Others
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin): sim
 - [~] Laps, session and activity messages at the end (stock, all): sim
 - [~] AUTO OFF (SYSTEM): switches off after idle (stock, Garmin): sim; never with a ride open
-- [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): sim; ROAD, INDOOR and MTB, no bikes
+- [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): sim; ROAD, INDOOR, MTB, GRAVEL, CX and COMMUTE (auto-pause, auto lap, GPS power, climbs per profile), no bikes or component wear
 - [ ] Settings in a file, two copies (stock, all): backup registers for now
 - [~] Screenshots saved to the volume (stock): sim; SYSTEM > SCREENSHOT, `\Screenshot\YYYYMMDDhhmmss.bmp`, no ride open
 - [~] Debug log file after a fault (stock, patch D1): sim; `\Rustfw\Log\faults.log`, a line per fault (kind, panic line or CFSR bits), no PC / LR
