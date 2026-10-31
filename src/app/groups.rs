@@ -483,6 +483,92 @@ impl Recording {
     }
 }
 
+/// The battery reading and BATTERY SAVER AUTO's state (app/device.rs).
+pub(crate) struct Saver {
+    /// Since the last battery reading.
+    pub(crate) battery_ms: u32,
+    /// The battery was reported low.
+    pub(crate) told_low: bool,
+    /// BATTERY SAVER AUTO has turned the saver on ([`App::saver_on`]): from [`BATTERY_SAVER_PERCENT`] until the charger.
+    pub(crate) saver_auto: bool,
+    /// A USB snapshot was just written to the backup registers ([`App::usb_snapshot`]): the drop that follows it
+    /// leaves registers 0 and 31 to it.
+    pub(crate) usb_snapped: bool,
+    /// BATTERY SAVER AUTO's state as the rider was last told.
+    pub(crate) saver_said: bool,
+}
+
+impl Saver {
+    /// The state at start.
+    pub(crate) fn new() -> Self {
+        Saver {
+            battery_ms: BATTERY_MS, // read at the first step
+            told_low: false,
+            saver_auto: false,
+            usb_snapped: false,
+            saver_said: false,
+        }
+    }
+}
+
+/// The quick panel's drawn state (app/quick.rs).
+pub(crate) struct Quick {
+    /// What the quick panel shows, box by box, and its shape (app/quick.rs).
+    pub(crate) shown: [u32; app::QUICK_BOXES],
+    pub(crate) shape: u8,
+    /// The title and artist scroll: the track's fingerprint and the steps since it began (app/quick.rs).
+    pub(crate) scroll: (u32, u32),
+    /// ZERO armed until, and its result shown until (epoch seconds, app/quick.rs).
+    pub(crate) zero: (Option<u32>, Option<u32>),
+}
+
+impl Quick {
+    /// The state at start.
+    pub(crate) fn new() -> Self {
+        Quick { shown: [0; app::QUICK_BOXES], shape: 0, scroll: (0, 0), zero: (None, None) }
+    }
+}
+
+/// The menus' input state and what they have drawn (app/menus.rs, app/input.rs).
+pub(crate) struct MenuInput {
+    /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
+    pub(crate) editing: bool,
+    /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
+    /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
+    pub(crate) chosen: bool,
+    /// A row that cannot be undone (forget a sensor or the phone, import stock's settings) asked to be confirmed: Start
+    /// on it again acts; any other input clears it (App::confirmed). A past ride's DELETE, asked on its card, is
+    /// [`PAST_DELETE`].
+    pub(crate) confirm: Option<(Menu, usize)>,
+    /// GIVE UP SAVE's step while its row waits in [`MenuInput::confirm`]: two banners of explanation, then two questions.
+    pub(crate) give_up_step: u8,
+    /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
+    /// when no key is down.
+    pub(crate) repeated: bool,
+    /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
+    pub(crate) shown: [u32; ui::MENU_ROWS],
+    /// The same without the value ([`App::menu_row_print`]): a row whose head is unchanged repaints its value only.
+    pub(crate) head: [u32; ui::MENU_ROWS],
+    /// The nearby list's rows on screen, as fingerprints ([`ui::list_prints`]).
+    pub(crate) list_shown: [u32; ui::LIST_ROWS],
+}
+
+impl MenuInput {
+    /// The state at start.
+    pub(crate) fn new() -> Self {
+        MenuInput {
+            editing: false,
+            chosen: false,
+            confirm: None,
+            give_up_step: 0,
+            repeated: false,
+            shown: [0; ui::MENU_ROWS],
+            head: [0; ui::MENU_ROWS],
+            list_shown: [0; ui::LIST_ROWS],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

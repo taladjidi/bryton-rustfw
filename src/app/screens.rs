@@ -626,13 +626,13 @@ impl App {
             self.draw_top(&mut Panel(b, self.area(), self.look()));
         }
         if self.screen == Screen::Nearby {
-            self.list_shown = ui::list_prints(&self.radio.nearby); // drawn whole by draw_screen
+            self.menu.list_shown = ui::list_prints(&self.radio.nearby); // drawn whole by draw_screen
         }
         if let Screen::Menu(menu, sel) = self.screen {
             let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
             self.menu_title_print = title_print(self.menu_title(menu).as_str());
-            self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, first, i));
-            self.menu_head = core::array::from_fn(|i| self.menu_print(menu, sel, first, i, false));
+            self.menu.shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, first, i));
+            self.menu.head = core::array::from_fn(|i| self.menu_print(menu, sel, first, i, false));
         }
         if self.screen == Screen::Media {
             self.phone.shown = ui::media::shown(&self.media_now());

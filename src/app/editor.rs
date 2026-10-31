@@ -561,11 +561,11 @@ impl App {
                 }
             }
             Input::Next | Input::NextHeld => {
-                self.repeated |= i == Input::NextHeld;
+                self.menu.repeated |= i == Input::NextHeld;
                 self.select_cell(b, (sel + 1) % cells);
             }
             Input::Prev | Input::PrevHeld => {
-                self.repeated |= i == Input::PrevHeld;
+                self.menu.repeated |= i == Input::PrevHeld;
                 self.select_cell(b, (sel + cells - 1) % cells);
             }
             Input::Select => self.open_actions(b, sel),

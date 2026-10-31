@@ -128,7 +128,7 @@ fn a_ride_start_at_a_place_calibrates_to_its_altitude() {
     // its menu: ALTITUDE, typed 250 m (from the 300 m the receiver gave), kept
     app.open(Screen::Menu(Menu::Place(0), 0));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert!(app.editing);
+    assert!(app.menu.editing);
     for _ in 0..50 {
         app.press(&mut sim, Press::Short(Key::Page)); // a metre down a step
     }

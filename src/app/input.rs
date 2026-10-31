@@ -222,7 +222,7 @@ fn page_at(k: usize) -> usize {
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
 pub const OFF_CONFIRM_MS: u32 = 10_000;
 
-/// The value of `App::confirm` while a past ride's DELETE waits for its second Start: no menu row has it.
+/// The value of `MenuInput::confirm` while a past ride's DELETE waits for its second Start: no menu row has it.
 pub(crate) const PAST_DELETE: (Menu, usize) = (Menu::History, usize::MAX);
 
 impl App {
@@ -286,7 +286,7 @@ impl App {
             self.depth += 1;
         }
         self.screen = s;
-        self.menu_chosen = false;
+        self.menu.chosen = false;
         if s == Screen::Trainer {
             self.ftms_retry(); // the rider wants the trainer: a Bluetooth one given up is tried again
         }
@@ -311,7 +311,7 @@ impl App {
             Some(s @ (Screen::Main | Screen::Ride(_))) => s,
             _ => Screen::Main,
         };
-        (self.depth, self.screen, self.menu_chosen) = (0, page, false);
+        (self.depth, self.screen, self.menu.chosen) = (0, page, false);
     }
 
     /// Back to the screen under this one (a ride page switched off since shows the main screen).
@@ -323,7 +323,7 @@ impl App {
             Some(&s) if self.depth > 0 || matches!(s, Screen::Main | Screen::Ride(_)) => s,
             _ => Screen::Main,
         };
-        self.menu_chosen = false;
+        self.menu.chosen = false;
         self.clamp_menu();
     }
 
@@ -338,7 +338,7 @@ impl App {
     /// Acts on a key press ([`Input::of`]). A key held to repeat that acted (a list scrolled, a value stepped) is
     /// not acted on again at its release.
     pub fn press(&mut self, b: &mut impl Board, p: Press) {
-        if matches!(p, Press::Short(_)) && core::mem::take(&mut self.repeated) {
+        if matches!(p, Press::Short(_)) && core::mem::take(&mut self.menu.repeated) {
             return;
         }
         if let Some(i) = Input::of(p) {
@@ -375,7 +375,7 @@ impl App {
             self.unbanner(b); // and the input acts, except Back (below)
         }
         // a row waiting to be confirmed (App::confirmed): only Start or a tap on it confirms, anything else drops it
-        let armed = self.confirm.take();
+        let armed = self.menu.confirm.take();
         if let (Some(_), Screen::Menu(menu, sel)) = (armed, self.screen)
             && !matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
         {
@@ -642,7 +642,7 @@ impl App {
                     Input::Touch(Gesture::Hold(..)) => return self.media(b, Media::VolUp, true),
                     _ => return,
                 };
-                self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
+                self.menu.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 return self.media(b, key, false);
             }
             _ => return,
@@ -756,20 +756,20 @@ impl App {
                 self.rename_input(b, i);
                 return self.update_menu_rows(b, menu, sel);
             }
-            (Screen::Menu(menu, sel), _) if self.editing => {
+            (Screen::Menu(menu, sel), _) if self.menu.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
-                    self.editing = false;
+                    self.menu.editing = false;
                     return;
                 };
                 match i {
                     Input::Next | Input::Prev => self.settings.step(s, i == Input::Prev),
                     Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down))) => self.settings.step(s, d == Dir::Up),
                     Input::NextHeld | Input::PrevHeld => {
-                        self.repeated = true;
+                        self.menu.repeated = true;
                         self.settings.step(s, i == Input::PrevHeld);
                     }
                     Input::Select | Input::Back | Input::Touch(Gesture::Tap(..) | Gesture::Swipe(Dir::Right)) => {
-                        self.editing = false;
+                        self.menu.editing = false;
                         // Back (and a swipe back) leaves the altitude as it was; Select or a tap sets it
                         if s == menu::Setting::Altitude && matches!(i, Input::Select | Input::Touch(Gesture::Tap(..))) {
                             match menu {
@@ -785,12 +785,12 @@ impl App {
                 return self.update_menu_rows(b, menu, sel);
             }
             (Screen::Menu(menu, sel), Input::Next | Input::Prev | Input::NextHeld | Input::PrevHeld) => {
-                self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
+                self.menu.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 let rows = self.rows(menu).max(1);
                 let down = matches!(i, Input::Next | Input::NextHeld);
                 // no wrap at the ends: a held key stops at the first or the last row
                 let next = if down { (sel + 1).min(rows - 1) } else { sel.saturating_sub(1) };
-                self.menu_chosen = true;
+                self.menu.chosen = true;
                 self.screen = Screen::Menu(menu, next);
                 // the rows that changed only, a screen of them when it turns (each row paints its whole box): the
                 // title stays (a whole show cleared the page first, 139 000 px for 69 000 drawn: 2026-10-26)
@@ -804,7 +804,7 @@ impl App {
                 if next >= rows || next == first {
                     return;
                 }
-                self.menu_chosen = false; // turned to, not chosen
+                self.menu.chosen = false; // turned to, not chosen
                 self.screen = Screen::Menu(menu, next);
                 return self.update_menu_rows(b, menu, next);
             }
@@ -827,12 +827,12 @@ impl App {
                     Some(row) if self.row(menu, row).is_some() => row,
                     _ => return self.update_menu_rows(b, menu, sel), // a row's "SURE?" goes
                 };
-                if self.ride.moving() && (row != sel || !self.menu_chosen) {
-                    self.menu_chosen = true;
+                if self.ride.moving() && (row != sel || !self.menu.chosen) {
+                    self.menu.chosen = true;
                     self.screen = Screen::Menu(menu, row);
                     return self.update_menu_rows(b, menu, row);
                 }
-                self.menu_chosen = true;
+                self.menu.chosen = true;
                 return self.select_row(b, menu, row, armed.filter(|&a| a == (menu, row)));
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
@@ -853,19 +853,19 @@ impl App {
             // trash.rs)
             (Screen::Past, Input::Select) if armed != Some(PAST_DELETE) => self.close(),
             (Screen::Past, Input::Select | Input::End) => {
-                self.confirm = armed;
+                self.menu.confirm = armed;
                 self.delete_past(b);
             }
             (Screen::Past, Input::Next) => {
-                self.confirm = None; // an armed DELETE is not carried over to the list and back
+                self.menu.confirm = None; // an armed DELETE is not carried over to the list and back
                 self.open(Screen::Laps(0))
             }
             (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::LAPS_TAP, x, y) => {
-                self.confirm = None;
+                self.menu.confirm = None;
                 self.open(Screen::Laps(0))
             }
             (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::DELETE_TAP, x, y) => {
-                self.confirm = armed;
+                self.menu.confirm = armed;
                 self.delete_past(b);
             }
             (Screen::Nearby, Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
@@ -919,7 +919,7 @@ impl App {
     /// the screen it opened.
     fn select_row(&mut self, b: &mut impl Board, menu: Menu, sel: usize, armed: Option<(Menu, usize)>) {
         let shown = Screen::Menu(menu, sel);
-        self.confirm = armed; // a second Start on a row waiting to be confirmed confirms it
+        self.menu.confirm = armed; // a second Start on a row waiting to be confirmed confirms it
         self.screen = shown;
         self.activate(b, menu, sel);
         if self.screen == shown {

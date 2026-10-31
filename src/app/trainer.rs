@@ -618,7 +618,7 @@ impl App {
             Input::Next => self.trainer.step_by(&d, true, false),
             Input::Prev => self.trainer.step_by(&d, false, false),
             Input::NextHeld | Input::PrevHeld => {
-                self.repeated = true;
+                self.menu.repeated = true;
                 self.trainer.step_by(&d, i == Input::NextHeld, true);
             }
             Input::Select => self.trainer.cycle_mode(&d),

@@ -133,11 +133,11 @@ impl App {
     /// The battery, every [`BATTERY_MS`]: the charge and the charger for the strip, "BATTERY LOW" once at
     /// [`LOW_BATTERY_PERCENT`]. True when the cell is empty and the unit was switched off.
     pub(crate) fn poll_battery(&mut self, b: &mut impl Board, pass_ms: u32) -> bool {
-        self.battery_ms = self.battery_ms.saturating_add(pass_ms);
-        if self.battery_ms < BATTERY_MS {
+        self.saver.battery_ms = self.saver.battery_ms.saturating_add(pass_ms);
+        if self.saver.battery_ms < BATTERY_MS {
             return false;
         }
-        self.battery_ms = 0;
+        self.saver.battery_ms = 0;
         let charging = b.charger_present();
         // VREFINT (channel 19), the battery (channel 1), then the factory VREFINT_CAL (BOARD.md 12)
         let reading = b.adc_read(19).and_then(|vref| {
@@ -153,25 +153,25 @@ impl App {
         self.strip.battery = self.battery.percent();
         self.strip.charging = charging;
         let low = self.strip.battery.is_some_and(|p| p <= LOW_BATTERY_PERCENT) && !charging;
-        if low && !self.told_low {
+        if low && !self.saver.told_low {
             self.alarm_notice("BATTERY LOW");
         }
-        self.told_low = low;
+        self.saver.told_low = low;
         // AUTO: on at the threshold (once: it stays on), off when the charger comes
         if charging {
-            self.saver_auto = false;
+            self.saver.saver_auto = false;
         } else if low_for_saver(self.strip.battery) {
-            self.saver_auto = true;
+            self.saver.saver_auto = true;
         }
         // said when AUTO's state changes (also when AUTO is chosen while low), "OFF" only when the charger ended it
-        let said = self.settings.saver == SaverMode::Auto && self.saver_auto;
-        if said != self.saver_said {
+        let said = self.settings.saver == SaverMode::Auto && self.saver.saver_auto;
+        if said != self.saver.saver_said {
             if said {
                 self.notice("BATTERY SAVER ON");
-            } else if !self.saver_auto {
+            } else if !self.saver.saver_auto {
                 self.notice("BATTERY SAVER OFF");
             }
-            self.saver_said = said;
+            self.saver.saver_said = said;
         }
         false
     }
@@ -182,14 +182,14 @@ impl App {
         match self.settings.saver {
             SaverMode::Off => false,
             SaverMode::On => true,
-            SaverMode::Auto => self.saver_auto,
+            SaverMode::Auto => self.saver.saver_auto,
         }
     }
 
     /// The computer dropped the USB device and the board reconnected it: counted (read it with `tools/dev.py peek`) and
     /// said in a notice.
     pub fn usb_dropped(&mut self, b: &mut impl Board) {
-        if core::mem::take(&mut self.usb_snapped) {
+        if core::mem::take(&mut self.saver.usb_snapped) {
             self.notice("USB RECONNECT");
             return; // this drop's snapshot holds registers 0 and 31 now; the next drop counts again
         }
@@ -212,7 +212,7 @@ impl App {
         for (r, w) in SNAP_BKP.iter().zip(usbsnap::pack(s)) {
             b.backup_write(*r, w);
         }
-        self.usb_snapped = true;
+        self.saver.usb_snapped = true;
     }
 
     /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,

@@ -165,7 +165,7 @@ impl App {
                 return false;
             }
         }
-        self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
+        self.menu.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
         true
     }
 

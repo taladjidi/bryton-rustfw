@@ -155,10 +155,10 @@ fn armed_delete_does_not_survive_the_lap_list() {
     app.set_map_memory(crate::tiles::tests::memory());
     let (name, row) = record_and_open(&mut sim, &mut app, 2, 5000);
     tap(&mut app, &mut sim, ui::card::DELETE_TAP);
-    assert_eq!(app.confirm, Some(PAST_DELETE), "asked");
+    assert_eq!(app.menu.confirm, Some(PAST_DELETE), "asked");
     tap(&mut app, &mut sim, ui::card::LAPS_TAP);
     assert_eq!(app.screen(), Screen::Laps(0));
-    assert_eq!(app.confirm, None);
+    assert_eq!(app.menu.confirm, None);
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Past);
     app.press(&mut sim, Press::Short(Key::Start));

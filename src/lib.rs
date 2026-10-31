@@ -203,13 +203,8 @@ pub struct App {
     pmc: app::pmc::State,
     /// The title a menu was drawn with (app/menus.rs `title_print`).
     menu_title_print: u32,
-    /// What the quick panel shows, box by box, and its shape (app/quick.rs).
-    quick_shown: [u32; app::QUICK_BOXES],
-    quick_shape: u8,
-    /// The title and artist scroll: the track's fingerprint and the steps since it began (app/quick.rs).
-    quick_scroll: (u32, u32),
-    /// ZERO armed until, and its result shown until (epoch seconds, app/quick.rs).
-    quick_zero: (Option<u32>, Option<u32>),
+    /// The quick panel's drawn state (app/quick.rs).
+    quick: Quick,
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
@@ -227,8 +222,8 @@ pub struct App {
     /// RMSSD and DFA alpha1 from the strap's beats.
     hrv: hrv::Hrv,
     battery: battery::Battery,
-    /// Since the last battery reading.
-    battery_ms: u32,
+    /// The battery reading and BATTERY SAVER AUTO's state (app/device.rs).
+    saver: Saver,
     /// The GNSS receiver.
     gps: Gps,
     /// Time run since the start, ms (saturating): a minute of it clears the fault count.
@@ -240,20 +235,8 @@ pub struct App {
     /// AUTO's day and night themes, resolved into RAM between rides ([`App::load_day_night`]): the switch never reads
     /// the card. Built-in defaults until the settings are loaded (OUTDOOR by day, DARK by night).
     auto_themes: [ui::Theme; 2],
-    /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
-    editing: bool,
-    /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
-    /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
-    menu_chosen: bool,
-    /// A row that cannot be undone (forget a sensor or the phone, import stock's settings) asked to be confirmed: Start
-    /// on it again acts; any other input clears it (App::confirmed). A past ride's DELETE, asked on its card, is
-    /// [`PAST_DELETE`].
-    confirm: Option<(Menu, usize)>,
-    /// GIVE UP SAVE's step while its row waits in [`App::confirm`]: two banners of explanation, then two questions.
-    give_up_step: u8,
-    /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
-    /// when no key is down.
-    repeated: bool,
+    /// The menus' input state and what they have drawn (app/menus.rs, app/input.rs).
+    menu: MenuInput,
     /// The screens under this one, the latest last: Back returns to them, with their selection. At most six now (a
     /// page, the ride menu, ALL SETTINGS, PAGES, a page, its field groups, under a group), so eight is room to spare.
     under: [Screen; 8],
@@ -303,15 +286,6 @@ pub struct App {
     heading: Option<u8>,
     /// The notices and the banner over the screen.
     notes: Notices,
-    /// The battery was reported low.
-    told_low: bool,
-    /// BATTERY SAVER AUTO has turned the saver on ([`App::saver_on`]): from [`BATTERY_SAVER_PERCENT`] until the charger.
-    saver_auto: bool,
-    /// A USB snapshot was just written to the backup registers ([`App::usb_snapshot`]): the drop that follows it
-    /// leaves registers 0 and 31 to it.
-    usb_snapped: bool,
-    /// BATTERY SAVER AUTO's state as the rider was last told.
-    saver_said: bool,
     /// A ride was just started from a key: the page is drawn again (its map and graphs start over).
     new_ride: bool,
     /// The card's map and elevation profile as drawn (set when the card is shown).
@@ -342,15 +316,9 @@ pub struct App {
     history: ride::History,
     /// Rolling power, NP, TSS, work, W' balance.
     power: power::Power,
-    /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
-    menu_shown: [u32; ui::MENU_ROWS],
-    /// The same without the value ([`App::menu_row_print`]): a row whose head is unchanged repaints its value only.
-    menu_head: [u32; ui::MENU_ROWS],
     /// Graph bars computed (the tests count them: a redraw clipped away must compute none).
     #[cfg(test)]
     pub(crate) bars: core::cell::Cell<u32>,
-    /// The nearby list's rows on screen, as fingerprints ([`ui::list_prints`]).
-    list_shown: [u32; ui::LIST_ROWS],
     /// The ride's track, from the good fixes.
     track: map::Track,
     /// The map's zoom level set by its "+" and "-" ([`map::mpp16`]); None: fitted to the track (per power-up).
@@ -513,17 +481,13 @@ impl App {
             decoders: Decoders::default(),
             hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),
-            battery_ms: BATTERY_MS, // read at the first step
+            saver: Saver::new(),
             gps: Gps::new(gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r)))),
             up_ms: 0,
             settings: misc,
             theme: ui::Theme::DARK,
             auto_themes: [ui::Theme::OUTDOOR, ui::Theme::DARK],
-            editing: false,
-            menu_chosen: false,
-            confirm: None,
-            give_up_step: 0,
-            repeated: false,
+            menu: MenuInput::new(),
             under: [Screen::Main; 8],
             depth: 0,
             pages,
@@ -548,10 +512,6 @@ impl App {
             sun: None,
             heading: None,
             notes: Notices::new(),
-            told_low: false,
-            saver_auto: false,
-            usb_snapped: false,
-            saver_said: false,
             graph_whole: false,
             plot_taps: [[None; page::CELLS]; PAGES + 1],
             ride_started: RideStart::new((2000, 1, 1), (0, 0)),
@@ -567,11 +527,8 @@ impl App {
             ride: ride::Ride::new(),
             history: ride::History::default(),
             power: power::Power::default(),
-            menu_shown: [0; ui::MENU_ROWS],
-            menu_head: [0; ui::MENU_ROWS],
             #[cfg(test)]
             bars: core::cell::Cell::new(0),
-            list_shown: [0; ui::LIST_ROWS],
             track: map::Track::new(),
             map_zoom: None,
             map_centre: None,
@@ -616,10 +573,7 @@ impl App {
             curve_ready: false,
             pmc: app::pmc::State::new(),
             menu_title_print: 0,
-            quick_shown: [0; app::QUICK_BOXES],
-            quick_shape: 0,
-            quick_scroll: (0, 0),
-            quick_zero: (None, None),
+            quick: Quick::new(),
             ftms: Ftms::default(),
             prof: prof::Prof::default(),
         }
@@ -790,7 +744,7 @@ impl App {
             self.press(b, p);
         }
         if mask == 0 {
-            self.repeated = false;
+            self.menu.repeated = false;
         }
         t = self.timed(b, Sec::Keys, t);
         self.step_recorder(b);

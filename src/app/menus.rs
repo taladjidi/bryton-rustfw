@@ -443,18 +443,18 @@ impl App {
             }
             Row::AltGps => self.alt_gps_row(&mut value),
             Row::Set(menu::Setting::Altitude)
-                if matches!(menu, Menu::Place(_)) && !(self.editing && self.screen == Screen::Menu(menu, i)) =>
+                if matches!(menu, Menu::Place(_)) && !(self.menu.editing && self.screen == Screen::Menu(menu, i)) =>
             {
                 if let Menu::Place(k) = menu {
                     self.place_alt_row(k, &mut value);
                 }
             }
             Row::SavePlace | Row::DeletePlace(_) => {}
-            Row::Set(menu::Setting::Altitude) if !(self.editing && self.screen == Screen::Menu(menu, i)) => {
+            Row::Set(menu::Setting::Altitude) if !(self.menu.editing && self.screen == Screen::Menu(menu, i)) => {
                 self.alt_row(&mut value);
             }
             Row::Set(s) => {
-                let edited = self.editing && self.screen == Screen::Menu(menu, i);
+                let edited = self.menu.editing && self.screen == Screen::Menu(menu, i);
                 value.push_str(if edited { "< " } else { "" });
                 self.settings.text(s, &mut value);
                 let number = value.as_str().starts_with(|c: char| c.is_ascii_digit());
@@ -652,7 +652,7 @@ impl App {
             value.push_str(">"); // opens a menu or a screen
             color = ui::GREY;
         }
-        if self.confirm == Some((menu, i)) {
+        if self.menu.confirm == Some((menu, i)) {
             // waiting for a second Start (App::confirmed)
             value.clear();
             value.push_str("SURE?");
@@ -802,7 +802,7 @@ impl App {
         }
         for i in 0..self.menu_rows() {
             let print = self.menu_row_print(menu, sel, first, i);
-            let (Some(&shown), Some(&head)) = (self.menu_shown.get(i), self.menu_head.get(i)) else { break };
+            let (Some(&shown), Some(&head)) = (self.menu.shown.get(i), self.menu.head.get(i)) else { break };
             if shown != print {
                 let mut p = Panel(b, self.area(), self.look());
                 // only the value changed: its own box, not the 240 x 43 row
@@ -816,7 +816,7 @@ impl App {
                     self.draw_menu_row(&mut p, menu, sel, first, i);
                 }
                 let now = self.menu_print(menu, sel, first, i, false);
-                if let (Some(h), Some(s)) = (self.menu_head.get_mut(i), self.menu_shown.get_mut(i)) {
+                if let (Some(h), Some(s)) = (self.menu.head.get_mut(i), self.menu.shown.get_mut(i)) {
                     (*h, *s) = (now, print);
                 }
             }
@@ -827,10 +827,10 @@ impl App {
     /// before on the same row (no other input between: [`App::input`] clears it); else it asks, in the banner and in
     /// the row ("SURE?"), and the row waits for a second Start or tap.
     pub(crate) fn confirmed(&mut self, menu: Menu, sel: usize, what: &str) -> bool {
-        if self.confirm.take() == Some((menu, sel)) {
+        if self.menu.confirm.take() == Some((menu, sel)) {
             return true;
         }
-        self.confirm = Some((menu, sel));
+        self.menu.confirm = Some((menu, sel));
         let mut l = Line::<40>::new();
         l.push_str(what);
         l.push_str("?\nSTART: YES BACK: NO");
@@ -1081,14 +1081,14 @@ impl App {
     /// Select on a setting: a number starts or ends its editing, a choice cycles.
     fn activate_setting(&mut self, b: &mut impl Board, s: menu::Setting) {
         if s.number().is_some() {
-            self.editing = !self.editing;
-            if self.editing && s == menu::Setting::Altitude {
+            self.menu.editing = !self.menu.editing;
+            if self.menu.editing && s == menu::Setting::Altitude {
                 match self.screen {
                     Screen::Menu(Menu::Place(k), _) => self.place_alt_edit_start(k), // the place's altitude
-                    _ => self.editing = self.alt_edit_start(), // from the altitude the barometer reads
+                    _ => self.menu.editing = self.alt_edit_start(), // from the altitude the barometer reads
                 }
             }
-            if !self.editing {
+            if !self.menu.editing {
                 self.setting_edited(s);
                 self.save_misc(b);
             }
@@ -1124,9 +1124,9 @@ impl App {
             Some(Sensor::Search) => self.set_sensor(b, kind, Sensor::Off),
             // paired but silent: Select searches for it again now (not after its rest); Select once more
             // forgets it
-            Some(Sensor::Paired(id)) if !heard && self.confirm != Some((menu, sel)) => {
+            Some(Sensor::Paired(id)) if !heard && self.menu.confirm != Some((menu, sel)) => {
                 self.set_sensor(b, kind, Sensor::Paired(id));
-                self.confirm = Some((menu, sel));
+                self.menu.confirm = Some((menu, sel));
                 self.say("SEARCHING AGAIN\nSTART: FORGET");
             }
             Some(Sensor::Paired(_)) => {

@@ -1633,7 +1633,7 @@ fn menu_touch_and_keys() {
                 12 => Input::Touch(Gesture::Tap(u16::from(b) % 240, u16::from(next()) % 320)),
                 _ => Input::NextHeld,
             };
-            let (before, chosen, editing) = (app.screen(), app.menu_chosen, app.editing);
+            let (before, chosen, editing) = (app.screen(), app.menu.chosen, app.menu.editing);
             let (pages, whole) = (app.pages, app.graph_whole);
             let recording = app.ride.state() == crate::ride::State::Running;
             let on_old = matches!(before, Screen::Menu(Menu::Storage, s)
@@ -1655,7 +1655,7 @@ fn menu_touch_and_keys() {
                         let r = ui::Rect(0, ui::quick::SENSORS_Y + k as u32 * ui::quick::ROW, ui::W, ui::quick::ROW);
                         if r.contains(x, y) {
                             reach[5] += 1;
-                            arms[5] += usize::from(app.quick_zero.0.is_some() || app.powercal.asking());
+                            arms[5] += usize::from(app.quick.zero.0.is_some() || app.powercal.asking());
                         }
                     }
                 }
@@ -1722,7 +1722,7 @@ fn menu_touch_and_keys() {
             if let Screen::Menu(m, s) = app.screen() {
                 assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
             }
-            asks += u32::from(app.confirm.is_some());
+            asks += u32::from(app.menu.confirm.is_some());
             for _ in 0..usize::from(b % 4) {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
@@ -1827,7 +1827,7 @@ fn menu_tree_by_chance() {
                 _ => Input::Touch(Gesture::Swipe([Dir::Left, Dir::Right, Dir::Up, Dir::Down][(b % 4) as usize])),
             };
             let stored = |sim: &Sim| watched.iter().map(|&r| sim.backup[r]).collect::<Vec<_>>();
-            let (before, editing) = (stored(&sim), app.editing);
+            let (before, editing) = (stored(&sim), app.menu.editing);
             if let Screen::Menu(Menu::Page(n), _) = app.screen()
                 && n < PAGES
                 && b % 3 == 0
@@ -2011,7 +2011,7 @@ fn history_by_chance() {
             let r = next();
             // a delete asked on a card is answered with Start two times in three (else any input drops it)
             let i = match r % 100 {
-                _ if app.confirm == Some(PAST_DELETE) && r % 3 != 0 => Input::Select,
+                _ if app.menu.confirm == Some(PAST_DELETE) && r % 3 != 0 => Input::Select,
                 _ if app.screen() == Screen::Past && r % 4 == 0 => Input::End, // asks
                 0..=24 => Input::Next,
                 25..=34 => Input::Prev,
