@@ -295,6 +295,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   redrawn when they change) and the result card.
   start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
   nothing on the unit calls it yet.
+- `src/nav/math.rs`: the shared math without libm: sin, cos, ln, atanh, sqrt, isqrt and the flat projection (`cos_q16`,
+  `project`) that the map, course, climbs, tiles, HRV and the pacer use. Pure logic.
 - `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the
   module): local minutes, None in polar day and night. Pure logic; `App::refresh_sun` works it out once a minute.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the

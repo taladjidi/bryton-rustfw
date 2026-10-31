@@ -4,6 +4,7 @@
 pub mod altitude;
 pub mod climbs_ahead;
 pub mod course;
+pub mod math;
 pub mod places;
 pub mod segment;
 pub mod segment_match;

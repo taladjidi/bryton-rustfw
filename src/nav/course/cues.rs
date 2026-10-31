@@ -483,7 +483,7 @@ impl Course {
         let (mut from, mut n) = (0usize, 0usize);
         for i in 0..self.cues.n.min(CUES) {
             let Some(&c) = self.cues.c.get(i) else { break };
-            let p = self.origin.map(|o| super::project(o, c.pos.0, c.pos.1));
+            let p = self.origin.map(|o| crate::math::project(o, c.pos.0, c.pos.1));
             let hint = match (c.at_m, c.run) {
                 (UNPLACED, _) => None,
                 (d, true) => Some(self.run_along(d)),
@@ -1408,7 +1408,7 @@ pub(crate) mod tests {
         let o = c.origin.unwrap();
         let on = |x: f64, y: f64| {
             let (lat, lon) = at(x, y);
-            crate::course::project(o, lat, lon)
+            crate::math::project(o, lat, lon)
         };
         let mut n = 0;
         assert_eq!(c.place(on(100.0, 100.0), 0, &mut n), None);

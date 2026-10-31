@@ -1,5 +1,5 @@
 //! Heart rate variability from the strap's RR intervals ([`crate::sensors::Beats`]), one beat at a time: RMSSD
-//! and DFA alpha1. Pure logic, no heap, f32 and f64 without libm (`tiles::ln`).
+//! and DFA alpha1. Pure logic, no heap, f32 and f64 without libm (`math::ln`).
 //!
 //! - **DFA alpha1** is the patch project's P9, ported (bryton-S510-mods `patches/P9-live-dfa-a1.c`, and its check
 //!   `tests/test_tools.py` `test_dfa_a1_matches_reference`): the beats of the last 2 minutes, newest first,
@@ -23,7 +23,7 @@
 //! Both are recomputed every [`EVERY`] beats (about every 3 to 5 s while riding): the cost is bounded by the
 //! window, about 4 n multiply-adds per box size for n beats.
 
-use crate::tiles::ln;
+use crate::math::ln;
 
 /// Beats kept: 2 minutes at 240 bpm is 480.
 pub const BEATS: usize = 512;
