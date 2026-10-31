@@ -171,7 +171,7 @@ impl App {
         self.gps.slept
     }
 
-    /// The next message for the receiver after power-up, one per pass: the configuration, the GNSS SYSTEMS, the time (UTC from the
+    /// The next message for the receiver after power-up, one per pass: the configuration with the GNSS SYSTEMS, the time (UTC from the
     /// RTC and its learnt offset, or the RTC as is with a 14 h accuracy) and the last position when known, then today's
     /// AssistNow Offline messages ([`App::next_ano`]). Then None. A change of GPS POWER, or of the power mode in force ([`App::gnss_saver`]: AUTO's choice, an MTB ride
     /// started or ended), sends the configuration alone again (its power mode), in the RAM layer as at start
@@ -190,9 +190,13 @@ impl App {
         loop {
             self.gps.sent = self.gps.sent.saturating_add(1);
             match self.gps.sent {
-                1 => return Some(one(config)),
-                2 => return Some(one(gnss::systems(self.settings.gnss_systems))),
-                3 => {
+                1 => {
+                    // both in one pass: the start-up takes no longer than before the systems were sent
+                    let (mut m, sys) = (one(config), gnss::systems(self.settings.gnss_systems));
+                    m.0[32..64].copy_from_slice(&sys);
+                    return Some((m.0, 2));
+                }
+                2 => {
                     // the RTC holds local time: with the offset learnt at a fix, UTC within a couple of seconds;
                     // without it, the RTC as is, within 14 h (any time zone): the date still helps
                     let (offset, acc_s) = self.gps.aid.offset_15min.map_or((0, 14 * 3600), |o| (o, 2));
@@ -202,7 +206,7 @@ impl App {
                     self.gps.ano.start((utc.0, utc.1, utc.2)); // the day's orbits follow the position
                     return Some(one(gnss::mga_time(utc, acc_s)));
                 }
-                4 => {
+                3 => {
                     let Some((lat, lon)) = self.gps.aid.pos else { continue };
                     return Some(one(gnss::mga_pos(lat, lon, 10_000))); // where it was: within 10 km, most rides
                 }
@@ -231,7 +235,7 @@ impl App {
                 self.gps.ano_gap = ANO_GAP;
                 return Some((m, 3));
             }
-            let Some((at, buf)) = self.gps.ano.want() else { return None };
+            let (at, buf) = self.gps.ano.want()?;
             let mut d = emmc::Volume(&mut self.emmc, b);
             let n = fat::Fat::mount(&mut d)
                 .and_then(|mut fat| {

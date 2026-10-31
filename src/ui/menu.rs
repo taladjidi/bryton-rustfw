@@ -309,7 +309,7 @@ impl Setting {
             Setting::DaylightSaving => "SUMMER TIME",
             Setting::MapUp => "MAP",
             Setting::PowerMatch => "POWER MATCH",
-            Setting::GnssSystems => "GNSS SYSTEMS",
+            Setting::GnssSystems => "GNSS",
             Setting::LevelStep => "LEVEL STEP",
             Setting::SlopeScale => "SLOPE SCALE",
             Setting::Lthr => "LTHR",

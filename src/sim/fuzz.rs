@@ -5483,7 +5483,11 @@ fn offline_assist_file() {
         given += n;
         empty += u32::from(n == 0);
     }
-    assert!(given > 1000 && empty > 0 && rejected > 100 && other_class > 100, "the fuzz reached the reader: {given} {empty} {rejected} {other_class}");
+    assert!(
+        given > 1000 && empty > 0 && rejected > 100 && other_class > 100,
+        "the fuzz reached the reader: {given} {empty} {rejected} {other_class}"
+    );
+}
 
 /// `\Rustfw\places.bin` (places.rs): copies built from their structure (the magic, version, length, a sequence
 /// number, places with latitudes, longitudes, altitudes and numbers in range and out of it, a number used twice, the

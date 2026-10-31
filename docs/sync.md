@@ -160,7 +160,7 @@ treat its altitude as barometric. Rides recorded before 2026-10-26 carry manufac
 
 ## AssistNow Offline (`tools/assist.py`)
 
-Helps the GNSS receiver find its first fix sooner (docs/features.md, BIKE > GNSS SYSTEMS). One-time setup: a free
+Helps the GNSS receiver find its first fix sooner (docs/features.md, BIKE > GNSS). One-time setup: a free
 u-blox Thingstream account gives an AssistNow token. Keep it outside the repository: in the environment
 (`UBLOX_ASSISTNOW_TOKEN`) or in `~/.config/bryton-rustfw/assist.json` (`{"token": "..."}`, `chmod 600`). Then, with
 the unit mounted as a drive:

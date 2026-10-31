@@ -5,10 +5,10 @@
 extern crate std;
 use super::tests::{run, to_row};
 use super::*;
+use crate::PAGES_LOAD_MS;
 use crate::fat::tests::Ram;
 use crate::menu::Setting;
 use crate::mga::ano;
-use crate::PAGES_LOAD_MS;
 use std::vec::Vec;
 
 /// The volume with `mga.ubx` holding `bytes`.
