@@ -241,6 +241,12 @@ mod tests {
     }
 
     #[test]
+    fn sqrt_is_exact_at_zero_and_close_at_100() {
+        assert_eq!(sqrt(0.0), 0.0);
+        assert!((sqrt(100.0) - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
     fn constant_grade_spends_the_w_prime_at_a_constant_power() {
         let secs = [Sec { len_m: 400, grade_x10: 70 }; 8];
         let p = plan(&secs, &rider(15_000.0));

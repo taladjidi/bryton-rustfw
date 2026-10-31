@@ -1057,7 +1057,7 @@ pub(crate) mod tests {
 
     /// A place `x` metres east and `y` north of [`ORIGIN`], degrees x 1e-7 (tools/route_pack.py `metres`).
     pub fn metres(x: f64, y: f64) -> (i32, i32) {
-        let cos = 40_295.0 / 65_536.0; // map::cos_q16 at the origin's latitude
+        let cos = 40_295.0 / 65_536.0; // math::cos_q16 at the origin's latitude
         (ORIGIN.0 + (y * 1e6 / 11_132.0).round() as i32, ORIGIN.1 + (x * 1e6 / (11_132.0 * cos)).round() as i32)
     }
 

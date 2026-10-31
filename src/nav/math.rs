@@ -3,17 +3,28 @@
 //! latitude, degrees x 1e-7 to metres). Pure logic; one copy, so the map, the course, the climbs, the sun, the
 //! tiles, HRV and the pacer agree.
 //!
-//! - `sin`: range reduction to [-pi, pi], then a 12-term Taylor series (error under 1e-12 over a few turns); `cos` is
-//!   `sin` shifted by a quarter turn.
-//! - `ln`: the exponent from the bits, then 2 atanh((m - 1) / (m + 1)) series for the mantissa; `atanh` is the Mercator
-//!   ordinate of a latitude whose sine is `s`.
-//! - `sqrt`: a first guess from the exponent halved, then Newton's steps.
-//! - `cos_q16`: Bhaskara I's sine approximation, within 0.2 %. `project`: 1e-7 degrees of a great circle is 0.011132 m.
+//! - `sin`: the Taylor series of sine, <https://en.wikipedia.org/wiki/Sine_and_cosine> (series definition), the
+//!   argument reduced to [-pi, pi] first; 12 terms, error under 1e-12 over a few turns. `cos` is `sin` shifted by a
+//!   quarter turn.
+//! - `ln`: via atanh, ln(x) = 2 atanh((x - 1) / (x + 1)), <https://en.wikipedia.org/wiki/Logarithm#Calculation> (the
+//!   inverse hyperbolic tangent series); the exponent comes from the bits, then the series for the mantissa.
+//! - `atanh`: its Maclaurin series, <https://en.wikipedia.org/wiki/Inverse_hyperbolic_functions#Series_expansions>;
+//!   here the Mercator ordinate of a latitude whose sine is `s`.
+//! - `sqrt`: Heron's method (Newton's steps),
+//!   <https://en.wikipedia.org/wiki/Methods_of_computing_square_roots#Heron's_method>, from a first guess taken from
+//!   the exponent halved.
+//! - `isqrt`: core's `u32::isqrt`.
+//! - `cos_q16`: Bhaskara I's sine approximation,
+//!   <https://en.wikipedia.org/wiki/Bh%C4%81skara_I%27s_sine_approximation_formula>, within 0.2 %.
+//!   `project`: 1e-7 degrees of a great circle is 0.011132 m.
 
 use core::f64::consts::{PI, TAU};
 
 /// Radians reduced to [-pi, pi] (the arguments here are a few turns at most).
 fn reduce(x: f64) -> f64 {
+    if x.abs() <= PI {
+        return x;
+    }
     let x = x - TAU * f64::from(((x / TAU) + 1024.0) as i32 - 1024);
     if x > PI { x - TAU } else { x }
 }
@@ -29,7 +40,7 @@ pub fn sin(x: f64) -> f64 {
     sum
 }
 
-/// Cosine, as [`sin`].
+/// Cosine, as [`sin`]. cos(0) is sin(pi / 2), within 1e-16 of 1, not exactly 1.
 pub fn cos(x: f64) -> f64 {
     sin(x + PI / 2.0)
 }
