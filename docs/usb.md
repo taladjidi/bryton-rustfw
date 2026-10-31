@@ -51,6 +51,10 @@ This page has what is known, what was tried, and what to ask or try next. Last u
 | 2026-10-23..24 | this firmware, dev link only | high | hours, 30 MB of sector dumps at about 0.25 MB/s | one answer line cut once (tools/dev.py now asks again), no drop |
 | 2026-10-24 | this firmware, USB drive | high | reading a 172 MB file at 6.4 to 7.2 MB/s | dropped after 15 MB, then after 40 MB; once right at the mount |
 | 2026-10-24 | this firmware, USB drive | **full** | the same 172 MB file at 1.0 MB/s | **no drop** |
+| 2026-10-31 | this firmware, USB drive (RAM runs) | high | mounting, then reading map packs | dropped 4 times in 4: 3 at or right after the mount, 1 after 288 MB at 4.3 MB/s; with `USB_PACE_US=500` too, 0.5 s in |
+| 2026-10-31 | this firmware, dev link `shot` loop, card idle | high | 739 screenshots, 108 MB in 180 s | no drop |
+| 2026-10-31 | this firmware, dev link `find`, card busy | high | 400 MB read on the card, little USB | no drop |
+| 2026-10-31 | this firmware, dev link `get`, card and USB together | high | 91 MB of map packs at 0.18 MB/s | no drop |
 
 - **Cable and port:** an Apple cable about a year old, straight into the Mac, and another port of the Mac too. Not a
   hub.
@@ -73,6 +77,26 @@ This page has what is known, what was tried, and what to ask or try next. Last u
 
 What the unit saw at a drop, the suspend watch, and the causes ruled out are dated in journal.md
 (2026-10-24 and 2026-10-27).
+
+**2026-10-31, both sides of a drop** (high-speed RAM runs, owner present):
+- **The Mac** (`/usr/bin/log stream --level debug --predicate 'process == "kernel"'`; zsh's own `log` shadows the
+  tool, and nothing of it is kept without a stream running): a bulk IN on the drive's endpoint 0x83 ends in
+  "transaction error", 0 bytes (xHCI: no valid packet after its retries); 300 ms later the mass storage driver resets
+  the device; then every SET_ADDRESS (9 in 12 s) ends in xHCI completion code 4, transaction error again, until the
+  replug.
+- **The unit** (the failure snapshot, `dev.py usbdrop`, taken when the bulk IN gave up 1 s later): the PHY answered
+  every ULPI register read; Function Control 0x45 (XcvrSelect 01 full speed, TermSelect 1), LineState J; the core
+  suspended (DSTS.SUSPSTS 1, GINTSTS.ESUSP) and **enumerated at full speed** (DSTS.ENUMSPD 01), so it saw the
+  computer's reset but the high-speed chirp did not complete; GINTSTS bit 23 set (reset detected, inferred).
+- **Reading (inferred):** after the first bad packet nothing passes any more, not even a full-speed SET_ADDRESS,
+  while the PHY's register path and its line state sensing still work: the data path (the PHY's transmitter or
+  receiver, or the core's transmit side) is stuck until a power cycle. Not the cable (it would let the resets and a
+  full-speed enumeration through), not the throughput alone (pacing did not help, the screenshot loop held).
+- **What triggers it:** only the USB drive dropped; the card busy alone, high-speed IN alone and both together at
+  0.18 MB/s over the dev link all held. Left to separate: the drive's own pattern (the computer's queued READ(10)s,
+  IN at several MB/s while the card is read) against the electrical load of both at once.
+- The old record in register 0 read 0xd1280200 at every drop (READ(10), phase error, no reset logged): the drive's
+  log missed the resets the snapshot shows.
 
 ## Next tries, cheapest first
 
