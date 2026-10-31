@@ -93,7 +93,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     the settings; screenshot rows carry it in `Row`), so the screenshot equals the panel.
   - To change a glyph, edit `tools/pixel_font.py` and run `python3 tools/font.py` (needs PIL; `-o PATH` writes elsewhere; check.sh compares its output with this file).
 - `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
-- `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).
+- `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only), the GNSS SYSTEMS keys.
+- `src/drivers/mga.rs`: AssistNow Offline: the reader of `\Rustfw\mga.ubx` that picks today's UBX-MGA-ANO messages a sector at a time.
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
 - `src/training/ride.rs`: the ride (Start / pause / lap / end, auto-pause, totals), the heart-rate and power zones and their
   colours, the history behind the graph field. Pure logic, one tick a second; each change comes out as an `Event`
@@ -304,7 +305,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `storage_tests.rs` (STORAGE and ABOUT: the card's figures, its oldest ride), `menu_tests.rs` (the menu
   tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `start_cue_tests.rs` (the start reminder and the ready card), `ride_tests.rs` (zone colours and bar,
   live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
-  `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`), `laps_tests.rs` (a past ride's lap list) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
+  `assist_tests.rs` (GNSS SYSTEMS and the AssistNow Offline messages to the receiver), `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`), `laps_tests.rs` (a past ride's lap list) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `curve_tests.rs` (the power curve screen), `pmc_tests.rs` (training load, its chart and the month rows), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.
@@ -317,6 +318,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   endpoints, each wait 1 s at most).
 - `src/board/hw.rs`: the unsafe primitives (above).
 - `tools/dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
+- `tools/assist.py`: downloads u-blox's AssistNow Offline data with the rider's own token (environment or
+  `~/.config/bryton-rustfw/assist.json`, never in the repository), keeps today's and later messages, and copies them to
+  `\Rustfw\mga.ubx` on the mounted unit, compared after the copy (docs/sync.md). `assist.py selftest` (check.sh): no network.
 - `tools/sync.py`: the computer's sync (docs/sync.md): rides from the mounted drive or the dev link (tools/dev.py `ls` /
   `get`) to Intervals.icu (full copy) and Strava (clean copy), never twice; planned workouts from Intervals.icu to
   `\Workout\calendar`. Dry run unless `--go`; keys and tokens only in `~/.config/bryton-rustfw/` (0600), never in
