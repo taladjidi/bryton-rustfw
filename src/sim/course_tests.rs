@@ -1338,3 +1338,89 @@ fn back_to_start_while_reading_a_course() {
     assert!(c.on.is_some());
     assert_eq!((c.course.points().to_vec(), c.course.id()), before, "the way back, not the hill read over it");
 }
+
+/// CLIMBS DONE: the hill of the course ridden to its top is listed, with a plausible time and VAM, in the ride menu;
+/// a new ride starts the list empty.
+#[test]
+fn climbs_done_lists_the_hill_ridden() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    sim.gnss.route = Some(course_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    app.follow_course(hill(&app));
+    run(&mut sim, &mut app, 200);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.climbs_done.len(), 0);
+    let (mut seen_on, mut gone) = (false, false);
+    while sim.ms < 700_000 && !gone {
+        run(&mut sim, &mut app, 1000);
+        let on = app.page_on(crate::CLIMB);
+        gone = seen_on && !on;
+        seen_on |= on;
+    }
+    assert!(gone);
+    run(&mut sim, &mut app, 3000);
+    let d = *app.climbs_done.get(0).expect("the hill is listed");
+    // 8 m/s over the climb's length
+    assert!(d.len_m > 200 && d.time_s > 30 && d.time_s < 600, "{d:?}");
+    assert!(d.vam() > 0 && d.vam() < 3000, "{d:?}");
+    run(&mut sim, &mut app, 10_000); // the banner goes
+    app.open(Screen::Menu(Menu::Climbs, 0));
+    app.show(&mut sim);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Climbs, 0));
+    sim.save("climbs_done");
+}
+
+/// The ride menu open with the cursor on END RIDE while a climb is completed: CLIMBS DONE comes in above it and the
+/// cursor stays on END RIDE. Then the ride ends and a new one starts in the same second: the list is empty.
+#[test]
+fn climbs_done_row_comes_in_under_an_open_menu_and_a_new_ride_clears() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    sim.gnss.route = Some(course_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    app.follow_course(hill(&app));
+    run(&mut sim, &mut app, 200);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    // PAUSE, END RIDE, ...: the cursor on END RIDE (the course rows are in, the menu is the ride's)
+    let end =
+        (0..app.rows(Menu::Ride(0))).find(|&i| app.row(Menu::Ride(0), i) == Some(menu::Row::Ride(menu::RideRow::End)));
+    let end = end.unwrap();
+    for _ in 0..end {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    let rows = app.rows(Menu::Ride(0));
+    while app.climbs_done.len() == 0 && sim.ms < 700_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    assert_eq!(app.climbs_done.len(), 1);
+    let Screen::Menu(m, sel) = app.screen() else { panic!("menu left: {:?}", app.screen()) };
+    assert!(app.rows(m) > rows, "CLIMBS DONE came in (and BACK TO START with the track)");
+    assert!((0..app.rows(m)).any(|i| app.row(m, i) == Some(menu::Row::Open(Menu::Climbs))));
+    assert_eq!(app.row(m, sel), Some(menu::Row::Ride(menu::RideRow::End)), "the cursor stayed on END RIDE");
+    // End it, then start again at once: the list is the new ride's
+    app.press(&mut sim, Press::Short(Key::Start)); // END RIDE row: asks
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 100);
+    assert_eq!(app.screen(), Screen::Summary, "ended");
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running, "a new ride");
+    assert_eq!(app.climbs_done.len(), 0);
+}

@@ -44,6 +44,7 @@ impl App {
         }
         if ev == ride::Event::Start {
             self.power.new_ride();
+            self.climbs_done.clear();
             self.zone_s = ride::ZoneTime::default();
             self.hrtss = hrtss::Hrtss::default();
             self.rec.model = Some(self.model_now()); // kept for the whole ride (app/fitness.rs)
@@ -589,6 +590,7 @@ impl App {
         }
         let alt = self.alt_now();
         self.live.snapshot(); // the pages show this second's readings, not each broadcast's
+        self.climbs_second();
         self.tlink.second = true; // and the trainer screen
         let input = ride::Input {
             speed_x10: self.live.get(Metric::Speed),

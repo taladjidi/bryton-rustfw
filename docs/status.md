@@ -6,6 +6,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **CLIMBS DONE (app/climbs_done.rs)**: sim only. Still to see: a real climb of a followed course or the road ahead
+  listed at its top with a plausible time and VAM, the banner, the average power and heart rate, the list empty after
+  a reset-resume.
+
 A feature not listed here was seen on the unit.
 
 - **Course reverse, the way to the start and BACK TO START (app/courses.rs, nav/course)**: sim only. To check on a ride:

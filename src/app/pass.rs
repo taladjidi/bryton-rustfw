@@ -71,6 +71,7 @@ impl App {
 
     /// What the screen on needs drawn again this pass (the page's boxes that changed, a list, the card's map).
     pub(crate) fn redraw_screen(&mut self, b: &mut impl Board) {
+        self.track_ride_menu(b);
         match self.screen {
             Screen::Main | Screen::Ride(_) | Screen::Edit(..) | Screen::Status => self.update_page(b),
             Screen::Summary => {
@@ -106,6 +107,7 @@ impl App {
                 | Menu::History
                 | Menu::Courses
                 | Menu::Segments
+                | Menu::Climbs
                 | Menu::System
                 | Menu::BuiltIn
                 | Menu::Storage

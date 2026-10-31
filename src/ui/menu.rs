@@ -545,6 +545,8 @@ pub enum Row {
     Stock(StockRow),
     /// Notification `n` of the NOTIFICATIONS list, newest first: Select opens its detail.
     Notif(usize),
+    /// Climb done `n` of CLIMBS DONE, newest first (no action).
+    Done(usize),
     /// Past ride `n` of the history, newest first: Select opens its card.
     Past(usize),
     /// Planned workout `n` of the calendar ([`crate::storage::workout_file::Calendar`]): Select shows its steps.
@@ -638,6 +640,7 @@ impl Row {
             | Row::Field(..)
             | Row::Past(_)
             | Row::Notif(_)
+            | Row::Done(_)
             | Row::Workout(_)
             | Row::Step(_)
             | Row::Course(_)
