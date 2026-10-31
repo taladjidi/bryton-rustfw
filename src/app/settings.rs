@@ -304,6 +304,10 @@ pub struct Settings {
     /// POWER MATCH (BIKE): ERG targets corrected so the power meter reads them ([`crate::power_match`]). Kept in
     /// settings.bin only, after THEME; ON in a file that predates it.
     pub power_match: bool,
+    /// LEVEL STEP (BIKE): an index in [`LEVEL_STEPS`] (data 168); 1 level in a file that predates it.
+    pub level_step: usize,
+    /// SLOPE SCALE (BIKE): an index in [`SLOPE_SCALES`] (data 169); 100 % in a file that predates it.
+    pub slope_scale: usize,
     /// LTHR (ME): the lactate threshold heart rate, bpm; 0 until it is set (the LTHR fields show "--"). Kept in
     /// settings.bin only, after the alert limits (byte 66); 0 in a file that predates it.
     pub lthr: u16,
@@ -396,6 +400,12 @@ pub struct Settings {
     /// MAX HR was worked out from BORN (data 149, a byte); a manual MAX HR edit clears it.
     pub max_hr_age: bool,
 }
+
+/// LEVEL STEP's choices: levels a press moves.
+pub const LEVEL_STEPS: [u8; 3] = [1, 2, 5];
+
+/// SLOPE SCALE's choices, percent of the course's grade given to the trainer.
+pub const SLOPE_SCALES: [u8; 4] = [100, 75, 50, 25];
 
 /// AUTO PAUSE's choices as the ride gets them ([`ride::Input::pause_kmh`]): 0 the profile's own rule, 255 never, else
 /// the km/h under which a ride is paused.
@@ -616,6 +626,8 @@ impl Settings {
             gps_power: GpsPower::Auto,
             theme: [0; 12],
             power_match: true,
+            level_step: 0,
+            slope_scale: 0,
             lthr: 0,
             power_smooth: 0,
             auto_theme: false,
@@ -886,6 +898,11 @@ impl Settings {
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
             Setting::PowerMatch => l.push_str(if self.power_match { "ON" } else { "OFF" }),
+            Setting::LevelStep => l.push_u32(u32::from(LEVEL_STEPS.get(self.level_step).copied().unwrap_or(1))),
+            Setting::SlopeScale => {
+                l.push_u32(u32::from(SLOPE_SCALES.get(self.slope_scale).copied().unwrap_or(100)));
+                l.push_str(" %");
+            }
             Setting::Lthr if self.lthr == 0 => l.push_str("--"),
             Setting::Lthr => l.push_u32(u32::from(self.lthr)),
             Setting::ZonesBy => l.push_str(if self.zones_lthr { "LTHR" } else { "MAX HR" }),
@@ -1068,6 +1085,8 @@ impl Settings {
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::PowerMatch => self.power_match = !self.power_match,
+            Setting::LevelStep => self.level_step = (self.level_step + 1) % LEVEL_STEPS.len(),
+            Setting::SlopeScale => self.slope_scale = (self.slope_scale + 1) % SLOPE_SCALES.len(),
             Setting::PowerSmooth => self.power_smooth = (self.power_smooth + 1) % POWER_SMOOTH_S.len(),
             Setting::AutoLap => self.auto_lap = (self.auto_lap + 1) % 3,
             Setting::LiveSegments => self.live_segments = !self.live_segments,

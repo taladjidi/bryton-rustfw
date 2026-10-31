@@ -599,6 +599,14 @@ intervals or enough clean data; not kept; not a steady-state zone 2 power). APPL
 setting's 5 W step), KEEP or Back keeps the one set; Start and Lap keep their ride meaning on the screen. A ramp under
 a whole minute has no result. The ride is recorded and saved as any ride.
 
+**Level and slope.** The trainer screen's Start goes round ERG, RES (5 % a press), LVL, SIM. LVL is a fixed level, 1 to 20,
+each 5 % of resistance (level 20 is 100 %): FE-C page 48 (0.5 % units, level x 10) and FTMS Set Target Resistance Level
+(op 0x04, scaled into the range the trainer reports); +/- and the buttons move it by BIKE > LEVEL STEP (1, 2 or 5
+levels; settings bytes 168). With a course followed on the trainer the slope sent is the course's grade over the next
+200 m at the distance the trainer's speed has ridden (so it is already smoothed), times BIKE > SLOPE SCALE (100, 75, 50
+or 25 %; byte 169), clamped to -10 to +20 %. A virtual course as a workout (started from the workout list) is not
+done: a course is followed from COURSES.
+
 **Release.** The trainer is let go (free resistance: FE-C page 48 at 0 %, FTMS Set Target Resistance Level 0) whenever
 what held it stops, so ERG's last target does not stay on it:
 - **stop:** STOP WORKOUT, the workout's end, a course no longer followed (a +/- on the trainer screen under a workout

@@ -226,10 +226,11 @@ Others
 - [x] Workouts synced from TrainingPeaks, intervals.icu (stock, all): sim
 - [x] Workout calendar: today and the next days (stock, Garmin, Wahoo): sim
 - [~] ERG mode to the workout target (stock, all): sim; not yet seen on the trainer
-- [~] Trainer resistance and power modes, by hand (stock): sim; stock's level mode not done
-- [~] Trainer slope from the course grade (Garmin, Wahoo, Karoo): sim
+- [~] Trainer resistance and power modes, by hand (stock): sim; level mode (LVL, 1 to 20) sim only
+- [~] Trainer slope from the course grade, with a scale of 100, 75, 50 or 25 % (Garmin, Wahoo, Karoo): sim
 - [~] FTP ramp test indoors (stock, Garmin, Coros): sim; no max HR or LTHR test, not yet on the trainer
-- [ ] Trainer level mode (stock) and a virtual course turned into a workout (stock)
+- [~] Trainer level mode (stock): sim
+- [ ] A virtual course turned into a workout (stock)
 - [ ] AI Coach / Pace Pilot on the unit: pacing sections and carbohydrate along a course (stock, from the app)
 - [ ] Progress Planner: plan that adapts to load and fatigue (stock app, S810)
 - [ ] Targeted adaptive coaching / daily suggested workouts (Garmin)
