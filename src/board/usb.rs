@@ -14,6 +14,7 @@
 use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
 use bryton_rustfw::dev::{self, Effect, Host, Session, Stats, UsbState, UsbWatch};
+use bryton_rustfw::usbsnap::{self, Keeper, UsbSnap};
 use bryton_rustfw::{App, Board, msc};
 use static_cell::StaticCell;
 use synopsys_usb_otg::{PhyType, UsbBus, UsbPeripheral};
@@ -31,6 +32,60 @@ const GRSTCTL: u32 = OTG_HS + 0x010;
 const DCTL: u32 = OTG_HS + 0x804;
 const DSTS: u32 = OTG_HS + 0x808;
 const DCFG: u32 = OTG_HS + 0x800;
+/// OTG_GPVNDCTL: the core's ULPI register access (RegData 7:0, RegAddr 21:16, RegWr 22, NewRegReq 25, VStsDone 27;
+/// DWC_otg layout, verified on the unit by peek / poke, 2026-10-31).
+const GPVNDCTL: u32 = OTG_HS + 0x034;
+/// Experiment switch (docs/install.md): microseconds to wait after each bulk IN packet of the drive, to see whether
+/// the high-speed drop depends on the rate. 0 (the default) is off; clamped to 10 ms.
+const PACE_US: u32 = parse_us(option_env!("USB_PACE_US"));
+
+const fn parse_us(s: Option<&str>) -> u32 {
+    let Some(s) = s else { return 0 };
+    let (b, mut i, mut n) = (s.as_bytes(), 0, 0u32);
+    while i < b.len() && b[i].is_ascii_digit() && n < 10_000 {
+        n = n * 10 + (b[i] - b'0') as u32;
+        i += 1;
+    }
+    if n > 10_000 { 10_000 } else { n }
+}
+
+/// Waits PACE_US after a bulk IN packet.
+// shortcut: a spin, not a sleep; an experiment build's switch, off (a constant 0, so the clippy lint) by default
+#[allow(clippy::absurd_extreme_comparisons)]
+fn pace() {
+    let t0 = cycles();
+    while cycles().wrapping_sub(t0) < PACE_US * (CPU_HZ / 1_000_000) {}
+}
+
+/// One ULPI register through GPVNDCTL (ULPI 1.1 register read); `None` if the PHY does not answer in about 1 ms,
+/// itself a finding.
+fn ulpi_read(addr: u8) -> Option<u8> {
+    wr(GPVNDCTL, 1 << 25 | u32::from(addr & 0x3f) << 16);
+    let t0 = cycles();
+    loop {
+        let v = rd(GPVNDCTL);
+        if v & (1 << 27) != 0 {
+            return Some(v as u8);
+        }
+        if cycles().wrapping_sub(t0) > CPU_HZ / 1000 {
+            return None;
+        }
+    }
+}
+
+/// The core's and the PHY's state now (the core's first: the PHY reads take up to 4 ms).
+fn snapshot(event: u8) -> UsbSnap {
+    UsbSnap {
+        event,
+        gintsts: rd(OTG_HS + 0x014),
+        gotgint: rd(OTG_HS + 0x004),
+        dsts: rd(DSTS),
+        diepint1: rd(OTG_HS + 0x928),
+        dtxfsts1: rd(OTG_HS + 0x918),
+        diepctl1: rd(OTG_HS + 0x920),
+        phy: [0x04, 0x13, 0x15, 0x07].map(ulpi_read),
+    }
+}
 /// Full speed (12 Mbit/s, 64-byte bulk packets) unless built with USB_HS=1: high-speed transfers drop on this unit
 /// (docs/usb.md; stock's drive too), full speed held for GBs of copies. The PHY itself does high speed (2026-10-31).
 const FULL_SPEED: bool = option_env!("USB_HS").is_none();
@@ -99,6 +154,8 @@ struct Msc {
     reset: bool,
     /// A USB bus reset was seen.
     bus_reset: bool,
+    /// The first failure's registers, until the app takes them ([`Link::snapshot`]).
+    snap: Keeper,
 }
 
 impl UsbClass<Bus> for Msc {
@@ -164,11 +221,17 @@ impl msc::Pipe for Bulk<'_> {
             let t0 = cycles();
             loop {
                 match self.msc.inp.write(p) {
-                    Ok(_) => return true,
+                    Ok(_) => {
+                        pace();
+                        return true;
+                    }
                     Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
                         self.dev.poll(&mut [&mut *self.cdc, &mut *self.msc]);
                     }
-                    Err(_) => return false,
+                    Err(_) => {
+                        self.msc.snap.note(|| snapshot(usbsnap::EVENT_SEND));
+                        return false;
+                    }
                 }
             }
         })
@@ -255,6 +318,7 @@ pub fn start() -> Option<Link> {
         out: alloc.bulk(MPS as u16),
         reset: false,
         bus_reset: false,
+        snap: Keeper::default(),
     };
     // pid.codes test VID / PID (0x1209 / 0x0001): fine for a device that never leaves the bench
     let dev = UsbDeviceBuilder::new(alloc, UsbVidPid(0x1209, 0x0001))
@@ -363,9 +427,15 @@ impl Link {
         let since = if bus == UsbState::Configured { self.sof.1 } else { self.bus.1 };
         let w = dev::watch_usb(bus, self.was_configured, now_ms.wrapping_sub(since), failed);
         if w == UsbWatch::Drop {
+            self.msc.snap.note(|| snapshot(usbsnap::EVENT_DROP)); // before the reconnect changes the core
             self.reconnect(now_ms);
         }
         w
+    }
+
+    /// The first failure's registers since the link came up, once (the app keeps them in backup registers).
+    pub fn snapshot(&mut self) -> Option<UsbSnap> {
+        self.msc.snap.take()
     }
 
     /// A soft disconnect and connect: the computer sees a detach, then an attach, and enumerates the device again.

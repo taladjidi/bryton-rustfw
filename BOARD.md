@@ -350,7 +350,10 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts and the Di2 presses' actions, tag 0x9; 0xc2 in earlier builds) and 29
   (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
   0x52430001, lib.rs `RIDE_BKP`), 31 (USB drops the link recovered from, tag 0x0b, `USB_DROPS_BKP`) and 0 (what the USB drive saw last at a
-  drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md). None free: the standby breadcrumbs share 0 (tag 0x5b) and 31 (the
+  drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md) and 15 (the USB snapshot of a link's first failure, tag 0xd2, `SNAP_BKP`: 8 words of
+  3 bytes are packed, src/link/usbsnap.rs, but only 15 is free, so the first word is kept: event, which PHY registers
+  answered, USB Interrupt Status 0x13, Debug 0x15; `tools/dev.py usbdrop` decodes it). The ULPI registers are read through
+  OTG_GPVNDCTL (0x40040034: RegData 7:0, RegAddr 21:16, RegWr 22, NewRegReq 25, VStsDone 27). Otherwise none free: the standby breadcrumbs share 0 (tag 0x5b) and 31 (the
   reset flags, tag 0x5c), the last writer winning; the whole table is in src/app/settings.rs.
 - **Setting it** (this firmware, from the phone's time; not yet seen on the unit): RM0399's calendar initialisation:
   PWR_CR1 DBP, RTC_WPR 0xca then 0x53, INIT (RTC_ISR bit 7, RTC_ICSR in main.rs), wait for INITF (bit 6, 10 ms at

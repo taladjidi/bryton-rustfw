@@ -20,6 +20,8 @@ plugged in: the dot at the top right turns green when the link is ready.
                                   mean and max us, % of wall time; panel pixels and eMMC sectors a second.
                                   --reset starts a new window; --watch N prints a fresh N-second window, again
                                   and again (tools/profile.py runs scripted scenarios)
+  dev.py usbdrop                  the USB core and PHY registers kept at the first failure of the last link (backup
+                                  registers, src/link/usbsnap.rs), decoded; read it after the replug
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py stackfault               run the stack past its canary on purpose (no ride open): the unit must reset
                                   with the fault marker (peek 0x580040c4 reads 0xfa0000nn within a minute)
@@ -232,6 +234,44 @@ def prof_table(p, title=None):
     return '\n'.join(out)
 
 
+BKP0 = 0x58004050                    # RTC_BKP0R; BKP n is at BKP0 + 4 n
+SNAP_BKP = [15]                      # src/app/settings.rs SNAP_BKP: the registers holding the snapshot, in order
+LINE = ('SE0', 'J', 'K', 'SE1')      # ULPI 1.1 Debug register, LineState bits 1:0
+EVENTS = {1: 'a bulk IN packet gave up after 1 s', 2: 'the watch decided a drop'}
+
+
+def usbdrop_decode(words):
+    """The snapshot of src/link/usbsnap.rs (tag 0xd2, 3 bytes a word) as text lines; the layout is mirrored there."""
+    if not words or words[0] >> 24 != 0xd2:
+        return ['no USB snapshot kept (none yet, or the registers hold something else)']
+    b = bytearray(24)
+    have = 0
+    for i, w in enumerate(words[:8]):
+        if w >> 24 == 0xd2:
+            b[3 * i:3 * i + 3] = (w & 0xffffff).to_bytes(3, 'little')
+            have = 3 * i + 3
+    ans = lambda i: b[0] >> 4 & 1 << i
+    n = lambda at, ln: int.from_bytes(b[at:at + ln], 'little') if have >= at + ln else None
+    hexv = lambda v, w: 'not stored' if v is None else f'{v:0{w}x}'
+    phy = lambda i, at: 'PHY did not answer' if not ans(i) else ('not stored' if have <= at else f'{b[at]:02x}')
+    out = [f'event: {EVENTS.get(b[0] & 15, "unknown " + str(b[0] & 15))}']
+    out.append(f'PHY 0x04 Function Control:  {phy(0, 3)}')
+    out.append(f'PHY 0x07 Interface Control: {phy(3, 4)}')
+    v13 = phy(1, 1)
+    if ans(1):
+        names = ('HostDisconnect', 'VbusValid', 'SessValid', 'SessEnd', 'IdGnd')
+        v13 += ' (' + ' '.join(nm for k, nm in enumerate(names) if b[1] >> k & 1) + ')'
+    out.append(f'PHY 0x13 USB Interrupt Status: {v13}')
+    out.append('PHY 0x15 Debug: ' + (f'{b[2]:02x} (LineState {LINE[b[2] & 3]})' if ans(2) else phy(2, 2)))
+    for name, at, ln in (('GINTSTS', 5, 4), ('DSTS', 9, 3), ('DIEPINT1', 12, 2), ('DTXFSTS1', 14, 2), ('DIEPCTL1', 16, 4),
+                         ('GOTGINT', 20, 2)):
+        out.append(f'{name}: {hexv(n(at, ln), 2 * ln)}')
+    d = n(9, 3)
+    if d is not None:
+        out.append(f'  DSTS: suspend {d & 1}, speed {(d >> 1) & 3} (0 high, 1 full), FNSOF {(d >> 8) & 0x3fff}')
+    return out
+
+
 def selftest():
     p = png(bytes(range(256)) * 600)                    # 2 * 240 * 320 bytes
     assert p.startswith(b'\x89PNG') and p[12:16] == b'IHDR'
@@ -301,6 +341,13 @@ def selftest():
         assert 'not in its folder' in str(e), e
     else:
         raise AssertionError('a file ls does not list was copied')
+    # one word (event 2 = drop; PHY 0x04 and 0x13 answered, 0x13 = 0x16; 0x15 did not): the rest is not stored
+    t = usbdrop_decode([0xd2 << 24 | 0x16 << 8 | 0x32])
+    assert 'event: the watch decided a drop' in t and 'PHY 0x15 Debug: PHY did not answer' in t, t
+    assert 'GINTSTS: not stored' in t and any('VbusValid SessValid' in x for x in t), t
+    full = usbdrop_decode([0xd2 << 24 | 0x01 << 16 | 0x16 << 8 | 0x72, 0xd2 << 24 | 0x45 << 0, 0xd2 << 24 | 0x30 << 16])
+    assert 'PHY 0x15 Debug: 01 (LineState J)' in full and 'PHY 0x04 Function Control:  45' in full, full
+    assert usbdrop_decode([0x1234])[0].startswith('no USB snapshot')
     print('dev.py selftest ok')
 
 
@@ -324,6 +371,7 @@ def main():
     p = sub.add_parser('peek', help='read registers: peek 0x40013014 [n]')
     p.add_argument('addr')
     p.add_argument('n', nargs='?', type=int, default=1)
+    sub.add_parser('usbdrop', help='decode the USB failure snapshot kept in the backup registers')
     p = sub.add_parser('poke', help='write a register: poke 0x40013000 0x1001')
     p.add_argument('addr')
     p.add_argument('value')
@@ -398,6 +446,8 @@ def main():
                 print(command(s, f'wtest {a.lba}'))
             elif a.cmd in ('info', 'where', 'reset', 'drive', 'stackfault'):
                 print(command(s, a.cmd))
+            elif a.cmd == 'usbdrop':
+                print('\n'.join(usbdrop_decode([int(command(s, f'peek {BKP0 + 4 * r:#x} 1'), 16) for r in SNAP_BKP])))
             elif a.cmd == 'peek':
                 first = command(s, f'peek {a.addr} {a.n}')
                 if first.startswith('err'):

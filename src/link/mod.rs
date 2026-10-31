@@ -6,3 +6,4 @@ pub mod dev;
 pub mod msc;
 pub mod phone;
 pub mod prof;
+pub mod usbsnap;

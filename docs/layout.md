@@ -297,6 +297,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   and the image run). `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from
   `Board::cycles`); `tools/profile.py`: scripted scenarios on the unit, a `prof` window each; `tools/walk.py`: the simulator's screen walk
   (`src/sim/walk_tests.rs`) replayed on the unit, unit and sim shots side by side in contact sheets under `target/walk/`.
+- `src/link/usbsnap.rs`: the USB core and ULPI PHY registers taken at a link's first failure (`Keeper`), packed into
+  backup-register words (`pack`) that `tools/dev.py usbdrop` decodes.
 - `src/link/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).

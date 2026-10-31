@@ -114,7 +114,7 @@ pub const CLIMB: usize = PAGES + 3;
 //   9, 12,13 stock (12: its Nordic image; 13: last battery mV)      -
 //   11       wheel, backlight, max HR, FTP (also in settings.bin)   WHEEL_BKP
 //   14       paired shifting system (0x61 / 0x62)                   sensors::Kind::backup
-//   15       stock reads it at boot                                 -
+//   15       stock reads it at boot (our USB snapshot, tag 0xd2)    SNAP_BKP
 //   16       weights and W' (0xa; also in settings.bin)             POWER_BKP
 //   17, 18   GNSS aiding                                            AID_BKP
 //   19       stock reads it at boot (once ours: set back to 0)      STOCK_BKP19
@@ -133,6 +133,13 @@ pub const USB_DROPS_BKP: usize = 31;
 /// RTC backup register with what the USB drive saw last at a drop ([`App::usb_dropped`]): tag 0xd1; shared with
 /// [`STANDBY_BKP`].
 pub const USB_LAST_BKP: usize = 0;
+
+/// RTC backup registers holding the USB snapshot of the first failure of a link ([`usbsnap::pack`], tag 0xd2, read by
+/// `tools/dev.py usbdrop`). Only 15 is free (stock reads it at boot but keeps its value only if it is 0x4649; an old
+/// build's page word, tag 0xa, which a 0xd2 word is not), so the first word only: the event, which PHY registers
+/// answered, USB Interrupt Status and Debug (LineState). [`usbsnap::WORDS`] are packed; give this array the other
+/// seven registers and the rest is stored too.
+pub const SNAP_BKP: [usize; 1] = [15];
 
 /// The standby breadcrumbs (main.rs `standby`: the power button did not start the unit after switching off,
 /// 2026-10-25): tag 0x5b in bits 24..31, the boots since standby was entered in bits 16..23, the times WFI returned

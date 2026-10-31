@@ -190,6 +190,14 @@ impl App {
         self.notice("USB RECONNECT");
     }
 
+    /// The first failure of a USB link (src/board/usb.rs): its registers into [`SNAP_BKP`], for `dev.py usbdrop`
+    /// after the replug. The board hands over one snapshot a link, so a later drop does not overwrite it.
+    pub fn usb_snapshot(&mut self, b: &mut impl Board, s: &usbsnap::UsbSnap) {
+        for (r, w) in SNAP_BKP.iter().zip(usbsnap::pack(s)) {
+            b.backup_write(*r, w);
+        }
+    }
+
     /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,
     /// no key for [`IDLE_AFTER_MS`], no finger, no tone or banner timed by the passes, the card not lent to the
     /// computer, no AssistNow Offline data left to send, a few seconds after the receiver starts), else [`POLL_MS`]. Measured 2026-10-28 overnight on the overview: 20 passes/s of 0.4 ms each.

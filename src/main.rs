@@ -1944,6 +1944,9 @@ fn main() -> ! {
                             UsbDot::Powered
                         }
                     };
+                    if let Some(s) = l.snapshot() {
+                        app.usb_snapshot(&mut board, &s);
+                    }
                     // a drive command read or wrote the card, which may have slept and taken over SysTick: without
                     // this, the sleep's end is lost and the main loop stalls while USB is still served (seen on the
                     // unit, 2026-10-24: the uptime stopped, the dev link kept answering)
