@@ -124,8 +124,6 @@ dependencies = [
 [[package]]
 name = "usbd-serial"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "065e4eaf93db81d5adac82d9cef8f8da314cb640fa7f89534b972383f1cf80fc"
 dependencies = [
  "embedded-hal",
  "embedded-io",

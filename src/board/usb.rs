@@ -312,7 +312,7 @@ pub fn start() -> Option<Link> {
     }
     let alloc: &'static UsbBusAllocator<Bus> = ALLOC.init(UsbBus::new(OtgHs, EP_MEMORY.init([0; 1024])));
     // the patched crates' fallible allocations (vendor/PATCHES.md): no USB rather than a panic
-    let cdc = CdcAcmClass::new(alloc, MPS as u16);
+    let cdc = CdcAcmClass::try_new(alloc, MPS as u16).ok()?;
     let msc = Msc {
         iface: alloc.interface(),
         inp: alloc.alloc(None, EndpointType::Bulk, MPS as u16, 0).ok()?,
