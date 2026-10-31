@@ -877,6 +877,21 @@ pub const MAIN: [Row; 8] = [
     Row::Open(Menu::Places),
 ];
 
+/// PAGES: one list per profile's set, then the settings of the pages and the quick overlay's fields.
+pub const PAGES: [Row; 6] = [
+    Row::Open(Menu::PageList(crate::ride::Profile::Road)),
+    Row::Open(Menu::PageList(crate::ride::Profile::Indoor)),
+    Row::Open(Menu::PageList(crate::ride::Profile::Mtb)),
+    Row::AutoScroll,
+    Row::Set(Setting::QuickStatus),
+    Row::Open(Menu::Page(crate::QUICK)),
+];
+
+/// The overview page's field rows (always four) and the quick overlay's (always six).
+pub const OVERVIEW_ROWS: usize = 4;
+/// See [`OVERVIEW_ROWS`].
+pub const QUICK_ROWS: usize = 6;
+
 /// SETTINGS: a menu per subject, each a screen of settings, so any setting is three levels down at most.
 pub const SETTINGS: [Row; 5] = [
     Row::Open(Menu::Me),

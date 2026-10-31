@@ -1168,6 +1168,8 @@ fn the_pages_menu_edits_the_set_it_names() {
     let label = |app: &App, i| app.menu_row(Menu::Pages, i).map(|(l, ..)| std::string::String::from(l.as_str()));
     assert_eq!((label(&app, 0).as_deref(), label(&app, 1).as_deref()), (Some("ROAD PAGES"), Some("INDOOR PAGES")));
     assert_eq!((app.rows(Menu::Pages), label(&app, 2).as_deref()), (6, Some("MTB PAGES")));
+    let tail: std::vec::Vec<_> = (3..6).map(|i| label(&app, i).unwrap_or_default()).collect();
+    assert_eq!(tail, ["AUTO SCROLL", "QUICK STATUS", "QUICK FIELDS"], "the rows after the page sets");
     press(&mut sim, &mut app, Key::Start);
     assert_eq!(app.screen(), Screen::Menu(Menu::PageList(ride::Profile::Indoor), 0));
     assert!(app.pages_set == ride::Profile::Indoor, "the editor works on the indoor set");
