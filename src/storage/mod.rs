@@ -75,7 +75,8 @@ mod tests {
         assert_eq!(a, [1, 3, 4, 4]);
         move_within(&mut a, 0..3, 2); // the destination runs past the end: the last one is dropped
         assert_eq!(a, [1, 3, 1, 3]);
-        move_within(&mut a, 3..1, 0); // an empty (reversed) range
+        #[allow(clippy::reversed_empty_ranges)] // the point: a malformed range moves nothing
+        move_within(&mut a, 3..1, 0);
         assert_eq!(a, [1, 3, 1, 3]);
     }
 
