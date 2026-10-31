@@ -673,6 +673,8 @@ pub struct Nordic {
     /// whose RAM cannot hold them); connections asked for (`sd_ble_gap_connect`) and the parameter updates sent.
     pub cfg: Vec<Vec<u8>>,
     pub no_mem: bool,
+    /// `sd_ble_enable` answers NO_MEM after the ATT MTU configuration only (RAM for the larger buffers is short).
+    pub no_mem_mtu: bool,
     pub connects: u32,
     pub param_updates: Vec<Vec<u8>>,
     /// Every payload received, in order.
@@ -1111,6 +1113,7 @@ impl Nordic {
             return;
         }
         let reply: Vec<u8> = match p {
+            [0, 0x60] if self.no_mem_mtu && self.cfg.iter().any(|c| c[..2] == [0x23, 0]) => vec![1, 0x60, 4, 0, 0, 0],
             [0, 0x60] if self.no_mem && !self.cfg.is_empty() => vec![1, 0x60, 4, 0, 0, 0], // NRF_ERROR_NO_MEM
             [0, 0x60] => {
                 self.enabled = true;
@@ -1368,7 +1371,7 @@ impl Board for Sim {
         if let Some(t) = &mut ftms {
             t.hang_up();
         }
-        let no_mem = self.nordic.no_mem;
+        let (no_mem, no_mem_mtu) = (self.nordic.no_mem, self.nordic.no_mem_mtu);
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
         let trainer = std::mem::take(&mut self.nordic.trainer);
         let meter = std::mem::take(&mut self.nordic.meter);
@@ -1387,6 +1390,7 @@ impl Board for Sim {
             phone,
             ftms,
             no_mem,
+            no_mem_mtu,
             reset: true,
             resets,
             chaos,

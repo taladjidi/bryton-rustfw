@@ -6,6 +6,11 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **Phone link: the ATT MTU and the notification's app**: sim only. Still to see with an iPhone: the chip starts with
+  the MTU configuration (`sd_ble_cfg_set` 0x23, `nrf::ATT_MTU` 103; if it answers NO_MEM the start drops to the two
+  links alone, `Version::mtu` 23), the Exchange MTU Request (GATTC 0x9e, response event 0x3a: both opcodes inferred
+  from the API v5 headers, not seen on the unit) is answered with 103 or less, and a message from WhatsApp, Messages
+  or Mail shows "WHATSAPP: sender: text" in the banner and the list (Get App Attributes on the Control Point).
 - **Peaks and cols along a course (storage/named.rs, NEXT POI, PROFILE marks)**: sim only, on synthetic tiles. The tile
   format is inferred: the name, then `ele` as a u64 of metres after the point, was read off a real cache on the
   computer (the stock document says only "8 bytes"), not on the unit. Still to see: a followed course through a region stock's cache holds (zoom 12, 11 or 9 under `\Map\Data\Temp`),

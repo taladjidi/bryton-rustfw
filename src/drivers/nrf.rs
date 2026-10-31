@@ -277,6 +277,8 @@ pub struct Version {
     /// The two links were configured ([`CFG`]): a trainer as central besides the phone, on tag [`crate::ble::TAG`].
     /// False: the chip's defaults, one link (the phone's), tag 0.
     pub central: bool,
+    /// The ATT MTU the chip was configured for ([`cfg_mtu`]): 23 when it refused (or has no configuration).
+    pub mtu: u16,
 }
 
 /// `sd_ble_cfg_set`.
@@ -294,33 +296,58 @@ pub const SD_BLE_CFG_SET: u8 = 0x69;
 pub const CFG: [&[u8]; 2] =
     [&[CMD, SD_BLE_CFG_SET, 0x20, 0, 0, 0, 1, 1, 2, 3, 0], &[CMD, SD_BLE_CFG_SET, 0x40, 0, 0, 0, 1, 1, 1, 0]];
 
-/// Resets the chip as stock does, configures two links ([`CFG`]), enables BLE and reads the version: proof that the
+/// The ATT MTU asked of the chip: 103, so a notification (3 bytes of header) carries 100 bytes and an ANCS answer
+/// (about 180 bytes) comes in two instead of ten. The ceiling is our own: [`KEPT`] bytes per event held while a
+/// command waits. Whether the chip's RAM holds the larger buffers is not known (its image is not in the stock image):
+/// it answers NO_MEM to `sd_ble_enable` when not, and the start falls back to [`CFG`] alone.
+pub const ATT_MTU: u16 = 103;
+
+/// `BLE_CONN_CFG_GATT` (0x23: ble.h `BLE_CONN_CFG_BASE` 0x20 + 3) for tag 1: `ble_gatt_conn_cfg_t` is one `att_mtu`
+/// u16 (ble_gatt.h; the serialization's layout as for the GAP one above: id, presence byte, tag, structure).
+pub fn cfg_mtu() -> [u8; 10] {
+    let [m0, m1] = ATT_MTU.to_le_bytes();
+    [CMD, SD_BLE_CFG_SET, 0x23, 0, 0, 0, 1, 1, m0, m1]
+}
+
+/// Resets the chip as stock does, configures two links ([`CFG`]) and the MTU ([`cfg_mtu`]), enables BLE and reads the version: proof that the
 /// chip runs and the link works. A chip that refuses the configuration (an error code from `sd_ble_cfg_set`, or
 /// NO_MEM from `sd_ble_enable` when its RAM cannot hold it) is reset and started on its defaults, as before: the
 /// phone link works either way, the trainer's needs [`Version::central`]. A chip that does not answer is not tried
 /// twice (the start's time with a dead chip stays one reset and one time-out).
 pub fn start(b: &mut impl Board) -> Result<Version, Error> {
-    match start_as(b, true) {
-        Err(Error::Code(_)) => start_as(b, false),
+    match start_as(b, 2) {
+        Err(Error::Code(_)) => match start_as(b, 1) {
+            Err(Error::Code(_)) => start_as(b, 0),
+            r => r,
+        },
         r => r,
     }
 }
 
-fn start_as(b: &mut impl Board, central: bool) -> Result<Version, Error> {
+/// `level` 2: the links and the larger MTU, 1: the links, 0: the chip's defaults.
+fn start_as(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     b.nrf_reset();
     let mut rx = Rx::new();
     let mut out = [0; 8];
-    if central {
+    if level > 0 {
         for c in CFG {
             call(b, &mut rx, c, &mut [])?;
         }
     }
+    if level > 1 {
+        call(b, &mut rx, &cfg_mtu(), &mut [])?;
+    }
+    let (central, mtu) = (level > 0, if level > 1 { ATT_MTU } else { 23 });
     call(b, &mut rx, &[CMD, SD_BLE_ENABLE], &mut out)?;
     let n = call(b, &mut rx, &[CMD, SD_BLE_VERSION_GET, 1], &mut out)?;
     match out[..n] {
-        [image, b0, b1, s0, s1, ..] => {
-            Ok(Version { image, bootloader: u16::from_le_bytes([b0, b1]), sd: u16::from_le_bytes([s0, s1]), central })
-        }
+        [image, b0, b1, s0, s1, ..] => Ok(Version {
+            image,
+            bootloader: u16::from_le_bytes([b0, b1]),
+            sd: u16::from_le_bytes([s0, s1]),
+            central,
+            mtu,
+        }),
         _ => Err(Error::Code(u32::MAX)),
     }
 }

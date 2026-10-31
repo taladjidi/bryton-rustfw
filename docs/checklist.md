@@ -285,7 +285,7 @@ Others
 ## Phone and connectivity
 
 - [x] Pair with a phone (BLE bonding) (stock, all): sim
-- [x] Call, text and e-mail notifications: iOS through ANCS, no app (stock app, all): unit for calls; sim for messages and decline
+- [x] Call, text and e-mail notifications: iOS through ANCS, no app (stock app, all): unit for calls; sim for messages and decline, the app's display name (Get App Attributes) and the larger ATT MTU
 - [ ] Android notifications (stock app, all): need a companion app
 - [x] Media remote: play, pause, next, previous, volume (patch P7, Garmin, Wahoo, Karoo): sim
 - [x] Now playing: title, artist, elapsed (ours): sim

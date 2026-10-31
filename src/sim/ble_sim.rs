@@ -66,12 +66,19 @@ pub struct PhoneSim {
     posted: Vec<(u32, &'static str, &'static str)>,
     connected: bool,
     secure: bool,
+    /// The largest ATT MTU it accepts (iOS: 185); 0: it never answers an Exchange MTU Request, 23: it refuses.
+    pub max_mtu: u16,
+    /// The link's ATT MTU: 23 until the unit's exchange.
+    pub mtu: u16,
+    /// The apps it names (bundle id, display name), and the bundle ids the unit asked about, in order.
+    pub apps: Vec<(&'static str, &'static str)>,
+    pub app_asks: Vec<std::string::String>,
 }
 
 impl PhoneSim {
     /// The chip was reset: the link is gone (the phone is still in range, and connects again to the next advertising).
     pub fn hang_up(&mut self) {
-        (self.connected, self.secure) = (false, false);
+        (self.connected, self.secure, self.mtu) = (false, false, 23);
         self.subscribed.clear();
     }
 
@@ -128,6 +135,10 @@ impl PhoneSim {
             posted: Vec::new(),
             connected: false,
             secure: false,
+            max_mtu: 185,
+            mtu: 23,
+            apps: vec![("com.phone", "Phone")],
+            app_asks: Vec::new(),
         }
     }
 }
@@ -546,6 +557,24 @@ impl Nordic {
                 ok(self, &[]);
                 self.ftms_write(h, &data, now);
             }
+            0x9e if u16_at(0) != 1 => {
+                // Exchange MTU Request: refused when the chip was not configured for that much (INVALID_PARAM)
+                let want = u16_at(2);
+                let conf =
+                    self.cfg.iter().find(|c| c[..2] == [0x23, 0]).map_or(23, |c| u16::from_le_bytes([c[6], c[7]]));
+                if want > conf {
+                    self.queue(&[1, *op, 7, 0, 0, 0]);
+                } else {
+                    ok(self, &[]);
+                    if let Some(ph) = &mut self.phone
+                        && ph.max_mtu != 0
+                    {
+                        ph.mtu = want.min(ph.max_mtu);
+                        let m = ph.max_mtu;
+                        self.gattc(0x3a, 0, &m.to_le_bytes());
+                    }
+                }
+            }
             0x9d if u16_at(0) == 1 => {
                 ok(self, &[]);
                 if let Some(t) = &mut self.ftms {
@@ -565,7 +594,7 @@ impl Nordic {
                     (0x15, [0, u0, u1, u2, u3, ..]) => {
                         let uid = u32::from_le_bytes([*u0, *u1, *u2, *u3]);
                         if let Some(&(_, title, msg)) = ph.posted.iter().find(|p| p.0 == uid) {
-                            // the answer, in 20-byte notifications (ATT MTU 23)
+                            // the answer, in notifications of the link's MTU less 3
                             let mut a = vec![0];
                             a.extend(uid.to_le_bytes());
                             a.extend([0, 9, 0]);
@@ -576,9 +605,24 @@ impl Nordic {
                             a.push(3);
                             a.extend((msg.len() as u16).to_le_bytes());
                             a.extend(msg.as_bytes());
-                            for c in a.chunks(20) {
+                            for c in a.chunks(usize::from(ph.mtu) - 3) {
                                 self.hvx(0x17, c);
                             }
+                        }
+                    }
+                    (0x15, [1, id @ ..]) => {
+                        // Get App Attributes: the identifier NUL-terminated, then the attribute ids
+                        let z = id.iter().position(|&c| c == 0).unwrap_or(id.len());
+                        let id = std::string::String::from_utf8_lossy(&id[..z]).into_owned();
+                        let name = ph.apps.iter().find(|a| a.0 == id).map_or("", |a| a.1);
+                        let mut a = vec![1];
+                        a.extend(id.bytes());
+                        a.extend([0, 0]);
+                        a.extend((name.len() as u16).to_le_bytes());
+                        a.extend(name.as_bytes());
+                        ph.app_asks.push(id);
+                        for c in a.chunks(usize::from(ph.mtu) - 3) {
+                            self.hvx(0x17, c);
                         }
                     }
                     (0x15, [2, u0, u1, u2, u3, action]) => {

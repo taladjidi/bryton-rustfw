@@ -1336,9 +1336,9 @@ fn usb_drive_commands() {
 #[test]
 fn phone_link_events() {
     use super::*;
-    const IDS: [u16; 22] = [
+    const IDS: [u16; 23] = [
         0x10, 0x11, 0x13, 0x14, 0x19, 0x1a, 0x1b, 0x1f, 0x21, 0x23, 0x01, 0x50, 0x52, 0x55, 0x56, 0x30, 0x32, 0x33,
-        0x36, 0x38, 0x39, 0x3b,
+        0x36, 0x38, 0x39, 0x3a, 0x3b,
     ];
     let (mut answers, mut notifs, mut fresh, mut stored, mut rejected, mut bonds) = (0usize, 0, 0, 0, 0, 0);
     let (mut sim, mut app) = started();
@@ -2665,6 +2665,61 @@ fn notification_answers() {
     assert!(whole > 20 && cut > 20, "{whole} whole, {cut} cut");
     assert_eq!(inbox.len(), crate::phone::INBOX);
     assert!(inbox.get(crate::phone::INBOX).is_none());
+}
+
+/// Get App Attributes answers (command 1, the identifier NUL-terminated, DisplayName) in random fragments, mixed with
+/// notification answers, damaged ones (a lying length, another attribute, no terminator) and random bytes: no panic,
+/// the cache keeps at most eight, and every kind was reached (counted): whole app answers, whole notification answers,
+/// answers dropped, names found in the cache.
+#[test]
+fn app_attribute_answers() {
+    use crate::phone::{Answer, AppCache, DataSource};
+    let (mut apps, mut notifs, mut dropped, mut hits) = (0, 0, 0, 0);
+    let mut cache = AppCache::default();
+    for seed in 1..=40u32 {
+        let mut r = xorshift(seed * 7919);
+        let mut ds = DataSource::default();
+        for _ in 0..60 {
+            let id: Vec<u8> = (0..1 + r() % 3).map(|_| b'a' + (r() % 3) as u8).collect();
+            let name: Vec<u8> = (0..r() % 24).map(|_| 0x20 + (r() % 100) as u8).collect();
+            let mut a = std::vec![1u8];
+            a.extend(&id);
+            let damage = r() % 8;
+            if damage != 1 {
+                a.push(0); // a missing terminator is damage 1
+            }
+            a.push(if damage == 2 { 3 } else { 0 }); // another attribute id
+            let lie = if damage == 3 { 300 } else { 0 };
+            a.extend((name.len() as u16 + lie).to_le_bytes());
+            a.extend(&name);
+            if damage == 4 {
+                a = (0..r() % 80).map(|_| r() as u8).collect(); // random bytes
+            }
+            if damage == 5 {
+                a = std::vec![0, 1, 0, 0, 0, 0, 0, 0, 1, 2, 0, b'h', b'i', 3, 0, 0]; // a notification answer, whole
+                notifs += usize::from(ds.push_any(&a).is_some());
+                continue;
+            }
+            let mut rest = a.as_slice();
+            while !rest.is_empty() {
+                let k = (1 + r() as usize % 40).min(rest.len());
+                let (c, tail) = rest.split_at(k);
+                rest = tail;
+                match ds.push_any(c) {
+                    Some(Answer::App(i)) => {
+                        apps += 1;
+                        hits += usize::from(cache.get(i.id.as_str()).is_some());
+                        cache.put(i);
+                        assert!(i.name.as_str().bytes().all(|c| !c.is_ascii_lowercase()), "capitals");
+                    }
+                    Some(Answer::Notif(_)) => notifs += 1,
+                    None => dropped += 1,
+                }
+            }
+        }
+    }
+    assert!(apps > 200 && notifs > 20 && dropped > 200 && hits > 20, "{apps} apps, {notifs} notifs, {dropped}, {hits}");
+    assert!(cache.get("zzz").is_none());
 }
 
 /// Pages of the FE-C profile (random bytes behind a page number chosen from the ones decoded, a few others) into the
