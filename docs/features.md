@@ -513,22 +513,24 @@ MENU
   the workout ends) moves the selection to the last row left.
 - **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, the bike's WEIGHT 0.1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
   to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, WHEEL) goes to its next value.
-- **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
-  altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
-  build is made from and its date; `tools/dev.py info` gives the same commit; the notices of the map data, "(c)
-  OpenStreetMap contributors (ODbL)", "(c) OpenMapTiles", "(c) IGN (Plan IGN v2, Etalab 2.0)", and the font's, "BARLOW,
-  SIL OFL 1.1"; drawn once when it opens), STORAGE (the card: TOTAL and FREE from the volume, FREE shows FSInfo's count with a
-  "~" (only a hint: stale after a power cut) until the FAT is counted over the passes, then the counted value, RIDES in `\Activities`, then the five oldest by name, each as its
-  day and size; a tap opens the ride's HISTORY card, where DELETE is). STORAGE is read only, a pass at a time while the
-  screen is open and no ride runs or waits to be saved (`--` until then, or while the card is lent to the computer);
-  DELETE restarts the count. SCREENSHOT leaves the menus and saves the screen under them (the overview, or the ride
-  page they were opened over) as `\Screenshot\YYYYMMDDhhmmss.bmp`, stock's folder and name: a 16-bit BMP of the panel's
-  own pixels (150 KB), with the notice SCREENSHOT SAVED. A menu row rather than a key combination, so it never fires by
-  accident; not while a ride is open or waits to be saved (NOT DURING A RIDE), with the card lent (USB DRIVE ON) or on a
-  read-only build. Less than the file and 8 MB free (the recorder's reserve) is CARD FULL: NO SCREENSHOT, nothing
-  written (the FAT counted first after a failed write, so a stale count never lets it in); a second shot in the same
-  second is SCREENSHOT: TRY AGAIN. The file's entry is written last, so a power cut or a write error never leaves a
-  partial picture (a failed write of the pixels frees what it took; a failed entry leaves its clusters lost, never freed, since the entry may be on the card unseen).
+- **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position, altitude,
+  UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the build is made
+  from and its date; `tools/dev.py info` gives the same commit; the notices of the map data, "(c) OpenStreetMap
+  contributors (ODbL)", "(c) OpenMapTiles", "(c) IGN (Plan IGN v2, Etalab 2.0)", and the font's, "BARLOW, SIL OFL 1.1";
+  drawn once when it opens), STORAGE (the card: TOTAL and FREE from the volume, FREE shows FSInfo's count with a "~"
+  (only a hint: stale after a power cut) until the FAT is counted over the passes, then the counted value, RIDES in
+  `\Activities`, then the five oldest by name, each as its day and size; a tap opens the ride's HISTORY card, where
+  DELETE is). STORAGE is read only, a pass at a time while the screen is open and no ride runs or waits to be saved
+  (`--` until then, or while the card is lent to the computer); DELETE restarts the count. SCREENSHOT leaves the menus
+  and saves the screen under them (the overview, or the ride page they were opened over) as
+  `\Screenshot\YYYYMMDDhhmmss.bmp`, stock's folder and name: a 16-bit BMP of the panel's own pixels (150 KB), with the
+  notice SCREENSHOT SAVED. A menu row rather than a key combination, so it never fires by accident; not while a ride is
+  open or waits to be saved (NOT DURING A RIDE), with the card lent (USB DRIVE ON) or on a read-only build. Less than
+  the file and 8 MB free (the recorder's reserve) is CARD FULL: NO SCREENSHOT, nothing written (the FAT counted first
+  after a failed write, so a stale count never lets it in); a second shot in the same second is SCREENSHOT: TRY AGAIN.
+  Without the folder (stock ships it; never made here) it is NO SCREENSHOT FOLDER. The file's entry is written last, so
+  a power cut or a write error never leaves a partial picture (a failed write of the pixels frees what it took; a failed
+  entry leaves its clusters lost, never freed, since the entry may be on the card unseen).
 - **Fault log:** after a reset that followed a fault or a panic (the banner FAULT RESET n), one line goes to
   `\Rustfw\Log\faults.log` once the card is quiet (no ride open or waiting to be saved: a ride resumed after the fault
   is saved first): the time of the restart, what it was (a panic and its source line; a CPU fault and its CFSR bits,
