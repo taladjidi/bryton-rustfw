@@ -762,7 +762,7 @@ impl Nearby {
     pub fn strongest(&self) -> impl Iterator<Item = Device> {
         let mut d = self.devices;
         if let Some(s) = d.get_mut(..self.count) {
-            s.sort_unstable_by_key(|d| core::cmp::Reverse(d.rssi));
+            crate::storage::bytes::sort_by_key(s, |d| core::cmp::Reverse(d.rssi));
         }
         d.into_iter().take(self.count)
     }
