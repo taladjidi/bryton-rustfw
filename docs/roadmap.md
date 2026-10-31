@@ -124,7 +124,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept), a larger ATT MTU,
   the notification's app shown;
 - ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); a battery saver mode; ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
-  computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); altitude calibration at saved places; favourite places.
+  computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); ~~altitude calibration at saved places; favourite places~~ done, sim (PLACES, `\Rustfw\places.bin`,
+  features.md; not seen on the unit, status.md); a place named after the nearest named point, routing to a place.
 
 **3d. Hard** (new radios, core changes, routing):
 - ANT+ lights; ANT+ radar and its alerts (sonnet); the sensor pool (several of a kind); ANT+ remote buttons;

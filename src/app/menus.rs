@@ -13,7 +13,7 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 /// The menus (the tree: docs/features.md, "Menu").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Menu {
-    /// The main menu ([`menu::MAIN`]): workouts, courses, history, pages, sensors, settings: six rows, one screen.
+    /// The main menu ([`menu::MAIN`]): workouts, courses, segments, history, pages, sensors, settings, places.
     Main,
     /// CALIBRATE POWER and TRAINER CONTROL first (when they apply), one row per sensor kind, BT TRAINER, the Di2
     /// buttons and the phone.
@@ -82,6 +82,10 @@ pub enum Menu {
     Notifs,
     /// The Bluetooth trainers heard by the search (app/ftms.rs): Select pairs one.
     BtTrainers,
+    /// SAVE PLACE, then the favourite places (app/places.rs): Select opens one.
+    Places,
+    /// Place `n`: its ALTITUDE (typed by hand) and DELETE.
+    Place(usize),
 }
 
 /// A menu's title (a page's is followed by its number).
@@ -122,6 +126,8 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Remote => "DI2 KEYS",
         Menu::Notifs => "NOTIFICATIONS",
         Menu::BtTrainers => "BT TRAINERS",
+        Menu::Places => "PLACES",
+        Menu::Place(_) => "PLACE",
     }
 }
 
@@ -182,6 +188,8 @@ impl App {
                     // the course page has no settings; no page edited while recording (UI review 2, 5.2 point 8)
                     (Row::Open(Menu::Page(n)), n <= OVERVIEW && self.ride.state() != ride::State::Running),
                     (Row::Ride(RideRow::Curve), self.power_paired()),
+                    // stopped only: a tap acts at once then (a row more scrolls the menu under a second tap)
+                    (Row::SavePlace, !self.ride.moving()),
                     (Row::Open(Menu::Main), true),
                 ];
                 rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i)
@@ -259,6 +267,14 @@ impl App {
                 (i == 0).then_some(Row::Empty(if self.radio.scanning { "SEARCHING" } else { "NONE FOUND" }))
             }
             Menu::BtTrainers => (i < self.ftms.n_found).then_some(Row::BtFound(i)),
+            // SAVE PLACE first, then the places (or the row that says none)
+            Menu::Places if i == 0 => Some(Row::SavePlace),
+            Menu::Places if self.places.list.is_empty() => (i == 1).then_some(Row::Empty("NONE SAVED")),
+            Menu::Places => self.places.list.get(i - 1).map(|_| Row::Place(i - 1)),
+            Menu::Place(k) if k < self.places.list.len() => {
+                [Row::Set(menu::Setting::Altitude), Row::DeletePlace(k)].get(i).copied()
+            }
+            Menu::Place(_) => None,
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(QUICK) => (i < 6).then_some(Row::Field(QUICK, i)),       // always six
             Menu::Page(n) => match i {
@@ -387,6 +403,14 @@ impl App {
                 }
             }
             Row::AltGps => self.alt_gps_row(&mut value),
+            Row::Set(menu::Setting::Altitude)
+                if matches!(menu, Menu::Place(_)) && !(self.editing && self.screen == Screen::Menu(menu, i)) =>
+            {
+                if let Menu::Place(k) = menu {
+                    self.place_alt_row(k, &mut value);
+                }
+            }
+            Row::SavePlace | Row::DeletePlace(_) => {}
             Row::Set(menu::Setting::Altitude) if !(self.editing && self.screen == Screen::Menu(menu, i)) => {
                 self.alt_row(&mut value);
             }
@@ -524,6 +548,7 @@ impl App {
             Row::Done(k) => self.climb_done_row(k, &mut label, &mut value)?,
             Row::Month(k) => self.month_row(k, &mut label, &mut value)?,
             Row::Seg(k) => self.segment_row(k, &mut label, &mut value)?,
+            Row::Place(k) => self.place_row(k, &mut label, &mut value)?,
             Row::SegSkipped => value.push_u32(u32::from(self.segments()?.skipped)),
             Row::Group(g) => {
                 label.push_str(ui::FIELD_GROUPS.get(g)?.0);
@@ -778,6 +803,14 @@ impl App {
                 self.open(Screen::Nearby);
             }
             Some(Row::AltGps) => self.alt_from_gps(),
+            Some(Row::SavePlace) => self.save_place(b),
+            Some(Row::Place(k)) => self.open(Screen::Menu(Menu::Place(k), 0)),
+            Some(Row::DeletePlace(k)) => {
+                if self.confirmed(menu, sel, "DELETE PLACE") {
+                    self.delete_place(k);
+                    self.close();
+                }
+            }
             Some(Row::Set(menu::Setting::Trip(_))) if self.ride.state() != ride::State::Idle => {
                 self.say("END THE RIDE FIRST")
             }
@@ -852,6 +885,11 @@ impl App {
                 self.open(Screen::Menu(Menu::Workouts, 0));
             }
             Menu::Courses => self.open_courses(b),
+            Menu::Places => {
+                if self.places_ready(b) {
+                    self.open(Screen::Menu(Menu::Places, 0));
+                }
+            }
             // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
             Menu::Page(n) if matches!(menu, Menu::Ride(_)) && n < PAGES => {
                 self.pages_set = self.ride_profile(); // the set on screen
@@ -949,7 +987,10 @@ impl App {
         if s.number().is_some() {
             self.editing = !self.editing;
             if self.editing && s == menu::Setting::Altitude {
-                self.editing = self.alt_edit_start(); // from the altitude the barometer reads
+                match self.screen {
+                    Screen::Menu(Menu::Place(k), _) => self.place_alt_edit_start(k), // the place's altitude
+                    _ => self.editing = self.alt_edit_start(), // from the altitude the barometer reads
+                }
             }
             if !self.editing {
                 self.setting_edited(s);

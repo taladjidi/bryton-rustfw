@@ -149,7 +149,7 @@ Others
 - [ ] Dual-frequency GNSS (Garmin, Wahoo, Coros)
 - [x] AssistNow offline data from the computer (`tools/assist.py`, `\Rustfw\mga.ubx`): sim; not from the phone (stock)
 - [x] Barometer: pressure and temperature (stock, all): unit
-- [x] Barometric altitude, calibrated by hand, from GPS or at a ride's start (stock, Garmin): sim; not at saved places
+- [x] Barometric altitude, calibrated by hand, from GPS, at a ride's start or at a saved place (stock, Garmin): sim
 - [x] Ambient light sensor (stock): unit
 - [ ] Accelerometer use (crash, motion start) (stock, Garmin)
 - [ ] Microphone (stock: voice search and group chat input)
@@ -373,7 +373,8 @@ Storage, USB and updates
 - [ ] Auto features per profile: smart pause, climb page switch, climb approach, map view (stock)
 - [ ] Data reset: trips, odometer, factory settings (stock)
 - [ ] About: firmware version, UUID, position (stock): over USB only
-- [ ] Altitude calibration at saved places (stock)
+- [x] Altitude calibration at saved places (stock): sim
+- [x] Favourite places: SAVE PLACE, PLACES with distance and bearing, altitude by hand, DELETE (stock, Garmin): sim
 - [x] Sensor names and gear teeth for Di2 (stock): sim (CHAINRINGS and CASSETTE presets); teeth from the Di2 itself open
 - [x] Remote button actions for Di2 hood buttons (stock, patch P12): sim (DI2 KEYS)
 

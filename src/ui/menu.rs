@@ -518,6 +518,12 @@ pub enum Row {
     OldRide(usize),
     /// FROM GPS: Select averages the receiver's altitude for 30 s and calibrates the barometer to it.
     AltGps,
+    /// SAVE PLACE: Select saves where the rider is (app/places.rs).
+    SavePlace,
+    /// Favourite place `n`: its distance and bearing from here; Select opens its menu.
+    Place(usize),
+    /// DELETE in place `n`'s menu (confirmed).
+    DeletePlace(usize),
     /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
     Drive,
     /// GIVE UP SAVE, first in SYSTEM only while a save is stuck (app/riding.rs, `give_up_save`).
@@ -601,6 +607,8 @@ impl Row {
             },
             Row::OldRide(_) => return None,
             Row::AltGps => "FROM GPS",
+            Row::SavePlace => "SAVE PLACE",
+            Row::DeletePlace(_) => "DELETE",
             Row::Drive => "USB DRIVE",
             Row::GiveUpSave => "GIVE UP SAVE",
             Row::Screenshot => "SCREENSHOT",
@@ -652,6 +660,7 @@ impl Row {
             | Row::Step(_)
             | Row::Course(_)
             | Row::Seg(_)
+            | Row::Place(_)
             | Row::Group(_) => return None,
             Row::SegSkipped => "SKIPPED FILES",
         })
@@ -833,7 +842,7 @@ pub const FITNESS: [StockRow; 20] = {
 };
 
 /// The main menu (off a ride): what to ride (workouts, courses, segments), what was ridden, then the set-up; seven rows, the list scrolls.
-pub const MAIN: [Row; 7] = [
+pub const MAIN: [Row; 8] = [
     Row::Open(Menu::Workouts),
     Row::Open(Menu::Courses),
     Row::Open(Menu::Segments),
@@ -841,6 +850,7 @@ pub const MAIN: [Row; 7] = [
     Row::Open(Menu::Pages),
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Settings),
+    Row::Open(Menu::Places),
 ];
 
 /// SETTINGS: a menu per subject, each a screen of settings, so any setting is three levels down at most.
