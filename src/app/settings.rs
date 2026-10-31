@@ -346,6 +346,8 @@ pub struct Settings {
     pub ready_check: bool,
     /// SUNSET ALERT: an index into [`SUNSET_LEAD_MIN`]; 0 (OFF) in a file that predates it. Kept in settings.bin only.
     pub sunset_alert: usize,
+    /// STEEP DESCENT: an index into [`STEEP_DESCENT_PCT`] (0: OFF); data 170, OFF in a file that predates it.
+    pub steep_descent: usize,
     /// CHAINRINGS: an index into [`CHAINRINGS`] (0: OFF, gear numbers); settings.bin only.
     pub chainrings: usize,
     /// CASSETTE: an index into [`CASSETTES`] (0: OFF); settings.bin only.
@@ -405,6 +407,9 @@ pub struct Settings {
 
 /// LEVEL STEP's choices: levels a press moves.
 pub const LEVEL_STEPS: [u8; 3] = [1, 2, 5];
+
+/// STEEP DESCENT's choices: OFF, or the grade (%) over 50 m a descent ahead must pass to be said.
+pub const STEEP_DESCENT_PCT: [u8; 4] = [0, 8, 10, 12];
 
 /// SLOPE SCALE's choices, percent of the course's grade given to the trainer.
 pub const SLOPE_SCALES: [u8; 4] = [100, 75, 50, 25];
@@ -630,6 +635,7 @@ impl Settings {
             power_match: true,
             level_step: 0,
             slope_scale: 0,
+            steep_descent: 0,
             gnss_systems: 0,
             lthr: 0,
             power_smooth: 0,
@@ -928,6 +934,13 @@ impl Settings {
             Setting::Sound => l.push_str(if self.sound { "ON" } else { "OFF" }),
             Setting::StartReminder => l.push_str(if self.start_reminder { "ON" } else { "OFF" }),
             Setting::ReadyCheck => l.push_str(if self.ready_check { "ON" } else { "OFF" }),
+            Setting::SteepDescent => match STEEP_DESCENT_PCT.get(self.steep_descent).copied().unwrap_or(0) {
+                0 => l.push_str("OFF"),
+                p => {
+                    l.push_u32(u32::from(p));
+                    l.push_str(" %");
+                }
+            },
             Setting::SunsetAlert => match SUNSET_LEAD_MIN.get(self.sunset_alert).copied().unwrap_or(0) {
                 0 => l.push_str("OFF"),
                 m => {
@@ -1101,6 +1114,7 @@ impl Settings {
             Setting::DateFormat => self.date_fmt = self.date_fmt.next(),
             Setting::DaylightSaving => self.dst = self.dst.next(),
             Setting::ReadyCheck => self.ready_check = !self.ready_check,
+            Setting::SteepDescent => self.steep_descent = (self.steep_descent + 1) % STEEP_DESCENT_PCT.len(),
             Setting::SunsetAlert => self.sunset_alert = (self.sunset_alert + 1) % SUNSET_LEAD_MIN.len(),
             Setting::Chainrings => self.chainrings = (self.chainrings + 1) % CHAINRINGS.len(),
             Setting::Cassette => self.cassette = (self.cassette + 1) % CASSETTES.len(),

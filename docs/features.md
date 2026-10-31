@@ -189,6 +189,15 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   three beeps when the sun is that many minutes from its set (the NOAA times the fields use, with a fix). Once a ride:
   a pause and resume do not say it again; a reset resume may. No fix or no sun times, no alert. Kept in settings.bin
   at byte 155 (after DATE FORMAT). Sim only (`sunset_alert_says_once_before_the_set`).
+- **Descents and the steep descent alert** (`nav/course`, `app/descents.rs`; sim): the descents of a course followed, and of
+  the road ahead with no course, are found by the climbs' own finder on the profile upside down (at least 300 m and 3 % on
+  average, up to 8 of a course, 4 of the trace), each with its length, drop, average grade and steepest grade over 50 m.
+  ALERTS > STEEP DESCENT (OFF, 8, 10 or 12 %; off by default) says "STEEP 12% IN 300 M" in a banner with a beep when the
+  next descent whose steepest 50 m passes the setting is 300 m ahead, once per descent (a retrace of the road ahead does
+  not say it again). The DESCENT AHEAD field (NEXT DESC, index 118, the course group) shows the distance to the next descent
+  (what is left of it on it) and its steepest grade ("290M|12%"). Kept in settings.bin at byte 171 (after GNSS SYSTEMS), OFF
+  when missing. Sim only (`steep_descent_alert_once`, `descents_gentle_and_steep`); the road ahead's descents share the
+  finder but have no sim ride of their own.
 - **Quick Status** (PAGES > QUICK STATUS ON or OFF, and PAGES > QUICK FIELDS: six boxes, each picked like a page editor field;
   on by default): a tap on a plain value field of a ride page opens the six chosen fields in a 2 x 3 grid over it, also while
   recording (it only reads). Back, a tap, a swipe or 10 s without an input closes it, back on the same page; Start and Lap
@@ -1016,8 +1025,8 @@ UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trip
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
 C, AUTO and zeros. START REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
 DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; CHAINRINGS and CASSETTE are 156 and 157;
-QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP the last (167; 168 in
-all) and read CLOCK and OFF when missing.
+QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP is 167, LEVEL STEP and SLOPE SCALE 168 and 169, GNSS SYSTEMS 170, STEEP DESCENT the last (171; 172 in
+all); they read CLOCK, OFF and the defaults when missing.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
 - the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers

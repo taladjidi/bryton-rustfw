@@ -463,7 +463,8 @@ impl App {
             | Field::ClimbGain
             | Field::UpToGo
             | Field::NextTurn
-            | Field::NextPoi => {
+            | Field::NextPoi
+            | Field::DescentAhead => {
                 return self.course_text(f);
             }
             Field::Gear => {
@@ -810,7 +811,8 @@ mod tests {
         assert_eq!([Field::from_index(109), Field::from_index(110)], [Field::PedalSmooth, Field::BattHrs]);
         assert_eq!([Field::from_index(111), Field::from_index(113)], [Field::Ctl, Field::Tsb]);
         assert_eq!(Field::from_index(117), Field::NextPoi);
-        assert_eq!(Field::ALL.len(), 118);
+        assert_eq!(Field::ALL.len(), 119);
+        assert_eq!(Field::from_index(118), Field::DescentAhead);
         assert_eq!([Field::from_index(114), Field::from_index(116)], [Field::PowerRing, Field::CadBar]);
     }
 

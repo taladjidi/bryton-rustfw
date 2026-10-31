@@ -119,7 +119,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ~~field sizes that follow the box, ring and bar gauges~~ done, sim (features.md "Gauge fields"; a value's scale already followed its box's width and height, `box_scale`); more gauged fields and a per-field style in the editor are open;
 - ride profiles: ~~gravel, cyclocross, commute, auto features per profile~~ done, sim (features.md: GRAVEL, CX and COMMUTE; auto-pause, auto lap, GPS power and climbs ahead per profile, road page set shared); three bikes and component wear (storage of their own) are open;
 - torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: ~~completed climbs listed with their
-  times~~ done, sim (features.md, ride menu CLIMBS DONE), ~~detection on or off per profile~~ done (CX and COMMUTE off), descents;
+  times~~ done, sim (features.md, ride menu CLIMBS DONE), ~~detection on or off per profile~~ done (CX and COMMUTE off), ~~descents~~ done, sim (features.md: STEEP DESCENT alert, DESCENT AHEAD field);
 - trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); a virtual course as a workout from the workout list;
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~a larger ATT MTU,
   the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md);
