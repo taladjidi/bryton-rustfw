@@ -1817,7 +1817,8 @@ fn menu_tree_by_chance() {
             if k % 250 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) {
                 // the course list's lengths come in while it shows and are drawn at the next list redraw
                 // (LIST_REDRAW_MS): a pass taken between the two shows the new length in the screenshot only
-                if matches!(app.screen(), Screen::Menu(Menu::Courses, _)) {
+                // (so do FITNESS's values while the scan runs and ends)
+                if matches!(app.screen(), Screen::Menu(Menu::Courses | Menu::Stock, _)) {
                     for _ in 0..LIST_REDRAW_MS / POLL_MS + 1 {
                         app.step(&mut sim);
                         sim.delay_ms(POLL_MS);

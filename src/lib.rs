@@ -194,6 +194,9 @@ pub struct App {
     /// This ride's best power per duration, computed as the ride goes (app/curve.rs), and what the POWER CURVE screen shows.
     ride_curve: Option<&'static mut power_curve::Rolling>,
     curve_shown: [u16; power_curve::N],
+    curve_ready: bool,
+    /// The title a menu was drawn with (app/menus.rs `title_print`).
+    menu_title_print: u32,
     /// What the quick panel shows, box by box, and its shape (app/quick.rs).
     quick_shown: [u32; app::QUICK_BOXES],
     quick_shape: u8,
@@ -563,6 +566,8 @@ impl App {
             powercal_shown: None,
             ride_curve: None,
             curve_shown: [0; power_curve::N],
+            curve_ready: false,
+            menu_title_print: 0,
             quick_shown: [0; app::QUICK_BOXES],
             quick_shape: 0,
             quick_scroll: (0, 0),

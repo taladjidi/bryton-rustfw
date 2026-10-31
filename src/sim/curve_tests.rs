@@ -100,7 +100,7 @@ fn the_curve_in_light() {
 #[test]
 fn fuzz_the_curve_inputs() {
     let (mut sim, mut app) = unit();
-    let mut reached = 0;
+    let (mut reached, mut riding) = (0, 0);
     for seed in 1..=200u32 {
         let mut x = seed.wrapping_mul(2_654_435_761);
         let mut next = move || {
@@ -120,14 +120,49 @@ fn fuzz_the_curve_inputs() {
             if let Screen::Curve(k) = app.screen() {
                 assert!(k < crate::power_curve::N);
                 reached += 1;
+                riding += usize::from(app.ride.state() != ride::State::Idle);
             } else {
                 break;
             }
         }
         if seed == 100 {
+            while app.screen() != Screen::Main {
+                app.press(&mut sim, Press::Short(Key::Back));
+            }
             app.press(&mut sim, Press::Short(Key::Start)); // the rest of the seeds ride
+            assert_eq!(app.ride.state(), ride::State::Running);
         }
         run(&mut sim, &mut app, 1500);
     }
-    assert!(reached > 400, "{reached}");
+    assert!(reached > 400 && riding > 100, "{reached} {riding}");
+}
+
+/// A second ride starts with an empty curve (the first's bests do not carry over), and a stop longer than a few
+/// seconds ends the efforts: 10 minutes, a 30 minute stop, 10 minutes more give no 12 minute best.
+#[test]
+fn a_new_ride_and_a_stop_start_the_curve_again() {
+    let (mut sim, mut app) = unit();
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 600_000);
+    let best = app.ride_best();
+    assert!(best[8] > 200 && best[9] == 0, "10 minutes of 210 W: {best:?}");
+    app.press(&mut sim, Press::Short(Key::Start)); // paused
+    run(&mut sim, &mut app, 1_800_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // resumed
+    run(&mut sim, &mut app, 600_000);
+    assert_eq!(app.ride_best()[9], 0, "the stop ended the effort: no 12 minute best");
+    // end it, start another
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 20_000);
+    assert_eq!(app.ride.state(), ride::State::Idle, "saved");
+    while app.screen() != Screen::Main {
+        app.press(&mut sim, Press::Short(Key::Back)); // the ride's card
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Running, Screen::Ride(0)));
+    assert_eq!(app.ride_best(), [0; crate::power_curve::N], "the new ride's curve starts empty");
+    run(&mut sim, &mut app, 30_000);
+    assert!(app.ride_best()[..4].iter().all(|&w| w > 200), "and fills");
 }

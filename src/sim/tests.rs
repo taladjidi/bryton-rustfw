@@ -69,7 +69,13 @@ pub(super) fn assert_consistent(sim: &Sim, app: &App) {
     for y in 0..H {
         let (drawn, panel) = (app.render_row(y).px, &sim.screen[(y * W) as usize..((y + 1) * W) as usize]);
         let bad: Vec<_> = (0..W as usize).filter(|&x| drawn[x] != panel[x]).collect();
-        assert!(bad.is_empty(), "row {y}, x {bad:?}: screenshot {:04x}, panel {:04x}", drawn[bad[0]], panel[bad[0]]);
+        assert!(
+            bad.is_empty(),
+            "{:?} row {y}, x {bad:?}: screenshot {:04x}, panel {:04x}",
+            app.screen(),
+            drawn[bad[0]],
+            panel[bad[0]]
+        );
     }
 }
 

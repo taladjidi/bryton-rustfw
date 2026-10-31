@@ -43,6 +43,7 @@ impl App {
             });
         }
         if ev == ride::Event::Start {
+            self.reset_ride_curve();
             self.power.new_ride();
             self.zone_s = ride::ZoneTime::default();
             self.hrtss = hrtss::Hrtss::default();
@@ -494,6 +495,7 @@ impl App {
                 // cover the part after the restart only (the file has every second's power: the history's and a
                 // computer's cover the whole ride)
                 self.power.new_ride();
+                self.reset_ride_curve();
                 // the zone times and the hrTSS restart after a resume, as the laps do
                 self.zone_s = ride::ZoneTime::default();
                 self.hrtss = hrtss::Hrtss::default();
@@ -604,13 +606,12 @@ impl App {
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {
-            if let (ride::Event::Start, Some(r)) = (ev, self.ride_curve.as_deref_mut()) {
-                r.reset();
-            }
             self.recorder(ev);
         }
-        if let (ride::State::Running, Some(r)) = (self.ride.state(), self.ride_curve.as_deref_mut()) {
-            r.sample(self.ride.timer_s(), input.power);
+        // only the seconds the timer ran, keyed by the wall clock: a stop longer than FILL_S ends the efforts
+        let now = self.now_s();
+        if let (true, Some(r)) = (self.ride.timer_s() != timer, self.ride_curve.as_deref_mut()) {
+            r.sample(now, input.power);
         }
         if self.ride.state() == ride::State::Running {
             self.auto_lap();

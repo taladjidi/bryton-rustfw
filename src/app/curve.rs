@@ -26,6 +26,18 @@ impl App {
         self.ride_curve = Some(r);
     }
 
+    /// A new ride, or one resumed after a reset: its curve starts again.
+    pub(crate) fn reset_ride_curve(&mut self) {
+        if let Some(r) = self.ride_curve.as_deref_mut() {
+            r.reset();
+        }
+    }
+
+    /// A power meter is paired (the ride menu's POWER CURVE row: it must not come and go with the radio).
+    pub(crate) fn power_paired(&self) -> bool {
+        matches!(self.radio.sensors.get(Kind::Power as usize), Some(Sensor::Paired(_)))
+    }
+
     /// This ride's bests so far.
     pub(crate) fn ride_best(&self) -> [u16; power_curve::N] {
         self.ride_curve.as_deref().map_or([0; power_curve::N], |r| r.best)
@@ -34,6 +46,7 @@ impl App {
     /// Opens the power curve.
     pub(crate) fn open_curve(&mut self) {
         self.curve_shown = self.ride_best();
+        self.curve_ready = self.stock.ready();
         self.open(Screen::Curve(FIRST));
     }
 
@@ -99,7 +112,12 @@ impl App {
     /// Once a pass: while the screen is up during a ride, the plot again when this ride's bests changed.
     pub(crate) fn step_curve(&mut self, b: &mut impl Board) {
         let Screen::Curve(k) = self.screen else { return };
-        if self.ride_best() != self.curve_shown && self.ride.timer_s().is_multiple_of(REDRAW_S) {
+        if self.stock.ready() != self.curve_ready {
+            self.curve_ready = self.stock.ready();
+            self.curve_shown = self.ride_best();
+            return self.show(b); // the scan finished under it: the 90 days and the CP line, whole
+        }
+        if self.ride_best() != self.curve_shown && self.now_s().is_multiple_of(REDRAW_S) {
             self.curve_shown = self.ride_best();
             let mut p = panel::Panel(b, self.area(), self.look());
             ui::curve::draw_plot(&mut p, &self.curve_best(), &self.ride_best());

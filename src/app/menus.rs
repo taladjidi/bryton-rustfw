@@ -174,7 +174,7 @@ impl App {
                     (Row::Open(Menu::Sensors), true),
                     // the course page has no settings; no page edited while recording (UI review 2, 5.2 point 8)
                     (Row::Open(Menu::Page(n)), n <= OVERVIEW && self.ride.state() != ride::State::Running),
-                    (Row::Ride(RideRow::Curve), self.power_heard()),
+                    (Row::Ride(RideRow::Curve), self.power_paired()),
                     (Row::Open(Menu::Main), true),
                 ];
                 rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i)
@@ -657,6 +657,11 @@ impl App {
     /// Redraws the menu rows that changed since they were drawn (the selection, a value).
     pub(crate) fn update_menu_rows(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
         let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
+        let title = self.menu_title(menu);
+        if title_print(title.as_str()) != self.menu_title_print {
+            self.menu_title_print = title_print(title.as_str()); // a page's name follows the profile
+            ui::draw_title(&mut Panel(b, self.area(), self.look()), title.as_str());
+        }
         for i in 0..self.menu_rows() {
             let print = self.menu_row_print(menu, sel, first, i);
             if self.menu_shown[i] != print {
@@ -977,4 +982,9 @@ impl App {
             self.phone_changed();
         }
     }
+}
+
+/// A menu title's print, to see when it changed under a menu that stays up.
+pub(crate) fn title_print(s: &str) -> u32 {
+    s.bytes().fold(0x811c_9dc5u32, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
 }
