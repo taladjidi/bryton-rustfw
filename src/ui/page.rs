@@ -29,6 +29,9 @@ pub fn min_size(f: Field) -> (u32, u32) {
     match f {
         Field::Map => (ui::W / 2, ui::RIDE_H / 2),
         f if f.is_picture() => (ui::W / 2, 118),
+        // a ring needs a hole that holds a value at 2x (a bar, the room under the value)
+        f if f.dial() == Some((Field::Power, true)) || f.dial() == Some((Field::Hr, true)) => (ui::W / 2, 118),
+        f if f.dial().is_some() => (ui::VALUE_MIN.0, ui::VALUE_MIN.1 + ui::BAR_ROOM),
         _ => ui::VALUE_MIN,
     }
 }

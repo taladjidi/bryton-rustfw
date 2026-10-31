@@ -1459,3 +1459,24 @@ fn unbanner_equals_the_whole_draw() {
     app.unbanner(&mut sim);
     super::tests::assert_consistent(&sim, &app);
 }
+
+/// The gauge fields are field indexes like any other: pages.bin keeps them with no new byte, an old file (without
+/// them) reads as before, and a build without them reads the new file as damaged, never as other fields.
+#[test]
+fn gauge_fields_round_trip_in_pages_bin() {
+    let page = Page::preset(2, [PowerRing, CadBar, HrRing, Time, Time, Time, Time, Time]).unwrap();
+    let s = Saved {
+        seq: 3,
+        pages: [page; 6],
+        count: 1,
+        words: [0; 6],
+        was: [0; 6],
+        more: [None; 6],
+        indoor: None,
+        mtb: None,
+        meta: crate::page::Meta::DEFAULT,
+    };
+    assert_eq!(Saved::from_sector(&s.to_sector()), Some(s));
+    assert_eq!(page.fields[..3], [PowerRing, CadBar, HrRing]);
+    assert_eq!(Field::from_index(Field::Tsb as u32 + 1), PowerRing, "appended after the training load");
+}
