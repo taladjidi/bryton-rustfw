@@ -802,9 +802,9 @@ mod tests {
     extern crate std;
     use super::*;
 
-    /// The app's size (printed): it lives in AXI SRAM (main.rs make_app; about 19 KB of the 512 KB free on
-    /// 2026-10-27), and its one temporary copy at start-up is on the stack (123 KB of DTCM: 64 KB here plus main's
-    /// 16 KB fits). Raised from 56 KB at the owner's go (2026-10-27: App was 57 104 B of 57 344); lowered to 48 KB
+    /// The app's size (printed): it lives in AXI SRAM (main.rs make_app; the AXI SRAM left after the cells is
+    /// `tools/numbers.py`'s `axi_free`, 51 628 B on 2026-10-31), and its one temporary copy at start-up is on the stack
+    /// (123 KB of DTCM: 48 KB here plus main's 16 KB fits). Raised from 56 KB at the owner's go (2026-10-27: App was 57 104 B of 57 344); lowered to 48 KB
     /// when the stock scan and the past ride's card went to their own cells (2026-10-31: 65 520 B to 41 472 B). Over
     /// it: move the largest parts out the same way (main.rs `make_stock_scan`), print them with `size_of_val`.
     #[test]
