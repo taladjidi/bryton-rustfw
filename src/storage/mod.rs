@@ -52,3 +52,45 @@ pub(crate) fn rfind_ascii(s: &str, b: u8) -> Option<usize> {
 pub(crate) fn take<const N: usize>(b: &[u8], i: usize) -> [u8; N] {
     i.checked_add(N).and_then(|end| b.get(i..end)).and_then(|s| s.try_into().ok()).unwrap_or([0; N])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn move_within_matches_copy_within_both_overlaps() {
+        for (src, dest) in [(2..7, 0), (0..5, 3), (3..8, 3), (1..4, 6)] {
+            let mut a: [u8; 10] = core::array::from_fn(|i| i as u8);
+            let mut b = a;
+            a.copy_within(src.clone(), dest);
+            move_within(&mut b, src, dest);
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn move_within_skips_what_is_out_of_range() {
+        let mut a = [1u8, 2, 3, 4];
+        move_within(&mut a, 2..9, 1); // the source runs past the end: only 3, 4 exist
+        assert_eq!(a, [1, 3, 4, 4]);
+        move_within(&mut a, 0..3, 2); // the destination runs past the end: the last one is dropped
+        assert_eq!(a, [1, 3, 1, 3]);
+        move_within(&mut a, 3..1, 0); // an empty (reversed) range
+        assert_eq!(a, [1, 3, 1, 3]);
+    }
+
+    #[test]
+    fn rfind_ascii_matches_rfind() {
+        for s in ["", "a.b.c", "no dots", ".x", "x.", "\u{e9}.\u{e9}"] {
+            assert_eq!(rfind_ascii(s, b'.'), s.rfind('.'), "{s}");
+        }
+    }
+
+    #[test]
+    fn take_at_the_end_gives_zeros() {
+        let b = [1u8, 2, 3, 4];
+        assert_eq!(take::<2>(&b, 2), [3, 4]);
+        assert_eq!(take::<2>(&b, 3), [0, 0]);
+        assert_eq!(take::<2>(&b, usize::MAX), [0, 0]);
+    }
+}
