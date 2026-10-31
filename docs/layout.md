@@ -132,7 +132,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `src/app/places.rs`: SAVE PLACE, the PLACES menu rows, the barometer calibrated at a place, the file read and written
   between rides.
 - `src/storage/bikes.rs`: the three bikes: each one's wheel, weight, gears, odometer and five parts (km since RESET,
-  SERVICE EVERY), `\Rustfw\bikes.bin`'s two copies (magic, version, length, sequence, CRC-32), the rides counted once
+  SERVICE), `\Rustfw\bikes.bin`'s two copies (magic, version, length, sequence, CRC-32), the rides counted once
   by a mark of the newest counted. Pure logic. `src/app/bikes.rs`: BIKES' menu rows, ACTIVE BIKE (its gear into the
   settings), the migration from the settings' single bike, the count at a ride scan's end, the part notice, the file
   read and written between rides (before settings.bin; the store in AXI SRAM, main.rs `make_bikes`).

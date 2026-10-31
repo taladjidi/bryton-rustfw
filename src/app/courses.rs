@@ -117,7 +117,7 @@ impl App {
         if before < len && c.at.along_m == len {
             let mut l = Line::<20>::new();
             l.push_str("DONE ");
-            ui::card::push_km(&mut l, len);
+            crate::push_trip(&mut l, len, false);
             l.push_str(" KM ");
             push_duration(&mut l, timer, false);
             self.say_as(l.as_str(), Banner::Ride);
@@ -246,7 +246,7 @@ impl App {
             course::Event::Climb(k) => {
                 let mut l = Line::<20>::new();
                 l.push_str("CLIMB ");
-                ui::card::push_km(&mut l, k.len_m);
+                crate::push_trip(&mut l, k.len_m, false);
                 l.push_str(" KM ");
                 l.push_u32(k.grade_x10().div_ceil(10).max(1));
                 l.push_str("%");
@@ -312,7 +312,7 @@ impl App {
                 None if c.cues_done(at) => l.push_str("END"),
                 None => l.push_str("--"),
             },
-            (Field::ToGo, _) => ui::card::push_km(&mut l, c.len_m().saturating_sub(d)),
+            (Field::ToGo, _) => crate::push_trip(&mut l, c.len_m().saturating_sub(d), false),
             (Field::OffCourse, _) => l.push_u32(at.off_m.unwrap_or(0).min(9999)),
             (Field::UpToGo, _) => l.push_u32(c.ascent_left(at)),
             // on a climb: what is left of it and the grade ahead; before it: its length and grade
@@ -322,7 +322,7 @@ impl App {
                     false => (k.len_m, k.grade_x10() as i32),
                 };
                 if m < 10_000 {
-                    ui::card::push_km(&mut l, m);
+                    crate::push_trip(&mut l, m, false);
                 } else {
                     l.push_u32(m / 1000);
                 }
@@ -365,7 +365,7 @@ impl App {
             Some(m) => {
                 // the distance with its unit stays whole, at the right (the owner's choice); the name is cut to the room
                 // left (menu_label_w), so a long course name loses its end, never its length
-                ui::card::push_km(value, m.saturating_add(50)); // to the nearest 100 m
+                crate::push_trip(value, m.saturating_add(50), false); // to the nearest 100 m
                 value.push_str(" KM");
             }
             None => value.push_str("--"),

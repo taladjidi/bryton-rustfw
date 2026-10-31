@@ -146,7 +146,9 @@ pub struct Theme {
 /// that does not parse is ignored; a number that does is brought into range: the file stays usable and every screen is
 /// tested at both ends). The zone bar stops at 8: the label's ink under it ends at 8 + 14 px and the value band starts
 /// at `FIELD_LABEL_H` (22), so a taller bar would put the label over the value (the layout is the same for every theme
-/// so the editor's fits checks hold). 44 is the least row a fingertip hits (docs/theming.md).
+/// so the editor's fits checks hold). 44 is the least row a fingertip hits (docs/theming.md). Default 8 px: 4 was too thin
+/// to see on the bike (owner, 2026-10-26); the bar sits above the label, a pixel apart from it (value-field labels start
+/// 9 px down).
 pub const ZONE_BAR: (u32, u32, u32) = (4, 8, 8);
 /// See [`ZONE_BAR`].
 pub const FRAME: (u32, u32, u32) = (1, 3, 4);

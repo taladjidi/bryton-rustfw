@@ -2,7 +2,7 @@
 //! progress bar, and touch buttons, laid out like a music player's. Pure drawing against [`Canvas`], each part in its
 //! own fixed box so a second's update redraws only the time and the bar's new columns.
 
-use super::{ACCENT, BLACK, Canvas, DARK, GREY, LABEL, PAGE_Y, W, WHITE};
+use super::{ACCENT, BLACK, Canvas, DARK, GREY, LABEL, NullCanvas, PAGE_Y, W, WHITE};
 use crate::text::{self, Align, Line, Style};
 
 /// A button of the screen.
@@ -97,19 +97,15 @@ pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
 
 /// What [`draw`] leaves on screen, without drawing (for a screen drawn elsewhere, a screenshot row).
 pub fn shown(now: &Now) -> Shown {
-    struct Nothing;
-    impl Canvas for Nothing {
-        fn fill(&mut self, _: u32, _: u32, _: u32, _: u32, _: u16) {}
-        fn blit(&mut self, _: u32, _: u32, _: u32, _: u32, _: &mut dyn FnMut(u32, u32) -> u16) {}
-    }
     let mut s = Shown::default();
-    update(&mut Nothing, now, &mut s, true);
+    update(&mut NullCanvas, now, &mut s, true);
     s
 }
 
 /// Redraws what changed since `shown` (all of it if `all`).
 pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown, all: bool) {
-    let print = [now.title.unwrap_or("\u{1}"), now.artist, now.album].iter().fold(0x811c_9dc5u32, |h, s| fnv(h, s));
+    let print =
+        [now.title.unwrap_or("\u{1}"), now.artist, now.album].iter().fold(0x811c_9dc5u32, |h, s| crate::fnv_str(h, s));
     if all || print != shown.text {
         shown.text = print;
         draw_text(c, now);
@@ -136,7 +132,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown, all: bool) {
         right.push_str("-");
         clock(&mut right, now.duration.saturating_sub(now.elapsed));
     }
-    let tprint = fnv(fnv(0x811c_9dc5, left.as_str()), right.as_str());
+    let tprint = crate::fnv_str(crate::fnv_str(0x811c_9dc5, left.as_str()), right.as_str());
     if all || tprint != shown.times {
         shown.times = tprint;
         // each in a box as wide as its longest text ("1:02:45", "-1:02:45"), not half the row: a second redraws
@@ -148,24 +144,9 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown, all: bool) {
     }
 }
 
-fn fnv(h: u32, s: &str) -> u32 {
-    s.bytes().chain([0]).fold(h, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
-}
-
 /// "3:07", "1:02:45".
 fn clock(l: &mut Line<8>, s: u32) {
-    let s = s.min(99 * 3600);
-    if s >= 3600 {
-        l.push_u32(s / 3600);
-        l.push_str(":");
-        l.push_str(super::DIGITS[(s / 600 % 6) as usize]);
-        l.push_str(super::DIGITS[(s / 60 % 10) as usize]);
-    } else {
-        l.push_u32(s / 60); // "1:29", not "01:29"
-    }
-    l.push_str(":");
-    l.push_str(super::DIGITS[(s / 10 % 6) as usize]);
-    l.push_str(super::DIGITS[(s % 10) as usize]);
+    crate::push_clock(l, s.min(99 * 3600)); // "1:29", not "01:29"
 }
 
 /// The title on two lines (cut at a space when it can), the artist and the album under it.
@@ -191,14 +172,8 @@ fn split(s: &str, w: u32) -> (&str, &str) {
     if LABEL.width(s) <= w {
         return (s, "");
     }
-    let fit = s
-        .char_indices()
-        .map(|(i, _)| i)
-        .chain([s.len()])
-        .take_while(|&i| LABEL.width(s.get(..i).unwrap_or("")) <= w)
-        .last();
-    let fit = fit.unwrap_or(0);
-    let cut = s.get(..fit).unwrap_or("").rfind(' ').filter(|&i| i > 0).unwrap_or(fit);
+    let head = LABEL.fit(s, w);
+    let cut = head.rfind(' ').filter(|&i| i > 0).unwrap_or(head.len());
     (s.get(..cut).unwrap_or(""), s.get(cut..).unwrap_or("").trim_start())
 }
 

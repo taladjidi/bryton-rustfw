@@ -421,7 +421,7 @@ impl App {
         l.push_str("+");
         l.push_u32(k.gain_m);
         l.push_str(" M");
-        ui::card::push_km(&mut r, k.len_m);
+        crate::push_trip(&mut r, k.len_m, false);
         r.push_str(" KM ");
         r.push_u32(k.grade_x10().div_ceil(10).max(1));
         r.push_str("%");

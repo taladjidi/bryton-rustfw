@@ -143,7 +143,7 @@ fn the_zone_bar_follows_its_number_and_is_all_that_is_redrawn() {
     // 136 bpm from 24 s on the sensor's clock, the run began about 6 s in: shown with the number, no hold
     assert!((16_000..20_000).contains(&at), "{at} ms");
     // the bar changes with its number now: the bar and the digits that changed, never the box whole
-    let bar = u64::from(bx.2) * u64::from(ui::ZONE_BAR_H);
+    let bar = u64::from(bx.2) * u64::from(ui::theme::ZONE_BAR.1);
     assert!(px >= bar && px < u64::from(bx.2) * u64::from(bx.3) / 2, "the bar and the changed digits only: {px} px");
     sim.save("zone_bar");
 }

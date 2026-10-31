@@ -105,7 +105,7 @@ impl App {
                     false => (k.len_m, k.grade_x10() as i32),
                 };
                 if m < 10_000 {
-                    ui::card::push_km(&mut l, m);
+                    crate::push_trip(&mut l, m, false);
                 } else {
                     l.push_u32(m / 1000);
                 }

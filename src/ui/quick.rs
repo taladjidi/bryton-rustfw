@@ -70,12 +70,6 @@ pub fn draw_media_buttons(c: &mut impl Canvas, playing: bool, dim: bool) {
     }
 }
 
-/// `s` cut to the characters that fit `w` px.
-pub fn fit(s: &str, w: u32) -> &str {
-    let end = s.char_indices().map(|(i, _)| i).chain([s.len()]).take_while(|&i| LABEL.width(&s[..i]) <= w).last();
-    s.get(..end.unwrap_or(0)).unwrap_or("")
-}
-
 /// Ticks a scrolling line holds at each end (the app ticks every `QUICK_STEP_MS`: 2 s).
 const HOLD: usize = 8;
 
@@ -157,7 +151,7 @@ pub fn draw_light_buttons(c: &mut impl Canvas) {
 
 /// Text in a fixed box of one label line, cut to fit.
 pub fn draw_text(c: &mut impl Canvas, (x, y, w): (u32, u32, u32), align: Align, fg: u16, s: &str) {
-    text::draw_in(c, &Style { fg, ..LABEL }, x, y, w, align, fit(s, w));
+    text::draw_in(c, &Style { fg, ..LABEL }, x, y, w, align, LABEL.fit(s, w));
 }
 
 #[cfg(test)]
@@ -219,7 +213,7 @@ mod tests {
 
     #[test]
     fn text_is_cut_to_its_box() {
-        assert_eq!(fit("SHORT", 100), "SHORT");
-        assert!(LABEL.width(fit("A VERY LONG TITLE INDEED", 96)) <= 96);
+        assert_eq!(LABEL.fit("SHORT", 100), "SHORT");
+        assert!(LABEL.width(LABEL.fit("A VERY LONG TITLE INDEED", 96)) <= 96);
     }
 }
