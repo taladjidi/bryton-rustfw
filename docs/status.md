@@ -570,6 +570,8 @@ A feature not listed here was seen on the unit.
 
 ## Known problems
 
+- **A card that never answers keeps the unit on** (auto off held) until the battery runs out; the ride stays on the
+  card. Owner to decide whether to allow auto off past `GIVE_UP` (storage/recorder/mod.rs).
 - **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps

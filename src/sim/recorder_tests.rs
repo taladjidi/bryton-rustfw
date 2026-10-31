@@ -328,6 +328,64 @@ fn the_card_answers_late_at_boot_without_start() {
     }
 }
 
+/// The full copy's side of the same: the clean copy reopened at the boot, the full copy's record not readable (the
+/// card failing in that place) for 5 or 10 s. The full copy is reopened once it reads (its pass that ends the wait
+/// never drops it), and saved with the same records as the clean one.
+#[test]
+fn the_full_copy_resumes_when_its_record_reads_late() {
+    for late_ms in [5000, 10_000] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 1000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let name = crate::recorder::ride_name(app.rec_time().0);
+        run(&mut sim, &mut app, 90_000);
+        let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let rec = fat.open(&mut d, "Rustfw/full.rec").unwrap();
+        let lba = fat.lba(rec.cluster);
+        sim.emmc.unreadable.push(lba..lba + 6);
+        let (mut sim, mut app) = reboot(&mut sim, 3);
+        sim.emmc.unreadable.push(lba..lba + 6);
+        run(&mut sim, &mut app, 1000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{late_ms} ms: {}", app.notes.list[0].as_str());
+        run(&mut sim, &mut app, late_ms);
+        assert!(app.rec.full_pending, "{late_ms} ms: still pending while its record does not read");
+        sim.emmc.unreadable.clear();
+        run(&mut sim, &mut app, 15_000);
+        assert!(!app.rec.full_pending && app.rec.full.phase() != recorder::Phase::Done, "{late_ms} ms: reopened");
+        save_ride(&mut sim, &mut app); // end
+        run(&mut sim, &mut app, 3000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{late_ms} ms: {}", app.notes.list[0].as_str());
+        let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+        let times = record_times(&sim.emmc.image, &path);
+        assert!(times.len() >= 60, "{late_ms} ms: {} records", times.len());
+        assert_eq!(record_times(&sim.emmc.image, &std::format!("Rustfw/{path}")), times, "{late_ms} ms");
+        assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    }
+}
+
+/// The card fails at a boot whose marker says a ride is open but whose card has none (a cut between the record's
+/// "done" and the marker's clear), and answers 6 s later (past the first retry, 5 s): the marker kept until then;
+/// the try then finds no ride, and nothing stays pending or marked, the ride settled.
+#[test]
+fn a_late_card_with_no_ride_settles() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.dead = true;
+    sim.backup[RIDE_BKP] = RIDE_OPEN;
+    let mut app = App::start(&mut sim, None);
+    assert!(app.rec.resume_pending, "the marker read");
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "kept while the card is down");
+    sim.emmc.dead = false;
+    run(&mut sim, &mut app, 15_000);
+    assert!(!app.rec.resume_pending && !app.rec.full_pending);
+    assert!(app.ride_settled());
+    assert_eq!(sim.backup[RIDE_BKP], 0);
+}
+
 /// Reliable write (emmc.rs) on a card that offers it: every write is CMD23 with bit 31 then CMD25, never a plain
 /// one. So a cut tears nothing: at every sector of a ride's first 75 s, the reboot finds a clean volume and the
 /// ride at its last checkpoint (the root directory's sector included, which a plain write could lose).
