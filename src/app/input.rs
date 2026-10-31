@@ -189,7 +189,11 @@ impl Screen {
             Screen::RampResult => "RAMP",
             Screen::About => "ABOUT",
             Screen::Notif(..) => "NOTIF",
-            _ => "OTHER",
+            Screen::SegmentResult => "SEGMENT",
+            Screen::Main => "MAIN",
+            Screen::Ride(_) => "RIDE",
+            Screen::Edit(..) => "EDIT",
+            Screen::Menu(..) => "MENU",
         }
     }
 }

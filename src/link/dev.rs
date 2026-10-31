@@ -156,6 +156,76 @@ pub fn watch_usb(bus: UsbState, was_configured: bool, still_ms: u32, failed: boo
     }
 }
 
+/// The USB watch's bookkeeping (what the board kept in its link): feed it the registers once per poll.
+#[derive(Debug)]
+pub struct Watcher {
+    /// DSTS.FNSOF when last seen changing, and when (ms, the caller's clock).
+    sof: (u32, u32),
+    /// The bus state seen last, and since when (ms).
+    bus: (UsbState, u32),
+    /// Configured since the last reconnect.
+    was_configured: bool,
+    /// The last state before a suspend was Configured (cleared by a reconnect).
+    before: bool,
+}
+
+impl Watcher {
+    /// A watcher that has seen nothing.
+    pub const fn new() -> Self {
+        Watcher { sof: (u32::MAX, 0), bus: (UsbState::Unconfigured, 0), was_configured: false, before: false }
+    }
+
+    /// The board's reconnect ran at `now_ms`: forget the link, so the next enumeration starts clean.
+    pub fn reconnected(&mut self, now_ms: u32) {
+        *self = Watcher { sof: (u32::MAX, now_ms), ..Watcher::new() };
+    }
+
+    /// One poll: `configured` / `suspended` are usb-device's state, `fnsof` DSTS.FNSOF, `now_ms` the main loop's
+    /// clock, `failed` as in [`watch_usb`]. On [`UsbWatch::Drop`] the board snapshots when [`Watcher::real_failure`]
+    /// says so, reconnects, and calls [`Watcher::reconnected`].
+    pub fn poll(
+        &mut self,
+        configured: bool,
+        suspended: bool,
+        fnsof: u32,
+        now_ms: u32,
+        failed: bool,
+    ) -> (UsbState, UsbWatch) {
+        let bus = if configured {
+            UsbState::Configured
+        } else if suspended {
+            UsbState::Suspended { configured: self.before }
+        } else {
+            UsbState::Unconfigured
+        };
+        if bus == UsbState::Configured {
+            (self.before, self.was_configured) = (true, true);
+        } else if bus == UsbState::Unconfigured {
+            self.before = false;
+        }
+        if bus != self.bus.0 {
+            self.bus = (bus, now_ms);
+        }
+        if bus != UsbState::Configured || fnsof != self.sof.0 {
+            self.sof = (fnsof, now_ms);
+        }
+        let since = if bus == UsbState::Configured { self.sof.1 } else { self.bus.1 };
+        (bus, watch_usb(bus, self.was_configured, now_ms.wrapping_sub(since), failed))
+    }
+
+    /// A drop worth a register snapshot: the frame number frozen while configured, or a suspend after a phase error
+    /// (not the host going away or sleeping).
+    pub fn real_failure(bus: UsbState, failed: bool) -> bool {
+        bus == UsbState::Configured || failed
+    }
+}
+
+impl Default for Watcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// What the main loop must do after a [`Session::feed`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -799,6 +869,36 @@ fn decimal(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_watcher_drops_gives_up_and_recovers() {
+        let mut w = Watcher::new();
+        let mut t = 0;
+        // configured with the frame number moving: up
+        for f in 0..5 {
+            t += 10;
+            assert_eq!(w.poll(true, false, f, t, false).1, UsbWatch::Up);
+        }
+        // the frame number frozen for SOF_LOST_MS: a drop, a real failure
+        let (bus, r) = w.poll(true, false, 4, t + SOF_LOST_MS, false);
+        assert_eq!((r, Watcher::real_failure(bus, false)), (UsbWatch::Drop, true));
+        w.reconnected(t + SOF_LOST_MS);
+        t += SOF_LOST_MS;
+        // not configured, none since the reconnect: down, however long
+        assert_eq!(w.poll(false, false, 0, t + UNCONFIGURED_MS, false).1, UsbWatch::Down);
+        // the computer enumerates again, then idles (suspend): left alone
+        assert_eq!(w.poll(true, false, 1, t + 3000, false).1, UsbWatch::Up);
+        assert_eq!(w.poll(false, true, 1, t + 3010, false).1, UsbWatch::Suspended);
+        // a failed transfer, then a suspend that outlasts the give-up: a drop with a snapshot
+        let (bus, r) = w.poll(false, true, 1, t + 3010 + UNCONFIGURED_MS, true);
+        assert_eq!((r, Watcher::real_failure(bus, true)), (UsbWatch::Drop, true));
+        // configured once, then unconfigured for good: a give-up without a snapshot
+        let mut w = Watcher::new();
+        w.poll(true, false, 1, 0, false);
+        assert_eq!(w.poll(false, false, 1, 1, false).1, UsbWatch::Down);
+        let (bus, r) = w.poll(false, false, 1, 1 + UNCONFIGURED_MS, false);
+        assert_eq!((r, Watcher::real_failure(bus, false)), (UsbWatch::Drop, false), "gave up: no snapshot");
+    }
+
     use super::*;
 
     #[test]

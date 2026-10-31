@@ -152,16 +152,12 @@ impl App {
         use menu::Row;
         match menu {
             Menu::Main => menu::MAIN.get(i).copied(),
-            Menu::Pages => [ride::Profile::Road, ride::Profile::Indoor, ride::Profile::Mtb]
-                .get(i)
-                .map(|&p| Row::Open(Menu::PageList(p)))
-                .or_else(|| (i == 3).then_some(Row::AutoScroll))
-                .or_else(|| (i == 4).then_some(Row::Set(menu::Setting::QuickStatus)))
-                .or_else(|| (i == 5).then_some(Row::Open(Menu::Page(QUICK)))),
-            Menu::PageList(_) => match i {
-                0 => Some(Row::Open(Menu::Page(OVERVIEW))),
-                _ if i <= self.view_count() => Some(Row::Open(Menu::Page(i - 1))),
-                _ => (i == self.view_count() + 1).then_some(Row::AddPage),
+            Menu::Pages => menu::PAGES.get(i).copied(),
+            // the overview first, then the pages, then ADD PAGE
+            Menu::PageList(_) => match i.checked_sub(1) {
+                None => Some(Row::Open(Menu::Page(OVERVIEW))),
+                Some(k) if k < self.view_count() => Some(Row::Open(Menu::Page(k))),
+                Some(k) => (k == self.view_count()).then_some(Row::AddPage),
             },
             // DROP CHANGES last, once there is something to drop
             Menu::Edit(_) if i == menu::EDIT_ROWS.len() => {
@@ -230,9 +226,11 @@ impl App {
             Menu::Stock => menu::FITNESS.get(i).map(|&r| Row::Stock(r)),
             Menu::Alerts => menu::ALERTS.get(i).copied(),
             // FITNESS first, then the rides; none yet: the scan's row, which shows how far it is
-            Menu::History if i == 0 => Some(Row::Open(Menu::Stock)),
-            Menu::History if self.stock.index.is_empty() => (i == 1).then_some(Row::Stock(menu::StockRow::Scan)),
-            Menu::History => self.stock.index.get(i - 1).map(|_| Row::Past(i - 1)),
+            Menu::History => match i.checked_sub(1) {
+                None => Some(Row::Open(Menu::Stock)),
+                Some(0) if self.stock.index.is_empty() => Some(Row::Stock(menu::StockRow::Scan)),
+                Some(k) => self.stock.index.get(k).map(|_| Row::Past(k)),
+            },
             // the planned workouts (or the row that says none), then the built-in ramp test
             Menu::Workouts => {
                 let n = self.plan.calendar.iter().count().max(1);
@@ -279,22 +277,28 @@ impl App {
             }
             Menu::BtTrainers => (i < self.ftms.n_found).then_some(Row::BtFound(i)),
             // SAVE PLACE first, then the places (or the row that says none)
-            Menu::Places if i == 0 => Some(Row::SavePlace),
-            Menu::Places if self.places.list.is_empty() => (i == 1).then_some(Row::Empty("NONE SAVED")),
-            Menu::Places => self.places.list.get(i - 1).map(|_| Row::Place(i - 1)),
+            Menu::Places => match i.checked_sub(1) {
+                None => Some(Row::SavePlace),
+                Some(0) if self.places.list.is_empty() => Some(Row::Empty("NONE SAVED")),
+                Some(k) => self.places.list.get(k).map(|_| Row::Place(k)),
+            },
             Menu::Place(k) if k < self.places.list.len() => {
                 [Row::Set(menu::Setting::Altitude), Row::DeletePlace(k)].get(i).copied()
             }
             Menu::Place(_) => None,
             Menu::Bikes | Menu::BikeParts(_) | Menu::Part(..) => self.bike_rows(menu, i),
-            Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
-            Menu::Page(QUICK) => (i < 6).then_some(Row::Field(QUICK, i)),       // always six
-            Menu::Page(n) => match i {
-                0 => Some(Row::EditPage(n)),
-                1 => Some(Row::Layout(n)),
-                _ if i - 2 < self.page_ref(n)?.cells() => Some(Row::Field(n, i - 2)),
-                _ => self.page_ops(n).nth(i - 2 - self.page_ref(n)?.cells()).map(|o| Row::PageOp(n, o)),
-            },
+            Menu::Page(OVERVIEW) => (i < menu::OVERVIEW_ROWS).then_some(Row::Field(OVERVIEW, i)),
+            Menu::Page(QUICK) => (i < menu::QUICK_ROWS).then_some(Row::Field(QUICK, i)),
+            Menu::Page(n) => {
+                let head = [Row::EditPage(n), Row::Layout(n)];
+                let Some(j) = i.checked_sub(head.len()) else { return head.get(i).copied() };
+                let cells = self.page_ref(n)?.cells();
+                if j < cells {
+                    Some(Row::Field(n, j))
+                } else {
+                    self.page_ops(n).nth(j - cells).map(|o| Row::PageOp(n, o))
+                }
+            }
         }
     }
 
