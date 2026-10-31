@@ -8,6 +8,7 @@ mod climbs_done;
 mod clock;
 mod courses;
 mod curve;
+mod descents;
 mod device;
 mod drive;
 mod editor;

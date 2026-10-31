@@ -11,6 +11,9 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   links alone, `Version::mtu` 23), the Exchange MTU Request (GATTC 0x9e, response event 0x3a: 0x9e, 0x3a and 0x23 inferred
   from enum adjacency in ble_gattc.h / ble.h (the unit's SoftDevice bases differ from SDK 17.1's: 0x94 verified), not seen on the unit) is answered with 103 or less, and a message from WhatsApp, Messages
   or Mail shows "WHATSAPP: sender: text" in the banner and the list (Get App Attributes on the Control Point).
+- **Descents and STEEP DESCENT (nav/course, app/descents.rs)**: sim only. Still to see: the banner and beep 300 m before a steep
+  drop on a followed course and on the road ahead (the max grade over 50 m from the map's elevation, smoothed, may read
+  differently from the road), the DESCENT AHEAD field.
 - **Peaks and cols along a course (storage/named.rs, NEXT POI, PROFILE marks)**: sim only, on synthetic tiles. The tile
   format is inferred: the name, then `ele` as a u64 of metres after the point, was read off a real cache on the
   computer (the stock document says only "8 bytes"), not on the unit. Still to see: a followed course through a region stock's cache holds (zoom 12, 11 or 9 under `\Map\Data\Temp`),
