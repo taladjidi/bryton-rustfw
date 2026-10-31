@@ -99,7 +99,7 @@ def mask(img):
 
 def same_title(a, b):
     """Do two screens show the same title text (thresholded masks, DRIFT tolerance)."""
-    ma, mb = mask(a), mask(b)
+    ma, mb = mask(a if hasattr(a, 'crop') else png_image(a)), mask(b if hasattr(b, 'crop') else png_image(b))
     union = sum(x or y for x, y in zip(ma, mb))
     diff = sum(x != y for x, y in zip(ma, mb))
     return union == 0 or diff / union <= DRIFT
