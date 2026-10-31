@@ -102,19 +102,20 @@ pub fn draw_plot(c: &mut impl Canvas, d: &[Day; SHOWN]) {
             bg
         }
     });
-    let grey = Style { fg: GREY, ..LABEL };
+    // half size: "-100" fits the 38 px left of the plot, where 2x text keeps only "-10"
+    let small = Style { scale: 1, ..Style { fg: GREY, ..LABEL } };
     let mut mark = |v: i32, y: u32| {
         let mut l = Line::<12>::new();
         if v < 0 {
             l.push_str("-");
         }
         l.push_u32(v.unsigned_abs());
-        draw_in(c, &grey, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
+        draw_in(c, &small, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
     };
     mark(ax.hi, PLOT.1);
-    mark(0, PLOT.1 + zero.saturating_sub(7).min(PLOT.3 - 14));
+    mark(0, PLOT.1 + zero.saturating_sub(4).min(PLOT.3 - 7));
     if ax.lo < 0 {
-        mark(ax.lo, PLOT.1 + PLOT.3 - 14);
+        mark(ax.lo, PLOT.1 + PLOT.3 - 7);
     }
 }
 
@@ -156,6 +157,14 @@ mod tests {
             let (ctl, atl, tsb) = f(i as i32);
             Day { tss: 60, ctl, atl, tsb }
         })
+    }
+
+    /// "-100" (a negative axis label) fits the box left of the plot at its size, and draws without leaving the screen.
+    #[test]
+    fn negative_axis_labels_fit() {
+        assert!(Style { scale: 1, ..LABEL }.width("-100") <= PLOT.0 - 2);
+        let mut f = Frame::new();
+        draw_plot(&mut f, &days(|_| (0, 0, -100)));
     }
 
     #[test]

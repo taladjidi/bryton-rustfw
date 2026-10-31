@@ -470,7 +470,7 @@ MENU
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, THEME
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER),
-     |             BIKES > ACTIVE BIKE, BIKE 1 to 3 > ODOMETER, a part > SERVICE EVERY, RESET
+     |             BIKES > ACTIVE BIKE, BIKE 1 to 3 > ODOMETER, a part > SERVICE, RESET
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >,
                    SCREENSHOT
  +- PLACES >       SAVE PLACE, then the favourite places (distance and bearing from here) -> ALTITUDE (typed), DELETE
@@ -880,7 +880,7 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
 - **Three bikes and part wear** (SETTINGS > BIKE > BIKES, `\Rustfw\bikes.bin`): ACTIVE BIKE (1, 2 or 3) puts that bike's
   WHEEL, WEIGHT, CHAINRINGS and CASSETTE into the settings the ride uses; editing them in BIKE edits the active bike. Each
   bike (BIKE 1 to 3; fixed names) has its own ODOMETER and five parts, CHAIN, CASSETTE, TYRE F, TYRE R and BRAKES (the
-  pads), each with its km since RESET (asked twice) and SERVICE EVERY (OFF, 500 to 10000 km); a part past its interval
+  pads), each with its km since RESET (asked twice) and SERVICE (the interval: OFF, 500 to 10000 km); a part past its interval
   is red in its bike's menu and said at the start ("CHAIN 3000 KM: SERVICE") and when a ride takes it past. Each saved
   ride goes to the active bike once, a few seconds after its save, when the ride scan has read it in `\Activities`; a
   ride of stock's goes to the bike active here. The file's mark (the newest ride counted) is written with the sums in one

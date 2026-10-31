@@ -1090,3 +1090,14 @@ pub fn first_shown(sel: usize, rows: usize, total: usize) -> usize {
     // the shift to the last screen happens once, at its first row: inside it, moving costs two rows
     if total > rows { if sel >= total - rows { total - rows } else { sel / rows * rows } } else { 0 }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The service interval's row is named SERVICE; "SERVICE EVERY" left no gap before OFF.
+    #[test]
+    fn service_row_is_named_service() {
+        assert_eq!(Row::PartEvery(0, 0).label(), Some("SERVICE"));
+    }
+}

@@ -949,7 +949,6 @@ mod date_format_tests {
         assert_eq!([Dmy, Mdy, Ymd].map(|f| date_numbers((2026, 12, 31), f).as_str().len()), [10, 10, 10]);
     }
 
-    /// The overview, the phone and the ride card keep the month's name, whatever DATE FORMAT says.
     #[test]
     fn date_short_has_no_year() {
         use crate::DateFormat::{Dmy, Mdy, Ymd};
@@ -959,6 +958,7 @@ mod date_format_tests {
         assert_eq!(date_short((2026, 11, 3), Ymd).as_str(), "11-03");
     }
 
+    /// The overview, the phone and the ride card keep the month's name, whatever DATE FORMAT says.
     #[test]
     fn date_text_keeps_the_month_name() {
         assert_eq!(date_text((2026, 10, 23)).as_str(), "FRI 23 OCT");

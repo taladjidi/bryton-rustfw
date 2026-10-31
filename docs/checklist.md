@@ -117,7 +117,7 @@ Others
 - [~] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all): sim; distance to go, off course, the climb, ascent left, the next peak or col (NEXT POI); no turns
 - [ ] Road surface type (Garmin)
 - [x] Battery of the unit and of each sensor as fields (Garmin, Wahoo): sim; the Di2 and the power meter and HR strap (ANT+ status), not seen on the unit
-- [x] Component wear: the bike chosen per ride, kilometres added per part (Garmin): sim (BIKES: five parts per bike, SERVICE EVERY, RESET)
+- [x] Component wear: the bike chosen per ride, kilometres added per part (Garmin): sim (BIKES: five parts per bike, SERVICE, RESET)
 
 ## Sensors and radios
 
