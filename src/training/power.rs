@@ -215,7 +215,8 @@ impl Power {
 /// ```
 pub fn tss(secs: u32, np: u16, ftp: u16) -> u32 {
     let (np, ftp) = (u64::from(np), u64::from(ftp.max(1)));
-    (u64::from(secs) * np * np * 100 / (ftp * ftp * 3600)).min(u64::from(u32::MAX)) as u32
+    // seconds held to 277 h so that np^2 x 100 x seconds fits in 64 bits whatever a damaged file says (found by the fuzz)
+    (u64::from(secs.min(1_000_000)) * np * np * 100 / (ftp * ftp * 3600)).min(u64::from(u32::MAX)) as u32
 }
 
 /// 3 s power per kg, x 10.
@@ -243,6 +244,11 @@ pub fn wbal_color(j: i32, wprime_j: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tss_holds_its_seconds() {
+        assert_eq!(tss(u32::MAX, u16::MAX, 1), tss(1_000_000, u16::MAX, 1), "no overflow from a damaged file");
+    }
     use crate::ride::Input;
 
     fn riding() -> Ride {

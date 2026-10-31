@@ -72,6 +72,8 @@ pub enum Menu {
     Segments,
     /// The climbs ridden to the top this ride, newest first (app/climbs_done.rs).
     Climbs,
+    /// FITNESS > MONTHS: a row per month of the scan's rides, newest first (app/pmc.rs).
+    Months,
     /// The phone link ([`menu::PHONE`]).
     Phone,
     /// What the Di2 buttons do ([`menu::REMOTE`]).
@@ -115,6 +117,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Courses => "COURSES",
         Menu::Segments => "SEGMENTS",
         Menu::Climbs => "CLIMBS DONE",
+        Menu::Months => "MONTHS",
         Menu::Phone => "PHONE",
         Menu::Remote => "DI2 KEYS",
         Menu::Notifs => "NOTIFICATIONS",
@@ -244,6 +247,8 @@ impl App {
             }
             Menu::Climbs if self.climbs_done.len() == 0 => (i == 0).then_some(Row::Empty("NONE YET")),
             Menu::Climbs => self.climbs_done.get(i).map(|_| Row::Done(i)),
+            Menu::Months if self.pmc.load.months().is_empty() => (i == 0).then_some(Row::Empty("NONE YET")),
+            Menu::Months => self.pmc.load.months().get(i).map(|_| Row::Month(i)),
             Menu::Phone => menu::PHONE
                 .get(i)
                 .map(|&r| Row::Phone(r))
@@ -517,6 +522,7 @@ impl App {
             Row::Step(k) => color = self.step_row(self.plan.steps().get(k)?, &mut label, &mut value),
             Row::Course(k) => color = self.course_row(k, &mut label, &mut value)?,
             Row::Done(k) => self.climb_done_row(k, &mut label, &mut value)?,
+            Row::Month(k) => self.month_row(k, &mut label, &mut value)?,
             Row::Seg(k) => self.segment_row(k, &mut label, &mut value)?,
             Row::SegSkipped => value.push_u32(u32::from(self.segments()?.skipped)),
             Row::Group(g) => {
@@ -825,6 +831,9 @@ impl App {
             }
             Some(Row::Stock(menu::StockRow::Import)) => {}
             Some(Row::Stock(menu::StockRow::Curve)) => self.open_curve(),
+            Some(Row::Stock(menu::StockRow::Load)) => self.open_load(),
+            Some(Row::Stock(menu::StockRow::Months)) => self.open(Screen::Menu(Menu::Months, 0)),
+            Some(Row::Month(_)) => self.pmc.stat = (self.pmc.stat + 1) % pmc::STATS,
             Some(Row::Stock(r @ (menu::StockRow::ApplyFtp | menu::StockRow::ApplyWPrime))) => {
                 self.apply_estimate(b, menu, sel, r)
             }

@@ -15,6 +15,11 @@ A feature not listed here was seen on the unit.
 - **The power curve screen (app/curve.rs, ui/curve.rs, HISTORY > FITNESS > POWER CURVE and the ride menu)**: sim only.
   To check on the unit: the 90-day curve after the scan, the green curve growing during a ride with the meter, the
   cursor by Page and by tap, both ends of the axis legible, and the redraw cost of opening it (`tools/dev.py info`).
+- **Training load: CTL, ATL, TSB, the chart and MONTHS (training/load.rs, app/pmc.rs, ui/load.rs, HISTORY > FITNESS)**:
+  sim only, on synthetic rides. To check on the unit: the numbers against Intervals.icu or TrainingPeaks for the same
+  rides (TSS of the power rides should match within a point or two; the hrTSS of a ride without power will be lower),
+  the chart after the scan, the three fields on a ride page moving as the ride goes, the month rows against the
+  scan's totals.
 - **Course reverse, the way to the start and BACK TO START (app/courses.rs, nav/course)**: sim only. To check on a ride:
   follow a course, REVERSE COURSE and ride it the other way (turns the other way round); start away from a course and
   see NEXT TURN give the compass point and distance until joined; ride out, BACK TO START in the ride menu, and ride

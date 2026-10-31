@@ -28,6 +28,7 @@ mod pace;
 mod pagemeta;
 mod pass;
 mod phone;
+pub(crate) mod pmc;
 mod powercal;
 mod profile;
 mod start_cues;
