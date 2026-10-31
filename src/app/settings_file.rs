@@ -337,8 +337,8 @@ impl SettingsCopy {
 }
 
 /// The profile after a register change: a register that says ROAD does not undo GRAVEL, CX or COMMUTE from the file
-/// (the register holds ROAD for them). shortcut: an explicit GRAVEL to ROAD change before a reset is lost, until the
-/// register gets a bit.
+/// (the register holds ROAD for them). shortcut: an explicit GRAVEL to ROAD change before a reset is lost until the
+/// file is written (retried each minute after a failure), until the register gets a bit.
 fn keep_new_profile(file: Option<ride::Profile>, reg: Option<ride::Profile>) -> Option<ride::Profile> {
     use ride::Profile::{Commute, Cx, Gravel, Road};
     if reg == Some(Road) && matches!(file, Some(Gravel | Cx | Commute)) { file } else { reg }
@@ -379,6 +379,8 @@ pub(crate) struct SettingsStore {
     pub(crate) dirty: bool,
     /// The newest copy's number.
     pub(crate) seq: u32,
+    /// After a failed write: `gps.ms` before which it is not tried again (at most once a minute).
+    pub(crate) retry_ms: u32,
     /// At the start, register 11 held no settings of this firmware's: the file wins.
     pub(crate) lost: bool,
     /// The registers at the start ([`registers`]) and the words of the settings read from them
@@ -531,7 +533,7 @@ impl App {
         }
         self.pay_trips();
         let st = self.settings_store;
-        if !(self.card_writable && st.loaded && st.dirty && self.ride_settled()) {
+        if !(self.card_writable && st.loaded && st.dirty && self.ride_settled() && self.gps.ms >= st.retry_ms) {
             return;
         }
         if !st.sound {
@@ -625,7 +627,7 @@ impl App {
 
     /// Writes the settings over the file's older copy (the file created with both if needed).
     fn save_settings(&mut self, b: &mut impl Board) {
-        self.settings_store.dirty = false; // once: a failure is said, and tried again at the next change
+        self.settings_store.dirty = false; // a failure is said, and tried again a minute later (below)
         let st = self.settings_store;
         let c = SettingsCopy {
             seq: st.seq.wrapping_add(1),
@@ -639,6 +641,9 @@ impl App {
             Some(Err(_)) => {
                 self.fats_unsure(); // compared again first
                 self.notice("SETTINGS NOT SAVED");
+                // still not in the file (a GRAVEL to ROAD change is lost to a reset until it is): tried again
+                self.settings_store.dirty = true;
+                self.settings_store.retry_ms = self.gps.ms.saturating_add(60_000);
             }
         }
     }

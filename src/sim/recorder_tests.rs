@@ -1021,3 +1021,20 @@ fn a_resumed_gravel_cx_or_commute_ride_keeps_its_profile() {
         assert_eq!(crate::fit::tests::field(session, 6), Some(sub), "{p:?}: sub_sport");
     }
 }
+
+/// Without settings.bin (never written here: the register says ROAD for GRAVEL), the ride still resumes, as ROAD.
+#[test]
+fn a_resumed_gravel_ride_without_its_settings_file_resumes_as_road() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.settings.profile = Some(crate::ride::Profile::Gravel); // not dirty: the file is not written
+    sim.backup[crate::WHEEL_BKP] = app.settings.to_word();
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 150_000);
+    let (mut sim2, mut app) = reboot(&mut sim, 3);
+    run(&mut sim2, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    assert_eq!(app.ride_profile(), crate::ride::Profile::Road);
+}
