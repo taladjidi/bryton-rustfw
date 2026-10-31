@@ -8,7 +8,7 @@ use crate::power_curve::{DURATIONS, N};
 use text::{Align, Line, Style, draw, draw_in};
 
 /// The plot's left, top, columns and rows.
-pub const PLOT: (u32, u32, u32, u32) = (40, LIST_Y + 24, 194, 150);
+pub const PLOT: (u32, u32, u32, u32) = (50, LIST_Y + 24, 186, 150);
 const COLS: usize = PLOT.2 as usize;
 const AXIS_Y: u32 = PLOT.1 + PLOT.3 + 3;
 const STRIP_Y: u32 = AXIS_Y + 16;
@@ -80,7 +80,8 @@ pub fn draw_screen(c: &mut impl Canvas, head: &str, best: &[u16; N], ride: &[u16
     let px = |pm: u32| PLOT.0 + pm * (PLOT.2 - 1) / 1000;
     draw(c, &grey, PLOT.0, AXIS_Y, Align::Left, "1S");
     draw(c, &grey, px(500), AXIS_Y, Align::Centre, "1M");
-    draw(c, &grey, px(781), AXIS_Y, Align::Centre, "10M");
+    // right-aligned a little past its tick: centred, it ran into "1H" at 2x
+    draw(c, &grey, px(781) + 6, AXIS_Y, Align::Right, "10M");
     draw(c, &grey, PLOT.0 + PLOT.2 + 2, AXIS_Y, Align::Right, "1H");
     draw_cursor(c, best, ride, cursor);
 }
@@ -110,9 +111,9 @@ pub fn draw_plot(c: &mut impl Canvas, best: &[u16; N], ride: &[u16; N]) {
         }
     });
     let grey = Style { fg: GREY, ..LABEL };
-    // half size: four digits ("1400") fit the 38 px left of the plot where 2x text keeps three
-    let small = Style { scale: 1, ..grey };
-    for (v, y) in [(ymax, PLOT.1), (ymax / 2, PLOT.1 + PLOT.3 / 2 - 4)] {
+    // 2x: four digits ("2500") take 48 px, the margin left of the plot
+    let small = grey;
+    for (v, y) in [(ymax, PLOT.1), (ymax / 2, PLOT.1 + PLOT.3 / 2 - 7)] {
         let mut l = Line::<12>::new();
         l.push_u32(u32::from(v));
         draw_in(c, &small, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
@@ -203,14 +204,16 @@ mod tests {
         let best = curve(|_| 1400);
         draw_screen(&mut f, "", &best, &best, 0);
         let mut g = Frame::new();
-        draw_in(&mut g, &Style { fg: GREY, scale: 1, ..LABEL }, 0, PLOT.1, PLOT.0 - 2, Align::Right, "1400");
-        let w = Style { scale: 1, ..LABEL }.width("1400");
-        for y in PLOT.1..PLOT.1 + 7 {
+        draw_in(&mut g, &Style { fg: GREY, ..LABEL }, 0, PLOT.1, PLOT.0 - 2, Align::Right, "1400");
+        let w = LABEL.width("1400");
+        for y in PLOT.1..PLOT.1 + 14 {
             for x in PLOT.0 - 2 - w..PLOT.0 - 2 {
                 assert_eq!(f.at(x, y), g.at(x, y));
             }
         }
         assert!(w <= PLOT.0 - 2);
+        // the widest realistic label, 9999 W, fits too
+        assert!(LABEL.width("9999") <= PLOT.0 - 2);
     }
 
     /// Both curves and the cursor draw at both ends of the theme metrics without leaving the screen, and the cursor
