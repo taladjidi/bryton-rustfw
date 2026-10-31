@@ -159,7 +159,7 @@ pub fn line(word: u32, (y, mo, d, h, mi, s): (u16, u8, u8, u8, u8, u8), build: &
         }
     }
     l.push_str(", ");
-    l.push_u32(word & 0xff);
+    l.push_u32((word & 0xff).max(1)); // 0 after the minute cleared the count
     l.push_str(" in a row, build ");
     l.push_str(build.get(..40).unwrap_or(build));
     l.push_str("\n");
