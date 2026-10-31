@@ -29,33 +29,31 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// The menus whose rows are the const tables (MAIN, SETTINGS, ME, ZONES, DISPLAY, BIKE, ALERTS, REMOTE = DI2 KEYS) or
-/// depend on nothing stored (PAGES: three profiles and fixed rows): a Start there lands on the same row on the unit.
-/// Every other menu (sensors, places, bikes, history, the ride menu, SYSTEM, storage...) lists data.
-fn static_menu(m: Menu) -> bool {
-    matches!(
-        m,
-        Menu::Main
-            | Menu::Settings
-            | Menu::Me
-            | Menu::Zones
-            | Menu::Display
-            | Menu::Bike
-            | Menu::Alerts
-            | Menu::Pages
-            | Menu::Remote
-    )
+/// One key of a path; a Start pressed in a menu also has that menu's title and the label of the row it lands on, so
+/// tools/walk.py finds the row by name on the unit (`where`), whatever data the unit's lists hold.
+type Step = (&'static str, Option<Target>);
+
+/// The row a Start is pressed on: where it is, and what kind (tools/walk.py's allowlist reads `kind`).
+#[derive(Clone)]
+struct Target {
+    title: String,
+    row: String,
+    idx: usize,
+    rows: usize,
+    /// "set" (Start cycles and saves a setting), "fixed" (a row of a const table: label from the table), "data" (a row
+    /// that only opens what the data holds: a workout, a past ride, a month, a notification, a place, a course) or
+    /// "other" (everything else: acts).
+    kind: &'static str,
 }
 
 struct Walk {
     n: usize,
-    /// The keys from the overview to where the walk is, each with whether it is a Start pressed inside a menu whose
-    /// rows depend on data (tools/walk.py refuses such a path: the unit's rows differ from the sim's).
-    keys: Vec<(&'static str, bool)>,
+    /// The keys from the overview to where the walk is.
+    keys: Vec<Step>,
     /// The screen being exercised (its path), to name the cuts.
     cur: String,
     /// (screen path, keys from the overview).
-    paths: Vec<(String, Vec<(&'static str, bool)>)>,
+    paths: Vec<(String, Vec<Step>)>,
     seen: Vec<Menu>,
     found: Vec<(String, Clip)>,
 }
@@ -89,8 +87,28 @@ fn key(sim: &mut Sim, app: &mut App, w: &mut Walk, k: &'static str) {
         "back" => Press::Short(Key::Back),
         _ => unreachable!("unknown key {k}"),
     };
-    let dynamic = k == "start" && matches!(app.screen(), Screen::Menu(m, _) if !static_menu(m));
-    w.keys.push((k, dynamic));
+    let target = match app.screen() {
+        Screen::Menu(m, i) if k == "start" => {
+            let row = app.row(m, i);
+            let kind = match row {
+                Some(Row::Set(_)) => "set",
+                Some(r) if r.label().is_some() => "fixed",
+                Some(
+                    Row::Workout(_) | Row::Past(_) | Row::Month(_) | Row::Notif(_) | Row::Place(_) | Row::Course(_),
+                ) => "data",
+                _ => "other",
+            };
+            Some(Target {
+                title: menu_title(m).into(),
+                row: app.menu_row(m, i).map_or(String::new(), |r| r.0.as_str().into()),
+                idx: i,
+                rows: app.rows(m),
+                kind,
+            })
+        }
+        _ => None,
+    };
+    w.keys.push((k, target));
     app.press(sim, p);
     run(sim, app, 30);
     w.drain();
@@ -320,8 +338,17 @@ fn walk_every_screen() {
         .enumerate()
         .map(|(i, (n, k))| {
             let ks: Vec<String> = k.iter().map(|s| format!("\"{}\"", s.0)).collect();
-            let dynamic = k.iter().any(|s| s.1);
-            format!("{{\"n\":{},\"name\":\"{n}\",\"dyn\":{dynamic},\"keys\":[{}]}}", i + 1, ks.join(","))
+            let steps: Vec<String> = k
+                .iter()
+                .map(|(key, t)| match t {
+                    Some(t) => format!(
+                        "{{\"key\":\"{key}\",\"title\":\"{}\",\"row\":\"{}\",\"idx\":{},\"rows\":{},\"kind\":\"{}\"}}",
+                        t.title, t.row, t.idx, t.rows, t.kind
+                    ),
+                    None => format!("{{\"key\":\"{key}\"}}"),
+                })
+                .collect();
+            format!("{{\"n\":{},\"name\":\"{n}\",\"keys\":[{}],\"steps\":[{}]}}", i + 1, ks.join(","), steps.join(","))
         })
         .collect();
     std::fs::write(dir.join("paths.json"), format!("[\n{}\n]\n", json.join(",\n"))).unwrap();
@@ -334,6 +361,10 @@ fn walk_every_screen() {
             k.0,
             k.1
         );
+    }
+    let starts: Vec<&Target> = w.paths.iter().flat_map(|p| p.1.iter().filter_map(|s| s.1.as_ref())).collect();
+    for kind in ["fixed", "data", "set", "other"] {
+        std::println!("walk: {kind} Start steps {}", starts.iter().filter(|t| t.kind == kind).count());
     }
     std::println!("walk: {} screens, {} clips, {:?}", w.n, w.found.len(), t0.elapsed());
     assert!(

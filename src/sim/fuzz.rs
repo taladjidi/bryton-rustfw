@@ -431,7 +431,7 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 13] = [
+    let words: [&[u8]; 14] = [
         b"peek ",
         b"poke ",
         b"load ",
@@ -439,6 +439,7 @@ fn dev_link_input() {
         b"0x4",
         b"\n",
         b"shot\n",
+        b"where\n",
         b"bat\n",
         b"sector ",
         b"emmc\n",
@@ -447,6 +448,40 @@ fn dev_link_input() {
         b" -",
     ];
     let mut maps = 0;
+    // `where` on screens chosen by the seed: menus with the cursor up to 3 past the last row, ride pages, others
+    let (mut wheres, mut menu_wheres) = (0, 0);
+    let menus = [
+        crate::Menu::Main,
+        crate::Menu::Sensors,
+        crate::Menu::Pages,
+        crate::Menu::Settings,
+        crate::Menu::System,
+        crate::Menu::History,
+        crate::Menu::Workouts,
+        crate::Menu::Places,
+        crate::Menu::Bikes,
+        crate::Menu::Phone,
+    ];
+    let mut app = app;
+    for seed in 1..=64usize {
+        let m = menus[seed % menus.len()];
+        let i = seed / menus.len() % (app.rows(m) + 4);
+        app.screen = match seed % 5 {
+            0 => crate::Screen::Ride(seed),
+            1 => crate::Screen::Nearby,
+            2 => crate::Screen::Past,
+            _ => crate::Screen::Menu(m, i),
+        };
+        let (mut session, mut pc) = (crate::dev::Session::new(), super::Pc::default());
+        session.feed(b"where\n", &app, Stats::default(), &mut pc);
+        let got = std::string::String::from_utf8(pc.got).unwrap();
+        assert!(got.starts_with("where ") && got.len() <= 54 && got.matches('\n').count() == 1, "{got:?}");
+        assert!(got.ends_with('\n'), "{got:?}");
+        wheres += 1;
+        menu_wheres += usize::from(matches!(app.screen, crate::Screen::Menu(..)) && got.matches('|').count() == 2);
+    }
+    assert!(wheres > 0 && menu_wheres > 0, "{wheres} {menu_wheres}");
+    let app = app;
     for seed in 1..=4u32 {
         let (mut session, mut pc) = (Session::new(), super::Pc::default());
         let mut buf = std::vec::Vec::new();

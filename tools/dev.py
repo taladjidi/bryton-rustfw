@@ -3,6 +3,7 @@
 plugged in: the dot at the top right turns green when the link is ready.
 
   dev.py info                     version and uptime
+  dev.py where                    the screen, cursor row and label: where TITLE|row/rows|LABEL (read-only)
   dev.py bat                      battery history, one reading a minute (the last 4 hours)
   dev.py shot [-o shot.png]       one screenshot
   dev.py watch [-i 1] [-n 0]      continuous screenshots into target/shots/NNNNN.png (Ctrl-C to stop)
@@ -265,6 +266,19 @@ def selftest():
         def readline(self):
             return (self.out.pop(0) + '\n').encode()
 
+    class Ask:
+        """A link whose `where` answer is canned."""
+        def __init__(self, answer):
+            self.answer = answer
+        def reset_input_buffer(self):
+            pass
+        def write(self, cmd):
+            assert cmd == b'where\n', cmd
+        def readline(self):
+            return (self.answer + '\n').encode()
+    assert command(Ask('where SENSORS|3/7|HEART RATE'), 'where') == 'where SENSORS|3/7|HEART RATE'
+    assert command(Ask('where OVERVIEW'), 'where') == 'where OVERVIEW'
+    assert any(l.strip().startswith("sub.add_parser('where'") for l in open(__file__)), 'where is a subcommand'
     blob = bytes(range(256)) * 40                       # 10240 bytes: answers of 4096, 4096 and 2048
     path = 'Activities\\FILE.FIT'
     chunks = [blob[i:i + 4096].hex() for i in range(0, len(blob), 4096)]
@@ -294,6 +308,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('info')
+    sub.add_parser('where', help='the screen, the cursor row and its label: where TITLE|row/rows|LABEL (read-only)')
     sub.add_parser('bat', help='battery history: one reading a minute, the last 4 hours')
     sub.add_parser('reset')
     p = sub.add_parser('key', help='press a key (the app acts as if it was pressed): key page [--long]')
@@ -381,7 +396,7 @@ def main():
                     r = line(s)
             elif a.cmd == 'wtest':
                 print(command(s, f'wtest {a.lba}'))
-            elif a.cmd in ('info', 'reset', 'drive', 'stackfault'):
+            elif a.cmd in ('info', 'where', 'reset', 'drive', 'stackfault'):
                 print(command(s, a.cmd))
             elif a.cmd == 'peek':
                 first = command(s, f'peek {a.addr} {a.n}')
