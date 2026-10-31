@@ -203,12 +203,13 @@ impl App {
         if self.ride.state() != ride::State::Idle && !self.rec.clean.held() {
             return self.say("END THE RIDE FIRST");
         }
-        let step = if self.confirm.take() == Some((menu, sel)) { usize::from(self.give_up_step) + 1 } else { 0 };
+        let step =
+            if self.menu.confirm.take() == Some((menu, sel)) { usize::from(self.menu.give_up_step) + 1 } else { 0 };
         if let Some(text) = ASK.get(step) {
-            (self.confirm, self.give_up_step) = (Some((menu, sel)), step as u8);
+            (self.menu.confirm, self.menu.give_up_step) = (Some((menu, sel)), step as u8);
             return self.say(text);
         }
-        self.give_up_step = 0;
+        self.menu.give_up_step = 0;
         let (local, _) = self.rec_time();
         let clean = self.rec.clean.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);
         let full = self.rec.full.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);

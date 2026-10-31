@@ -74,8 +74,8 @@ impl App {
     /// Opens the panel, with no calibration result left from before.
     pub(crate) fn open_quick(&mut self) {
         self.powercal.reset();
-        self.quick_zero = (None, None);
-        self.quick_scroll = (0, 0);
+        self.quick.zero = (None, None);
+        self.quick.scroll = (0, 0);
         self.open(Screen::Quick);
     }
 
@@ -126,7 +126,7 @@ impl App {
     pub(crate) fn quick_button(&self) -> (Line<16>, u16, u16) {
         let mut l = Line::<16>::new();
         let now = self.now_s();
-        let armed = self.quick_zero_ok() && self.quick_zero.0.is_some_and(|t| !expired(t, now));
+        let armed = self.quick_zero_ok() && self.quick.zero.0.is_some_and(|t| !expired(t, now));
         let (fg, bg) = match self.powercal.phase() {
             Phase::Asking => {
                 l.push_str("ASKING...");
@@ -166,27 +166,27 @@ impl App {
             return;
         }
         let now = self.now_s();
-        if self.quick_zero.0.is_some_and(|t| !expired(t, now)) {
-            self.quick_zero = (None, None);
+        if self.quick.zero.0.is_some_and(|t| !expired(t, now)) {
+            self.quick.zero = (None, None);
             self.powercal_go();
         } else {
             self.powercal.reset(); // a result on the button gives way to SURE?
-            self.quick_zero = (Some(now.wrapping_add(ARM_S)), None);
+            self.quick.zero = (Some(now.wrapping_add(ARM_S)), None);
         }
     }
 
     /// Takes back an expired arming, and a result shown for [`RESULT_S`].
     fn quick_zero_tick(&mut self) {
         let now = self.now_s();
-        if !self.quick_zero_ok() || self.quick_zero.0.is_some_and(|t| expired(t, now)) {
-            self.quick_zero.0 = None;
+        if !self.quick_zero_ok() || self.quick.zero.0.is_some_and(|t| expired(t, now)) {
+            self.quick.zero.0 = None;
         }
         if matches!(self.powercal.phase(), Phase::Done(..) | Phase::Failed | Phase::NoAnswer) {
-            match self.quick_zero.1 {
-                None => self.quick_zero.1 = Some(now.wrapping_add(RESULT_S)),
+            match self.quick.zero.1 {
+                None => self.quick.zero.1 = Some(now.wrapping_add(RESULT_S)),
                 Some(t) if expired(t, now) => {
                     self.powercal.reset();
-                    self.quick_zero.1 = None;
+                    self.quick.zero.1 = None;
                 }
                 Some(_) => {}
             }
@@ -215,12 +215,12 @@ impl App {
                         ui::GREY
                     }
                     (B_TITLE, Some(t)) => {
-                        put(&mut l, q::window(t, ui::W - 16, self.quick_scroll.1));
+                        put(&mut l, q::window(t, ui::W - 16, self.quick.scroll.1));
                         ui::WHITE
                     }
                     _ => {
                         let a = if n.title.is_some() { n.artist } else { "" };
-                        put(&mut l, q::window(a, ui::W - 16, self.quick_scroll.1));
+                        put(&mut l, q::window(a, ui::W - 16, self.quick.scroll.1));
                         ui::GREY
                     }
                 }
@@ -345,28 +345,28 @@ impl App {
 
     /// What the panel shows has been drawn: the fingerprints and the shape to compare with.
     pub(crate) fn quick_drawn(&mut self) {
-        (self.quick_shown, self.quick_shape) = (self.quick_prints(), self.quick_shape());
+        (self.quick.shown, self.quick.shape) = (self.quick_prints(), self.quick_shape());
     }
 
     /// Redraws the boxes that changed since they were drawn, each in its own place; the whole panel when the lines
     /// moved (a sensor paired or forgotten, a meter appeared).
     pub(crate) fn update_quick(&mut self, b: &mut impl Board) {
-        if self.quick_shape != self.quick_shape() {
+        if self.quick.shape != self.quick_shape() {
             return self.show(b);
         }
         self.quick_zero_tick();
         // a new track starts both lines over; else the scroll takes a step
         let track = fnv(fnv(0, self.media_now().title.unwrap_or("").as_bytes()), self.media_now().artist.as_bytes());
-        self.quick_scroll =
-            if track == self.quick_scroll.0 { (track, self.quick_scroll.1.wrapping_add(1)) } else { (track, 0) };
+        self.quick.scroll =
+            if track == self.quick.scroll.0 { (track, self.quick.scroll.1.wrapping_add(1)) } else { (track, 0) };
         let now = self.quick_prints();
         let mut p = Panel(b, self.area(), self.look());
-        for (i, (&a, &s)) in now.iter().zip(&self.quick_shown).enumerate() {
+        for (i, (&a, &s)) in now.iter().zip(&self.quick.shown).enumerate() {
             if a != s && a != 0 {
                 self.quick_draw_box(&mut p, i);
             }
         }
-        self.quick_shown = now;
+        self.quick.shown = now;
     }
 
     /// An input on the panel: Back or a swipe up closes it, a tap acts on the button under it.

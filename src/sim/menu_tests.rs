@@ -494,11 +494,11 @@ fn menu_tree_reaches_everything() {
             }
             app.screen = Screen::Menu(m, i);
             for editing in [false, true] {
-                app.editing = editing;
+                app.menu.editing = editing;
                 let (label, value, _) = app.menu_row(m, i).unwrap();
                 whole(label.as_str(), value.as_str());
             }
-            (app.editing, app.screen) = (false, Screen::Main);
+            (app.menu.editing, app.screen) = (false, Screen::Main);
         }
     }
 

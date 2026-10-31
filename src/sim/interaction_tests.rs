@@ -268,7 +268,7 @@ fn the_quick_panel_has_the_remote_the_meter_and_the_light() {
     let line = power_line(&app);
     tap(&mut app, &mut sim, line);
     assert_eq!(app.quick_button().0.as_str(), "ZERO", "riding: no arming, nothing said");
-    assert!(app.quick_zero.0.is_none());
+    assert!(app.quick.zero.0.is_none());
     swipe(&mut app, &mut sim, Dir::Up);
     assert!(matches!(app.screen(), Screen::Ride(_)), "closed over the page it opened on");
 }
@@ -290,20 +290,20 @@ fn zero_on_the_quick_panel_needs_two_taps_in_time() {
     assert_eq!((app.quick_button().0.as_str(), app.powercal.asking()), ("SURE?", false), "late: only arms again");
     super::tests::assert_consistent(&sim, &app);
     // armed, then the meter is lost: the button is greyed ZERO, not SURE?, and a tap does nothing
-    app.quick_zero.0 = None;
+    app.quick.zero.0 = None;
     tap(&mut app, &mut sim, line);
     assert_eq!(app.quick_button().0.as_str(), "SURE?");
     app.radio.heard_ms[Kind::Power as usize] = u32::MAX; // the meter is lost
     assert_eq!(app.quick_button().0.as_str(), "ZERO", "cannot calibrate: SURE? is withdrawn");
     tap(&mut app, &mut sim, line);
-    assert!(app.quick_zero.0.is_none() && !app.powercal.asking());
+    assert!(app.quick.zero.0.is_none() && !app.powercal.asking());
     super::tests::assert_consistent(&sim, &app);
     // heard no more: a tap does nothing
-    app.quick_zero.0 = None;
+    app.quick.zero.0 = None;
     app.radio.heard_ms[Kind::Power as usize] = u32::MAX;
     assert!(!app.power_heard());
     tap(&mut app, &mut sim, line);
-    assert!(app.quick_zero.0.is_none() && !app.powercal.asking(), "cannot calibrate: no arming");
+    assert!(app.quick.zero.0.is_none() && !app.powercal.asking(), "cannot calibrate: no arming");
 }
 
 /// The panel left open redraws only the boxes whose value changed: with a meter, a strap, a speed sensor, a trainer
@@ -379,13 +379,13 @@ fn a_long_title_scrolls_and_a_short_one_does_not() {
     assert!(moved, "the visible text moved");
     assert!(big <= 3, "{big} steps cost over {} px", 2 * 224 * 20);
     assert!(held >= 10, "the holds and the seconds between send nothing ({held} quiet steps)");
-    assert!(app.quick_scroll.1 > 8);
+    assert!(app.quick.scroll.1 > 8);
     // the same title with another artist starts over
     let at = sim.ms + 100;
     let song = Act::Track("A VERY LONG SONG TITLE THAT OVERFLOWS", "Other");
     sim.nordic.phone.as_mut().unwrap().script.push((at, song));
     run(&mut sim, &mut app, 1000);
-    assert!(app.quick_scroll.1 <= 5, "restarted: {}", app.quick_scroll.1);
+    assert!(app.quick.scroll.1 <= 5, "restarted: {}", app.quick.scroll.1);
     super::tests::assert_consistent(&sim, &app);
 }
 

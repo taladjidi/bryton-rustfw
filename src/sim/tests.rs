@@ -405,10 +405,10 @@ fn touch_edits_a_number_and_goes_back() {
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr)); // in RIDER
     let left = 6900 - sim.ms;
     run(&mut sim, &mut app, left);
-    assert!(app.editing, "the tap edits");
+    assert!(app.menu.editing, "the tap edits");
     assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::MaxHr))), "MAX HR < 191 >", "the swipe up adds one");
     run(&mut sim, &mut app, 1000);
-    assert!(!app.editing, "the second tap keeps it");
+    assert!(!app.menu.editing, "the second tap keeps it");
     assert_eq!(Settings::from_word(sim.backup[11]).max_hr, 191);
     run(&mut sim, &mut app, 1000);
     assert_eq!(app.screen(), Screen::Menu(Menu::Settings, row_of(menu::Row::Open(Menu::Me))), "swipe right: back");

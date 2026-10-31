@@ -536,7 +536,7 @@ fn delete_rides() {
     open_card(&mut sim, &mut app, 2);
     app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.notes.text.as_str(), "DELETE RIDE?\nSTART: YES BACK: NO");
-    assert_eq!(app.confirm, Some(PAST_DELETE));
+    assert_eq!(app.menu.confirm, Some(PAST_DELETE));
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Back)); // the banner, then (nothing asked) the list
     assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "only asked: Lap dropped it");
@@ -580,7 +580,7 @@ fn delete_rides() {
         app.input(sim, Input::Touch(Gesture::Tap((dx + dw / 2) as u16, (dy + dh / 2) as u16)))
     };
     tap_delete(&mut sim, &mut app);
-    assert_eq!((app.screen(), app.confirm), (Screen::Past, Some(PAST_DELETE)), "a tap asks");
+    assert_eq!((app.screen(), app.menu.confirm), (Screen::Past, Some(PAST_DELETE)), "a tap asks");
     sim.save("past_delete_asks");
     tap_delete(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
