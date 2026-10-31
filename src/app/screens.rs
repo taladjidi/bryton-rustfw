@@ -646,14 +646,17 @@ impl App {
     /// selected box when it changed.
     pub(crate) fn update_page(&mut self, b: &mut impl Board) {
         self.refresh_done();
-        if self.screen == Screen::Main {
-            self.refresh_calendar(b, false); // after the start, midnight, or new zones: the card follows
-        }
         // Everything but the map follows the readings of the second (the pages show one reading a second, bars and
         // the workout move by the second); between seconds only an input (it acts at once) or the map needs a look.
         let due = core::mem::take(&mut self.value_due) || self.light.idle_ms < 1000;
+        if self.screen == Screen::Main && due {
+            self.refresh_calendar(b, false); // after the start, midnight, or new zones (an input): the card follows
+        }
+        if !due && !self.drawn.iter().any(|d| matches!(d, Drawn::Map(_))) {
+            return; // nothing to look at before the next second (review of 2026-10-31, finding 10)
+        }
         let slow = self.saver_on() && self.light.idle_ms >= 1000;
-        let widgets = self.widgets(); // built once a pass
+        let widgets = self.widgets(); // built once a pass that looks
         let first = widgets.clone().position(|(_, w)| w == Widget::Field(Field::Map));
         let selected = if let Screen::Edit(_, k) = self.screen { Some(k) } else { None };
         for (i, (bx, w)) in widgets.enumerate() {

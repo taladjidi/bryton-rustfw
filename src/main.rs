@@ -1885,13 +1885,15 @@ fn main() -> ! {
         // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
         // while the finger is down)
         // idle: a longer sleep (App::pass_ms), ended at once by a key or a byte from the Nordic chip, so neither
-        // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before)
+        // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before); a ride's
+        // 100 ms pass by a key only (LoopPolicy::begin_sleep): our side holds the chip's bytes (RTS, the RX FIFO);
+        // the chip's ANT event queue is 32 events (BOARD.md 11), its BLE and serialization queues are not known
         let wake = policy.begin_sleep(app.pass_ms(), app.radio_up());
         if !wake.radio {
             nrf_flush();
         }
         if wake.io {
-            wake_on_io(true, wake.radio);
+            wake_on_io(true, wake.bytes);
         }
         'sleep: loop {
             // a finger down makes the pass POLL_MS again
@@ -1959,7 +1961,7 @@ fn main() -> ! {
                 let w = Woke {
                     touch: touch_edge(),
                     timer: timer_done(),
-                    io: wake.io && io_edge(wake.radio),
+                    io: wake.io && io_edge(wake.bytes),
                     key: press.is_some(),
                     usb: woke,
                 };

@@ -510,9 +510,9 @@ fn auto_theme_follows_the_light_with_a_hold_and_a_gap() {
     assert_eq!(sim.screen[0], Theme::OUTDOOR.ink(crate::ui::BLACK), "a background pixel in the day theme");
 }
 
-/// THEME AUTO alone reads the light once a second; with AUTO off (and no backlight following the light) it stops.
+/// THEME AUTO alone reads the light every 5 s; with AUTO off (and no backlight following the light) it stops.
 #[test]
-fn auto_theme_alone_reads_once_a_second_and_stops_when_off() {
+fn auto_theme_alone_reads_every_5_s_and_stops_when_off() {
     let (mut sim, mut app) = unit(None);
     app.settings.light_level = 0; // a fixed backlight: the light is read for the theme only
     app.settings.auto_theme = true;
@@ -521,7 +521,7 @@ fn auto_theme_alone_reads_once_a_second_and_stops_when_off() {
     let r0 = sim.bus.light_reads;
     run(&mut sim, &mut app, 20_000);
     let reads = sim.bus.light_reads - r0;
-    assert!((18..=22).contains(&reads), "{reads} readings in 20 s, one a second");
+    assert!((3..=5).contains(&reads), "{reads} readings in 20 s, one each 5 s");
     app.settings.auto_theme = false;
     run(&mut sim, &mut app, 3_000);
     let r1 = sim.bus.light_reads;

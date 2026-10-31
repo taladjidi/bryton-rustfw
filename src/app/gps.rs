@@ -39,15 +39,23 @@ fn one(f: [u8; 32]) -> Msg {
 /// Passes between two AssistNow Offline messages (one a pass would be 1.7 kB/s; mga.rs has the pace).
 pub const ANO_GAP: u8 = 1;
 
-/// GNSS bytes read per pass at most: 128 per 50 ms is 2560 bytes/s, twenty times NAV-PVT at 1 Hz. A pass stops at
-/// the first 32 bytes of idle fill between frames, so most passes read 32.
+/// GNSS bytes read per pass at most: 128 per 50 ms is 2560 bytes/s, twenty times NAV-PVT at 1 Hz; at a ride's
+/// passes ([`RIDE_POLL_MS`]) 1 280 B/s, about 12 times NAV-PVT. A pass stops at the first 32 bytes of idle fill
+/// between frames, so most passes read 32.
 pub(crate) const GNSS_READ: usize = 128;
 
-/// While the receiver has nothing to send (idle fill), it is read every this many passes (200 ms), not every pass:
-/// its output is NAV-PVT once a second (and the answers to the configuration), which then waits at most a pass or
-/// three in its buffer; a read that finds bytes keeps reading every pass until the fill comes back. Each read is a
-/// 32-byte SPI4 transfer the CPU polls (113 us a pass on the unit, 0.24 % of the time: 2026-10-26).
-pub const GNSS_IDLE_PASSES: u8 = 4;
+/// While the receiver has nothing to send (idle fill), it is read again this long after, ms (4 passes of
+/// [`POLL_MS`]), not every pass: its output is NAV-PVT once a second (and the answers to the configuration), which
+/// then waits at most this long in its buffer; a read that finds bytes keeps reading every pass until the fill comes
+/// back. Each read is a 32-byte SPI4 transfer the CPU polls (113 us a pass on the unit, 0.24 % of the time:
+/// 2026-10-26). Time, not passes: a ride's passes are [`RIDE_POLL_MS`].
+pub const GNSS_FILL_MS: u32 = 200;
+
+/// After a NAV-PVT read whole (the fill after it), with nothing left to send the receiver (the configuration, the
+/// time and position, AssistNow Offline), the next read waits this long, ms: the next PVT is due a second after this
+/// one, so one idle read before it instead of four (review of 2026-10-31, finding 10). Then [`GNSS_FILL_MS`] reads
+/// until it comes: it lands at most that late, within its second.
+pub const GNSS_PVT_WAIT_MS: u32 = 800;
 
 impl App {
     /// Reads what the GNSS receiver has (sending its configuration once): the latest fix, its state in the strip,
@@ -65,9 +73,8 @@ impl App {
         self.gps.ms = self.gps.ms.saturating_add(self.dt_ms);
         self.gps.pvt_ms = self.gps.pvt_ms.saturating_add(self.dt_ms);
         let mut send = if self.gps.ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
-        if send.is_none() && self.gps.wait > 0 {
-            self.gps.wait -= 1;
-        } else {
+        self.gps.wait = self.gps.wait.saturating_sub(self.dt_ms);
+        if send.is_some() || self.gps.wait == 0 {
             self.read_gnss(b, send.take());
         }
         if self.gps.pvt_ms > PVT_STALE_MS && self.gps.pvt.take().is_some() {
@@ -79,9 +86,14 @@ impl App {
     }
 
     /// One read of the receiver: up to [`GNSS_READ`] bytes (`send` goes out with the first 32), the fixes in them
-    /// taken. Found idle, the next reads wait [`GNSS_IDLE_PASSES`].
+    /// taken. Found idle, the next read waits [`GNSS_FILL_MS`], or [`GNSS_PVT_WAIT_MS`] after a PVT with nothing
+    /// left to send.
     fn read_gnss(&mut self, b: &mut impl Board, send: Option<Msg>) {
         self.gps.wait = 0;
+        let mut pvt_read = false;
+        // the start's messages all sent, and AssistNow Offline's (a change of power mode or systems goes at once,
+        // whatever the wait)
+        let nothing_to_send = send.is_none() && self.gps.sent >= 5 && self.gps.ano.done();
         let (out, chunks) = send.unwrap_or(([0xff; mga::WIRE], 0));
         for i in 0..GNSS_READ / 32 {
             let mut buf = [0xff; 32];
@@ -90,13 +102,14 @@ impl App {
             }
             b.gnss_transfer(&mut buf);
             if i >= chunks && buf == [0xff; 32] && self.gps.parser.idle() {
-                self.gps.wait = GNSS_IDLE_PASSES - 1;
+                self.gps.wait = if pvt_read && nothing_to_send { GNSS_PVT_WAIT_MS } else { GNSS_FILL_MS };
                 break; // nothing waiting in the receiver
             }
             for &byte in &buf {
                 if let Some(pvt) = self.gps.parser.push(byte).and_then(|(c, i, p)| gnss::pvt(c, i, p)) {
                     self.gps.pvt = Some(pvt);
                     self.gps.pvt_ms = 0;
+                    pvt_read = true;
                     self.learn_aid(b, pvt);
                     self.adapt(Some(pvt));
                     // a speed sensor or a trainer heard lately gives the speed (indoors a fix through a window says
@@ -115,6 +128,12 @@ impl App {
                         self.live.set(Metric::Speed, (pvt.speed_mm_s * 36 / 1000).min(u32::from(u16::MAX)) as u16);
                     }
                 }
+            }
+            // the PVT read whole and fill after it (a 100-byte PVT ends in the 4th transfer): nothing else waits.
+            // Two 0xff, so a checksum byte of 0xff ending a transfer does not add the long wait
+            if pvt_read && nothing_to_send && buf.ends_with(&[0xff, 0xff]) && self.gps.parser.idle() {
+                self.gps.wait = GNSS_PVT_WAIT_MS;
+                break;
             }
         }
     }

@@ -113,7 +113,9 @@ impl App {
         }
         // a ride named over a day ahead is left out (a clock set wrong then); nothing counted without a clock
         let done = self.stock.status() == stock::Status::Done && self.date.0 >= 2020;
-        let (y, mo, d, h, mi, _) = from_epoch_s(epoch_s(self.rec_time().0) + 86_400);
+        let count = done && self.bikes.as_deref().is_some_and(|s| s.seen_rev != self.stock.index.rev); // not every pass
+        let (y, mo, d, h, mi, _) =
+            if count { from_epoch_s(epoch_s(self.rec_local()) + 86_400) } else { Default::default() };
         let (gear, writable) = (bikes::Gear::of(&self.settings), self.card_writable);
         let index = &self.stock.index;
         let Some(st) = self.bikes.as_deref_mut().filter(|s| s.loaded) else { return };

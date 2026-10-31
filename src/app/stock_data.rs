@@ -157,7 +157,7 @@ impl App {
         }
         // the cache written, its FAT comparison first spread over passes in the same time budget (a read-only build
         // skips it: its write would be refused by emmc::Card::write after those reads, for nothing)
-        let t = fat::write::dos_time(self.rec_time().0);
+        let t = fat::write::dos_time(self.rec_local());
         while self.stock.unsaved()
             && self.card_writable
             && self.ride_settled()

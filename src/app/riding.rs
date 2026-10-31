@@ -384,10 +384,15 @@ impl App {
     /// learnt at a fix, whatever TIME ZONE shows; the RTC as is before one), less the seconds being caught up
     /// ([`App::step`]).
     pub(crate) fn rec_time(&self) -> (recorder::Local, u32) {
-        let ((y, mo, d), (h, mi)) = (self.date, self.strip.time);
-        let local = (y, mo, d, h, mi, self.seconds);
+        let local = self.rec_local();
         let offset = self.shown_offset_s() + i64::from(self.rec.lag_s);
         (local, fit::fit_time(from_epoch_s(epoch_s(local) - offset)))
+    }
+
+    /// The local time alone, as [`App::rec_time`]'s: the date and time read, no division (every pass's users).
+    pub(crate) fn rec_local(&self) -> recorder::Local {
+        let ((y, mo, d), (h, mi)) = (self.date, self.strip.time);
+        (y, mo, d, h, mi, self.seconds)
     }
 
     /// This second's record: the fix, the sensors, the barometer's temperature.
@@ -461,7 +466,7 @@ impl App {
         if self.emmc.lent() {
             return; // a read-only build has no ride here: [`App::recorder`] never starts one, nor is one resumed
         }
-        let (local, _) = self.rec_time();
+        let local = self.rec_local();
         self.profile_to_recorders(); // before a checkpoint (a ride switched off or cut while paused)
         if self.rec.clean.phase() != recorder::Phase::Done {
             self.rec.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)

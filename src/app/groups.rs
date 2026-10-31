@@ -140,8 +140,8 @@ pub(crate) struct Gps {
     pub(crate) ano_file: Option<(fat::File, fat::Seek)>,
     /// The power mode the last configuration sent (saver: cyclic tracking).
     pub(crate) saver: bool,
-    /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
-    pub(crate) wait: u8,
+    /// Time left before the receiver is read again while it has nothing, ms ([`GNSS_FILL_MS`], [`GNSS_PVT_WAIT_MS`]).
+    pub(crate) wait: u32,
     /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
     pub(crate) off: bool,
     /// The RTC's offset from UTC and the last position, as kept in backup registers.

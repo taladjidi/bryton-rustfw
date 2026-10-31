@@ -79,6 +79,12 @@ pub const fn stack_intact(word: u32) -> bool {
 /// from the Nordic chip end main.rs's sleep at once, so this bounds only what nothing announces: the clock shown (a
 /// second at most this late), the GNSS read, the timers' resolution.
 pub const IDLE_POLL_MS: u32 = 250;
+/// Main loop period while a ride runs and nothing wants the short pass ([`App::pass_ms`]): no finger, key held,
+/// tone, banner, editor, AssistNow data, card failure, trainer link, course or road ahead being read. Keys end the
+/// sleep at once (main.rs `wake_on_io`); the Nordic chip's bytes do not (its broadcasts would end nearly every
+/// sleep): our side holds them (RTS and the 16-byte RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11,
+/// the enable's 0x20), its BLE and serialization queues are not known. Review of 2026-10-31, finding 9.
+pub const RIDE_POLL_MS: u32 = 100;
 /// No key for this long (the backlight's default OFF AFTER), and the loop may slow to [`IDLE_POLL_MS`].
 pub const IDLE_AFTER_MS: u32 = 30_000;
 /// A pass's work counted at most ([`Board::awake_us`]): the first pass, or a stall, is not a key held for seconds.
@@ -107,14 +113,16 @@ pub const BARO_RIDE_MS: u32 = 1000;
 pub const TOUCH_MS: u32 = 10;
 
 /// How often the ambient light is read while the backlight follows it (and while the menu shows it): with the
-/// band chosen once a second ([`ambient::Auto`], stock's timing), a change of light reaches the
-/// backlight within 2 s (a window that straddles it, then a whole one).
-pub const LIGHT_MS: u32 = 250;
+/// band chosen once a second ([`ambient::Auto`], stock's timing: its sensor converts once a second), a change of
+/// light reaches the backlight within 2 s (a window that straddles it, then a whole one). Two readings a second, not
+/// four (review of 2026-10-31, finding 10: an I2C read the CPU polls).
+pub const LIGHT_MS: u32 = 500;
 
 /// How often the light is read when only THEME AUTO wants it (the backlight not following it, the menu not showing it):
-/// one reading a second, the mean the switch checks ([`ui::theme::DayNight`]). The switch is decided and drawn while the
-/// screen is off too: it costs one reading a second, and the theme on the panel is the one for when the screen returns.
-pub const THEME_LIGHT_MS: u32 = 1000;
+/// one reading each 5 s, each counting its 5 s of the switch's [`ui::theme::HOLD_S`] ([`ui::theme::DayNight`]), so the
+/// theme still switches after 30 s of the other light. The switch is decided and drawn while the screen is off too:
+/// it costs one reading each 5 s, and the theme on the panel is the one for when the screen returns.
+pub const THEME_LIGHT_MS: u32 = 5000;
 
 /// True at the saver's threshold or below.
 fn low_for_saver(p: Option<u8>) -> bool {
@@ -205,16 +213,38 @@ impl App {
 
     /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,
     /// no key for [`IDLE_AFTER_MS`], no finger, no tone or banner timed by the passes, the card not lent to the
-    /// computer, no AssistNow Offline data left to send, a few seconds after the receiver starts), else [`POLL_MS`]. Measured 2026-10-28 overnight on the overview: 20 passes/s of 0.4 ms each.
+    /// computer, no AssistNow Offline data left to send, a few seconds after the receiver starts), [`RIDE_POLL_MS`]
+    /// while a ride runs with the same quiet and no per-pass work waiting, else [`POLL_MS`]. Measured 2026-10-28
+    /// overnight on the overview: 20 passes/s of 0.4 ms each.
     pub fn pass_ms(&self) -> u32 {
-        let idle = !self.busy()
-            && !self.touching()
-            && self.light.idle_ms >= IDLE_AFTER_MS
+        let quiet = !self.touching()
             && self.tones.quiet()
             && self.notes.ms.is_none()
             && !self.emmc.lent()
             && (self.gps.off || self.gps.ano.done()); // AssistNow Offline messages go out at a pass each
-        if idle { IDLE_POLL_MS } else { POLL_MS }
+        if quiet && !self.busy() && self.light.idle_ms >= IDLE_AFTER_MS {
+            IDLE_POLL_MS
+        } else if quiet && self.ride_quiet() {
+            RIDE_POLL_MS
+        } else {
+            POLL_MS
+        }
+    }
+
+    /// A ride runs and nothing counts on 20 passes a second: no key held (its hold is timed by the passes), no
+    /// editor, no card failure waiting for its retry (the recorder counts calls, storage/recorder `RETRY`), no
+    /// course or road-ahead tile being read (a budget a pass), no trainer heard or Bluetooth trainer connected (its
+    /// FE-C and FTMS control messages go one a call, app/trainer.rs `send_trainer`: half the rate on 100 ms passes).
+    fn ride_quiet(&self) -> bool {
+        self.ride.state() == ride::State::Running
+            && !self.keys.any_down()
+            && self.edit.is_none()
+            && self.rec.clean.fails() == 0
+            && self.rec.full.fails() == 0
+            && self.courses.as_deref().is_none_or(|c| !c.loading())
+            && self.ahead.as_ref().is_none_or(|(a, _)| !a.busy())
+            && !self.tlink.up
+            && self.ftms.conn.is_none()
     }
 
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.
@@ -297,7 +327,8 @@ impl App {
         match (wanted, self.light.measuring) {
             (true, false) => {
                 self.light.measuring = ambient::light_start(b);
-                self.light.ms = 0;
+                // the first reading a second on (a conversion done) at most: THEME AUTO's first decides at once
+                self.light.ms = every.saturating_sub(1000);
             }
             (true, true) if self.light.ms >= every => {
                 if let Some(lux10) = ambient::light_read(b) {
