@@ -105,8 +105,6 @@ dependencies = [
 [[package]]
 name = "synopsys-usb-otg"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46672633ec4f32826e4267866ba732aac8a95a0b86317aadbddac7474f747407"
 dependencies = [
  "critical-section",
  "embedded-hal",

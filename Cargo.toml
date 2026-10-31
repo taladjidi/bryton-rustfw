@@ -32,6 +32,7 @@ critical-section = "1.2"                                          # implemented 
 # rewritten site, AGENTS.md "Toolchain and dependencies" how to refresh them when a version changes.
 [patch.crates-io]
 usb-device = { path = "vendor/usb-device" }
+synopsys-usb-otg = { path = "vendor/synopsys-usb-otg" }
 
 [profile.release]
 opt-level = "s"
