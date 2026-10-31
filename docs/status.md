@@ -14,7 +14,7 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 - The USB core (OTG, PHY, VBUS timing): the dev link runs against a fake computer (`Pc`), not the cable.
 - DBP (the backup domain write enable, PWR_CR1): the simulated backup registers are always writable.
 - The MPU, the caches and the memory attributes: no protection and no cache lines.
-- The eMMC: the card is a model (`EmmcCard`) with fixed timing; only the responses of the commands in `expected_resp` are checked.
+- The eMMC: the card is a model (`EmmcCard`) with fixed timing; the responses of the commands in `expected_resp` are checked and an unlisted command fails the test; the data commands (8, 17, 18, 24, 25) go through `emmc_read` / `emmc_write`, which do not check a response type.
 
 ## Not yet seen on the unit
 

@@ -2070,6 +2070,8 @@ fn sunset_alert_says_once_before_the_set() {
 fn backup_indexes_fit_the_rtc_registers() {
     // The board's backup_read / backup_write ignore an index past the 32 registers (no aliasing): every index the
     // library uses must be one of them, or its value would be lost on the unit.
+    // typed by hand: a new backup constant must be added here; the simulator's panic on backup[n] is the net for the
+    // paths the tests run
     let mut used = vec![
         crate::USB_DROPS_BKP,
         crate::USB_LAST_BKP,
