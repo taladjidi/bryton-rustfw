@@ -56,7 +56,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->799 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->801 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
@@ -170,9 +170,9 @@ seconds, and the run ends with all of them and a total:
   tracked files, dead functions in `tools/`, and ruff's pyflakes checks when ruff is installed;
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - **lane F, the firmware:** `cargo clippy --release -- -D warnings`, the firmware build, `tools/stack_check.py` and its
-  selftest (the stack frames against their budgets), `tools/pack.py`, then if Renode is installed `renode/run.py`,
-  `--vbus` and `--off` (docs/devloop.md, Emulation), the three boots in parallel, each killed after 300 s
-  (`RENODE_TIMEOUT`) and failing;
+  selftest (the stack frames against their budgets), `tools/pack.py`, then if Renode is installed `renode/run.py`
+  (the boot, then the cable in) and `--off` (docs/devloop.md, Emulation), in sequence (`RENODE_PARALLEL=1` runs both
+  together), each killed after 300 s (`RENODE_TIMEOUT`) and failing;
 - **lane H, the host:** clippy on the tests and the simulator, `cargo test-host` (unit tests, simulator tests and doc
   tests on the Mac; writes `target/sim/preview.bmp`), `RUSTDOCFLAGS="-D warnings" cargo doc` (no broken or private
   links), `cargo deny check` (when installed), then what the tests wrote: `tools/fit_check.py` on the test rides when

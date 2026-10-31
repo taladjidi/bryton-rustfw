@@ -89,7 +89,7 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     - the panel start-up order;
     - no fault or panic;
     - the bar and Ferris are pixel-equal to the simulator's preview;
-    - with `--vbus` (PC13 high), the USB start path runs and the clock keeps going.
+    - after those checks the same boot raises PC13 (the cable in): the USB start path runs and the clock keeps going.
   - **Install:** `/Applications/Renode.app`, from the `osx-arm64-portable.dmg` of github.com/renode/renode
     release 1.17.0 (sha256 checked against the release; not Apple-signed).
     - Docs: https://renode.readthedocs.io.

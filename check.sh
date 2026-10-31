@@ -96,15 +96,20 @@ lane_F() {  # the firmware
     elif ! touched '^(src/main\.rs|src/board/|link\.x|build\.rs|memory\.x|Cargo\.(toml|lock)|renode/)'; then
         skip "renode (no change in main.rs, board/, link.x, build.rs, Cargo.toml, renode/)"
     else
-        renode3() {  # the three boots share nothing but screen.png, which nothing reads back
-            python3 renode/run.py > "$C/renode-boot.log" 2>&1 & p1=$!
-            python3 renode/run.py --vbus > "$C/renode-vbus.log" 2>&1 & p2=$!
-            python3 renode/run.py --off > "$C/renode-off.log" 2>&1 & p3=$!
-            r=0; wait $p1 || r=1; wait $p2 || r=1; wait $p3 || r=1
+        renode2() {  # the boot (first screen, then the cable in) and the switch-off; in sequence unless RENODE_PARALLEL=1
+            if [ "${RENODE_PARALLEL:-0}" = 1 ]; then
+                python3 renode/run.py > "$C/renode-boot.log" 2>&1 & p1=$!
+                python3 renode/run.py --off > "$C/renode-off.log" 2>&1 & p2=$!
+                r=0; wait $p1 || r=1; wait $p2 || r=1
+            else
+                r=0
+                python3 renode/run.py > "$C/renode-boot.log" 2>&1 || r=1
+                python3 renode/run.py --off > "$C/renode-off.log" 2>&1 || r=1
+            fi
             cat "$C"/renode-*.log
             return $r
         }
-        step "renode x3 (boot, vbus, off)" renode3
+        step "renode (boot + vbus, off)" renode2
     fi
 }
 
