@@ -160,6 +160,52 @@ fn a_wheel_changed_mid_ride_survives_a_reset() {
     assert_eq!(bikes(&app).active().gear.wheel_mm, new, "and given to the active bike");
 }
 
+/// The card fails at a boot with a ride to resume: ACTIVE BIKE is refused (nothing loaded or switched while the
+/// resume waits); Start then reopens the ride once the card answers (as recorder_tests'
+/// `start_while_the_card_failed_at_boot`), with the WHEEL changed during it, and its save counts it.
+#[test]
+fn active_bike_is_refused_while_a_resume_waits() {
+    let (mut sim, mut app) = boot(crate::fat::tests::image());
+    settle(&mut sim, &mut app);
+    let old = app.settings.wheel_mm;
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000);
+    let new = crate::WHEELS.iter().copied().find(|&w| w != old).unwrap();
+    app.settings.wheel_mm = new;
+    app.save_misc(&mut sim);
+    run(&mut sim, &mut app, 2000);
+
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    sim2.gnss.fix = Some(8000);
+    sim2.emmc.dead = true;
+    let mut app = App::start(&mut sim2, None);
+    app.set_bike_memory(memory());
+    run(&mut sim2, &mut app, 2000);
+    assert!(app.rec.resume_pending, "the resume waits for the card");
+    app.open(Screen::Menu(Menu::Bikes, 0));
+    app.press(&mut sim2, Press::Short(Key::Start)); // ACTIVE BIKE
+    assert_eq!(app.notes.text.as_str(), "END THE RIDE FIRST");
+    assert!(app.bikes().is_none(), "nothing loaded");
+    app.leave_menus();
+    app.press(&mut sim2, Press::Short(Key::Start)); // the ride left open is reopened first
+    run(&mut sim2, &mut app, 3000);
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app, u64::from(PAGES_LOAD_MS) + 10_000);
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")));
+    assert_eq!((app.settings.wheel_mm, bikes(&app).active().gear.wheel_mm), (new, new), "the new wheel kept");
+    if app.ride.state() == ride::State::Running {
+        app.press(&mut sim2, Press::Short(Key::Start)); // paused, to end it
+    }
+    super::save_ride(&mut sim2, &mut app);
+    run(&mut sim2, &mut app, 10_000);
+    scanned(&mut sim2, &mut app);
+    let m = last_ride_m(&app);
+    assert!(m > 300, "{m}");
+    assert_eq!(bikes(&app).list[0].odo_m, m, "the resumed ride counted");
+}
+
 /// The first start of this build with a ride open (here: the bikes' memory given mid-ride): the mark is set before
 /// that ride's start, so its save counts it on BIKE 1 (the settings' ODOMETER, read before it was paid, lacks it).
 #[test]

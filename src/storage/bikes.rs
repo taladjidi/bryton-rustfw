@@ -24,7 +24,7 @@
 //!
 //! ```text
 //! 0    "RBIK"          magic
-//! 4    version (u16)   1
+//! 4    version (u16)   2 (1: 77e66c7, never released)
 //! 6    length (u16)    bytes of data at 12: 140 now; a later build appends and raises it (a reader takes what it knows)
 //! 8    seq (u32)       higher is newer
 //! 12   active (u8)     0 to 2; then a zero byte
@@ -54,7 +54,7 @@ pub const PART_NAMES: [&str; PARTS] = ["CHAIN", "CASSETTE", "TYRE F", "TYRE R", 
 pub const EVERY_KM: [u16; 11] = [0, 500, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 8000, 10_000];
 
 const MAGIC: &[u8; 4] = b"RBIK";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const DATA_AT: usize = 12;
 const AT_MARK_AT: usize = 20;
 /// Rides of the mark's minute kept by their file.

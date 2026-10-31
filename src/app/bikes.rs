@@ -179,7 +179,7 @@ impl App {
         };
         let (y, mo, d, h, mi, _) = from_epoch_s(epoch_s(from) - 60);
         let mark = if self.date.0 >= 2020 { (y, mo, d, h, mi) } else { (0, 0, 0, 0, 0) };
-        let idle = self.ride.state() == ride::State::Idle;
+        let idle = !open;
         let Some(st) = self.bikes.as_deref_mut() else { return };
         if read.is_err() && read != Err(fat::Error::NotFound) {
             st.tries = st.tries.saturating_add(1);
@@ -224,7 +224,8 @@ impl App {
     /// The bikes may be changed: the file read first (now, if it was not); else why not, said.
     fn bikes_ready(&mut self, b: &mut impl Board) -> bool {
         let Some(st) = self.bikes.as_deref() else { return false };
-        if self.ride.state() != ride::State::Idle {
+        // a ride open, or one waiting to be resumed or saved: its gear and its count stay as they are
+        if !self.ride_settled() {
             self.say("END THE RIDE FIRST");
             return false;
         }

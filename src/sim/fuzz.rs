@@ -5753,17 +5753,17 @@ fn places_files() {
 /// the mark's minute scanned later). No panic; a copy read is one a write gives back the same; the newest of two is
 /// the higher sequence; a count never adds a ride twice nor moves the mark past the limit. Reach counts: copies read,
 /// refused by a field, by the CRC, files whose second copy won, counts that added, lists with a ride past the limit,
-/// a late ride in the mark's minute added.
+/// a late ride in the mark's minute added, a ride of the mark's minute held by the file read (skipped).
 #[test]
 fn bikes_files() {
     use crate::bikes::{AT_MARK, BIKES, Bikes, DATA_LEN, EVERY_KM, PARTS};
-    let mut reach = [0usize; 7];
+    let mut reach = [0usize; 8];
     for seed in 1..=4000u32 {
         let mut r = xorshift(seed);
         let mut copy = || {
             let mut s = [0u8; 512];
             s[..4].copy_from_slice(if r().is_multiple_of(16) { b"RBIX" } else { b"RBIK" });
-            s[4..6].copy_from_slice(&(if r().is_multiple_of(16) { 2u16 } else { 1 }).to_le_bytes());
+            s[4..6].copy_from_slice(&(if r().is_multiple_of(16) { 1u16 } else { 2 }).to_le_bytes());
             let len = match r() % 16 {
                 0 => r() % 600,
                 1 => DATA_LEN as u32 + r() % 40,
@@ -5782,7 +5782,7 @@ fn bikes_files() {
                 (r() % 60) as u8,
             ]);
             for k in 0..AT_MARK {
-                s[20 + 4 * k..24 + 4 * k].copy_from_slice(&(r() % 6).to_le_bytes()); // the rides' clusters below
+                s[20 + 4 * k..24 + 4 * k].copy_from_slice(&(r() % 7).to_le_bytes()); // 0 none, else as the rides
             }
             for k in 0..BIKES {
                 let e = &mut s[32 + k * 40..32 + (k + 1) * 40];
@@ -5846,8 +5846,18 @@ fn bikes_files() {
                 1 => (y + 1, mo, d, h, mi), // past the limit
                 _ => (y, mo, d, h, mi.wrapping_add((r() % 3) as u8)),
             };
-            let mut rides: std::vec::Vec<_> = (0..r() % 6).map(|k| (near(&mut r), 10 + k, r() % 200_000)).collect();
+            let mut rides: std::vec::Vec<_> =
+                (0..r() % 6).map(|_| (near(&mut r), 1 + r() % 6, r() % 200_000)).collect();
             reach[5] += usize::from(rides.iter().any(|r| r.0 > limit));
+            // a ride of the mark's minute whose file the copy read already holds: not counted again
+            let held = |r: &(crate::history::Start, u32, u32)| r.0 == k.counted && k.at_mark.contains(&r.1);
+            let skipped = k.counted.0 != 0 && rides.iter().any(held);
+            reach[7] += usize::from(skipped);
+            if skipped && rides.iter().all(held) {
+                let was = k;
+                assert!(!k.count(rides.iter().copied(), limit), "seed {seed}: a held ride counted");
+                assert_eq!(k, was, "seed {seed}");
+            }
             let before = *k.active();
             if k.count(rides.iter().copied(), limit) && k.active().odo_m != before.odo_m {
                 reach[4] += 1;
