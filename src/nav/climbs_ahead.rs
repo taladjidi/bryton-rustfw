@@ -744,12 +744,7 @@ impl Ahead {
         let (all, n) = Course::climbs_of(total, |d| self.alt_at(d));
         let kept = keep_climbs(all.get(..n.min(CLIMBS)).unwrap_or(&[]), self.medium, &mut self.climbs);
         (self.n_climbs, self.end, self.have) = (kept, end, true);
-        let (all, n) = Descent::of(total, |d| self.alt_at(d));
-        self.descents = [Descent::NONE; 4];
-        for (o, d) in self.descents.iter_mut().zip(all.iter().take(n)) {
-            *o = *d;
-        }
-        self.n_descents = n.min(4);
+        (self.descents, self.n_descents) = Descent::of::<4>(total, |d| self.alt_at(d));
         (self.seg, self.along_m, self.off_s) = (0, 0, 0);
     }
 

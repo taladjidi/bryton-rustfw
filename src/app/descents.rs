@@ -11,7 +11,7 @@ impl App {
     const STEEP_AHEAD_M: u32 = 300;
     /// Two sightings of a descent start within this many metres of the ride's odometer are the same descent (the
     /// road ahead is traced again as the rider goes).
-    const SAME_DESCENT_M: i32 = 400;
+    const SAME_DESCENT_M: i32 = 150;
 
     /// The descents of the course followed, else of the road ahead, and the rider's place on them, m.
     fn descents_here(&self) -> Option<(impl Iterator<Item = Descent> + '_, u32)> {
@@ -67,7 +67,7 @@ impl App {
         l.push_u32((to + 25) / 50 * 50);
         l.push_str(" M");
         self.light.idle_ms = 0;
-        self.say_as(l.as_str(), Banner::Ride);
+        self.say_as(l.as_str(), Banner::Cue);
         self.tones.play(&Self::CUE_TONES);
     }
 }

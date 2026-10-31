@@ -1433,6 +1433,12 @@ fn east_route(ms: u64) -> (i32, i32, i32) {
 /// A course made in the test and followed from its start: flat, a 300 m drop of 12 % at 1000 m, flat, then a long
 /// gentle one (4 km at 4 %).
 fn descent_scene(steep: usize) -> (Sim, App) {
+    let pts = [(0.0, 0.0, 200.0), (1000.0, 0.0, 200.0), (1300.0, 0.0, 164.0), (2500.0, 0.0, 164.0), (6500.0, 0.0, 4.0)];
+    descent_scene_on(steep, &pts)
+}
+
+/// [`descent_scene`] on a course of your own (x, y, altitude corners).
+fn descent_scene_on(steep: usize, pts: &[(f64, f64, f64)]) -> (Sim, App) {
     use crate::course::tests::{course, lines};
     let mut sim = Sim::new(9, 0, 0);
     sim.gnss.route = Some(east_route);
@@ -1442,8 +1448,7 @@ fn descent_scene(steep: usize) -> (Sim, App) {
     let mut app = App::start(&mut sim, None);
     app.set_course_memory(crate::storage::course_file::tests::memory());
     let c = app.courses.as_deref_mut().unwrap();
-    let pts = [(0.0, 0.0, 200.0), (1000.0, 0.0, 200.0), (1300.0, 0.0, 164.0), (2500.0, 0.0, 164.0), (6500.0, 0.0, 4.0)];
-    c.course = course(&lines(&pts, 10.0));
+    c.course = course(&lines(pts, 10.0));
     (c.on, c.at) = (Some(crate::fat::File { cluster: 0, size: 0, dir: false }), crate::course::Tracker::new());
     app.settings.steep_descent = steep;
     app.pages[0] = PageCfg {
@@ -1489,4 +1494,27 @@ fn steep_descent_alert_once() {
         run(&mut sim, &mut app, 500);
         assert!(!app.notes.text.as_str().starts_with("STEEP"), "OFF: never");
     }
+}
+
+/// Two steep pitches with flat road between them (separate descents) both say it, each once (the alert is a
+/// cue-level banner: a turn cue ahead replaces it and is replaced by it, the newer wins).
+#[test]
+fn two_steep_pitches_both_alert() {
+    let pts = [
+        (0.0, 0.0, 200.0),
+        (1000.0, 0.0, 200.0),
+        (1300.0, 0.0, 164.0),
+        (2300.0, 0.0, 164.0),
+        (2600.0, 0.0, 128.0),
+        (4000.0, 0.0, 128.0),
+    ];
+    let (mut sim, mut app) = descent_scene_on(2, &pts);
+    let (mut said, mut on) = (0, false);
+    while sim.ms < 600_000 {
+        run(&mut sim, &mut app, 500);
+        let now = app.notes.ms.is_some() && app.notes.text.as_str().starts_with("STEEP");
+        said += usize::from(now && !on);
+        on = now;
+    }
+    assert_eq!(said, 2, "{:?}", app.on_course().map(|(c, _)| c.descents().collect::<Vec<_>>()));
 }

@@ -234,6 +234,8 @@ const DESC_MIN_GRADE_X10: u32 = 30;
 /// The window the steepest grade is taken over, m, and how far it slides each step.
 const DESC_WINDOW_M: u32 = 50;
 const DESC_STEP_M: u32 = 25;
+/// Past the room, descents under this steepest grade (% x 10, the lowest STEEP DESCENT) go first.
+const DESC_KEEP_X10: u32 = 80;
 
 /// A descent of a profile: found as a climb of the upside-down profile, with its steepest 50 m.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -263,27 +265,45 @@ impl Descent {
     }
 
     /// The descents of any profile `total` m long whose altitude (dm) at a distance (m) is `alt_at`: the climbs of
-    /// the profile upside down ([`Course::runs_of`]), each with its steepest [`DESC_WINDOW_M`] m. A course's own and
-    /// the road ahead's (`climbs_ahead`).
-    pub(crate) fn of(total: u32, alt_at: impl Fn(u32) -> Option<i32>) -> ([Descent; DESCENTS], usize) {
+    /// the profile upside down ([`Course::runs_of`]), each with its steepest grade: two windows of 50 m one after the
+    /// other both at it, so one bad altitude reading is not a wall. At most `N`, in order: past that the ones under
+    /// [`DESC_KEEP_X10`] go, then the least steep, so a steep one at the end of a long course is still kept. A
+    /// course's own and the road ahead's (`climbs_ahead`).
+    pub(crate) fn of<const N: usize>(total: u32, alt_at: impl Fn(u32) -> Option<i32>) -> ([Descent; N], usize) {
         let (runs, n) = Course::runs_of(total, |d| alt_at(d).map(|a| -a), DESC_MIN_LEN_M, DESC_MIN_GRADE_X10);
-        let (mut out, mut k) = ([Descent::NONE; DESCENTS], 0);
-        for r in runs.iter().take(n) {
+        let grade = |d: u32| match (alt_at(d), alt_at(d + DESC_WINDOW_M)) {
+            (Some(a), Some(b)) => (a - b) * 100 / DESC_WINDOW_M as i32,
+            _ => 0,
+        };
+        let (mut all, mut k) = ([Descent::NONE; CLIMBS], 0);
+        for (r, slot) in runs.iter().take(n).zip(all.iter_mut()) {
             let (mut max, mut d) = (0i32, r.start_m);
-            while d < r.end_m() {
-                let to = (d + DESC_WINDOW_M).min(r.end_m());
-                if let (Some(a), Some(b)) = (alt_at(d), alt_at(to))
-                    && to > d
-                {
-                    max = max.max((a - b) * 100 / (to - d) as i32);
-                }
+            while d + 2 * DESC_WINDOW_M <= r.end_m() {
+                max = max.max(grade(d).min(grade(d + DESC_WINDOW_M)));
                 d += DESC_STEP_M;
             }
-            if let Some(slot) = out.get_mut(k) {
-                *slot =
-                    Descent { start_m: r.start_m, len_m: r.len_m, drop_m: r.gain_m, max_x10: max.clamp(0, 999) as u32 };
-                k += 1;
+            *slot = Descent { start_m: r.start_m, len_m: r.len_m, drop_m: r.gain_m, max_x10: max.clamp(0, 999) as u32 };
+            k += 1;
+        }
+        if k > N {
+            let mut j = 0;
+            for i in 0..k {
+                if all.get(i).is_some_and(|d| d.max_x10 >= DESC_KEEP_X10) {
+                    all.swap(i, j);
+                    j += 1;
+                }
             }
+            k = j;
+        }
+        while k > N {
+            // the least steep out (the first of them), the rest keep their order
+            let Some(low) = (0..k).min_by_key(|&i| all.get(i).map_or(0, |d| d.max_x10)) else { break };
+            all.copy_within(low + 1..k, low);
+            k -= 1;
+        }
+        let mut out = [Descent::NONE; N];
+        for (o, d) in out.iter_mut().zip(all.iter().take(k)) {
+            *o = *d;
         }
         (out, k)
     }
@@ -690,8 +710,8 @@ impl Course {
             });
         }
         (self.climbs, self.n_climbs) = self.find_climbs();
-        let (all, n) = Descent::of(self.len_m(), |d| self.alt_at(d));
-        self.n_descents = n.min(DESCENTS);
+        let (all, n) = Descent::of::<DESCENTS>(self.len_m(), |d| self.alt_at(d));
+        self.n_descents = n;
         for ((c, m), d) in self.descents.iter_mut().zip(self.desc_max.iter_mut()).zip(all.iter().take(n)) {
             (*c, *m) = (Climb { start_m: d.start_m, len_m: d.len_m, gain_m: d.drop_m }, d.max_x10 as u16);
         }
@@ -1116,6 +1136,38 @@ pub(crate) mod tests {
         let d: std::vec::Vec<_> = c.descents().collect();
         assert_eq!(d.len(), 1, "{d:?}");
         assert!((140..=160).contains(&d[0].max_x10) && d[0].grade_x10() < 40, "{:?}", d[0]);
+    }
+
+    /// More descents than room: the gentle ones go first, so a steep one at the end of a long course is still kept.
+    #[test]
+    fn a_steep_descent_after_ten_gentle_ones_is_kept() {
+        let mut pts = std::vec![(0.0, 0.0, 600.0)];
+        let (mut x, mut z) = (0.0, 600.0);
+        for _ in 0..10 {
+            // 600 m at 4 %, then a 700 m climb back
+            pts.push((x + 600.0, 0.0, z - 24.0));
+            pts.push((x + 1300.0, 0.0, z));
+            x += 1300.0;
+        }
+        pts.push((x + 400.0, 0.0, z - 48.0)); // 400 m at 12 %
+        let c = course(&lines(&pts, 10.0));
+        let d: std::vec::Vec<_> = c.descents().collect();
+        assert!(
+            d.len() <= DESCENTS && d.last().is_some_and(|k| k.max_x10 >= 110 && k.start_m.abs_diff(x as u32) <= 50),
+            "{d:?}"
+        );
+        assert!(d.windows(2).all(|w| w[0].start_m < w[1].start_m), "in course order");
+    }
+
+    /// One altitude glitch (a 3 m dip at one point) is not a steep pitch: two windows in a row must pass the grade.
+    #[test]
+    fn a_single_dip_is_not_a_steep_descent() {
+        let mut pts = lines(&[(0.0, 0.0, 200.0), (1000.0, 0.0, 160.0)], 10.0); // 4 %
+        pts[50].2 -= 3.0;
+        let c = course(&pts);
+        let d: std::vec::Vec<_> = c.descents().collect();
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].max_x10 < 80, "{:?}", d[0]);
     }
 
     /// Reversed: the same length, the ends swapped, the ascent and climbs of the profile read downhill, and the
