@@ -588,7 +588,13 @@ fn the_mtu_is_exchanged_and_a_refusal_stays_at_23() {
         assert_eq!(app.phone.mtu, want, "phone max {max}");
         let ph = sim.nordic.phone.as_ref().unwrap();
         assert_eq!(ph.mtu, want.min(if max == 0 { 23 } else { max }));
-        assert!(ph.subscribed.contains(&0x33), "the discovery went on: {:?}", ph.subscribed);
+        if max == 0 {
+            // the stack's MTU procedure stays pending (BUSY for the rest): the link is dropped
+            assert!(sim.nordic.got.iter().any(|p| p[..2] == [0, 0x76]), "disconnected");
+            assert!(!ph.mtu_pending, "the pending procedure went with the link");
+        } else {
+            assert!(ph.subscribed.contains(&0x33), "the discovery went on: {:?}", ph.subscribed);
+        }
     }
 }
 
@@ -638,4 +644,33 @@ fn an_unnamed_app_and_a_call_do_not_wait() {
     assert_eq!(app.phone.inbox.get(0).unwrap().app.as_str(), "PHONE", "the bundle id's last part");
     assert!(app.phone.ringing);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().app_asks, ["com.phone"], "the call's app was not asked");
+}
+
+/// At MTU 23 a long bundle id does not fit one ATT write with its request (the write takes 20 bytes): the app is not
+/// asked about, and the notification is shown at once with the bundle id's last part.
+#[test]
+fn a_long_bundle_id_is_not_asked_at_mtu_23() {
+    let mut phone = iphone(std::vec![(4000, Act::Notify(4, 7, "Bob", "hi"))]);
+    (phone.max_mtu, phone.app_id) = (23, "net.whatsapp.WhatsApp");
+    let (mut sim, mut app) = unit(phone);
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 6000);
+    assert!(sim.nordic.phone.as_ref().unwrap().app_asks.is_empty(), "not asked");
+    assert_eq!(app.phone.inbox.get(0).unwrap().app.as_str(), "WHATSAPP");
+    assert_eq!(app.notes.list[0].as_str(), "09:41 WHATSAPP: Bob: hi");
+}
+
+/// An unanswered Get App Attributes leaves the notification shown (bundle id fallback) and the app cached empty, so it
+/// is not asked again.
+#[test]
+fn an_app_that_is_never_answered_is_asked_once() {
+    let script = std::vec![(4000, Act::Notify(4, 7, "Bob", "one")), (12_000, Act::Notify(4, 8, "Bob", "two"))];
+    let mut phone = iphone(script);
+    phone.mute_apps = true;
+    let (mut sim, mut app) = unit(phone);
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 16_000);
+    assert_eq!(app.phone.inbox.len(), 2);
+    assert_eq!(app.phone.inbox.get(1).unwrap().app.as_str(), "PHONE");
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().app_asks, ["com.phone"], "asked once");
 }

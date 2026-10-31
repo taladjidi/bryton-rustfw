@@ -63,7 +63,7 @@ const GATTC_DESCS_DISCOVER: u8 = 0x97;
 const GATTC_READ: u8 = 0x9a;
 const GATTC_WRITE: u8 = 0x9c;
 const GATTC_HV_CONFIRM: u8 = 0x9d;
-/// `SD_BLE_GATTC_EXCHANGE_MTU_REQUEST`: 0x94 + 10 in ble_gattc.h's enum (ATTR_INFO_DISCOVER included).
+/// `SD_BLE_GATTC_EXCHANGE_MTU_REQUEST`: inferred from enum adjacency in ble_gattc.h (the unit's SoftDevice bases differ from SDK 17.1's: 0x94 is verified, 0x9a / 0x9c / 0x9d follow the same order).
 const GATTC_EXCHANGE_MTU_REQUEST: u8 = 0x9e;
 const GATTS_SERVICE_ADD: u8 = 0xa0;
 const GATTS_CHARACTERISTIC_ADD: u8 = 0xa2;

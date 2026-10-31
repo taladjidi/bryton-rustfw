@@ -302,7 +302,7 @@ pub const CFG: [&[u8]; 2] =
 /// it answers NO_MEM to `sd_ble_enable` when not, and the start falls back to [`CFG`] alone.
 pub const ATT_MTU: u16 = 103;
 
-/// `BLE_CONN_CFG_GATT` (0x23: ble.h `BLE_CONN_CFG_BASE` 0x20 + 3) for tag 1: `ble_gatt_conn_cfg_t` is one `att_mtu`
+/// `BLE_CONN_CFG_GATT` (0x23, inferred from enum adjacency in ble.h: `BLE_CONN_CFG_BASE` 0x20 + 3) for tag 1: `ble_gatt_conn_cfg_t` is one `att_mtu`
 /// u16 (ble_gatt.h; the serialization's layout as for the GAP one above: id, presence byte, tag, structure).
 pub fn cfg_mtu() -> [u8; 10] {
     let [m0, m1] = ATT_MTU.to_le_bytes();

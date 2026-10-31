@@ -2668,6 +2668,88 @@ fn notification_answers() {
     assert!(inbox.get(crate::phone::INBOX).is_none());
 }
 
+/// A connected iPhone (discovery done, the MTU exchanged), then structured events into the phone link: notification
+/// answers on the Data Source for bundle ids never seen (long, short, repeated), app answers for the asked id and
+/// for others, a late MTU response. No panic, the cache never passes its bound, and the paths were reached
+/// (counted): the MTU raised, a notification held for its app, names cached, answers for an app not asked.
+#[test]
+fn phone_link_app_answers() {
+    use super::*;
+    const IDS: [&str; 6] =
+        ["a.b", "com.example.Chat", "net.whatsapp.WhatsApp", "x", "com.very.long.bundle.id.zz", "q.r.s.t.u.v"];
+    let (mut raised, mut held, mut cached, mut stray, mut late) = (0, 0, 0, 0, 0);
+    for seed in 1..=12u32 {
+        let mut phone = PhoneSim::new(true);
+        phone.connect_at = 1000;
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.nordic.phone = Some(phone);
+        let mut app = App::start(&mut sim, None);
+        app.activate(&mut sim, Menu::Phone, 1);
+        super::tests::run(&mut sim, &mut app, 4000);
+        raised += usize::from(app.phone.mtu > 23);
+        let Some(conn) = app.phone.conn else { continue };
+        let mut r = xorshift(seed * 104_729);
+        let hvx = |handle: u16, data: &[u8]| {
+            let mut p = std::vec![2, 0x39, 0];
+            p.extend(conn.to_le_bytes());
+            p.extend([0, 0, 0, 0]);
+            p.extend(handle.to_le_bytes());
+            p.extend([1]);
+            p.extend((data.len() as u16).to_le_bytes());
+            p.extend(data);
+            p
+        };
+        for _ in 0..40 {
+            let id = IDS[r() as usize % IDS.len()];
+            match r() % 4 {
+                0 | 1 => {
+                    // a notification's attributes for a fresh uid, in two fragments
+                    let mut a = std::vec![0u8];
+                    a.extend(r().to_le_bytes());
+                    for (n, v) in [(0u8, id), (1, "Bob"), (3, "hi")] {
+                        a.push(n);
+                        a.extend((v.len() as u16).to_le_bytes());
+                        a.extend(v.as_bytes());
+                    }
+                    let cut = 1 + r() as usize % (a.len() - 1);
+                    for part in [&a[..cut], &a[cut..]] {
+                        app.phone_event(&mut sim, &hvx(0x17, part));
+                    }
+                    held += usize::from(app.phone.held.is_some());
+                }
+                2 => {
+                    // an app's attributes, for the id asked or another
+                    let mut a = std::vec![1u8];
+                    a.extend(id.bytes());
+                    a.extend([0, 0, 3, 0, b'A', b'p', b'p']);
+                    app.phone_event(&mut sim, &hvx(0x17, &a));
+                    stray += usize::from(app.phone.held.is_none());
+                }
+                _ => {
+                    // an MTU response outside the exchange: ignored
+                    let mut p = std::vec![2, 0x3a, 0];
+                    p.extend(conn.to_le_bytes());
+                    p.extend((r() as u16 % 4).to_le_bytes());
+                    p.extend([0, 0]);
+                    p.extend((r() as u16).to_le_bytes());
+                    app.phone_event(&mut sim, &p);
+                    late += usize::from(app.phone.mtu >= 23);
+                }
+            }
+            if r().is_multiple_of(3) {
+                super::tests::run(&mut sim, &mut app, 600);
+            }
+            cached += app.phone.apps.len();
+            assert!(app.phone.apps.len() <= crate::phone::APPS && app.phone.mtu >= 23);
+        }
+    }
+    assert!(
+        raised > 5 && held > 20 && cached > 100 && stray > 10 && late > 20,
+        "{raised} {held} {cached} {stray} {late}"
+    );
+}
+
 /// Get App Attributes answers (command 1, the identifier NUL-terminated, DisplayName) in random fragments, mixed with
 /// notification answers, damaged ones (a lying length, another attribute, no terminator) and random bytes: no panic,
 /// the cache keeps at most eight, and every kind was reached (counted): whole app answers, whole notification answers,
@@ -2721,6 +2803,13 @@ fn app_attribute_answers() {
     }
     assert!(apps > 200 && notifs > 20 && dropped > 200 && hits > 20, "{apps} apps, {notifs} notifs, {dropped}, {hits}");
     assert!(cache.get("zzz").is_none());
+    let mut many = AppCache::default();
+    for k in 0..100u32 {
+        let mut i = crate::phone::AppInfo::default();
+        i.id.push_u32(k);
+        many.put(i);
+        assert!(many.len() <= crate::phone::APPS && many.len() == (k as usize + 1).min(crate::phone::APPS));
+    }
 }
 
 /// Pages of the FE-C profile (random bytes behind a page number chosen from the ones decoded, a few others) into the

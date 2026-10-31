@@ -327,6 +327,16 @@ impl AppCache {
         self.items.get(..self.n)?.iter().find(|i| i.id.as_str() == id).map(|i| i.name)
     }
 
+    /// How many apps are kept (at most [`APPS`]).
+    pub fn len(&self) -> usize {
+        self.n
+    }
+
+    /// Whether none is.
+    pub fn is_empty(&self) -> bool {
+        self.n == 0
+    }
+
     /// Keeps `info` as the newest; the oldest goes when full.
     pub fn put(&mut self, info: AppInfo) {
         self.items.rotate_right(1);

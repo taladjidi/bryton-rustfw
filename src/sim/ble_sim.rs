@@ -68,6 +68,12 @@ pub struct PhoneSim {
     secure: bool,
     /// The largest ATT MTU it accepts (iOS: 185); 0: it never answers an Exchange MTU Request, 23: it refuses.
     pub max_mtu: u16,
+    /// The bundle id its notifications come from.
+    pub app_id: &'static str,
+    /// It never answers Get App Attributes.
+    pub mute_apps: bool,
+    /// An Exchange MTU Request never answered: the stack refuses other GATTC calls (BUSY) until the link ends.
+    pub mtu_pending: bool,
     /// The link's ATT MTU: 23 until the unit's exchange.
     pub mtu: u16,
     /// The apps it names (bundle id, display name), and the bundle ids the unit asked about, in order.
@@ -78,7 +84,7 @@ pub struct PhoneSim {
 impl PhoneSim {
     /// The chip was reset: the link is gone (the phone is still in range, and connects again to the next advertising).
     pub fn hang_up(&mut self) {
-        (self.connected, self.secure, self.mtu) = (false, false, 23);
+        (self.connected, self.secure, self.mtu, self.mtu_pending) = (false, false, 23, false);
         self.subscribed.clear();
     }
 
@@ -136,6 +142,9 @@ impl PhoneSim {
             connected: false,
             secure: false,
             max_mtu: 185,
+            app_id: "com.phone",
+            mute_apps: false,
+            mtu_pending: false,
             mtu: 23,
             apps: vec![("com.phone", "Phone")],
             app_asks: Vec::new(),
@@ -329,6 +338,14 @@ impl Nordic {
             self.queue(&[1, *op, 4, 0, 0, 0]);
             return true;
         }
+        if matches!(*op, 0x94 | 0x96 | 0x97 | 0x9a | 0x9c)
+            && args.len() >= 2
+            && u16::from_le_bytes([args[0], args[1]]) != 1
+            && self.phone.as_ref().is_some_and(|ph| ph.mtu_pending)
+        {
+            self.queue(&[1, *op, 17, 0, 0, 0]); // NRF_ERROR_BUSY
+            return true;
+        }
         let ok = |n: &mut Nordic, out: &[u8]| n.queue(&[&[1, *op, 0, 0, 0, 0][..], out].concat());
         let u16_at = |i: usize| u16::from_le_bytes([args[i], args[i + 1]]);
         match *op {
@@ -477,7 +494,7 @@ impl Nordic {
             0x76 => {
                 ok(self, &[]);
                 if let Some(ph) = &mut self.phone {
-                    (ph.connected, ph.secure, ph.connect_at) = (false, false, u64::MAX);
+                    (ph.connected, ph.secure, ph.connect_at, ph.mtu_pending) = (false, false, u64::MAX, false);
                 }
                 self.evt(0x11, &[0, 0, 0x16]);
             }
@@ -567,8 +584,10 @@ impl Nordic {
                 } else {
                     ok(self, &[]);
                     if let Some(ph) = &mut self.phone
-                        && ph.max_mtu != 0
+                        && ph.max_mtu == 0
                     {
+                        ph.mtu_pending = true;
+                    } else if let Some(ph) = &mut self.phone {
                         ph.mtu = want.min(ph.max_mtu);
                         let m = ph.max_mtu;
                         self.gattc(0x3a, 0, &m.to_le_bytes());
@@ -597,8 +616,9 @@ impl Nordic {
                             // the answer, in notifications of the link's MTU less 3
                             let mut a = vec![0];
                             a.extend(uid.to_le_bytes());
-                            a.extend([0, 9, 0]);
-                            a.extend(b"com.phone");
+                            a.push(0);
+                            a.extend((ph.app_id.len() as u16).to_le_bytes());
+                            a.extend(ph.app_id.as_bytes());
                             a.push(1);
                             a.extend((title.len() as u16).to_le_bytes());
                             a.extend(title.as_bytes());
@@ -621,8 +641,10 @@ impl Nordic {
                         a.extend((name.len() as u16).to_le_bytes());
                         a.extend(name.as_bytes());
                         ph.app_asks.push(id);
-                        for c in a.chunks(usize::from(ph.mtu) - 3) {
-                            self.hvx(0x17, c);
+                        if !ph.mute_apps {
+                            for c in a.chunks(usize::from(ph.mtu) - 3) {
+                                self.hvx(0x17, c);
+                            }
                         }
                     }
                     (0x15, [2, u0, u1, u2, u3, action]) => {
