@@ -11,7 +11,11 @@ use crate::text::clips::{self, Clip};
 use std::string::String;
 
 /// Clippings not fixed yet: (screen path contains, string prefix, why).
-const KNOWN: &[(&str, &str, &str)] = &[];
+const KNOWN: &[(&str, &str, &str)] = &[(
+    "BLE NEARBY",
+    "",
+    "the list shows 12 characters at 2x; a long device name needs a 1x font or two lines (layout decision)",
+)];
 
 struct Walk {
     n: usize,
@@ -113,7 +117,20 @@ fn visit(sim: &mut Sim, app: &mut App, w: &mut Walk, m: Menu, name: &str) {
             }
         } else if opens(row) && !matches!(row, Row::Open(m2) if w.seen.contains(&m2)) && cards < 4 {
             cards += usize::from(!matches!(row, Row::Open(_) | Row::Stock(_)));
+            rich(app);
             key(sim, app, w, "start");
+            if app.screen() == Screen::Nearby {
+                run(sim, app, 1200); // the scan has cleared and listed its own first
+                // devices as a scan would list them: long names, a manufacturer's
+                for (n, name) in ["DECATH TRAINER 44945", "Wahoo KICKR 5A3F", "HRM-Dual 123456789"].iter().enumerate() {
+                    let mut ad = vec![name.len() as u8 + 1, 0x09];
+                    ad.extend(name.as_bytes());
+                    let r = crate::nrf::AdvReport { addr_type: 1, addr: [0x50 + n as u8; 6], rssi: -100, data: &ad };
+                    app.radio.nearby.add(&r);
+                }
+                app.show(sim);
+                run(sim, app, 1100);
+            }
             match app.screen() {
                 Screen::Menu(m2, 0) if m2 != m && !w.seen.contains(&m2) => {
                     visit(sim, app, w, m2, &format!("{name}/{}", menu_title(m2)));
@@ -158,13 +175,33 @@ fn unit() -> (Sim, App) {
         }
     }
     let mut app = App::start(&mut sim, Some(KEY));
+    app.set_bike_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::BikeStore::default())));
     app.settings.ftp = 200;
     run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 20_000);
-    // a sprinter's curve: 4-digit watts on the axis and in the readout
+    // three bikes, 5-digit km odometers, parts 13 km from a 5000 KM service
+    if let Some(s) = app.bikes.as_deref_mut() {
+        for b in &mut s.list.list {
+            b.odo_m = 45_678_900;
+            b.parts = [crate::bikes::Part { m: 4_987_000, every_km: 5000 }; crate::bikes::PARTS];
+        }
+    }
+    rich(&mut app);
+    (sim, app)
+}
+
+/// Big synthetic numbers in what the scan read (again before each screen: a scan may replace them): rides of 300 km,
+/// 2000 m of ascent and 4000 kJ, a 1450 W curve, and heavy rides in the last days, so the form is far under -100.
+fn rich(app: &mut App) {
+    let rides: Vec<_> = (0..app.stock.index.len()).filter_map(|i| app.stock.index.get(i).cloned()).collect();
+    for (i, mut r) in rides.into_iter().enumerate() {
+        app.stock.index.remove(&r.file, r.start);
+        (r.dist_m, r.timer_s, r.ascent_m, r.kj) = (312_400 + i as u32 * 1000, 40_000, Some(2345 + i as u16), 4321);
+        (r.np, r.avg_power, r.power_s) = (Some(420), Some(380), 14_400);
+        app.stock.index.add(r);
+    }
     for (n, w) in app.stock.out.curve.watts.iter_mut().enumerate() {
         *w = 1450u16.saturating_sub(n as u16 * 90).max(180);
     }
-    (sim, app)
 }
 
 /// One pass: the whole menu tree, the overview under each date format, then a ride started with its pages and menu.

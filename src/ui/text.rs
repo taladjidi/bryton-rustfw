@@ -374,6 +374,8 @@ impl<const N: usize> core::fmt::Write for Line<N> {
             let mut tmp = [0; 4];
             let bytes = c.encode_utf8(&mut tmp).as_bytes();
             let Some(dst) = self.buf.get_mut(self.len..self.len + bytes.len()) else {
+                #[cfg(test)]
+                clips::note("line", s, N as u32);
                 return Ok(()); // full: the rest is dropped, which is fine for a screen line
             };
             dst.copy_from_slice(bytes);

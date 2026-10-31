@@ -628,7 +628,7 @@ impl Row {
             Row::SavePlace => "SAVE PLACE",
             Row::DeletePlace(_) => "DELETE",
             Row::ActiveBike => "ACTIVE BIKE",
-            Row::BikeOdo(_) => "ODOMETER",
+            Row::BikeOdo(_) => "ODO",
             Row::Part(_, p) => crate::bikes::PART_NAMES.get(p).copied().unwrap_or("PART"),
             Row::PartEvery(..) => "SERVICE", // "SERVICE EVERY" left no gap before "OFF"
             Row::PartReset(..) => "RESET",
