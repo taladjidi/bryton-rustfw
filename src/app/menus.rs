@@ -653,7 +653,7 @@ impl App {
             color = ui::GREY;
         }
         if self.menu.confirm == Some((menu, i)) {
-            // waiting for a second Start (App::confirmed)
+            // waiting for a second Start (MenuInput::confirm)
             value.clear();
             value.push_str("SURE?");
             color = ui::RED;

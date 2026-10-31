@@ -222,7 +222,7 @@ fn page_at(k: usize) -> usize {
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
 pub const OFF_CONFIRM_MS: u32 = 10_000;
 
-/// The value of `App::confirm` while a past ride's DELETE waits for its second Start: no menu row has it.
+/// The value of `MenuInput::confirm` while a past ride's DELETE waits for its second Start: no menu row has it.
 pub(crate) const PAST_DELETE: (Menu, usize) = (Menu::History, usize::MAX);
 
 impl App {
@@ -374,7 +374,7 @@ impl App {
         if cleared {
             self.unbanner(b); // and the input acts, except Back (below)
         }
-        // a row waiting to be confirmed (App::confirmed): only Start or a tap on it confirms, anything else drops it
+        // a row waiting to be confirmed (MenuInput::confirm): only Start or a tap on it confirms, anything else drops it
         let armed = self.menu.confirm.take();
         if let (Some(_), Screen::Menu(menu, sel)) = (armed, self.screen)
             && !matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
