@@ -57,6 +57,31 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
   otherwise, so it would wake the unit from power-off. Option bytes are flash configuration, and we never
   touch them.
 
+## The gate: tiers, lanes and skips
+
+`./check.sh` (AGENTS.md "Before every commit" lists what it checks):
+- **Tiers:** `./check.sh --quick` (guards, lint, fmt, host clippy, `cargo test-host`; prints that it is not the gate) for
+  iterating; `./check.sh` is the gate; `--full` runs everything whatever the diff; `-v` prints every lane's log.
+- **Lanes:** after the guards, lint and fmt, three lanes run in parallel, each in a subshell with its own log in
+  `target/check/` (F: firmware clippy, build, stack_check, pack; H: host clippy, tests, doc, deny, fit_check,
+  walk selftest; P: the Python self-tests and the font regeneration). F and H take different cargo locks
+  (`target/thumbv7em-none-eabihf/release` and `target/aarch64-apple-darwin/debug`), so they do not block each other.
+  Any failed lane fails the gate and its log is printed. Every step's wall seconds and a total end the output.
+- **Renode is bounded:** `renode/run.py` kills Renode after 300 s (`RENODE_TIMEOUT`) and fails with
+  "renode: timed out after 300 s"; Renode hangs now and then on a loaded machine.
+- **Skips by diff, on a branch only:** the changed files are the diff against the merge base with
+  `origin/main` plus the working tree's `status --porcelain`. The tool self-tests run only when `tools/`, `test-data/`,
+  `renode/`, `docs/theming.md`, `src/ui/tiles.rs` or `check.sh` changed (the walk selftest: `src/sim/walk_tests.rs`
+  instead of `src/ui/tiles.rs`); the font check only for `tools/font.py`, `tools/pixel_font.py`, `tools/fonts/`,
+  `src/ui/fonts.rs`; Renode only for `src/main.rs`, `src/lib.rs`, `src/app/pass.rs`, `src/board/`, `src/drivers/panel.rs`,
+  `src/ui/strip.rs`, `src/ui/overview.rs`, `link.x`, `build.rs`, `Cargo.toml`, `Cargo.lock`, `renode/`. Each skip is
+  printed with its reason and repeated in the `SKIPPED:` line. On main, on a detached HEAD and with `--full` nothing is
+  skipped.
+- **Renode runs last,** after the three lanes and only when they passed: it compares the boot screen with the
+  `target/sim/preview.bmp` that lane H writes (it fails when that file is missing) and needs lane F's image.
+- **Live numbers:** `tools/numbers.py --write` runs on main (or `--full`) only. On a branch `--check` reports the stale
+  markers without failing; the merge step on main writes them.
+
 ## Emulation
 
 - **The simulator above is the main tool:** it tests the logic at full speed with exact panel checks.
@@ -68,7 +93,7 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     - the panel start-up order;
     - no fault or panic;
     - the bar and Ferris are pixel-equal to the simulator's preview;
-    - with `--vbus` (PC13 high), the USB start path runs and the clock keeps going.
+    - after those checks the same boot raises PC13 (the cable in): the USB start path runs and the clock keeps going.
   - **Install:** `/Applications/Renode.app`, from the `osx-arm64-portable.dmg` of github.com/renode/renode
     release 1.17.0 (sha256 checked against the release; not Apple-signed).
     - Docs: https://renode.readthedocs.io.
