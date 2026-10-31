@@ -683,7 +683,7 @@ impl App {
         self.virtual_course_second();
         let fix = self.gps.pvt.filter(|p| p.good());
         let ev = match (self.courses.as_deref_mut(), fix) {
-            (Some(c), Some(p)) if c.on.is_some() => c.course.follow(&mut c.at, p.lat, p.lon),
+            (Some(c), Some(p)) if c.on.is_some() && c.base_m.is_none() => c.course.follow(&mut c.at, p.lat, p.lon),
             _ => None,
         };
         if let Some(ev) = ev {

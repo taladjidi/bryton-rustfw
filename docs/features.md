@@ -653,8 +653,8 @@ levels; settings bytes 168). With a course followed on the trainer the slope sen
 200 m at the distance the trainer's speed has ridden (so it is already smoothed), times BIKE > SLOPE SCALE (100, 75, 50
 or 25 %; byte 169), clamped to -10 to +20 %. **RIDE A COURSE** (WORKOUTS, after RAMP TEST; needs a trainer heard): lists the courses; the one picked
 is loaded and the ride starts indoors (a ride already running is kept) on the course page: the profile with the rider's place
-(the trainer's distance, no GPS), distance to go, timer. The trainer gets the course's grades (SIM). At the course's
-length a banner says "DONE 12.3 KM 45:10" once; the ride goes on, the trainer let go. Not done: the grade is not a field of
+(the ride's distance from the trainer's speed, no GPS), distance to go, timer. The trainer gets the course's grades (SIM). At the course's
+length a banner says "DONE 12.3 KM 45:10" once; the ride goes on, the trainer let go. A reset mid course resumes the ride, not the course. Not done: the grade is not a field of
 that page, and the end does not stop or save the ride.
 
 **Release.** The trainer is let go (free resistance: FE-C page 48 at 0 %, FTMS Set Target Resistance Level 0) whenever

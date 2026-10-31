@@ -6,7 +6,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
-- **RIDE A COURSE** (WORKOUTS): sim only. On the D900: pick a course, the ride starts indoors, the trainer follows the grades, the profile's rider moves with the trainer's distance, DONE at the length.
+- **RIDE A COURSE** (WORKOUTS): sim only. On the D900: pick a course, the ride starts indoors, the trainer follows the grades, the profile's rider moves with the trainer's distance, DONE at the length. Known limit: a reset mid course resumes the ride, not the course.
 
 - **Phone link: the ATT MTU and the notification's app**: sim only. Still to see with an iPhone: the chip starts with
   the MTU configuration (`sd_ble_cfg_set` 0x23, `nrf::ATT_MTU` 103; if it answers NO_MEM the start drops to the two
