@@ -178,7 +178,7 @@ impl App {
         } else {
             off + (0..3 + n).find(|&i| name(i).eq_ignore_ascii_case(Settings::name_of(&cur))).unwrap_or(0)
         };
-        let next = (now + 1) % (off + 3 + n);
+        let next = (now + 1).checked_rem(off + 3 + n).unwrap_or(0);
         if auto_first && next == 0 {
             self.settings.auto_theme = true;
             self.light.day_night = Default::default(); // the first reading decides at once

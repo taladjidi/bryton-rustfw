@@ -99,7 +99,7 @@ impl App {
                 let from = if i as u32 == idx { first } else { start + i as u32 * len };
                 let to = if i as u32 + 1 == count { end } else { start + (i as u32 + 1) * len };
                 let (Some(a), Some(b)) = (alt(from), alt(to)) else { break 'k None };
-                let grade = (b - a) * 100 / to.saturating_sub(from).max(1) as i32; // dm over m: % x 10
+                let grade = ((b - a) * 100).checked_div(to.saturating_sub(from).max(1) as i32).unwrap_or(0); // dm over m: % x 10
                 *s = pacing::Sec {
                     len_m: to.saturating_sub(from).min(65_535) as u16,
                     grade_x10: grade.clamp(-1000, 1000) as i16,

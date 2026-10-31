@@ -115,7 +115,7 @@ impl<const L: usize> Ring<L> {
                 *sum -= u32::from(self.v.get((self.head + L - d) % L).copied().unwrap_or(0)); // d values back
             }
             if self.len + 1 >= d {
-                *best = (*best).max((*sum / d as u32) as u16);
+                *best = (*best).max(sum.checked_div(d as u32).unwrap_or(0) as u16);
             }
         }
         if let Some(slot) = self.v.get_mut(self.head) {

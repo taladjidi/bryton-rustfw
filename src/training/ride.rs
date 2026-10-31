@@ -1196,7 +1196,7 @@ impl History {
     /// second is longer than a column) take the same altitude; standing still rewrites the same column.
     pub fn dist_second(&mut self, dist_m: u32, alt: Option<u16>) {
         let Some(alt) = alt else { return };
-        while (dist_m / self.dist_step) as usize >= DIST_COLS {
+        while dist_m.checked_div(self.dist_step).unwrap_or(0) as usize >= DIST_COLS {
             halve_in_place(&mut self.by_dist);
             if let Some(tail) = self.by_dist.get_mut(DIST_COLS / 2..) {
                 tail.fill(0);
@@ -1204,7 +1204,7 @@ impl History {
             self.dist_n = self.dist_n.div_ceil(2);
             self.dist_step *= 2;
         }
-        let i = (dist_m / self.dist_step) as usize;
+        let i = dist_m.checked_div(self.dist_step).unwrap_or(0) as usize;
         // only a small gap is bridged: nothing filled yet (the first reading, or after a resume emptied the history)
         // or a jump (a GPS glitch) starts at `i`, the columns before stay empty (0)
         let gap = i.saturating_sub(self.dist_n as usize);
@@ -1270,7 +1270,11 @@ impl History {
 #[allow(clippy::indexing_slicing)]
 fn halve_in_place(a: &mut [u16]) {
     for j in 0..a.len() / 2 {
-        a[j] = mean(a[2 * j], a[2 * j + 1]);
+        if let (Some(&x), Some(&y)) = (a.get(2 * j), a.get(2 * j + 1))
+            && let Some(o) = a.get_mut(j)
+        {
+            *o = mean(x, y);
+        }
     }
 }
 

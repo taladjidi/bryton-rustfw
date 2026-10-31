@@ -289,7 +289,9 @@ impl Descent {
             let mut j = 0;
             for i in 0..k {
                 if all.get(i).is_some_and(|d| d.max_x10 >= DESC_KEEP_X10) {
-                    all.swap(i, j);
+                    if i < all.len() && j < all.len() {
+                        all.swap(i, j);
+                    }
                     j += 1;
                 }
             }
@@ -298,7 +300,8 @@ impl Descent {
         while k > N {
             // the least steep out (the first of them), the rest keep their order
             let Some(low) = (0..k).min_by_key(|&i| all.get(i).map_or(0, |d| d.max_x10)) else { break };
-            all.copy_within(low + 1..k, low);
+            let Some(s) = all.get_mut(low..k) else { break };
+            s.rotate_left(1.min(s.len())); // the dropped one goes to the end, past the new k
             k -= 1;
         }
         let mut out = [Descent::NONE; N];
@@ -791,7 +794,7 @@ impl Course {
     pub fn lat_lon(&self, p: (i32, i32)) -> Option<(i32, i32)> {
         let (lat, lon, cos) = self.origin?;
         let dlat = i64::from(p.1) * 1_000_000 / 11_132;
-        let dlon = i64::from(p.0) * 1_000_000 * 65_536 / (11_132 * cos.max(1));
+        let dlon = (i64::from(p.0) * 1_000_000 * 65_536).checked_div(11_132 * cos.max(1)).unwrap_or(0);
         Some((
             (i64::from(lat) + dlat).clamp(-900_000_000, 900_000_000) as i32,
             (i64::from(lon) + dlon).clamp(-1_800_000_000, 1_800_000_000) as i32,
@@ -887,7 +890,7 @@ impl Course {
     pub fn grade_ahead(&self, d: u32) -> Option<i32> {
         let to = d.saturating_add(AHEAD_M).min(self.len_m());
         let len = to.checked_sub(d).filter(|&l| l >= 20)?;
-        Some((self.alt_at(to)? - self.alt_at(d)?) * 100 / len as i32)
+        ((self.alt_at(to)? - self.alt_at(d)?) * 100).checked_div(len as i32)
     }
 
     /// The ascent left from where `t` is to the end, m.
@@ -1033,7 +1036,7 @@ impl Course {
             let len = top.saturating_sub(from);
             let gain = alt_at(top).zip(alt_at(from)).map_or(0, |(t, f)| (t - f).max(0) as u32);
             if len >= min_len
-                && gain * 100 / len >= min_grade
+                && (gain * 100).checked_div(len).is_some_and(|g| g >= min_grade)
                 && let Some(slot) = out.get_mut(n)
             {
                 *slot = Climb { start_m: from, len_m: len, gain_m: gain / 10 };
@@ -1047,7 +1050,7 @@ impl Course {
         for b in 0..total.div_ceil(bin) {
             let (d0, d1) = (b.saturating_mul(bin), (b + 1).saturating_mul(bin).min(total));
             let (Some(a0), Some(a1)) = (alt_at(d0), alt_at(d1)) else { break };
-            let up = (a1 - a0) * 100 / (d1 - d0).max(1) as i32 >= UP_X10;
+            let up = ((a1 - a0) * 100).checked_div((d1 - d0).max(1) as i32).is_some_and(|g| g >= UP_X10);
             cur = match cur {
                 None if up => Some((d0, d1, a1)),
                 None => None,

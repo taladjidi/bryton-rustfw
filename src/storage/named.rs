@@ -366,7 +366,8 @@ impl Pois {
             }
             let (top, bot) = self.scan.lat;
             let lat = i64::from(top) + (i64::from(bot) - i64::from(top)) * i64::from(gy) / 4096;
-            let lon = (i64::from(x) * 4096 + i64::from(gx)) * 3_600_000_000 / (4096 << z) - 1_800_000_000;
+            let lon = ((i64::from(x) * 4096 + i64::from(gx)) * 3_600_000_000).checked_div(4096 << z).unwrap_or(0)
+                - 1_800_000_000;
             let Some(plane) = c.plane_of(lat as i32, lon as i32) else { continue };
             if let Some((off_m, along_m)) = c.near(plane, NEAR_M) {
                 self.offer(Poi::new(nm, ele.min(u64::from(u16::MAX)) as u16, class == 3, along_m, off_m));

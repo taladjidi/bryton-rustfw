@@ -382,11 +382,11 @@ impl Fat {
         }
         let end = sector.checked_add(n).ok_or(Error::Corrupt)?;
         self.grow(d, h, end.div_ceil(self.spc))?;
-        let mut c = self.nth(d, h.first, sector / self.spc)?;
+        let mut c = self.nth(d, h.first, sector.checked_div(self.spc).unwrap_or(0))?;
         let mut at = sector;
         let mut done = 0;
         while at < end {
-            let in_cluster = at % self.spc;
+            let in_cluster = at.checked_rem(self.spc).unwrap_or(0);
             if done > 0 && in_cluster == 0 {
                 c = self.next(d, c)?.ok_or(Error::Corrupt)?;
             }
@@ -406,8 +406,8 @@ impl Fat {
         sector: u32,
         buf: &mut [u8; SECTOR],
     ) -> Result<(), Error> {
-        let c = self.nth(d, h.first, sector / self.spc)?;
-        self.read(d, self.lba(c) + sector % self.spc, buf)
+        let c = self.nth(d, h.first, sector.checked_div(self.spc).unwrap_or(0))?;
+        self.read(d, self.lba(c) + sector.checked_rem(self.spc).unwrap_or(0), buf)
     }
 
     /// Sets `h`'s size and write time in its entry; then, if the chain is longer than the size needs (a resume
@@ -763,7 +763,7 @@ impl Fat {
 
     /// The sector before `lba` in the folder whose chain starts at `dir` (None at its start, or `dir` unknown).
     fn dir_sector_before(&mut self, d: &mut impl Disk, dir: u32, lba: u32) -> Result<Option<u32>, Error> {
-        let c = lba.checked_sub(self.data_start).map_or(0, |x| x / self.spc + 2);
+        let c = lba.checked_sub(self.data_start).map_or(0, |x| x.checked_div(self.spc).unwrap_or(0) + 2);
         if !self.valid(c) || dir == 0 {
             return Ok(None);
         }

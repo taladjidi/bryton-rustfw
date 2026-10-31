@@ -18,10 +18,10 @@ pub(crate) fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
     }
     let v = v.unsigned_abs();
     let unit = 10u32.pow(shift);
-    l.push_u32(v / unit);
+    l.push_u32(v.checked_div(unit).unwrap_or(0));
     if decimals > 0 {
         l.push_str(".");
-        let frac = v % unit / 10u32.pow(shift - decimals);
+        let frac = v.checked_rem(unit).unwrap_or(0).checked_div(10u32.pow(shift.saturating_sub(decimals))).unwrap_or(0);
         let digits = 10u32.pow(decimals - 1);
         let mut d = digits;
         while d > 0 {
@@ -53,7 +53,7 @@ pub(crate) fn left_text(l: &mut Line<8>, minutes: Option<u32>) {
 /// `v / 10^decimals` with its decimals ("0.75").
 pub(crate) fn push_fixed_u(l: &mut Line<8>, v: u32, decimals: u32) {
     let unit = 10u32.pow(decimals);
-    l.push_u32(v / unit);
+    l.push_u32(v.checked_div(unit).unwrap_or(0));
     if !v.is_multiple_of(unit) {
         l.push_str(".");
         let mut d = unit / 10;

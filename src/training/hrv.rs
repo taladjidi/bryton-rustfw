@@ -107,7 +107,7 @@ impl Hrv {
                 }
             }
         }
-        (pairs >= MIN_PAIRS).then(|| (sum / u64::from(pairs)).isqrt() as u16)
+        (pairs >= MIN_PAIRS).then(|| sum.checked_div(u64::from(pairs)).unwrap_or(0).isqrt() as u16)
     }
 
     /// DFA alpha1 and the artifacts' share, %.

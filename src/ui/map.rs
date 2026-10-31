@@ -397,7 +397,9 @@ impl View {
     fn fit_box(track: &Track, min: (i32, i32), max: (i32, i32), fw: i64, fh: i64) -> Option<View> {
         track.pos?;
         let (sx, sy) = (i64::from(max.0) - i64::from(min.0), i64::from(max.1) - i64::from(min.1));
-        let fits = |m: i64| sx * 16 / m <= fw && sy * 16 / m <= fh;
+        let fits = |m: i64| {
+            (sx * 16).checked_div(m).is_some_and(|v| v <= fw) && (sy * 16).checked_div(m).is_some_and(|v| v <= fh)
+        };
         let mpp16 = (FIT_LEVEL..MAX_LEVEL).map(mpp16).find(|&m| fits(m)).unwrap_or(mpp16(MAX_LEVEL));
         Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16, rot: 0 })
     }
@@ -420,7 +422,7 @@ impl View {
         let (c, s) = rot_cs(self.rot);
         let (dx, dy) = (i64::from(p.0) - i64::from(self.cx), i64::from(p.1) - i64::from(self.cy));
         let (c, s) = (i64::from(c), i64::from(s));
-        let px = |m256: i64| (m256 * 16).div_euclid(self.mpp16 * 256) as i32;
+        let px = |m256: i64| (m256 * 16).checked_div_euclid(self.mpp16 * 256).unwrap_or(0) as i32;
         (area.0 + area.2 / 2 + px(dx * c - dy * s), area.1 + area.3 / 2 - px(dx * s + dy * c))
     }
 
@@ -733,7 +735,7 @@ fn triangle(c: &mut impl Canvas, k: Rect, v: [(i32, i32); 3], color: u16) {
         let (mut lo, mut hi) = (i32::MAX, i32::MIN);
         for (a, b) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])] {
             if a.1 != b.1 && a.1.min(b.1) <= y && y <= a.1.max(b.1) {
-                let x = a.0 + (b.0 - a.0) * (y - a.1) / (b.1 - a.1);
+                let x = a.0 + ((b.0 - a.0) * (y - a.1)).checked_div(b.1 - a.1).unwrap_or(0);
                 (lo, hi) = (lo.min(x), hi.max(x));
             }
         }

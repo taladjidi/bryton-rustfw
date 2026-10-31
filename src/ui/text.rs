@@ -199,7 +199,10 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
         let (font, g, k) = pick(style, face, ch);
         let w = u32::from(g.advance) * k;
         c.blit(x, y, w, style.height(), &mut |px, py| {
-            palette.get(usize::from(font.coverage(g, px / k, py / k))).copied().unwrap_or(0)
+            palette
+                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
+                .copied()
+                .unwrap_or(0)
         });
         x += w;
     }
@@ -227,7 +230,10 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
             break;
         }
         c.blit(x, y, w, style.height(), &mut |px, py| {
-            palette.get(usize::from(font.coverage(g, px / k, py / k))).copied().unwrap_or(0)
+            palette
+                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
+                .copied()
+                .unwrap_or(0)
         });
         x += w;
     }
@@ -260,7 +266,14 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
         *p = blend(fg, bg, a as u8);
     }
     c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
-        palette.get(usize::from(font.coverage(g, (px + x0) / k, (py + y0) / k))).copied().unwrap_or(0)
+        palette
+            .get(usize::from(font.coverage(
+                g,
+                (px + x0).checked_div(k).unwrap_or(0),
+                (py + y0).checked_div(k).unwrap_or(0),
+            )))
+            .copied()
+            .unwrap_or(0)
     });
 }
 

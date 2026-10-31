@@ -573,7 +573,10 @@ pub const MENU_ROWS: usize = menu_rows(MENU_ROW);
 
 /// Rows a menu shows at row pitch `row` (6 at 44, 4 at 56).
 pub const fn menu_rows(row: u32) -> usize {
-    ((H - LIST_Y) / row) as usize
+    match (H - LIST_Y).checked_div(row) {
+        Some(n) => n as usize,
+        None => 0,
+    }
 }
 
 /// Where a tap goes back (as Back): the "<" at the left of a menu's title, a finger wide, from the strip's line to

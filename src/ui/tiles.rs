@@ -699,7 +699,7 @@ fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
     }
     // grid unit u lands at (a u + b) >> 16, so pixel s's centre is at u = ((s + 1/2) 2^16 - b) / a, 16 a pixel
     let at = |s: i32, a: i64, b: i64| {
-        let t = if a > 0 { ((i64::from(s) << 16) + 0x8000 - b).div_euclid(a * 16) } else { -1 };
+        let t = if a > 0 { ((i64::from(s) << 16) + 0x8000 - b).checked_div_euclid(a * 16).unwrap_or(0) } else { -1 };
         u16::try_from(t).ok().filter(|&t| usize::from(t) < ign::SIDE)
     };
     let mut cols = [0u16; ui::W as usize];
@@ -981,7 +981,9 @@ fn heapsort(v: &mut [[u16; 4]]) {
             if key(v, root) >= key(v, child) {
                 return;
             }
-            v.swap(root, child);
+            if root < v.len() && child < v.len() {
+                v.swap(root, child);
+            }
             root = child;
         }
     }
@@ -990,7 +992,9 @@ fn heapsort(v: &mut [[u16; 4]]) {
         down(v, root, n);
     }
     for end in (1..n).rev() {
-        v.swap(0, end);
+        if end < v.len() {
+            v.swap(0, end);
+        }
         down(v, 0, end);
     }
 }
@@ -1260,7 +1264,7 @@ impl Raster<'_> {
             // the brush centres covering row y lie on rows y - hi ..= y + lo of the segment, each row from half a
             // row above to half a row below (in half rows), so a shallow line has no gaps
             let (c0, c1) = ((2 * (y - hi) - 1).max(2 * a.1), (2 * (y + lo) + 1).min(2 * b.1));
-            let at = |c: i32| a.0 + dx * (c - 2 * a.1) / (2 * dy);
+            let at = |c: i32| a.0 + (dx * (c - 2 * a.1)).checked_div(2 * dy).unwrap_or(0);
             let (x0, x1) = if dy == 0 { (a.0, b.0) } else { (at(c0), at(c1)) };
             self.run(y, x0.min(x1) - lo, x0.max(x1) + hi, color);
         }
@@ -1305,7 +1309,8 @@ impl Raster<'_> {
                 if (a.1 <= y) != (b.1 <= y)
                     && let Some(slot) = xs.get_mut(k)
                 {
-                    let x = i64::from(a.0) + i64::from(b.0 - a.0) * i64::from(y - a.1) / i64::from(b.1 - a.1);
+                    let x = i64::from(a.0)
+                        + (i64::from(b.0 - a.0) * i64::from(y - a.1)).checked_div(i64::from(b.1 - a.1)).unwrap_or(0);
                     *slot = x as i32;
                     k += 1;
                 }
@@ -1343,13 +1348,13 @@ fn clip(mut a: (i64, i64), mut b: (i64, i64), r: (i64, i64, i64, i64)) -> Option
         let c = if ca != 0 { ca } else { cb };
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let p = if c & 4 != 0 {
-            (a.0 + dx * (r.1 - a.1) / dy, r.1)
+            (a.0 + (dx * (r.1 - a.1)).checked_div(dy).unwrap_or(0), r.1)
         } else if c & 8 != 0 {
-            (a.0 + dx * (r.3 - a.1) / dy, r.3)
+            (a.0 + (dx * (r.3 - a.1)).checked_div(dy).unwrap_or(0), r.3)
         } else if c & 1 != 0 {
-            (r.0, a.1 + dy * (r.0 - a.0) / dx)
+            (r.0, a.1 + (dy * (r.0 - a.0)).checked_div(dx).unwrap_or(0))
         } else {
-            (r.2, a.1 + dy * (r.2 - a.0) / dx)
+            (r.2, a.1 + (dy * (r.2 - a.0)).checked_div(dx).unwrap_or(0))
         };
         if c == ca {
             a = p;

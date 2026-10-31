@@ -201,7 +201,7 @@ impl Page {
 
     /// `n` fields from cell `at` out, those after moved back.
     fn remove_fields(&mut self, at: usize, n: usize) {
-        if at + n <= CELLS {
+        if at.checked_add(n).is_some_and(|e| e <= CELLS) {
             self.fields.copy_within(at + n..CELLS, at);
             for f in self.fields.iter_mut().skip(CELLS - n) {
                 *f = Field::Time;
@@ -253,11 +253,18 @@ impl Page {
             return Err("5 ROWS AT MOST");
         }
         let mut p = *self;
-        let share = p.rows[r].0;
+        if r + 1 >= ROWS {
+            return Err("5 ROWS AT MOST"); // r < the used rows, which are fewer than ROWS
+        }
+        let share = p.rows.get(r).map_or(1, |x| x.0);
         let below = (share / 2).max(1);
-        p.rows[r].0 = (share - below).max(1);
+        if let Some(x) = p.rows.get_mut(r) {
+            x.0 = (share - below).max(1);
+        }
         p.rows.copy_within(r + 1..ROWS - 1, r + 2);
-        p.rows[r + 1] = (below, 1);
+        if let Some(x) = p.rows.get_mut(r + 1) {
+            *x = (below, 1);
+        }
         let at = self.first_of(r + 1);
         p.insert_field(at, new);
         self.checked(p)
@@ -282,10 +289,12 @@ impl Page {
         let mut p = *self;
         let first = self.first_of(r);
         let keep = *self.fields.get(k).ok_or("NO BOX")?;
-        if p.rows[r].1 > 1 {
-            p.rows[r].1 -= 1;
+        if let Some(row) = p.rows.get_mut(r).filter(|x| x.1 > 1) {
+            row.1 -= 1;
             p.remove_fields(first + 1 - j.min(1), 1); // the other cell of the row
-            p.fields[first] = keep;
+            if let Some(f) = p.fields.get_mut(first) {
+                *f = keep;
+            }
             return self.checked(p).map(|p| (p, first));
         }
         let rows = self.used().len();
@@ -295,11 +304,18 @@ impl Page {
         let other = if r + 1 < rows { r + 1 } else { r - 1 };
         let (top, gone) = (r.min(other), r.max(other));
         let at = self.first_of(top);
-        p.remove_fields(at, 1 + usize::from(self.rows[other].1));
+        let (Some(&(rs, _)), Some(&(os, oc))) = (self.rows.get(r), self.rows.get(other)) else { return Err("ONE BOX") };
+        p.remove_fields(at, 1 + usize::from(oc));
         p.insert_field(at, keep);
-        p.rows[top] = ((self.rows[r].0 + self.rows[other].0).min(SHARE), 1);
-        p.rows.copy_within(gone + 1..ROWS, gone);
-        p.rows[ROWS - 1] = (0, 0);
+        if let Some(x) = p.rows.get_mut(top) {
+            *x = ((rs + os).min(SHARE), 1);
+        }
+        if gone < ROWS {
+            p.rows.copy_within(gone + 1..ROWS, gone);
+        }
+        if let Some(x) = p.rows.last_mut() {
+            *x = (0, 0);
+        }
         self.checked(p).map(|p| (p, at))
     }
 

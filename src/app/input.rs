@@ -818,7 +818,10 @@ impl App {
                 // under the rows, which is no row
                 let slot = (u32::from(y).checked_sub(ui::LIST_Y))
                     .filter(|&d| d < (self.menu_rows() as u32) * self.theme.menu_row + 4)
-                    .map(|d| ((d / self.theme.menu_row) as usize).min(self.menu_rows() - 1));
+                    .map(|d| {
+                        (d.checked_div(self.theme.menu_row).unwrap_or(0) as usize)
+                            .min(self.menu_rows().saturating_sub(1))
+                    });
                 let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
                 let row = match slot.map(|k| first + k) {
                     Some(row) if self.row(menu, row).is_some() => row,

@@ -375,7 +375,11 @@ impl App {
         // the whole course's range, 30 m at least, so a flat course stays flat
         let (lo, hi) = c.course.range_dm();
         let hi = hi.max(lo + 300);
-        let h = ((i64::from(alt - lo) * i64::from(a.3)) / i64::from(hi - lo)).clamp(1, i64::from(a.3)) as u32;
+        let h = (i64::from(alt - lo) * i64::from(a.3))
+            .checked_div(i64::from(hi - lo))
+            .unwrap_or(0)
+            .max(1)
+            .min(i64::from(a.3)) as u32;
         let color = match (p.rider.is_some_and(|r| k < r), climb) {
             (true, _) => ui::DARK,
             (false, true) => ui::grade_color(grade),
@@ -412,7 +416,11 @@ impl App {
         };
         let grade = (h1 - h0) * 100 / g1.saturating_sub(g0).clamp(1, i32::MAX as u32) as i32;
         let hi = hi.max(lo + 300);
-        let h = ((i64::from(m - lo) * i64::from(a.3)) / i64::from(hi - lo)).clamp(1, i64::from(a.3)) as u32;
+        let h = (i64::from(m - lo) * i64::from(a.3))
+            .checked_div(i64::from(hi - lo))
+            .unwrap_or(0)
+            .max(1)
+            .min(i64::from(a.3)) as u32;
         ui::progress_column(p.rider, k, a.3, (h, ui::grade_color(grade)))
     }
 
