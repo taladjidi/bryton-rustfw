@@ -8,7 +8,9 @@
 //! its two copies in this firmware's own folder, the newer over the older, the FAT copies compared first after a
 //! write that failed. A place saved during a ride is kept in memory and written once the ride is saved (a reset in
 //! between loses it, never the ride). A read that fails for any reason but "no file" is tried again, and no place can
-//! be saved until it succeeds: a first copy is never written beside a newer one.
+//! be saved until it succeeds: a first copy is never written beside a newer one. The file is never made here (nor made
+//! whole): a ride's start makes it, zeroed (storage/recorder/mod.rs `make_kept`, so no write between rides touches
+//! `\Rustfw`'s directory sector); without it a place saved waits in memory for the next ride's end (`no_file`).
 //!
 //! **The calibration.** Each second with a fix (horizontal accuracy 10 m or better) and the speed under 2 km/h within
 //! [`places::NEAR_M`] of a place with an altitude, the barometer is calibrated to it ([`altitude::By::Place`]), once
@@ -67,8 +69,11 @@ impl App {
         if !st.loaded && st.tries < LOAD_TRIES && (self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS) {
             self.load_places(b);
         }
+        let settled = self.ride_settled();
+        self.places.file.no_file &= settled; // a ride's start makes the file: tried again once it is over
         let st = self.places.file;
-        if self.card_writable && st.loaded && st.dirty && self.ride_settled() && self.fats_ready(b, CopyFile::Places) {
+        if self.card_writable && st.loaded && st.dirty && !st.no_file && settled && self.fats_ready(b, CopyFile::Places)
+        {
             self.save_places(b);
         }
     }
@@ -84,7 +89,7 @@ impl App {
         }
     }
 
-    /// Writes the places over the file's older copy (the file created with both if needed).
+    /// Writes the places over the file's older copy (never made here: module doc).
     fn save_places(&mut self, b: &mut impl Board) {
         let seq = self.places.file.seq.wrapping_add(1);
         self.save_copy(b, CopyFile::Places, seq, &self.places.list.to_sector(seq));

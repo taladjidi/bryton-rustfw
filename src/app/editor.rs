@@ -102,6 +102,12 @@ impl CopyFile {
         }
     }
 
+    /// Its writer makes it when it is missing (pages, settings); bikes.bin and places.bin are made at a ride's start
+    /// only (recorder/mod.rs `make_kept`), so no write between rides touches `\Rustfw`'s directory sector.
+    fn makes(self) -> bool {
+        matches!(self, CopyFile::Pages | CopyFile::Settings)
+    }
+
     /// The notice when a write of it failed.
     fn not_saved(self) -> &'static str {
         match self {
@@ -277,7 +283,12 @@ impl App {
     pub(crate) fn load_copies(&mut self, b: &mut impl Board, f: CopyFile, file: &mut [u8; 1024]) -> Option<bool> {
         let read = self.read_copies(b, f.name(), file);
         let suspect = self.fats_suspect;
-        self.copies(f)?.read(read, f == CopyFile::Pages, suspect)
+        let st = self.copies(f)?;
+        let whole = st.read(read, f == CopyFile::Pages, suspect);
+        if let Some(whole) = whole.filter(|_| !f.makes()) {
+            st.no_file = !whole; // written once a ride's start has made it
+        }
+        whole
     }
 
     /// File `f` may be written now: the FAT copies known equal, else compared over the next passes first (from its
@@ -302,19 +313,26 @@ impl App {
         }
     }
 
-    /// `sector`, copy number `seq`, written over file `f`'s older copy (the file created with both if needed), its
-    /// change no longer waiting: Some(true) written, Some(false) failed (said, and the FAT copies compared before the
-    /// next write), None no volume (a card stock never formatted, the tests' blank one: nothing to say).
+    /// `sector`, copy number `seq`, written over file `f`'s older copy (the file created with both if needed and
+    /// [`CopyFile::makes`] it), its change no longer waiting: Some(true) written, Some(false) failed (said, and the
+    /// FAT copies compared before the next write), None no volume (a card stock never formatted, the tests' blank
+    /// one: nothing to say), or no whole file that is not made here (the change waits for a ride's start: `no_file`).
     pub(crate) fn save_copy(&mut self, b: &mut impl Board, f: CopyFile, seq: u32, sector: &[u8; 512]) -> Option<bool> {
         if let Some(st) = self.copies(f) {
             st.dirty = false; // once: a failure is said, and tried again at the next change
         }
-        let r = self.write_copy(b, f.name(), seq % 2, sector)?;
+        let r = self.write_copy(b, f.name(), seq % 2, sector, f.makes())?;
         match r {
             Ok(()) => {
                 if let Some(st) = self.copies(f) {
                     (st.seq, st.sound) = (seq, true);
                 }
+            }
+            Err(fat::Error::NotFound) if !f.makes() => {
+                if let Some(st) = self.copies(f) {
+                    (st.dirty, st.no_file) = (true, true); // nothing written: after the next ride's start
+                }
+                return None;
             }
             Err(_) => {
                 self.fats_unsure();
@@ -343,21 +361,28 @@ impl App {
     }
 
     /// Copy `slot` (0 or 1) of `\Rustfw\<name>` written with `sector`, the other untouched; the file created (or
-    /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]). None: no volume.
+    /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]), only if `make`: else nothing
+    /// written and `NotFound` unless it is whole (bikes.bin, places.bin: made at a ride's start, recorder/mod.rs
+    /// `make_kept`, so no later write touches `\Rustfw`'s directory sector). None: no volume.
     pub(crate) fn write_copy(
         &mut self,
         b: &mut impl Board,
         name: &str,
         slot: u32,
         sector: &[u8; 512],
+        make: bool,
     ) -> Option<Result<(), fat::Error>> {
         let t = fat::write::dos_time(self.rec_time().0);
         let mut d = emmc::Volume(&mut self.emmc, b);
         let mut fat = fat::Fat::mount(&mut d).ok()?;
-        Some(
-            fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)
-                .and_then(|dir| write_copy_in(&mut fat, &mut d, dir, name, slot, sector, t)),
-        )
+        let dir =
+            if make { fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t) } else { fat.open(&mut d, recorder::DIR) };
+        Some(dir.and_then(|dir| {
+            if !make && fat.locate(&mut d, dir, name)?.size != 1024 {
+                return Err(fat::Error::NotFound);
+            }
+            write_copy_in(&mut fat, &mut d, dir, name, slot, sector, t)
+        }))
     }
 
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds

@@ -5289,16 +5289,24 @@ fn fault_log_files() {
     }
     let base = crate::fat::tests::image();
     let t = (0, 0);
-    let (mut created, mut appended, mut rotated) = (0, 0, 0);
+    let (mut created, mut appended, mut rotated, mut no_folder) = (0, 0, 0, 0);
     for seed in 1..=300u32 {
         let mut r = xorshift(seed);
         let mut d = Ram(base.clone(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let top = fat.ensure_dir(&mut d, fat.root(), crate::recorder::DIR, t).unwrap();
         let mut size = None;
+        // the folder a ride's start makes (recorder `make_kept`): without it, nothing written
+        if seed % 8 == 0 {
+            let before = d.0.clone();
+            assert_eq!(append(&mut fat, &mut d, top, b"x\n", t), Err(crate::fat::Error::NotFound), "seed {seed}");
+            assert!(d.0 == before, "seed {seed}: written without the folder");
+            no_folder += 1;
+            continue;
+        }
+        let dir = fat.ensure_dir(&mut d, top, LOG_DIR, t).unwrap();
         if seed % 4 != 0 {
             // a log there: some sectors of anything, then a size in its entry
-            let dir = fat.ensure_dir(&mut d, top, LOG_DIR, t).unwrap();
             let mut h = fat.create(&mut d, dir, FILE, t).unwrap();
             let sectors = 1 + r() % 140;
             let data: Vec<u8> = bytes(seed, sectors as usize * 512).collect();
@@ -5329,7 +5337,7 @@ fn fault_log_files() {
         }
     }
     std::println!("fault log: {created} created, {appended} appended, {rotated} started again");
-    assert!(created > 10 && appended > 10 && rotated > 10, "{created} {appended} {rotated}");
+    assert!(created > 10 && appended > 10 && rotated > 10 && no_folder > 10, "{created} {appended} {rotated}");
 }
 
 /// Lap lists (a past ride's LAPS, fitread.rs `lap` into history.rs `lap_row` and the card's list): FIT files built

@@ -40,7 +40,7 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [ ] Languages other than English (stock)
 - [~] Imperial units (stock): sim; speed, distance, ascent and altitude, the totals and the trips; the course fields stay metric
 - [x] Redraw only what changes, in the smallest box (ours): unit
-- [ ] Lap list with each lap's numbers in a past ride (stock, Garmin)
+- [x] Lap list with each lap's numbers in a past ride (stock, Garmin): sim
 - [ ] Power phase page (stock, Garmin)
 - [ ] Wind page: head or tail wind and its cost in speed (Wahoo)
 
@@ -78,7 +78,7 @@ Heart rate
 - [x] Heart rate, average, maximum (stock, all): unit
 - [x] Heart rate as % of max and of LTHR (stock, Garmin): sim
 - [x] Heart rate zone (stock, all): sim
-- [~] Time in the heart rate zone of now (Garmin, Karoo): sim; not each zone's time
+- [x] Time in the heart rate zone of now (Garmin, Karoo): sim
 - [x] DFA a1, live from the strap's beats (patch P9, Karoo, Garmin): sim
 - [x] RMSSD (ours): sim
 
@@ -102,10 +102,10 @@ Power
 - [ ] Cycling dynamics: power phase, platform centre offset, seated / standing (Garmin, S800)
 - [~] % of FTP: current, average, lap, 3 / 10 / 30 s (stock): sim; no last lap's
 - [x] Power zone (stock, all): sim
-- [~] Time in the power zone of now (stock, Garmin): sim; not each zone's time
+- [x] Time in the power zone of now (stock, Garmin): sim
 - [x] Lap power, last lap power, lap NP (stock, Garmin, Wahoo): sim
 - [ ] Real-time stamina (Garmin)
-- [ ] Power curve, best efforts this ride (Karoo, Garmin)
+- [x] Power curve, best efforts this ride (Karoo, Garmin): sim
 
 Others
 
@@ -125,7 +125,7 @@ Others
 - [x] ANT+ beat-to-beat intervals for HRV (patch P8, Garmin): sim
 - [x] ANT+ speed, cadence, speed and cadence (stock, all): sim
 - [x] ANT+ power (stock, all): sim
-- [~] Power curve screen: the 90-day curve and this ride's over it, CP and W', a cursor by key and tap (FITNESS, ride menu): sim; not yet seen on the unit
+- [x] Power curve screen: the 90-day curve and this ride's over it, CP and W', a cursor by key and tap (FITNESS, ride menu): sim; not yet seen on the unit
 - [~] Power meter calibration: zero offset, auto zero (stock, Garmin, Wahoo, Karoo): sim; not yet seen on the unit
 - [~] Sensor pairing menu: pair, forget (stock, all): unit; one sensor per kind; the maker's short name in the row (ANT+ common page 80): sim
 - [ ] Sensor pool: several of a kind, switch when another is found (stock, Garmin)
@@ -160,6 +160,7 @@ Others
 - [x] Auto pause under 2 km/h (stock, all): unit
 - [x] Auto pause threshold set by hand (Garmin, Wahoo): sim; AUTO, OFF, 2, 3, 5, 8 km/h
 - [~] Auto lap by distance or time (Garmin, Wahoo, Karoo): sim; by position is not in
+- [x] Laps: the Lap key, the lap banner, auto lap, the laps of a past ride (stock, Garmin): sim
 - [x] Start reminder when the bike moves (stock, Garmin): sim
 - [~] FIT activity file written as the ride goes (stock, all): sim
 - [~] Checkpoint every minute, two copies of the recovery record, resume after any reset (stock): sim, power cut tested after every sector
@@ -170,9 +171,8 @@ Others
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin): sim
 - [~] Laps, session and activity messages at the end (stock, all): sim
 - [~] AUTO OFF (SYSTEM): switches off after idle (stock, Garmin): sim; never with a ride open
-- [~] Battery saver (SYSTEM): OFF / ON / AUTO at 20 %, GPS cyclic, backlight capped, slower map redraw, strip tag (Garmin, Wahoo): sim
 - [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): sim; ROAD, INDOOR, MTB, GRAVEL, CX and COMMUTE (auto-pause, auto lap, GPS power, climbs per profile); three bikes with their own wheel, weight, gears and odometer (BIKE > BIKES); no bike per profile
-- [ ] Settings in a file, two copies (stock, all): backup registers for now
+- [x] Settings in a file, two copies (stock, all): unit
 - [~] Screenshots saved to the volume (stock): sim; SYSTEM > SCREENSHOT, `\Screenshot\YYYYMMDDhhmmss.bmp`, no ride open
 - [~] Debug log file after a fault (stock, patch D1): sim; `\Rustfw\Log\faults.log`, a line per fault (kind, panic line or CFSR bits), no PC / LR
 
@@ -181,7 +181,7 @@ Others
 - [x] Track since power-on on a map, heading arrow, fitted view, scale bar (stock, all): unit
 - [x] Last known position before a fix (ours): unit
 - [~] Basemap: roads and water from stock's tile cache (stock, all): sim with real tiles; not seen on the unit
-- [~] Map zoom and pan by touch (stock, all): sim; pinch to zoom in the driver (two fingers not seen on the unit)
+- [x] Map zoom and pan by touch (stock, all): sim; pinch to zoom in the driver (two fingers not seen on the unit)
 - [~] Map heading up or north up (Garmin, Wahoo): sim (DISPLAY > MAP; turned basemap, track, arrow, north arrow)
 - [~] IGN Plan v2 maps from packs made on the computer, "(c) IGN" on the map (ours): sim; not seen on the unit
 - [~] Our own OpenStreetMap packs over USB (all have region maps): `tools/map_pack.py`, tracks and paths included; sim (synthetic area); not seen on the unit
@@ -195,7 +195,7 @@ Others
 - [x] Turn-by-turn cues (stock, all): sim
 - [ ] Voice turn-by-turn on a speaker (Garmin, Wahoo, Karoo)
 - [ ] Rerouting on the unit (stock, all)
-- [ ] Retrace / back to start along the ride's own path (stock, Garmin, Wahoo, Karoo)
+- [x] Retrace / back to start along the ride's own path (stock, Garmin, Wahoo, Karoo): sim (BACK TO START)
 - [ ] Route to a pinned point on the map (stock, Garmin, Wahoo)
 - [ ] Route to a saved place or POI (stock, Garmin, Wahoo, Karoo)
 - [ ] Address and POI search (stock, Garmin, Wahoo)
@@ -203,10 +203,10 @@ Others
 - [ ] Popularity routing (Garmin, Karoo)
 - [ ] Course creator on the unit (Garmin)
 - [~] POIs and peaks along a course (stock, Garmin): sim; peaks, volcanoes and cols with their elevation from stock's cached tiles (NEXT POI field, marks and the next name on the profile), where the cache has them; no water points or shops; not seen on the unit
-- [ ] Live segments (Strava) (stock, Garmin, Wahoo, Karoo) (ours: page, banners, result card, `sim`; the effort is not saved yet)
+- [x] Live segments (Strava) (stock, Garmin, Wahoo, Karoo) (ours: page, banners, result card, efforts kept as PRs): sim
 - [ ] Segments from the rider's own rides (best sections ridden twice), no Strava (ours)
 - [ ] Road closures and hazards on the route (Garmin)
-- [ ] Favourite and recent places, navigate to one (stock)
+- [~] Favourite places: saved, listed with distance and bearing (SAVE PLACE, PLACES): sim; recent places and navigating to one not done
 - [~] Course sync from Strava, Komoot, RideWithGPS (stock, all): sim; copied over USB, no app
 - [~] Virtual ride: a course on a smart trainer (stock, Wahoo): sim (WORKOUTS > RIDE A COURSE)
 
@@ -242,7 +242,7 @@ Others
 - [~] Training load, fitness / fatigue / form (CTL, ATL, TSB) (stock app, Garmin, Coros, Karoo): sim (CTL, ATL, TSB fields, FITNESS > TRAINING LOAD chart); not yet seen on the unit; hrTSS of a ride without power from its average heart rate
 - [ ] Training status, training readiness, recovery time (Garmin)
 - [ ] Load focus, aerobic / anaerobic split (Garmin, Coros)
-- [ ] Power curve and rider profile (stock app, Garmin, Karoo)
+- [x] Power curve and rider profile (stock app, Garmin, Karoo): sim (the curve; the profile in ME)
 - [~] VO2max and FTP estimates from rides (Garmin): sim; no VO2max
 - [x] Aerobic and anaerobic thresholds from DFA a1 over recent rides (ours): sim; not yet on real rides
 - [ ] Heat and altitude acclimation (Garmin)
@@ -256,12 +256,12 @@ Others
 - [~] Climb page that opens by itself at a climb's start (stock, Garmin): sim; no off switch
 - [~] Climbs without a course, predicted from the road ahead (stock, Karoo, Garmin): sim; not seen on the unit
 - [~] Descents and a steep descent warning (Garmin, Karoo): sim; STEEP DESC 8, 10 or 12 % banner 300 m ahead, DESCENT AHEAD field; not seen on the unit
-- [ ] Climb filter: all or medium and above (stock)
+- [x] Climb filter: all or medium and above (stock): sim (BIKE > CLIMBS)
 - [x] Gradient-coloured climb profile in sections (stock, all): sim
 - [x] Pacing on a climb from FTP and W' balance (ours, Garmin): sim; not yet on a real climb
 - [ ] Summit segments / climb challenges with others (Wahoo, Garmin)
-- [ ] Completed climbs listed with their times (Karoo)
-- [ ] Climb detection on or off per profile, descents too (Garmin, Karoo)
+- [x] Completed climbs listed with their times (Karoo): sim (ride menu, CLIMBS DONE)
+- [x] Climb detection on or off per profile, descents too (Garmin, Karoo): sim (CX and COMMUTE have no climbs ahead)
 
 ## Alerts and safety
 
@@ -291,11 +291,11 @@ Others
 - [ ] Android notifications (stock app, all): need a companion app
 - [x] Media remote: play, pause, next, previous, volume (patch P7, Garmin, Wahoo, Karoo): sim
 - [x] Now playing: title, artist, elapsed (ours): sim
-- [ ] Media remote from Di2 buttons (patch P12)
+- [x] Media remote from Di2 buttons (patch P12): sim (DI2 KEYS: play, tracks)
 - [x] Camera shutter on the phone (ours): sim
 - [ ] Live tracking (stock app, all): needs a phone app
 - [ ] Group ride: members on the map, messages, voice input (stock app, Garmin, Karoo)
-- [~] Ride upload to Strava and Intervals.icu (stock app, all): sim; `tools/sync.py` on the computer, not yet run against the real services
+- [x] Ride upload to Strava and Intervals.icu (stock app, all): sim; `tools/sync.py` on the computer, not yet run against the real services
 - [~] Planned workouts from Intervals.icu onto the unit (Garmin, Wahoo, Karoo): sim
 - [ ] Wi-Fi sync without the phone (Garmin, Wahoo, Karoo, Coros)
 - [x] Time zone from the phone (ours): sim
@@ -312,7 +312,7 @@ Battery and power
 - [x] Battery history (ours): unit
 - [ ] Charging only in a safe temperature range (stock): charger on whenever USB is in
 - [~] Battery hours left (Garmin, Coros): sim; BATT HRS fits the drain of the last 20 minutes on the battery, "--" while it is under 3.4 % an hour; not seen on the unit
-- [ ] Battery saver mode (Garmin, Wahoo, Coros)
+- [x] Battery saver mode (SYSTEM > BATT SAVER: OFF / ON / AUTO at 20 %, GPS cyclic, backlight capped; Garmin, Wahoo, Coros): sim
 - [ ] Stop mode between seconds (ours): the largest battery gain left
 - [ ] Battery life as stock claims (stock): to measure
 - [x] Power off by holding Back (stock): unit
@@ -331,7 +331,7 @@ Touch and buttons
 - [~] Swipe up from the bottom to go home (stock): sim, on a ride page after MORE
 - [x] Tap a field to open Quick Status (stock): sim (PAGES > QUICK STATUS, QUICK FIELDS; Back, tap or 10 s closes)
 - [ ] Long press a field to change it (stock, Garmin, Karoo)
-- [ ] Pinch to zoom the map (Wahoo, Garmin)
+- [x] Pinch to zoom the map (Wahoo, Garmin): sim
 - [ ] Digital dial (Coros): no such hardware
 - [x] Key repeat when a number is held (ours): unit
 - [ ] Page key changes page before the click (patch P14)
@@ -348,7 +348,7 @@ Storage, USB and updates
 - [x] Way back to stock: the bootloader's recovery mode (stock bootloader): unit
 - [x] Shares the volume with stock, so the two can be swapped (ours): unit; read only so far
 - [ ] GPS assistance and map updates from the computer (stock Update Tool)
-- [ ] Memory: free space, delete old rides (stock)
+- [x] Memory: free space, delete old rides (stock): sim (SYSTEM > STORAGE)
 
 ## Settings
 
@@ -364,17 +364,17 @@ Storage, USB and updates
 - [x] The laps of a past ride (HISTORY, the ride, LAPS): number, time, distance, speed, power, heart rate; NO LAPS: sim
 - [x] A ride menu while riding (Garmin, Karoo): sim
 - [x] GPS status: fix, satellites, position, altitude, UTC (stock, Garmin): unit
-- [~] Settings kept through power off (stock, all): unit; backup registers, not a file
-- [ ] Time zone, daylight saving, date and time formats (stock, all)
+- [x] Settings kept through power off (stock, all): unit; in \Rustfw\settings.bin, two copies
+- [~] Time zone and daylight saving (stock, all): sim (DISPLAY > ZONE, SUMMER TIME); the 12 h time format not done
 - [x] Units: metric or imperial, temperature (stock, all): sim
 - [x] Date format D/M/Y, M/D/Y, Y-M-D (ours): sim (fields unit test)
 - [x] Climbs ahead ALL or MEDIUM+, CLIMB PAGE on or off (ours): sim
 - [ ] Language (stock, all)
 - [x] First start setup: stock's settings and pages taken by themselves (ours): sim
 - [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired sensors, backlight, reminders, pages (ours): sim
-- [ ] Auto features per profile: smart pause, climb page switch, climb approach, map view (stock)
+- [~] Auto features per profile: auto pause and auto lap per profile (the profile's own rule): sim; the climb page and the map view are not per profile
 - [ ] Data reset: trips, odometer, factory settings (stock)
-- [ ] About: firmware version, UUID, position (stock): over USB only
+- [~] About: firmware version and commit, the notices (stock): sim; the UUID and the position not shown
 - [x] Altitude calibration at saved places (stock): sim
 - [x] Favourite places: SAVE PLACE, PLACES with distance and bearing, altitude by hand, DELETE (stock, Garmin): sim
 - [x] Sensor names and gear teeth for Di2 (stock): sim (CHAINRINGS and CASSETTE presets); teeth from the Di2 itself open
@@ -386,11 +386,11 @@ Storage, USB and updates
 - [x] Delete rides on the unit (stock): sim
 - [~] Totals: week, month, year, odometer (stock, Garmin): unit; week, year and total; FITNESS > MONTHS rows (km, hours, rides, ascent, TSS): sim
 - [ ] Personal records and best efforts (Garmin, Karoo)
-- [~] Power curve over season and all time (stock app, Garmin): sim; bests for CP and W' only, no screen, no season
+- [~] Power curve over the last 90 days (stock app, Garmin): sim; no all-time curve
 - [~] Training load chart on the unit (stock app, Garmin): sim, not yet on the unit
 - [ ] Each ride matched to the planned workout (ours)
 - [x] Rides read from stock's \Activities too (ours): sim
-- [ ] Ride upload to intervals.icu or Strava from a computer tool (ours)
+- [x] Ride upload to intervals.icu or Strava from a computer tool (ours): sim (tools/sync.py)
 
 ## Climbs ahead and live segments: what it would take
 
