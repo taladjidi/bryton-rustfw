@@ -472,9 +472,13 @@ impl App {
         let was_held = self.rec.clean.held();
         let recovering = self.rec.resume_pending;
         let o = if self.rec.resume_pending {
+            // a call while waiting after a failure tries nothing and says Nothing, the last one too (its wait then
+            // 0): still pending. Cleared only by a try that found no ride (2026-10-31: the card that answered late at
+            // boot lost the marker, and the ride was never resumed)
+            let waited = self.rec.clean.waiting();
             let o = self.rec.clean.recover(&mut emmc::Volume(&mut self.emmc, b), local);
             // a card that failed at boot is tried again (the marker stays until the ride is found)
-            self.rec.resume_pending = matches!(o, recorder::Outcome::Failed(_)) || self.rec.clean.waiting();
+            self.rec.resume_pending = waited || matches!(o, recorder::Outcome::Failed(_));
             o
         } else if self.rec.clean.due() {
             self.rec.clean.io(&mut emmc::Volume(&mut self.emmc, b), local)
@@ -580,8 +584,9 @@ impl App {
             self.rec.full_pending = false;
         }
         let o = if self.rec.full_pending && !self.rec.resume_pending {
+            let waited = self.rec.full.waiting(); // as the clean one's (step_recorder)
             let o = self.rec.full.recover(&mut emmc::Volume(&mut self.emmc, b), local);
-            self.rec.full_pending = matches!(o, recorder::Outcome::Failed(_)) || self.rec.full.waiting();
+            self.rec.full_pending = waited || matches!(o, recorder::Outcome::Failed(_));
             o
         } else if self.rec.full.due() {
             self.rec.full.io_after(&self.rec.clean, &mut emmc::Volume(&mut self.emmc, b), local)

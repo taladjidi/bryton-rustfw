@@ -6,6 +6,12 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 ## Not yet seen on the unit
 
+- **A card that answers late at boot (2026-10-31, app/riding.rs `step_recorder`)**: sim only. Still to see: a ride
+  recording over a checkpoint, the unit restarted (four buttons) with the card failing at the boot (no way to force
+  that on the unit yet: a RAM run whose first eMMC commands fail, `tools/dev.py poke` on the card's clock, or a dev
+  build that refuses the first tries), and without Start the ride coming back paused with RIDE RESUMED once the card
+  answers, the marker kept (`tools/dev.py peek` of RTC backup register 30) until then.
+
 - **Three bikes and part wear (src/storage/bikes.rs, src/app/bikes.rs)**: sim only. Still to see: the first start making
   BIKE 1 from the settings' wheel and ODOMETER (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
   switching the wheel and weight (the speed from a wheel sensor follows); a ride saved, then within a minute its distance
@@ -564,6 +570,8 @@ A feature not listed here was seen on the unit.
 
 ## Known problems
 
+- **A card that never answers keeps the unit on** (auto off held) until the battery runs out; the ride stays on the
+  card. Owner to decide whether to allow auto off past `GIVE_UP` (storage/recorder/mod.rs).
 - **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps
