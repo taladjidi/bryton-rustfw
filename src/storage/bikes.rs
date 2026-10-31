@@ -370,6 +370,7 @@ mod tests {
             s[at] = v;
             assert_eq!(Bikes::from_sector(&resealed(s)), None, "byte {at} = {v}");
         }
+        assert_eq!(DATA_LEN, 140, "the module doc's length: a copy written by every build");
         let mut s = new.to_sector(5);
         s[6] = (DATA_LEN + 20) as u8;
         assert_eq!(Bikes::from_sector(&resealed(s)), Some((5, new)), "a later build's length");
