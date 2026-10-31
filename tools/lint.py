@@ -4,10 +4,18 @@
 Each hit prints `lint: <check>: file:line: what`; the exit status is 1 on any hit.
   unused-pub  a pub / pub(crate) item of src/ that only tests (or doc tests) use: make it #[cfg(test)] or ALLOW it
   dashes      U+2014 / U+2013 in a tracked text file (AGENTS.md, Wording)
-  keys        a licensed key file's bytes (raw or hex) inside a tracked file; only the file name is printed
+  keys        a licensed key file's bytes (raw, hex in any layout, decimal / 0x byte arrays, a little-endian
+              literal, base64) inside a tracked or new file, or a key file itself tracked; only file names are
+              printed. The key files are looked for in the worktree and in the main checkout.
   tools-dead  a function of tools/ or renode/ that nothing names
   ruff        pyflakes errors (F, E9) of tools/ and renode/, when ruff is installed
+
+Limit of unused-pub: it matches names, not paths, so a common name (`new`, `len`) used anywhere in src/ counts as
+used and an unused pub item of that name is not found.
 """
+import base64
+import contextlib
+import io
 import re
 import shutil
 import subprocess
@@ -43,8 +51,9 @@ def blank(text):
 
 def files(root):
     if (root / ".git").exists():
-        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True).stdout
-        names = [n for n in out.decode().split("\0") if n]
+        # tracked plus untracked not ignored (as check.sh's docs guard), so a new file is scanned before git add
+        cmd = ["git", "-C", str(root), "ls-files", "-z", "-co", "--exclude-standard"]
+        names = {n for n in subprocess.run(cmd, capture_output=True, check=True).stdout.decode().split("\0") if n}
     else:
         names = [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()]
     return sorted(n for n in names if (root / n).is_file())
@@ -144,29 +153,55 @@ def dashes(root):
     return hits
 
 
-def key_forms(k):
-    h = k.hex()
-    out = {k, h.encode(), h.upper().encode()}
-    for sep in (b", 0x", b" ", b":", b"-", b",", b", "):
-        for hx in (h, h.upper()):
-            pairs = [hx[i : i + 2].encode() for i in range(0, len(hx), 2)]
-            out.add(sep.join(pairs))
-            out.add(b"0x" + sep.join(pairs) if sep.endswith(b"0x") else sep.join(b"0x" + p for p in pairs))
-    return {f for f in out if len(f) >= 8}
+def key_search(k):
+    """-> a function data -> bool: does `data` carry key `k` in one of the forms a person or a tool writes."""
+    rk = k[::-1]
+    hexes = (k.hex(), rk.hex())  # the reverse is a little-endian u64 literal
+    b64 = []
+    for off in range(3):
+        s = base64.b64encode(bytes(off) + k).decode().rstrip("=")
+        b64.append(s[(0, 2, 3)[off] : -1].encode())  # drop the chars the prefix and the padding share
+
+    def hit(data):
+        if k in data or any(b in data for b in b64):
+            return True
+        if len(data) > 2_000_000:  # shortcut: no text forms in a huge file, raise if one is ever needed
+            return False
+        text = data.decode("latin-1").lower()
+        flat = re.sub(r"[^0-9a-f]", "", text.replace("0x", "").replace("\\x", ""))
+        if any(h in flat for h in hexes):
+            return True
+        toks = (int(t, 16) if t[1:2] == "x" else int(t) for t in re.findall(r"0x[0-9a-f]+|\d+", text))
+        nums = bytes(v for v in toks if v < 256)
+        return k in nums or rk in nums
+
+    return hit
 
 
-def keys(root):
-    found = [root / k for k in KEY_FILES if (root / k).is_file() and (root / k).stat().st_size >= 4]
+def main_checkout(root):
+    cmd = ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]
+    p = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    return Path(p.stdout.strip()).parent if p.returncode == 0 and p.stdout.strip() else root
+
+
+def keys(root, homes=None):
+    homes = homes or [root, main_checkout(root)]
+    found = {}
+    for h in homes:
+        for k in KEY_FILES:
+            f = h / k
+            if f.is_file() and f.stat().st_size >= 8 and k not in found:
+                found[k] = f
     if not found:
-        print("lint: keys: no key files, skipped")
+        print("keys: no key files, skipped")
         return []
-    forms = set().union(*(key_forms(f.read_bytes()) for f in found))
+    print("keys: checked " + " ".join(sorted(found)))
+    searches = [key_search(f.read_bytes()) for f in found.values()]
     hits = []
     for n in files(root):
-        if n in KEY_FILES:
-            continue
-        data = (root / n).read_bytes()
-        if any(f in data for f in forms):
+        if Path(n).name in KEY_FILES:
+            hits.append(f"lint: keys: {n}:0: a licensed key file is tracked")
+        elif any(s((root / n).read_bytes()) for s in searches):
             hits.append(f"lint: keys: {n}:0: contains a licensed key")
     return hits
 
@@ -199,11 +234,13 @@ def ruff(root):
     if not shutil.which("ruff"):
         print("ruff: not installed, skipped")
         return []
-    p = subprocess.run(
-        ["ruff", "check", "--select", "F,E9", "--output-format", "concise", "tools", "renode"],
-        cwd=root, capture_output=True, text=True,
-    )
-    return [f"lint: ruff: {l}" for l in p.stdout.splitlines() if re.match(r"\S+:\d+:\d+:", l)] if p.returncode else []
+    dirs = [d for d in ("tools", "renode") if (root / d).is_dir()]
+    cmd = ["ruff", "check", "--select", "F,E9", "--output-format", "concise", *dirs]
+    p = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    if not p.returncode:
+        return []
+    found = [f"lint: ruff: {l}" for l in p.stdout.splitlines() if re.match(r"\S+:\d+:\d+:", l)]
+    return found or [f"lint: ruff: exit {p.returncode}: {p.stderr[:200]}"]
 
 
 def run(root):
@@ -242,22 +279,60 @@ def selftest():
             ALLOW = {}
             (root / "docs/x.md").write_text("a \u2014 b\nfine\n")
             assert dashes(root) == ["lint: dashes: docs/x.md:1: em or en dash"]
-            key = bytes(range(7, 39))
-            (root / "ant_key.bin").write_bytes(key)
-            (root / "src/k.rs").write_text("const K: [u8; 4] = [" + ", ".join(f"0x{b:02x}" for b in key) + "];\n")
-            (root / "src/k2.rs").write_text("// " + key.hex().upper() + "\n")
-            (root / "src/ok.rs").write_text("// nothing\n")
-            out = keys(root)
-            assert sorted(out) == ["lint: keys: src/k.rs:0: contains a licensed key",
-                                   "lint: keys: src/k2.rs:0: contains a licensed key"], out
-            assert not any(f.hex() in " ".join(out) for f in (key, key[:8])), "key printed"
             (root / "tools/t.py").write_text("def dead():\n    pass\n\ndef live():\n    pass\nlive()\n\ndef main():\n    pass\n")
             assert tools_dead(root) == ["lint: tools-dead: tools/t.py:1: `dead` is named nowhere else"], tools_dead(root)
             ALLOW_DEAD = {"dead": "x"}
             assert tools_dead(root) == []
     finally:
         ALLOW, ALLOW_DEAD = saved
+    selftest_keys()
     print("lint selftest: ok")
+
+
+def selftest_keys():
+    key = bytes([0xA1, 0x3C, 0x5E, 0x77, 0x09, 0xD2, 0xB4, 0x68])
+    pairs = [f"{b:02x}" for b in key]
+    forms = {
+        "raw": b"\0" + key,
+        "hex": ("// " + key.hex().upper()).encode(),
+        "hex sep": " ".join(pairs).encode(),
+        "decimal": ("[" + ", ".join(map(str, key)) + "]").encode(),
+        "rustfmt": ("const K: [u8; 8] = [\n" + "".join(f"    0x{p},\n" for p in pairs) + "];\n").encode(),
+        "bytes repr": ("b'" + "".join(f"\\x{p}" for p in pairs) + "'").encode(),
+        "le u64": ("0x" + "_".join(key[::-1].hex()[i : i + 4] for i in range(0, 16, 4))).encode(),
+    }
+    for pre in range(3):
+        for post in range(3):
+            forms[f"b64 {pre}/{post}"] = base64.b64encode(b"\x11\x22"[:pre] + key + b"ab"[:post]) + b"\n"
+    leak = [key.hex(), key[::-1].hex()]
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as h:
+        root, home = Path(d), Path(h)
+        (home / "ant_key.bin").write_bytes(key)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        (root / "src").mkdir()
+        (root / "src/ok.rs").write_text("// 0123456789abcdef fedcba9876543210 [1, 2, 3, 4, 5, 6, 7, 8] [161, 60, 94, 119, 9, 210, 180]\n")
+        (root / "src/part.rs").write_text("[0xa1, 0x3c, 0x5e, 0x77, 0x09, 0xd2, 0xb4]\n")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            assert keys(root, [home]) == []  # near misses and unrelated numbers are no hit
+            for name, data in forms.items():
+                (root / "src/new.rs").write_bytes(data)  # untracked, never added: still scanned
+                got = keys(root, [home])
+                assert got == ["lint: keys: src/new.rs:0: contains a licensed key"], (name, got)
+                assert not any(x in " ".join(got) for x in leak), name
+            (root / "src/new.rs").unlink()
+            (root / "ant_key.bin").write_bytes(b"x")
+            subprocess.run(["git", "-C", str(root), "add", "ant_key.bin"], check=True)
+            assert keys(root, [home]) == ["lint: keys: ant_key.bin:0: a licensed key file is tracked"]
+            assert keys(root, [root / "nowhere"]) == []
+        text = out.getvalue()
+        assert "no key files, skipped" in text and "checked ant_key.bin" in text, text
+        assert not any(x in text for x in leak), "key printed"
+    if shutil.which("ruff"):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "tools").mkdir()
+            (Path(d) / "tools/bad.py").write_text("import os\n")
+            got = ruff(Path(d))
+            assert len(got) == 1 and "tools/bad.py:1:" in got[0], got
 
 
 if __name__ == "__main__":
