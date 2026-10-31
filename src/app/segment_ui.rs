@@ -43,6 +43,8 @@ pub(crate) struct SegUi {
     first: usize,
     pub(crate) filled: bool,
     rows: [ListRow; LIST_ROWS],
+    /// The climb's grade percent last written in the head's sub line.
+    pct: core::cell::Cell<Option<i32>>,
 }
 
 impl SegUi {
@@ -53,6 +55,7 @@ impl SegUi {
             prev: Screen::Main,
             seen: 0,
             announce: None,
+            pct: core::cell::Cell::new(None),
             card_ms: 0,
             result: None,
             first: 0,
@@ -96,6 +99,7 @@ pub(crate) struct HeadText {
     big: Line<8>,
     ink: u16,
     pub(crate) sub: Line<16>,
+    sub_ink: u16,
     keep: bool,
 }
 
@@ -107,6 +111,7 @@ impl HeadText {
             big: self.big.as_str(),
             ink: self.ink,
             sub: self.sub.as_str(),
+            sub_ink: self.sub_ink,
             keep: self.keep,
         }
     }
@@ -116,7 +121,8 @@ impl App {
     /// What the head box of the CLIMB page shows: the segment ridden (its name, the delta against the target, the
     /// target's label), else the climb (its title, the time to the top); None with neither.
     pub(crate) fn head_text(&self) -> Option<HeadText> {
-        let mut h = HeadText { top: Line::new(), big: Line::new(), ink: ui::WHITE, sub: Line::new(), keep: false };
+        let mut h =
+            HeadText { top: Line::new(), big: Line::new(), ink: ui::WHITE, sub: Line::new(), sub_ink: 0, keep: false };
         if let Some(n) = self.segment_now() {
             h.top.push_str(ascii(n.name.get(..n.name.len().min(32)).unwrap_or(&[])));
             h.big.push_str(ui::segment::delta_text(n.delta_s).as_str());
@@ -147,6 +153,22 @@ impl App {
             _ => h.big.push_str("--"),
         }
         h.sub.push_str("GAIN LEFT");
+        // the grade under the rider (100 m round it, as the profile's bars do), in the profile's colour
+        let (g0, g1) = (n.along.saturating_sub(50).max(k.start_m), n.along.saturating_add(50).min(k.end_m()));
+        if let (Some(a), Some(b)) = (self.climb_alt(&n, g0), self.climb_alt(&n, g1)) {
+            let g = (b - a) * 100 / g1.saturating_sub(g0).clamp(1, i32::MAX as u32) as i32;
+            // the percent shown stays until the grade is 0.8 % away from it (no redraw of the line for a wobble)
+            let shown = self.seg_ui.pct.get().filter(|&p| (g - p * 10).abs() < 8);
+            let pct = shown.unwrap_or(if g < 0 { -((-g + 5) / 10) } else { (g + 5) / 10 });
+            self.seg_ui.pct.set(Some(pct));
+            h.sub.push_str(" ");
+            if pct < 0 {
+                h.sub.push_str("-");
+            }
+            h.sub.push_u32(pct.unsigned_abs());
+            h.sub.push_str("%");
+            h.sub_ink = ui::grade_color(g);
+        }
         Some(h)
     }
 

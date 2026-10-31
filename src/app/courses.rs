@@ -286,7 +286,7 @@ impl App {
         }
         if f == Field::NextPoi {
             match self.next_poi() {
-                Some((_, m)) => push_dist(&mut l, m),
+                Some((_, m)) => crate::map::push_distance(&mut l, m), // "1.7 KM": a bare K reads as thousands
                 None => l.push_str("--"),
             }
             return l;

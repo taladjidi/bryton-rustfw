@@ -167,6 +167,8 @@ OFF, ON, or AUTO (on once at 20 % or less, off at the charger). It reads existin
 The recording is outside it: 1 s samples and the checkpoints are unchanged (a sim test compares the card's commands with it on and off).
 To measure: the same ride ON and OFF, the battery's percent after an hour (docs/status.md). Per profile (ride profiles' settings) is open.
 
+The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on the overview and exits 1 above it; set 2026-10-31 beside the 1.52 % measured that day).
+
 ## The main loop while idle (2026-10-28)
 
 - **Measured overnight before** (owner, on battery, the overview, backlight off): 12.2 h cost about 41 % of the

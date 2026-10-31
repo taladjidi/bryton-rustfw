@@ -545,6 +545,79 @@ fn graph_field() {
     sim.save("graph");
 }
 
+/// Regression guard: the elevation graph, with a climb in it and with a single sample (its 1 px bar is the reading,
+/// kept), draws nothing between the plot and its axis text nor right of the plot (UI review 3 saw a grey pixel
+/// there on the unit; it was that bar).
+#[test]
+fn elevation_graph_leaves_the_axis_row_clean() {
+    for (run_ms, bars) in [(400_000u64, true), (3_000, false)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.alt = Some(|ms| 300_000 + (ms / 20) as i32); // 50 m a minute
+        let mut app = App::start(&mut sim, Some(KEY));
+        use Field::*;
+        app.pages[0] = PageCfg { layout: 3, fields: [AltGraph, MaxSpeed, HrGraph, Timer, Timer, Timer] }.into();
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Start));
+        sim.gnss.fix = Some(7000);
+        run(&mut sim, &mut app, run_ms);
+        assert_consistent(&sim, &app);
+        let bx = crate::ui::field_box(3, crate::ui::RIDE_H, 0).unwrap();
+        let a = crate::ui::graph_area(bx);
+        let lit = |x0: u32, y0: u32, w: u32, h: u32| {
+            (y0..y0 + h)
+                .flat_map(|y| (x0..x0 + w).map(move |x| (x, y)))
+                .filter(|&(x, y)| sim.screen[(y * W + x) as usize] != 0)
+                .count()
+        };
+        assert_eq!(lit(a.0, a.1, a.2, a.3) > 100, bars, "the plot's bars");
+        assert_eq!(lit(a.0, a.1 + a.3 + 1, a.2, 1), 0, "between the plot and its text");
+        assert_eq!(lit(a.0 + a.2, a.1, 4, a.3 + 20), 0, "right of the plot");
+    }
+}
+
+/// A paired strap that goes silent while the ride records: "HR LOST" once after 10 s, the strip's BLE in red, and
+/// "HR BACK" once when it is heard again. A sensor never heard is not lost.
+#[test]
+fn a_sensor_lost_mid_ride_is_announced_once() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word(); // paired, never heard
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    sim.gnss.fix = Some(7000);
+    run(&mut sim, &mut app, 30_000);
+    assert!(!app.strip.lost && app.notes.text.as_str() != "HR LOST", "heard, and the unheard power meter is not lost");
+    let strap = sim.nordic.sensors.pop().unwrap();
+    run(&mut sim, &mut app, 8_000);
+    assert!(!app.strip.lost, "not yet: 10 s of silence");
+    run(&mut sim, &mut app, 6_000);
+    assert_eq!((app.notes.text.as_str(), app.notes.kind), ("HR LOST", crate::Banner::Alarm));
+    assert!(app.strip.lost);
+    assert_consistent(&sim, &app);
+    sim.save("sensor_lost");
+    app.notes.text.clear();
+    run(&mut sim, &mut app, 20_000);
+    assert_ne!(app.notes.text.as_str(), "HR LOST", "once");
+    sim.nordic.sensors.push(strap);
+    for _ in 0..60 {
+        run(&mut sim, &mut app, 1_000); // the channel searches again: a few seconds
+        if !app.strip.lost {
+            break;
+        }
+    }
+    assert!(!app.strip.lost, "heard again");
+    assert_eq!(app.notes.text.as_str(), "HR BACK");
+    // a short drop-out (6 s) and back: nothing said
+    let strap = sim.nordic.sensors.pop().unwrap();
+    app.notes.text.clear();
+    run(&mut sim, &mut app, 6_000);
+    sim.nordic.sensors.push(strap);
+    run(&mut sim, &mut app, 30_000);
+    assert!(!app.notes.text.as_str().contains("LOST"), "{}", app.notes.text.as_str());
+}
+
 /// A tap on a graph shows the next plot (power, heart rate, W' balance, DFA alpha1, elevation) until the unit is
 /// switched off, the page as kept unchanged; a hold switches every graph between the last minutes and the whole
 /// ride. Only while the ride is paused (or none runs): while it records, a tap or a hold on a page does nothing (UI

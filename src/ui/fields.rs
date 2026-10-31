@@ -832,6 +832,14 @@ pub const VALUE_MIN: (u32, u32) =
 /// hour ("1:23|45"), so the hours and minutes keep the box's size.
 pub const SMALL_TAIL: char = '|';
 
+/// The blank between a value and its small tail: "1.5K|6%" reads "1.5K 6%", not "1.5K6%" (UI review).
+const TAIL_GAP: u32 = 6;
+
+/// The gap at a value `scale`: 4 px at 1x, where there is no room for more.
+fn tail_gap(scale: u32) -> u32 {
+    if scale > 1 { TAIL_GAP } else { 4 }
+}
+
 /// The small tail's style ([`SMALL_TAIL`]).
 const TAIL: Style = Style { fg: GREY, ..LABEL };
 
@@ -878,14 +886,23 @@ type ValueAt<'a> = (Style, u32, u32, &'a str, &'a str, (u32, u32));
 
 pub(super) fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, fg: u16) -> ValueAt<'a> {
     let (mut big, tail) = value.split_once(SMALL_TAIL).unwrap_or((value, ""));
-    let style = Style { fg, scale: value_scale(big, w, h), ..LABEL };
+    let mut style = Style { fg, scale: value_scale(big, w, h), ..LABEL };
+    // a tail takes its gap too: a smaller scale rather than a lost tail (a timer's seconds), by the lengths only
+    let room = w.saturating_sub(2);
+    while !tail.is_empty()
+        && style.scale > 1
+        && style.width(big) + tail_gap(style.scale) + ink(&TAIL, tail) > room
+        && ink(&style, big) <= room
+    {
+        style.scale -= 1;
+    }
     let top = y + FIELD_LABEL_H + h.saturating_sub(1 + FIELD_LABEL_H).saturating_sub(style.height()) / 2;
     let band = (x + 1, x + w - 1);
     let room = band.1 - band.0;
     while ink(&style, big) > room {
         big = big.get(..big.len().saturating_sub(1)).unwrap_or(""); // too long even at 1x: cut, whole characters
     }
-    let with_tail = style.width(big) + ink(&TAIL, tail);
+    let with_tail = style.width(big) + tail_gap(style.scale) + ink(&TAIL, tail);
     let (tail, ink) = if tail.is_empty() || with_tail > room { ("", ink(&style, big)) } else { (tail, with_tail) };
     (style, band.0 + room.saturating_sub(ink) / 2, top, big, tail, band)
 }
@@ -995,6 +1012,9 @@ pub fn draw_field_value(c: &mut impl Canvas, bx: (u32, u32, u32, u32), value: &s
     if !tail.is_empty() {
         // the ink's bottom rows level: 7 font rows of each
         let ty = top + 7 * style.scale - 7 * TAIL.scale;
+        let gap = tail_gap(style.scale).min(r.saturating_sub(end));
+        c.fill(end, top, gap, bh, BLACK);
+        end += gap;
         let tw = TAIL.width(tail).min(r.saturating_sub(end));
         c.fill(end, top, tw, ty - top, BLACK);
         let t_end = text::draw_clipped(c, &TAIL, end, ty, r, tail);
@@ -1018,7 +1038,7 @@ pub fn draw_field_value_changes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), o
     }
     draw_cells(c, &style, left, top, r, big, Some(old_big));
     let ty = top + 7 * style.scale - 7 * TAIL.scale;
-    draw_cells(c, &TAIL, left + style.width(big), ty, r, tail, Some(old_tail));
+    draw_cells(c, &TAIL, left + style.width(big) + tail_gap(style.scale), ty, r, tail, Some(old_tail));
 }
 
 /// A graph's axis text and figures: the label font (2x), grey; no 1x text where a rider reads (UI review).
