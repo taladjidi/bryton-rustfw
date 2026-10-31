@@ -290,7 +290,7 @@ impl SettingsCopy {
         s.height_cm = data.next().map(u16::from).filter(|h| (100..=230).contains(h)).unwrap_or(0);
         // MAX HR from age (a byte after HEIGHT): a file without it reads off
         s.max_hr_age = flag(data.next(), false);
-        // START REMINDER and READY CHECK (after MAX HR from age): a file without them reads both ON
+        // REMINDER and READY CHECK (after MAX HR from age): a file without them reads both ON
         s.start_reminder = flag(data.next(), d.start_reminder);
         s.ready_check = flag(data.next(), d.ready_check);
         // CLIMBS, CLIMB PAGE and DATE FORMAT (after READY CHECK): a file without them reads ALL, the climb page on and
@@ -298,7 +298,7 @@ impl SettingsCopy {
         s.climbs_medium = flag(data.next(), d.climbs_medium);
         s.climb_page = flag(data.next(), d.climb_page);
         s.date_fmt = data.next().and_then(crate::DateFormat::from_byte).unwrap_or(d.date_fmt);
-        // SUNSET ALERT (after DATE FORMAT): a file without it reads OFF; a byte out of its range reads OFF
+        // SUNSET (after DATE FORMAT): a file without it reads OFF; a byte out of its range reads OFF
         s.sunset_alert = data.next().map(usize::from).filter(|&v| v < SUNSET_LEAD_MIN.len()).unwrap_or(d.sunset_alert);
         // CHAINRINGS and CASSETTE (after SUNSET ALERT): a file without them, or a byte out of range, reads OFF
         s.chainrings = data.next().map(usize::from).filter(|&v| v < CHAINRINGS.len()).unwrap_or(d.chainrings);

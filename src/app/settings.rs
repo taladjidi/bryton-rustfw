@@ -325,12 +325,12 @@ pub struct Settings {
     pub day_theme: [u8; 12],
     /// NIGHT THEME: the theme AUTO uses in the dark.
     pub night_theme: [u8; 12],
-    /// AUTO LAP (BIKE): 0 OFF, 1 BY DISTANCE, 2 BY TIME. Kept in settings.bin only (data 94, with the two after it); OFF
+    /// AUTO LAP (BIKE): 0 OFF, 1 DISTANCE, 2 TIME. Kept in settings.bin only (data 94, with the two after it); OFF
     /// in a file that predates it.
     pub auto_lap: usize,
-    /// LAP EVERY, km (1 to 50) for BY DISTANCE; 5 in a file that predates it.
+    /// LAP EVERY, km (1 to 50) for DISTANCE; 5 in a file that predates it.
     pub lap_km: u16,
-    /// LAP EVERY, minutes of moving time (1 to 60) for BY TIME; 10 in a file that predates it.
+    /// LAP EVERY, minutes of moving time (1 to 60) for TIME; 10 in a file that predates it.
     pub lap_min: u16,
     /// LIVE SEGMENTS (SEGMENTS menu): the matcher runs during a ride. Kept in settings.bin only (data 97, with the byte
     /// after it); ON in a file that predates it.
@@ -340,15 +340,15 @@ pub struct Settings {
     /// SOUND (DISPLAY): the buzzer plays the alerts, the course and workout tones and the start / pause beeps (the
     /// power-on and power-off melodies stay). Kept in settings.bin only (data 99); ON in a file that predates it.
     pub sound: bool,
-    /// START REMINDER (BIKE): with no ride, the bike moving for 10 s says START THE RIDE? (data 150); ON in a file that
+    /// REMINDER (BIKE): with no ride, the bike moving for 10 s says START THE RIDE? (data 150); ON in a file that
     /// predates it.
     pub start_reminder: bool,
     /// READY CHECK (BIKE): a new ride's start shows the GPS, sensors and battery for 3 s (data 151); ON in a file that
     /// predates it.
     pub ready_check: bool,
-    /// SUNSET ALERT: an index into [`SUNSET_LEAD_MIN`]; 0 (OFF) in a file that predates it. Kept in settings.bin only.
+    /// SUNSET: an index into [`SUNSET_LEAD_MIN`]; 0 (OFF) in a file that predates it. Kept in settings.bin only.
     pub sunset_alert: usize,
-    /// STEEP DESCENT: an index into [`STEEP_DESCENT_PCT`] (0: OFF); data 170, OFF in a file that predates it.
+    /// STEEP DESC: an index into [`STEEP_DESCENT_PCT`] (0: OFF); data 170, OFF in a file that predates it.
     pub steep_descent: usize,
     /// CHAINRINGS: an index into [`CHAINRINGS`] (0: OFF, gear numbers); settings.bin only.
     pub chainrings: usize,
@@ -388,7 +388,7 @@ pub struct Settings {
     pub trip_m: [u32; 2],
     /// The time of each trip, s of moving time.
     pub trip_s: [u32; 2],
-    /// ODOMETER: the distance (m) of every ride saved on this unit since this build had it (data 119, u32); never reset.
+    /// ODO: the distance (m) of every ride saved on this unit since this build had it (data 119, u32); never reset.
     pub odo_m: u32,
     /// ZONES BY (ME): the heart-rate zones come from the LTHR, not the maximum (data 123; MAX HR in a file that predates it).
     pub zones_lthr: bool,
@@ -472,12 +472,12 @@ pub const CHAINRINGS: [(&str, &[u8]); 6] = [
 /// so gear `n` of a cassette is `teeth[len - n]`. Shimano's published 11 and 12-speed ratios.
 pub const CASSETTES: [(&str, &[u8]); 7] = [
     ("OFF", &[]),
-    ("11-28 11S", &[11, 12, 13, 14, 15, 17, 19, 21, 23, 25, 28]),
-    ("11-30 11S", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30]),
-    ("11-32 11S", &[11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32]),
-    ("11-34 11S", &[11, 13, 15, 17, 19, 21, 23, 25, 27, 30, 34]),
-    ("11-30 12S", &[11, 12, 13, 14, 15, 16, 17, 19, 21, 24, 27, 30]),
-    ("11-34 12S", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30, 34]),
+    ("11-28/11", &[11, 12, 13, 14, 15, 17, 19, 21, 23, 25, 28]),
+    ("11-30/11", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30]),
+    ("11-32/11", &[11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32]),
+    ("11-34/11", &[11, 13, 15, 17, 19, 21, 23, 25, 27, 30, 34]),
+    ("11-30/12", &[11, 12, 13, 14, 15, 16, 17, 19, 21, 24, 27, 30]),
+    ("11-34/12", &[11, 12, 13, 14, 15, 17, 19, 21, 24, 27, 30, 34]),
 ];
 
 /// The teeth of a Di2 gear word ([`Metric::Gear`]: front << 8 | rear, from 1) under the chosen presets, as
@@ -955,9 +955,7 @@ impl Settings {
                 l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
                 l.push_str(" S");
             }
-            Setting::AutoLap => {
-                l.push_str(["OFF", "BY DISTANCE", "BY TIME"].get(self.auto_lap).copied().unwrap_or("OFF"))
-            }
+            Setting::AutoLap => l.push_str(["OFF", "DISTANCE", "TIME"].get(self.auto_lap).copied().unwrap_or("OFF")),
             Setting::LiveSegments => l.push_str(if self.live_segments { "ON" } else { "OFF" }),
             Setting::SegTarget => l.push_str(SEGMENT_TARGETS.get(self.seg_target).copied().unwrap_or("AUTO")),
             Setting::Sound => l.push_str(if self.sound { "ON" } else { "OFF" }),

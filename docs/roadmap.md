@@ -54,7 +54,7 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
 - ~~**T4. Bounded metrics**~~ done, sim only (theming.md phase 2): `[metrics]` `zone_bar` 4 to 8 (a taller bar would cover the label's band: FIELD_LABEL_H), `frame` 1 to 4,
   `menu_row` 44 to 56 (clamped), read through `Canvas::theme()` and by the touch code from `App::menu_rows`; the
   fits tests, the menu tiling and the taps run at both ends of each range.
-- ~~**T5. Day and night**~~ done, sim only (theming.md section 4b): THEME AUTO, DAY THEME and NIGHT THEME, switched from
+- ~~**T5. Day and night**~~ done, sim only (theming.md section 4b): THEME AUTO, DAY and NIGHT, switched from
   the ambient light (ui/theme.rs `DayNight`, app/themes.rs): night under 20 lux, day over 50 lux, each held 30 s, at most
   one switch a minute, a full redraw each. Agent: implementer.
 - ~~**T6. Overview variants**~~ done, sim only (theming.md phase 3): `[theme] overview = classic | fields` (ui/overview.rs
@@ -123,7 +123,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); ~~a virtual course as a workout from the workout list~~ done, sim (features.md, RIDE A COURSE);
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~a larger ATT MTU,
   the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md);
-- ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); ~~a battery saver mode~~ done, sim (SYSTEM > BATTERY SAVER, features.md; per profile and the measured gain are open); ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
+- ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); ~~a battery saver mode~~ done, sim (SYSTEM > BATT SAVER, features.md; per profile and the measured gain are open); ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
   computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); ~~altitude calibration at saved places; favourite places~~ done, sim (PLACES, `\Rustfw\places.bin`,
   features.md; not seen on the unit, status.md); a place named after the nearest named point, routing to a place.
 

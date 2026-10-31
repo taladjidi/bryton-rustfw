@@ -150,7 +150,7 @@ sheets, at their test conditions), none was measured on the unit.
   while riding): about 0.1 mA and 0.01 mA (recalled from their data sheets): nothing to gain.
 
 
-## Battery saver (SYSTEM > BATTERY SAVER)
+## Battery saver (SYSTEM > BATT SAVER)
 
 OFF, ON, or AUTO (on once at 20 % or less, off at the charger). It reads existing knobs and changes no setting (app/device.rs
 `App::saver_on`), so OFF restores everything. **Savings are estimates from the tables above, none measured.**

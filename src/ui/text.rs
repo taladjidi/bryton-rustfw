@@ -137,7 +137,12 @@ impl Style {
             .map(|(i, ch)| i + ch.len_utf8())
             .take_while(|&e| self.width(s.get(..e).unwrap_or("")) <= w)
             .last();
-        s.get(..end.unwrap_or(0)).unwrap_or("")
+        let head = s.get(..end.unwrap_or(0)).unwrap_or("");
+        #[cfg(test)]
+        if head.len() < s.len() {
+            clips::note("fit", s, w);
+        }
+        head
     }
 
     /// Line height in screen pixels.
@@ -209,6 +214,10 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
         let w = (u32::from(g.advance) * k).min(right.saturating_sub(x));
+        #[cfg(test)]
+        if w < u32::from(g.advance) * k && g.w > 0 {
+            clips::note("draw_clipped", s, right.saturating_sub(x));
+        }
         if w == 0 {
             break;
         }
@@ -255,6 +264,10 @@ pub fn draw_in(c: &mut impl Canvas, style: &Style, x: u32, y: u32, w: u32, align
     // Cut at the last whole character that fits. `get` and not `[..]`: slicing can panic, and its message alone
     // pulls about 8 KB of formatting and Unicode tables into the image.
     let mut s = s;
+    #[cfg(test)]
+    if style.width(s) > w {
+        clips::note("draw_in", s, w);
+    }
     while style.width(s) > w {
         let end = s.char_indices().next_back().map_or(0, |(i, _)| i);
         s = s.get(..end).unwrap_or("");
@@ -361,6 +374,8 @@ impl<const N: usize> core::fmt::Write for Line<N> {
             let mut tmp = [0; 4];
             let bytes = c.encode_utf8(&mut tmp).as_bytes();
             let Some(dst) = self.buf.get_mut(self.len..self.len + bytes.len()) else {
+                #[cfg(test)]
+                clips::note("line", s, N as u32);
                 return Ok(()); // full: the rest is dropped, which is fine for a screen line
             };
             dst.copy_from_slice(bytes);
@@ -514,5 +529,42 @@ mod tests {
         let w = draw(&mut f, &PIX4, 200, 100, Align::Right, "42");
         assert!((200..240).all(|x| (100..140).all(|y| f.at(x, y) == BLACK)));
         assert!((200 - w..200).any(|x| (100..140).any(|y| f.at(x, y) == WHITE)));
+    }
+}
+
+/// Test-only record of text cut by its box (see src/sim/walk_tests.rs): the sim reads and clears it after each screen.
+#[cfg(test)]
+pub(crate) mod clips {
+    extern crate std;
+    use std::cell::{Cell, RefCell};
+    use std::string::String;
+    use std::vec::Vec;
+
+    /// One cut: which routine, the whole string, the box width.
+    pub type Clip = (&'static str, String, u32);
+
+    std::thread_local! {
+        static CLIPS: RefCell<Vec<Clip>> = const { RefCell::new(Vec::new()) };
+        static MAY: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// Records a cut, unless a [`may_truncate`] scope is open.
+    pub fn note(kind: &'static str, s: &str, w: u32) {
+        if MAY.with(Cell::get) == 0 {
+            CLIPS.with(|c| c.borrow_mut().push((kind, s.into(), w)));
+        }
+    }
+
+    /// Runs `f` where cutting is by design (a long name in a list): nothing is recorded.
+    pub fn may_truncate<R>(f: impl FnOnce() -> R) -> R {
+        MAY.with(|m| m.set(m.get() + 1));
+        let r = f();
+        MAY.with(|m| m.set(m.get() - 1));
+        r
+    }
+
+    /// Takes the cuts recorded so far.
+    pub fn take() -> Vec<Clip> {
+        CLIPS.with(|c| c.take())
     }
 }

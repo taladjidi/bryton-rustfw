@@ -758,7 +758,7 @@ fn cog_opens_settings_while_recording() {
     assert_eq!(app.rec.clean.phase(), crate::recorder::Phase::Recording);
 }
 
-/// SYSTEM scrolled to its last row: the last screen is full (the last `MENU_ROWS` rows, BATTERY SAVER at the bottom), not
+/// SYSTEM scrolled to its last row: the last screen is full (the last `MENU_ROWS` rows, BATT SAVER at the bottom), not
 /// one row at the top and empty slots under it (2026-10-29).
 #[test]
 fn last_screen_of_system_is_full() {
@@ -776,7 +776,7 @@ fn last_screen_of_system_is_full() {
     for slot in 0..ui::MENU_ROWS {
         assert!(app.menu_row(Menu::System, first + slot).is_some(), "slot {slot} is empty");
     }
-    let bottom = app.menu_row(Menu::System, first + ui::MENU_ROWS - 1).map(|r| r.0.as_str() == "BATTERY SAVER");
+    let bottom = app.menu_row(Menu::System, first + ui::MENU_ROWS - 1).map(|r| r.0.as_str() == "BATT SAVER");
     assert_eq!(bottom, Some(true));
 }
 
