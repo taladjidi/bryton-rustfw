@@ -168,6 +168,16 @@ impl App {
         }
     }
 
+    /// The ride's state for the dev link's `info`: a finished ride still being saved is "ending".
+    pub(crate) fn ride_word(&self) -> &'static [u8] {
+        match self.ride.state() {
+            ride::State::Running => b"running",
+            ride::State::Paused => b"paused",
+            ride::State::Idle if self.ride_settled() => b"idle",
+            ride::State::Idle => b"ending",
+        }
+    }
+
     /// No ride running, and none waiting to be resumed or saved: the card may be used for something else.
     pub(crate) fn ride_settled(&self) -> bool {
         self.ride.state() == ride::State::Idle

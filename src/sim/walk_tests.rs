@@ -29,14 +29,33 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The menus whose rows are the const tables (MAIN, SETTINGS, ME, ZONES, DISPLAY, BIKE, ALERTS, REMOTE = DI2 KEYS) or
+/// depend on nothing stored (PAGES: three profiles and fixed rows): a Start there lands on the same row on the unit.
+/// Every other menu (sensors, places, bikes, history, the ride menu, SYSTEM, storage...) lists data.
+fn static_menu(m: Menu) -> bool {
+    matches!(
+        m,
+        Menu::Main
+            | Menu::Settings
+            | Menu::Me
+            | Menu::Zones
+            | Menu::Display
+            | Menu::Bike
+            | Menu::Alerts
+            | Menu::Pages
+            | Menu::Remote
+    )
+}
+
 struct Walk {
     n: usize,
-    /// The keys from the overview to where the walk is.
-    keys: Vec<&'static str>,
+    /// The keys from the overview to where the walk is, each with whether it is a Start pressed inside a menu whose
+    /// rows depend on data (tools/walk.py refuses such a path: the unit's rows differ from the sim's).
+    keys: Vec<(&'static str, bool)>,
     /// The screen being exercised (its path), to name the cuts.
     cur: String,
     /// (screen path, keys from the overview).
-    paths: Vec<(String, Vec<&'static str>)>,
+    paths: Vec<(String, Vec<(&'static str, bool)>)>,
     seen: Vec<Menu>,
     found: Vec<(String, Clip)>,
 }
@@ -70,7 +89,8 @@ fn key(sim: &mut Sim, app: &mut App, w: &mut Walk, k: &'static str) {
         "back" => Press::Short(Key::Back),
         _ => unreachable!("unknown key {k}"),
     };
-    w.keys.push(k);
+    let dynamic = k == "start" && matches!(app.screen(), Screen::Menu(m, _) if !static_menu(m));
+    w.keys.push((k, dynamic));
     app.press(sim, p);
     run(sim, app, 30);
     w.drain();
@@ -299,8 +319,9 @@ fn walk_every_screen() {
         .iter()
         .enumerate()
         .map(|(i, (n, k))| {
-            let ks: Vec<String> = k.iter().map(|s| format!("\"{s}\"")).collect();
-            format!("{{\"n\":{},\"name\":\"{n}\",\"keys\":[{}]}}", i + 1, ks.join(","))
+            let ks: Vec<String> = k.iter().map(|s| format!("\"{}\"", s.0)).collect();
+            let dynamic = k.iter().any(|s| s.1);
+            format!("{{\"n\":{},\"name\":\"{n}\",\"dyn\":{dynamic},\"keys\":[{}]}}", i + 1, ks.join(","))
         })
         .collect();
     std::fs::write(dir.join("paths.json"), format!("[\n{}\n]\n", json.join(",\n"))).unwrap();

@@ -59,6 +59,8 @@ fi
 python3 -I tools/numbers.py --write
 python3 -I tools/numbers.py selftest
 python3 -I tools/dev.py selftest
+# the unit walk's path filter and contact sheets; skipped without PIL (plain python3: PIL may be in the user site)
+if python3 -c 'import PIL' 2>/dev/null; then python3 tools/walk.py selftest; else skipped="${skipped:+$skipped }walk (PIL)"; fi
 python3 -I tools/sync.py selftest  # a fake Intervals.icu and Strava on 127.0.0.1: no network
 python3 -I tools/assist.py selftest  # AssistNow Offline trim and copy; no network
 python3 -I tools/segments.py selftest  # the live segment writer on synthetic efforts; the committed fixture equals a fresh one

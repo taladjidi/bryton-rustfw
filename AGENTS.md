@@ -295,6 +295,8 @@ The commands, the profiler, Renode, the testing layers, the run-from-RAM loop, E
 decision are in docs/devloop.md. One rule stays here, since that doc does not state it:
 - **Renode passing proves little:** it does not model the MPU, caches, attributes, a real WFI wake, SPI or ULPI
   timing (it passed an image whose SPI1 lost master mode on the unit, 2026-10-22). The simulator is the main tool.
+- **After a batch of screen changes, run `tools/walk.py`** (docs/devloop.md): every screen on the unit beside the
+  simulator's, a reset or fault check. It refuses paths that save, write the card or change a setting.
 
 ## Later (when the firmware does more than one thing)
 
