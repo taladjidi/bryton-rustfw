@@ -5,3 +5,5 @@ firmware/R039/
 ant_key.bin
 di2_key.bin
 .claude/
+mutants.out*
+check.log

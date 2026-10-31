@@ -187,6 +187,10 @@ the `font_sheet` test) when choosing a text size.
 
 ## Tests
 
+- **Per branch, not in check.sh (slow):** `python3 tools/review.py` (cargo-mutants on the diff, new jscpd clones, lint); attach its
+  `target/review/report.md` to the review. A MISSED mutant is a change no test notices. The runner runs
+  `python3 tools/review.py --quick` before each merge (mutants only where the diff touches src/storage/); the full run is the review step.
+
 - **Unit tests:** in `#[cfg(test)] mod tests` at the bottom of each file. `src/ui/` tests draw into a framebuffer
   that panics on any off-screen fill.
 - **Simulator tests (`src/sim/`):** the whole app runs against `Sim`, a fake `Board`.

@@ -1,0 +1,5 @@
+# cargo-mutants for tools/review.py: build and test on the Mac (the default target is the bike computer).
+additional_cargo_args = ["--target", "aarch64-apple-darwin"]
+additional_cargo_test_args = ["--target", "aarch64-apple-darwin"]
+# not host-testable or not firmware logic: the simulator, generated fonts, the board, the binary's main
+exclude_globs = ["src/sim/**", "src/ui/fonts.rs", "src/board/**", "src/main.rs"]
