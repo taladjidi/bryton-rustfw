@@ -123,8 +123,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); a virtual course as a workout from the workout list;
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept), a larger ATT MTU,
   the notification's app shown;
-- ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); a battery saver mode; GNSS systems chosen per profile; AssistNow offline data from the
-  computer; altitude calibration at saved places; favourite places.
+- ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); a battery saver mode; ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
+  computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); altitude calibration at saved places; favourite places.
 
 **3d. Hard** (new radios, core changes, routing):
 - ANT+ lights; ANT+ radar and its alerts (sonnet); the sensor pool (several of a kind); ANT+ remote buttons;

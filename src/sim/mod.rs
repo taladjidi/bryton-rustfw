@@ -544,6 +544,10 @@ pub struct Gnss {
     /// and each change: (simulated ms, mode).
     pub pm_mode: u8,
     pub pm_log: Vec<(u64, u8)>,
+    /// Each CFG-SIGNAL key a CFG-VALSET set (CFG-SIGNAL-GPS_ENA ... GLO_ENA), in order: (key, value).
+    pub signals: Vec<(u32, u8)>,
+    /// Each UBX-MGA-ANO received whole: (simulated ms, svId, gnssId, year since 2000, month, day).
+    pub ano: Vec<(u64, u8, u8, u8, u8, u8)>,
     /// Horizontal accuracy of a fix, mm (0: 3 m).
     pub h_acc_mm: u32,
     /// Its own UBX framing of what it receives.
@@ -593,7 +597,15 @@ impl Gnss {
     /// A byte from the host: CFG-VALSET's keys taken (the RAM layer only, as this firmware sends; each key's value
     /// size from its bits 28..30, u-blox M10 interface description UBX-21035062, "Configuration interface").
     fn receive(&mut self, now: u64, byte: u8) {
-        let Some((0x06, 0x8a, p)) = self.rx.push(byte) else { return };
+        let Some((class, id, p)) = self.rx.push(byte) else { return };
+        if (class, id) == (0x13, 0x20) {
+            assert_eq!(p.len(), 76, "MGA-ANO is 76 bytes");
+            self.ano.push((now, p[2], p[3], p[4], p[5], p[6]));
+            return;
+        }
+        if (class, id) != (0x06, 0x8a) {
+            return;
+        }
         assert_eq!(p.get(..2), Some(&[0, 0x01][..]), "VALSET version 0, the RAM layer only");
         let mut at = 4;
         while let Some(k) = p.get(at..at + 4) {
@@ -604,6 +616,9 @@ impl Gnss {
                 4 => 4,
                 _ => 8,
             };
+            if (0x1031_0000..0x1031_0100).contains(&key) {
+                self.signals.push((key, p[at + 4]));
+            }
             if key == 0x20d0_0001 {
                 let mode = p[at + 4];
                 if mode != self.pm_mode || self.pm_log.is_empty() {
@@ -1549,6 +1564,8 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
     }
 }
 
+#[cfg(test)]
+mod assist_tests;
 #[cfg(test)]
 mod course_tests;
 #[cfg(test)]

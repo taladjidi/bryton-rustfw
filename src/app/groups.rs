@@ -130,6 +130,11 @@ pub(crate) struct Gps {
     pub(crate) sent: u8,
     /// The configuration goes again at the next message (the GPS POWER setting changed).
     pub(crate) reconfig: bool,
+    /// The systems go again at the next message (the GNSS SYSTEMS setting changed).
+    pub(crate) resys: bool,
+    /// AssistNow Offline: the card's file being read and sent ([`mga::Ano`]), and the passes to wait between messages.
+    pub(crate) ano: mga::Ano,
+    pub(crate) ano_gap: u8,
     /// The power mode the last configuration sent (saver: cyclic tracking).
     pub(crate) saver: bool,
     /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
@@ -159,6 +164,9 @@ impl Gps {
             ms: 0,
             sent: 0,
             reconfig: false,
+            resys: false,
+            ano: mga::Ano::new(),
+            ano_gap: 0,
             saver: false,
             wait: 0,
             off: false,

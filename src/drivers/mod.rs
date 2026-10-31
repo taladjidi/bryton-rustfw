@@ -10,6 +10,7 @@ pub mod fec;
 pub mod fecble;
 pub mod ftms;
 pub mod gnss;
+pub mod mga;
 pub mod nrf;
 pub mod panel;
 pub mod powercal;

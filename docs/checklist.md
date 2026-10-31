@@ -145,9 +145,9 @@ Others
 - [ ] Running dynamics / MTB fork and shock sensors (Garmin, Karoo)
 - [ ] Muscle oxygen and core temperature sensors as fields (Garmin, Wahoo)
 - [x] GPS (u-blox M10), with last position at power-up for a fast fix (stock, all): unit
-- [ ] GNSS systems chosen per profile (GPS, Galileo, GLONASS, BeiDou, QZSS) (stock, all)
+- [~] GNSS systems chosen (GPS, Galileo, GLONASS; BeiDou by the default): sim, one setting for all profiles, not per profile (stock, all)
 - [ ] Dual-frequency GNSS (Garmin, Wahoo, Coros)
-- [ ] AssistNow offline data from the update tool or the phone (stock)
+- [x] AssistNow offline data from the computer (`tools/assist.py`, `\Rustfw\mga.ubx`): sim; not from the phone (stock)
 - [x] Barometer: pressure and temperature (stock, all): unit
 - [x] Barometric altitude, calibrated by hand, from GPS or at a ride's start (stock, Garmin): sim; not at saved places
 - [x] Ambient light sensor (stock): unit

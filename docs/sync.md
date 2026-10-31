@@ -158,6 +158,19 @@ Intervals.icu, Strava and Domestique show the rides as from a Bryton Rider S510 
 treat its altitude as barometric. Rides recorded before 2026-10-26 carry manufacturer 255 (development) and show as
 "DEVELOPMENT".
 
+## AssistNow Offline (`tools/assist.py`)
+
+Helps the GNSS receiver find its first fix sooner (docs/features.md, BIKE > GNSS SYSTEMS). One-time setup: a free
+u-blox Thingstream account gives an AssistNow token. Keep it outside the repository: in the environment
+(`UBLOX_ASSISTNOW_TOKEN`) or in `~/.config/bryton-rustfw/assist.json` (`{"token": "..."}`, `chmod 600`). Then, with
+the unit mounted as a drive:
+
+    python3 tools/assist.py            # downloads a week of predictions, keeps today's on, copies to \Rustfw\mga.ubx
+
+The file lasts the week; run it again from time to time (weekly is enough). The token is never printed or written to the
+unit. Stock's own file is `\System\mgaoffline.ubx`, which its phone app downloads; this firmware reads its own copy and
+never touches stock's.
+
 ## Not yet seen
 
 - Not yet run against the real Intervals.icu and Strava, nor with the unit's drive (docs/status.md).

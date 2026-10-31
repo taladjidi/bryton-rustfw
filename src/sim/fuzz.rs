@@ -5424,3 +5424,63 @@ fn climbs_done_views() {
     }
     assert!(completed > 0, "the fuzz never completed a climb");
 }
+
+/// `\Rustfw\mga.ubx` (drivers/mga.rs `Ano`): a file the computer put on the volume, read a sector at a time. Built
+/// from real MGA-ANO frames of several days, with frames of other classes and ids, flipped bytes (bad checksums),
+/// cut frames, wrong lengths, noise and a short last sector; the reader must never panic, and every frame it gives
+/// must be a whole MGA-ANO of the wanted day with a good checksum. The counts assert the fuzz reached the reader:
+/// frames given, files that gave none, frames damaged or of another class on purpose.
+#[test]
+fn offline_assist_file() {
+    use crate::gnss::Parser;
+    use crate::mga::{Ano, ano};
+    let (mut given, mut empty, mut rejected, mut other_class) = (0u32, 0u32, 0u32, 0u32);
+    for seed in 1..400u32 {
+        let mut r = xorshift(seed * 7919);
+        let day = (26u8, 10u8, 20 + (r() % 4) as u8);
+        let mut file: Vec<u8> = Vec::new();
+        for _ in 0..r() % 120 {
+            let d = (day.0, day.1, 20 + (r() % 4) as u8);
+            let mut f = ano((r() % 4) as u8, (r() % 40) as u8, d).to_vec();
+            match r() % 8 {
+                0 => {
+                    let at = 2 + (r() as usize) % 82;
+                    f[at] ^= 1 << (r() % 8);
+                    rejected += 1;
+                }
+                1 => f.truncate((r() as usize) % 84),
+                2 => {
+                    f[3] = 0x21 + (r() % 3) as u8; // MGA-FLASH and its neighbours: not ours
+                    other_class += 1;
+                }
+                3 => file.extend((0..r() % 40).map(|_| r() as u8)),
+                4 => f[4] = (r() % 120) as u8, // a wrong length
+                _ => {}
+            }
+            file.extend(f);
+        }
+        let mut a = Ano::new();
+        a.start((2026, day.1, day.2));
+        let mut n = 0;
+        while !a.done() {
+            while let Some(f) = a.take() {
+                let mut p = Parser::new();
+                let whole: Vec<_> = f.iter().filter_map(|&b| p.push(b).map(|(c, i, q)| (c, i, q.to_vec()))).collect();
+                assert_eq!(whole.len(), 1, "one whole frame with a good checksum");
+                let (c, i, q) = &whole[0];
+                assert_eq!((*c, *i, q.len()), (0x13, 0x20, 76));
+                assert_eq!((q[4], q[5], q[6]), day, "the wanted day");
+                n += 1;
+            }
+            if let Some((off, buf)) = a.want() {
+                let from = (off as usize).min(file.len());
+                let m = (file.len() - from).min(512);
+                buf[..m].copy_from_slice(&file[from..from + m]);
+                a.filled(m);
+            }
+        }
+        given += n;
+        empty += u32::from(n == 0);
+    }
+    assert!(given > 1000 && empty > 0 && rejected > 100 && other_class > 100, "the fuzz reached the reader: {given} {empty} {rejected} {other_class}");
+}

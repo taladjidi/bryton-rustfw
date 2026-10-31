@@ -135,6 +135,39 @@ pub fn config(saver: bool) -> [u8; 32] {
     frame(0x06, 0x8a, &p)
 }
 
+/// The GNSS SYSTEMS choices ([`systems`]'s argument): the receiver's default (GPS, Galileo and BeiDou B1I; stock leaves
+/// it so), GPS alone, GPS and Galileo, GPS, Galileo and GLONASS. The M10 tracks at most three systems at once; the
+/// data sheet (MAX-M10S UBX-20035208 R08, table 15) puts GPS alone at 7.5 mA tracking, GPS + Galileo at 8, and the
+/// default at 9.5 (continuous, 3 V, 1 Hz).
+pub const SYSTEMS: [&str; 4] = ["DEFAULT", "GPS", "GPS+GAL", "GPS+GAL+GLO"];
+
+/// UBX-CFG-VALSET to the RAM layer: which GNSS the receiver tracks, by [`SYSTEMS`] index (the CFG-SIGNAL-GPS_ENA,
+/// GAL_ENA, BDS_ENA and GLO_ENA keys of u-blox's M10 SPG 5.10 interface description UBX-21035062, CFG-SIGNAL; key
+/// ids 0x1031001f, 0x10310021, 0x10310022, 0x10310025, cross-checked with pyubx2's `ubxtypes_configdb.py`). The
+/// receiver restarts its GNSS engine when they change. SBAS and QZSS are left as they are.
+///
+/// ```
+/// use bryton_rustfw::gnss::systems;
+/// assert_eq!([14, 19, 24, 29].map(|i| systems(1)[i]), [1, 0, 0, 0], "GPS alone");
+/// assert_eq!([14, 19, 24, 29].map(|i| systems(3)[i]), [1, 1, 0, 1], "GPS, Galileo, GLONASS");
+/// ```
+pub fn systems(choice: usize) -> [u8; 32] {
+    const KEYS: [u32; 4] = [0x1031_001f, 0x1031_0021, 0x1031_0022, 0x1031_0025];
+    let on: [u8; 4] = match choice {
+        1 => [1, 0, 0, 0],
+        2 => [1, 1, 0, 0],
+        3 => [1, 1, 0, 1],
+        _ => [1, 1, 1, 0],
+    };
+    let mut p = [0u8; 24];
+    p[..4].copy_from_slice(&[0, 0x01, 0, 0]); // version 0, layers: RAM
+    for (i, (key, v)) in KEYS.iter().zip(on).enumerate() {
+        p[4 + 5 * i..8 + 5 * i].copy_from_slice(&key.to_le_bytes());
+        p[8 + 5 * i] = v;
+    }
+    frame(0x06, 0x8a, &p)
+}
+
 /// GPS POWER AUTO's thresholds and why. The trade (u-blox M10 integration manuals, e.g. SAM-M10Q UBX-22020019 R01,
 /// 2.6.2 "Power save mode"): cyclic tracking (PSMCT) keeps the 1 Hz navigation output ("In the POT state the receiver
 /// continues to output position fixes according to the CFG-RATE-*"), but in its power optimized tracking state "no new

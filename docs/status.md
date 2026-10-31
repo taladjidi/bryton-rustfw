@@ -165,6 +165,15 @@ A feature not listed here was seen on the unit.
 - **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: seen on the unit 2026-10-29: 7 passes a second idle
   on the overview (`prof`, 1 s window, 0.91 % awake). Still to see: a real press of each key, after 30 s idle, acts at
   once (not up to 250 ms later).
+- **GNSS SYSTEMS and AssistNow Offline (`gnss::systems`, `mga::Ano`, `tools/assist.py`)**: on the host only. On the unit:
+  CFG-VALGET of the CFG-SIGNAL-GPS/GAL/BDS/GLO_ENA keys (0x1031001f, 21, 22, 25) reads what the setting says after
+  power-up and after a change (and the receiver keeps tracking after the restart of its engine); with `mga.ubx` on
+  the drive, `tools/gnss.py` shows UBX-MGA-ACK answers if CFG-NAVSPG-ACKAIDING is on, and the receiver takes the
+  messages at 840 B/s without loss. **Time to first fix, how to measure:** with the unit off for over 4 hours (no
+  ephemeris left), outdoors in the open, power it on and read the time from power-up to the first NAV-PVT with
+  fixType 3 (`tools/dev.py` `info`, or the strip going green) five times with the file and five times without it
+  (rename it); the same with the position and time aiding only is the baseline (BOARD.md 13: not measured yet).
+  Also whether the receiver accepts ANO of a system it is not set to track (GLONASS with GPS+GAL).
 - **GPS POWER AUTO (`gnss::Adaptive`)**: on the host only. On the unit, a road ride: `tools/gnss.py` CFG-VALGET of
   0x20d00001 reads 2 after 11 minutes fast and straight, 0 within a second of a stop or a hairpin; the track and the
   speed against FULL's (and a speed sensor's) on the same road; the share of the ride in cyclic tracking.

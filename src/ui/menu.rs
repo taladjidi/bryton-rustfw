@@ -151,6 +151,8 @@ pub enum Setting {
     GpsPower,
     /// ERG targets corrected so the power meter reads them, on or off (`power_match`, [`crate::power_match`]).
     PowerMatch,
+    /// GNSS SYSTEMS (BIKE): which satellite systems the receiver tracks ([`crate::gnss::SYSTEMS`]).
+    GnssSystems,
     /// LEVEL STEP (BIKE): how many levels a press moves in the trainer's LEVEL mode ([`crate::LEVEL_STEPS`]).
     LevelStep,
     /// SLOPE SCALE (BIKE): how much of the course's grade the trainer is given ([`crate::SLOPE_SCALES`]).
@@ -307,6 +309,7 @@ impl Setting {
             Setting::DaylightSaving => "SUMMER TIME",
             Setting::MapUp => "MAP",
             Setting::PowerMatch => "POWER MATCH",
+            Setting::GnssSystems => "GNSS SYSTEMS",
             Setting::LevelStep => "LEVEL STEP",
             Setting::SlopeScale => "SLOPE SCALE",
             Setting::Lthr => "LTHR",
@@ -918,7 +921,7 @@ pub const DISPLAY: [Row; 14] = [
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 22] = [
+pub const BIKE: [Row; 23] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -928,6 +931,7 @@ pub const BIKE: [Row; 22] = [
     Row::Set(Setting::ClimbsMedium),
     Row::Set(Setting::ClimbPage),
     Row::Set(Setting::GpsPower),
+    Row::Set(Setting::GnssSystems),
     Row::Set(Setting::PowerMatch),
     Row::Set(Setting::LevelStep),
     Row::Set(Setting::SlopeScale),
