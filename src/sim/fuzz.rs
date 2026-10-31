@@ -5277,6 +5277,53 @@ fn settings_file_time_zone_bytes() {
     assert!(zones > 1000 && rules > 1000 && wild > 1000 && short > 1000, "{zones} {rules} {wild} {short}");
 }
 
+/// LEVEL STEP and SLOPE SCALE (settings bytes 168, 169): random bytes, in range and wild, files of 168 to 170 bytes;
+/// the indexes read always lie inside their tables. The fuzz reaches kept and wild bytes.
+#[test]
+fn settings_file_trainer_bytes() {
+    use crate::{LEVEL_STEPS, SLOPE_SCALES, SettingsCopy};
+    let mut next = xorshift(0x1e7e);
+    let (mut kept, mut wild) = (0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 168 + (next() % 3) as usize;
+        let (a, b) = (
+            if next().is_multiple_of(2) { (next() % 3) as u8 } else { next() as u8 },
+            if next().is_multiple_of(2) { (next() % 4) as u8 } else { next() as u8 },
+        );
+        sec[28 + 168..28 + 170].copy_from_slice(&[a, b]);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        assert!(st.level_step < LEVEL_STEPS.len() && st.slope_scale < SLOPE_SCALES.len());
+        kept += u32::from(len > 168 && usize::from(a) < LEVEL_STEPS.len());
+        wild += u32::from(len > 169 && usize::from(b) >= SLOPE_SCALES.len());
+    }
+    assert!(kept > 1000 && wild > 1000, "{kept} {wild}");
+}
+
+/// LEVEL mode under random keys and LEVEL STEPs: the level stays 1 to 20 and the brake at most 100 %.
+#[test]
+fn trainer_level_steps() {
+    use crate::trainer::{Command, Drive, LEVELS, Trainer};
+    let mut next = xorshift(0x1e7e1);
+    let mut t = Trainer::default();
+    let none = Drive::default();
+    t.cycle_mode(&none);
+    t.cycle_mode(&none);
+    let (mut lo, mut hi) = (0u32, 0u32);
+    for _ in 0..20_000 {
+        let d = Drive { level_step: next() as u8, ..Drive::default() };
+        t.step_by(&d, next().is_multiple_of(2), next().is_multiple_of(2));
+        assert!((1..=LEVELS).contains(&t.level()));
+        assert!(matches!(t.command(&d), Command::Resistance(h) if h <= 200));
+        lo += u32::from(t.level() == 1);
+        hi += u32::from(t.level() == LEVELS);
+    }
+    assert!(lo > 100 && hi > 100, "{lo} {hi}");
+}
+
 /// Where TIME ZONE is in the settings data.
 const TZ_AT: usize = 165;
 

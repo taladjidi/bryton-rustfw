@@ -512,8 +512,8 @@ impl App {
                 unit(l, "%");
             }
             Mode::Level => {
-                l.push_str("LVL ");
                 l.push_u32(u32::from(t.level()));
+                l.push_str("/20");
             }
             Mode::Sim => {
                 let g = i32::from(t.grade(&d));

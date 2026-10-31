@@ -7,6 +7,8 @@
 //! - **ERG**: hold a target power, whatever the cadence. Driven by the workout's power step ([`Drive::erg_w`]) or,
 //!   with none, by hand.
 //! - **RESISTANCE**: a fixed brake, percent of the trainer's maximum.
+//! - **LEVEL**: a fixed brake in 20 levels of 5 % ([`LEVELS`]), sent as RESISTANCE is; LEVEL STEP sets how many a
+//!   press moves. On FTMS the 20 levels are spread over the trainer's reported resistance range.
 //! - **SIM**: the road: a grade (the course's at the distance ridden, [`Drive::grade_x100`], or by hand), with a
 //!   rolling resistance coefficient ([`CRR`]).
 //!

@@ -347,9 +347,11 @@ fn the_screen_changes_the_target_and_the_mode() {
     sim.save("trainer_screen_res");
     app.press(&mut sim, Press::Short(Key::Start)); // level
     assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "LVL");
+    app.settings.level_step = 2; // 5 levels a press
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 600);
-    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.resistance), (0x30, 60), "level 6, 30 % in 0.5 % units");
+    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.resistance), (0x30, 100), "level 10, 50 % in 0.5 % units");
+    assert_eq!(app.trainer_field(Field::TrainerTarget).as_str(), "10/20");
     app.press(&mut sim, Press::Short(Key::Start)); // simulation
     app.press(&mut sim, Press::Short(Key::Lap));
     run(&mut sim, &mut app, 600);
