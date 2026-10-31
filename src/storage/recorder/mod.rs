@@ -269,6 +269,12 @@ pub const KEPT: [(&str, u32); 8] = [
     (crate::trash::REC, SECTOR_U32),
 ];
 
+/// The clusters a file of `size` bytes takes, at least one. A cluster of 0 bytes (never: the mount takes a power of two
+/// sectors) counts as one byte: no division by zero on the save's path.
+fn clusters_for(size: u32, cluster_bytes: u32) -> u32 {
+    size.div_ceil(cluster_bytes.max(1)).max(1)
+}
+
 /// [`KEPT`] made where missing or not their size (zeros where they were shorter), then `\Rustfw\Deleted\Full` and
 /// `\Rustfw\Log` (the fault log's folder: storage/faultlog.rs never makes it); the FATs synced first when anything is
 /// to be made, as in [`Recorder::setup`] (a cut while making them leaves no record to say so). Reads only when all
@@ -1510,7 +1516,7 @@ impl Recorder {
         fat.write_sectors(d, &mut file, 0, &s)?;
         // a checkpoint that grew the chain, then failed: cut back to the size (its entry's size first), else saved
         // a cluster longer than its size
-        if file.clusters > size.div_ceil(fat.cluster_bytes()).max(1) {
+        if file.clusters > clusters_for(size, fat.cluster_bytes()) {
             fat.set_size(d, &mut file, size, t)?;
             self.file = Some(file);
         }
