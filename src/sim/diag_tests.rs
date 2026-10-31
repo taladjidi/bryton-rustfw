@@ -45,12 +45,20 @@ fn newest_notice(app: &App) -> &str {
     app.notes.list[0].as_str()
 }
 
+/// The volume with stock's `\Screenshot` folder in it (stock ships it; this firmware never makes it).
+fn with_screenshot_folder(img: Vec<u8>) -> Vec<u8> {
+    let mut d = Ram(img, 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    fat.ensure_dir(&mut d, fat.root(), screenshot::DIR, (0, 0)).unwrap();
+    d.0
+}
+
 /// The menus' SCREENSHOT: the menus left, the screen under them saved at the next pass as
 /// `\Screenshot\YYYYMMDDhhmmss.bmp`, which decodes to the panel's pixels; the volume clean.
 #[test]
 fn screenshot_saves_the_panel() {
     let (mut sim, mut app) = started();
-    sim.emmc.image = crate::storage::trash::tests::volume();
+    sim.emmc.image = with_screenshot_folder(crate::storage::trash::tests::volume());
     run(&mut sim, &mut app, 3000);
     let rides_before = rides(&sim.emmc.image);
     app.press(&mut sim, Press::Long(Key::Page));
@@ -58,7 +66,7 @@ fn screenshot_saves_the_panel() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "the menus left: {:?}", app.screen());
     app.step(&mut sim);
-    let shots = files(&sim.emmc.image, "Screenshot").expect("the folder made");
+    let shots = files(&sim.emmc.image, "Screenshot").expect("the folder");
     assert_eq!(shots.len(), 1, "{shots:?}");
     let (name, size) = &shots[0];
     assert!(name.starts_with("20261023090") && name.ends_with(".bmp") && name.len() == 18, "{name}");
@@ -71,7 +79,7 @@ fn screenshot_saves_the_panel() {
     assert_eq!(rides(&sim.emmc.image), rides_before);
 }
 
-/// A full card (FSInfo right): a notice, nothing written, no folder. FSInfo stale (a computer's write), so the room
+/// A full card (FSInfo right): a notice, nothing written, no file. FSInfo stale (a computer's write), so the room
 /// check passes and the card fills up mid-write: a notice, no file, the chain freed (no cluster lost). The same stale
 /// count after a failed write (the FAT copies suspect): the FAT counted first, so nothing written. During a ride:
 /// refused, nothing written.
@@ -79,7 +87,7 @@ fn screenshot_saves_the_panel() {
 fn screenshot_on_a_full_card_or_during_a_ride_writes_nothing() {
     for (tell, suspect) in [(true, false), (false, false), (false, true)] {
         let (mut sim, mut app) = started();
-        let mut img = crate::fat::tests::image();
+        let mut img = with_screenshot_folder(crate::fat::tests::image());
         fill(&mut img, 5, tell);
         sim.emmc.image = img;
         run(&mut sim, &mut app, 3000);
@@ -89,11 +97,7 @@ fn screenshot_on_a_full_card_or_during_a_ride_writes_nothing() {
         let case = std::format!("tell {tell}, suspect {suspect}");
         assert!(newest_notice(&app).ends_with("CARD FULL: NO SCREENSHOT"), "{case}: {}", newest_notice(&app));
         let shots = files(&sim.emmc.image, "Screenshot");
-        if tell || suspect {
-            assert_eq!(shots, None, "{case}: nothing written");
-        } else {
-            assert_eq!(shots, Some(Vec::new()), "{case}: the folder, no file");
-        }
+        assert_eq!(shots, Some(Vec::new()), "{case}: the folder, no file");
         assert_eq!(fsck(&sim.emmc.image), Ok(0), "{case}: no cluster lost");
     }
 
@@ -108,6 +112,53 @@ fn screenshot_on_a_full_card_or_during_a_ride_writes_nothing() {
     assert_eq!(files(&sim.emmc.image, "Screenshot"), None);
 }
 
+/// No `\Screenshot` folder (stock ships it; this firmware never makes it): the shot is refused with its notice, and
+/// the root directory sector, which holds `\Activities` and `\System`, is byte for byte as it was.
+#[test]
+fn screenshot_without_its_folder_writes_nothing() {
+    let (mut sim, mut app) = started();
+    sim.emmc.image = crate::fat::tests::image();
+    run(&mut sim, &mut app, 3000);
+    let root = root_cluster(&sim.emmc.image);
+    let before = sim.emmc.image[root.clone()].to_vec();
+    app.shot_due = true;
+    app.step(&mut sim);
+    assert!(newest_notice(&app).ends_with("NO SCREENSHOT FOLDER"), "{}", newest_notice(&app));
+    assert_eq!(files(&sim.emmc.image, "Screenshot"), None, "no folder made");
+    assert_eq!(sim.emmc.image[root], before[..], "the root directory cluster unchanged");
+    assert_eq!(fsck(&sim.emmc.image), Ok(0));
+}
+
+/// The bytes of the root directory's whole cluster (`\Activities` and `\System` live in it).
+fn root_cluster(img: &[u8]) -> std::ops::Range<usize> {
+    let mut d = Ram(img.to_vec(), 0);
+    let fat = Fat::mount(&mut d).unwrap();
+    let at = fat.lba(fat.root().cluster) as usize * 512;
+    at..at + fat.cluster_bytes() as usize
+}
+
+/// A plain empty file named `Screenshot` in the root, where the folder goes: refused like a missing folder, and
+/// nothing is written into the file or the root cluster.
+#[test]
+fn screenshot_with_a_file_named_screenshot_writes_nothing() {
+    let (mut sim, mut app) = started();
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let root = fat.root();
+    fat.link(&mut d, root, "Screenshot", &crate::fat::write::Handle::default(), (0, 0)).unwrap();
+    sim.emmc.image = d.0;
+    run(&mut sim, &mut app, 3000);
+    let root = root_cluster(&sim.emmc.image);
+    let before = sim.emmc.image[root.clone()].to_vec();
+    app.shot_due = true;
+    app.step(&mut sim);
+    assert!(newest_notice(&app).ends_with("NO SCREENSHOT FOLDER"), "{}", newest_notice(&app));
+    let file = crate::storage::trash::tests::file(&sim.emmc.image, "Screenshot");
+    assert_eq!(file, Some(Vec::new()), "the plain file untouched");
+    assert_eq!(sim.emmc.image[root], before[..], "the root cluster unchanged");
+    assert_eq!(fsck(&sim.emmc.image), Ok(0));
+}
+
 /// A power cut after every sector of a screenshot: the volume as fsck takes it (at most the shot's chain lost, the
 /// FAT copies apart in one sector at most, no chain past its size), either no file or the whole picture, and every
 /// ride byte for byte as it was.
@@ -115,7 +166,7 @@ fn screenshot_on_a_full_card_or_during_a_ride_writes_nothing() {
 fn screenshot_cut_at_every_sector() {
     let base = || {
         let mut sim = Sim::new(9, 0, 0);
-        sim.emmc.image = crate::storage::trash::tests::volume();
+        sim.emmc.image = with_screenshot_folder(crate::storage::trash::tests::volume());
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 3000);
         (sim, app)
@@ -353,7 +404,7 @@ fn fault_log_retried_after_a_failure() {
 #[test]
 fn second_screenshot_in_the_same_second() {
     let (mut sim, mut app) = started();
-    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.image = with_screenshot_folder(crate::fat::tests::image());
     run(&mut sim, &mut app, 3000);
     app.shot_due = true;
     app.step(&mut sim);
