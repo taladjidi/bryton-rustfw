@@ -48,6 +48,8 @@
 //!   `DrawTarget::draw_iter` (src/primitives/line/thick_points.rs), and it brings 5 crates (az, byteorder,
 //!   float-cmp, micromath, embedded-graphics-core); here a road row is one slice `fill` into the buffer.
 
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
+
 use crate::fat::{self, Disk, Fat, File, Seek};
 use crate::fonts::PIXEL;
 use crate::ign;
@@ -89,6 +91,7 @@ const TILE_PX: f64 = 362.0;
 const M_PER_E7: f64 = 0.011_132;
 
 /// RGB565 of 8-bit red, green, blue.
+#[allow(clippy::cast_possible_truncation)] // 5 + 6 + 5 bits of 8-bit inputs: the value fits 16 bits
 const fn rgb(r: u32, g: u32, b: u32) -> u16 {
     ((r >> 3) << 11 | (g >> 2) << 5 | b >> 3) as u16
 }
@@ -388,13 +391,16 @@ impl Basemap {
         let mut tiles = [(0u32, 0u32, Proj::default()); SLOTS];
         let mut n = 0;
         for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (0, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
-            let (x, y) = (cx as i64 + dx, cy as i64 + dy);
-            if x < 0 || y < 0 || x >= 1 << z || y >= 1 << z || n == tiles.len() {
+            let (x, y) = (i64::from(cx) + dx, i64::from(cy) + dy);
+            let (Ok(xu), Ok(yu)) = (u32::try_from(x), u32::try_from(y)) else { continue };
+            if x >= 1 << z || y >= 1 << z {
                 continue;
             }
-            let p = frame.proj(z, x as u32, y as u32);
-            if p.on_screen(w, h) {
-                tiles[n] = (x as u32, y as u32, p);
+            let p = frame.proj(z, xu, yu);
+            if p.on_screen(w, h)
+                && let Some(t) = tiles.get_mut(n)
+            {
+                *t = (xu, yu, p);
                 n += 1;
             }
         }
@@ -403,22 +409,25 @@ impl Basemap {
         // the tiles not held go into the slots used longest ago (not one of these)
         self.tick = self.tick.wrapping_add(1);
         let mut at = [usize::MAX; SLOTS];
-        for (i, &(x, y, _)) in tiles.iter().take(n).enumerate() {
+        for (a, &(x, y, _)) in at.iter_mut().zip(tiles.iter().take(n)) {
             if let Some(s) = self.slots.iter().position(|s| s.key == (z, x, y)) {
-                at[i] = s;
-                self.slots[s].used = self.tick;
+                *a = s;
+                if let Some(sl) = self.slots.get_mut(s) {
+                    sl.used = self.tick;
+                }
             }
         }
         for (i, &(x, y, _)) in tiles.iter().take(n).enumerate() {
-            if at[i] != usize::MAX {
+            if at.get(i) != Some(&usize::MAX) {
                 continue;
             }
-            let free = (0..SLOTS).filter(|s| !at.contains(s)).min_by_key(|&s| self.slots[s].used);
+            let free = (0..SLOTS).filter(|s| !at.contains(s)).min_by_key(|&s| self.slots.get(s).map_or(0, |t| t.used));
             let Some(s) = free else { continue };
             let Some(words) = store.get_mut(s * SLOT_WORDS..(s + 1) * SLOT_WORDS) else { continue };
             let (feats, pts) = words.split_at_mut(FEATS * 4);
             let (feats, _) = feats.as_chunks_mut::<4>();
-            self.slots[s] = Slot { key: (0, 0, 0), feats: 0, used: self.tick };
+            let Some(slot) = self.slots.get_mut(s) else { continue };
+            *slot = Slot { key: (0, 0, 0), feats: 0, used: self.tick };
             let name = tile_name(x, y);
             let got = match (dirs, self.osm.find(fat, d, (z, x, y))) {
                 (_, Err(e)) => Err(e),
@@ -436,9 +445,13 @@ impl Basemap {
                 Err(fat::Error::Io) => return Err(fat::Error::Io),
                 Err(_) => 0, // missing or damaged: drawn empty
             };
-            self.slots[s] = Slot { key: (z, x, y), feats, used: self.tick };
+            if let Some(slot) = self.slots.get_mut(s) {
+                *slot = Slot { key: (z, x, y), feats, used: self.tick };
+            }
             self.stats.tiles_read += 1;
-            at[i] = s;
+            if let Some(a) = at.get_mut(i) {
+                *a = s;
+            }
         }
         // draw: the background, then each draw key over all tiles
         let px = px.get_mut(..(w * h) as usize).unwrap_or(&mut []);
@@ -449,12 +462,14 @@ impl Basemap {
         let mut buf = Raster { px, w, h, written: 0 };
         for key in 0..KEYS {
             for (i, &(_, _, proj)) in tiles.iter().take(n).enumerate() {
-                let Some(slot) = self.slots.get(at[i]) else { continue };
-                let Some(words) = store.get(at[i] * SLOT_WORDS..(at[i] + 1) * SLOT_WORDS) else { continue };
+                let Some(&ai) = at.get(i) else { continue };
+                let Some(slot) = self.slots.get(ai) else { continue };
+                let Some(words) = store.get(ai * SLOT_WORDS..(ai + 1) * SLOT_WORDS) else { continue };
+                let Some(cur) = cursor.get_mut(i) else { continue };
                 let (feats, pts) = words.split_at(FEATS * 4);
                 let feats = feats.as_chunks::<4>().0.get(..slot.feats).unwrap_or(&[]);
-                while let Some(f) = feats.get(cursor[i]).filter(|f| f[1] == key) {
-                    cursor[i] += 1;
+                while let Some(f) = feats.get(*cur).filter(|f| f[1] == key) {
+                    *cur += 1;
                     let Some(pts) = pts.get(usize::from(f[0]) * 2..(usize::from(f[0]) + usize::from(f[2])) * 2) else {
                         continue;
                     };
@@ -630,11 +645,12 @@ impl Ign {
             if x < 0 || y < 0 || x >= 1 << z || y >= 1 << z {
                 continue;
             }
-            let p = frame.proj(z, x as u32, y as u32);
+            let (Ok(xu), Ok(yu)) = (u32::try_from(x), u32::try_from(y)) else { continue };
+            let p = frame.proj(z, xu, yu);
             if p.on_screen(w, h)
                 && let Some(t) = v.tiles.get_mut(v.n)
             {
-                *t = (x as u32, y as u32, p, None);
+                *t = (xu, yu, p, None);
                 v.n += 1;
             }
         }
@@ -691,13 +707,18 @@ fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
     }
     // grid unit u lands at (a u + b) >> 16, so pixel s's centre is at u = ((s + 1/2) 2^16 - b) / a, 16 a pixel
     let at = |s: i32, a: i64, b: i64| {
-        let t = if a > 0 { ((i64::from(s) << 16) + 0x8000 - b).div_euclid(a * 16) } else { -1 };
+        let t = if a > 0 {
+            ((i64::from(s) << 16).saturating_add(0x8000).saturating_sub(b)).checked_div_euclid(a.saturating_mul(16))
+        } else {
+            None
+        };
+        let t = t.unwrap_or(-1);
         u16::try_from(t).ok().filter(|&t| usize::from(t) < ign::SIDE)
     };
     let mut cols = [0u16; ui::W as usize];
     let (mut x0, mut x1) = (usize::MAX, 0);
     for (x, c) in cols.iter_mut().enumerate().take(w.max(0) as usize) {
-        if let Some(t) = at(x as i32, p.ax, p.bx) {
+        if let Some(t) = at(i32::try_from(x).unwrap_or(i32::MAX), p.ax, p.bx) {
             (*c, x0, x1) = (t, x0.min(x), x + 1);
         }
     }
@@ -713,7 +734,7 @@ fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
         for (d, &c) in dst.iter_mut().zip(cols) {
             *d = src.get(usize::from(c)).copied().unwrap_or(BACKGROUND);
         }
-        written += cols.len() as u32;
+        written += n32(cols.len());
     }
     written
 }
@@ -729,8 +750,8 @@ fn raster_turned(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 
     let corners = [(0, 0), (4096, 0), (0, 4096), (4096, 4096)].map(|(u, v)| p.at(u, v));
     let lo = |f: fn(&(i64, i64)) -> i64| corners.iter().map(f).min().unwrap_or(0);
     let hi = |f: fn(&(i64, i64)) -> i64| corners.iter().map(f).max().unwrap_or(0);
-    let (x0, x1) = (lo(|p| p.0).clamp(0, i64::from(w)) as i32, (hi(|p| p.0) + 1).clamp(0, i64::from(w)) as i32);
-    let (y0, y1) = (lo(|p| p.1).clamp(0, i64::from(h)) as i32, (hi(|p| p.1) + 1).clamp(0, i64::from(h)) as i32);
+    let (x0, x1) = (i32c(lo(|p| p.0).clamp(0, i64::from(w))), i32c((hi(|p| p.0) + 1).clamp(0, i64::from(w))));
+    let (y0, y1) = (i32c(lo(|p| p.1).clamp(0, i64::from(h))), i32c((hi(|p| p.1) + 1).clamp(0, i64::from(h))));
     // a tile axis: the 16.16 coordinate t of the pixel's centre gives the tile pixel (t - b) / (16 a), a > 0
     let (da, db) = (p.ax * 16, p.ay * 16);
     if da <= 0 || db <= 0 {
@@ -874,20 +895,19 @@ fn load(
     let mut n = 0;
     let mut i = 0;
     while i < count && n < feats.len() {
-        let batch = (count - i).min((IO / 10) as u32);
+        let batch = (count - i).min(n32(IO / 10));
         let bytes = io.get_mut(..batch as usize * 10).ok_or(fat::Error::Corrupt)?;
         t.read(false, 4 + i * 10, bytes)?;
-        stats.bytes_read += bytes.len() as u32;
-        for r in bytes.chunks_exact(10) {
+        stats.bytes_read += n32(bytes.len());
+        for r in bytes.as_chunks::<10>().0 {
             let (layer, npts, class, sub) = (u16::from(r[0]), u16::from_le_bytes([r[1], r[2]]), r[7], r[8]);
-            let off = u32::from_le_bytes([r[3], r[4], r[5], r[6]]);
             let min = if layer == WATER_AREA { 3 } else { 2 };
             if !(ROAD..=WATERWAY).contains(&layer) || class == 0 || class > 13 || npts < min || n == feats.len() {
                 continue;
             }
             let kind = layer | u16::from(class) << 2 | u16::from(sub.min(15)) << 6;
             if let Some(f) = feats.get_mut(n) {
-                *f = [off as u16, (off >> 16) as u16, npts, kind];
+                *f = [u16::from_le_bytes([r[3], r[4]]), u16::from_le_bytes([r[5], r[6]]), npts, kind];
                 n += 1;
             }
         }
@@ -902,7 +922,7 @@ fn load(
         let Some(&[lo, hi, count, kind]) = feats.get(k) else { break };
         let off = u32::from(lo) | u32::from(hi) << 16;
         let points = usize::from(count);
-        if u64::from(off) + 4 * points as u64 > u64::from(psize) {
+        if u64::from(off) + 4 * u64::try_from(points).unwrap_or(u64::MAX) > u64::from(psize) {
             continue; // past the end of P: dropped
         }
         if next + points > pts.len() / 2 {
@@ -912,23 +932,24 @@ fn load(
         let mut first = (0i64, 0i64);
         let mut prev = (0i64, 0i64);
         for j in 0..points {
-            let pos = off + 4 * j as u32;
-            if pos < start || pos + 4 > start + len as u32 {
-                start = pos & !(fat::SECTOR as u32 - 1);
-                let want = (psize - start).min(IO as u32) as usize;
+            let pos = off + 4 * n32(j);
+            if pos < start || pos + 4 > start + n32(len) {
+                start = pos & !(n32(fat::SECTOR) - 1);
+                let want = usize::try_from((psize - start).min(n32(IO))).unwrap_or(0);
                 len = t.read(true, start, io.get_mut(..want).ok_or(fat::Error::Corrupt)?)?;
-                stats.bytes_read += len as u32;
-                if pos + 4 > start + len as u32 {
+                stats.bytes_read += n32(len);
+                if pos + 4 > start + n32(len) {
                     return Err(fat::Error::Corrupt);
                 }
             }
             let at = (pos - start) as usize;
-            let b = io.get(at..at + 4).ok_or(fat::Error::Corrupt)?;
+            let b = io.get(at..).and_then(|s| s.first_chunk::<4>()).ok_or(fat::Error::Corrupt)?;
             let (x, y) = (u16::from_le_bytes([b[0], b[1]]), u16::from_le_bytes([b[2], b[3]]));
+            let (sx, sy) = (i16::from_le_bytes([b[0], b[1]]), i16::from_le_bytes([b[2], b[3]]));
             if let Some(p) = pts.get_mut((next + j) * 2..(next + j) * 2 + 2) {
                 p.copy_from_slice(&[x, y]);
             }
-            let q = (i64::from(x as i16), i64::from(y as i16));
+            let q = (i64::from(sx), i64::from(sy));
             if j == 0 {
                 first = q;
             } else {
@@ -945,7 +966,7 @@ fn load(
             _ => 3 + 13 - (kind >> 2 & 15),
         };
         if let Some(f) = feats.get_mut(kept) {
-            *f = [next as u16, key, count, kind | u16::from(hole) << 10];
+            *f = [u16::try_from(next).unwrap_or(u16::MAX), key, count, kind | u16::from(hole) << 10];
         }
         kept += 1;
         next += points;
@@ -958,28 +979,34 @@ fn load(
 /// Sorts features by draw key (`f[1]`), in place: heapsort, O(n log n) and a few hundred bytes of code where
 /// core's sort_unstable costs about 6 KB of image.
 fn heapsort(v: &mut [[u16; 4]]) {
-    fn down(v: &mut [[u16; 4]], mut root: usize, end: usize) {
+    let key = |v: &[[u16; 4]], i: usize| v.get(i).map_or(0, |f| f[1]);
+    let swap = |v: &mut [[u16; 4]], a: usize, b: usize| {
+        if a < v.len() && b < v.len() {
+            v.swap(a, b);
+        }
+    };
+    let down = |v: &mut [[u16; 4]], mut root: usize, end: usize| {
         loop {
-            let mut child = 2 * root + 1;
+            let mut child = root.saturating_mul(2).saturating_add(1);
             if child >= end {
                 return;
             }
-            if child + 1 < end && v[child][1] < v[child + 1][1] {
+            if child + 1 < end && key(v, child) < key(v, child + 1) {
                 child += 1;
             }
-            if v[root][1] >= v[child][1] {
+            if key(v, root) >= key(v, child) {
                 return;
             }
-            v.swap(root, child);
+            swap(v, root, child);
             root = child;
         }
-    }
+    };
     let n = v.len();
     for root in (0..n / 2).rev() {
         down(v, root, n);
     }
     for end in (1..n).rev() {
-        v.swap(0, end);
+        swap(v, 0, end);
         down(v, 0, end);
     }
 }
@@ -1091,6 +1118,7 @@ impl Frame {
     }
 
     /// Tile (`x`, `y`) of zoom `z` to area pixels.
+    #[allow(clippy::cast_possible_truncation)] // float to int casts saturate: they cannot fail
     fn proj(&self, z: u8, x: u32, y: u32) -> Proj {
         let units = f64::from(1u32 << z) * 4096.0; // grid units around the world
         // east: lon (1e-7 degrees) = U / units x 3.6e9 - 1.8e9, linear in u
@@ -1113,6 +1141,7 @@ impl Frame {
     }
 
     /// The tile of zoom `z` under the view's centre.
+    #[allow(clippy::cast_possible_truncation)] // the float to int cast saturates, and the value is clamped first
     fn centre_tile(&self, z: u8) -> (u32, u32) {
         let n = f64::from(1u32 << z);
         let lon = self.lon0 + self.cx / self.east;
@@ -1249,7 +1278,7 @@ impl Raster<'_> {
             // the brush centres covering row y lie on rows y - hi ..= y + lo of the segment, each row from half a
             // row above to half a row below (in half rows), so a shallow line has no gaps
             let (c0, c1) = ((2 * (y - hi) - 1).max(2 * a.1), (2 * (y + lo) + 1).min(2 * b.1));
-            let at = |c: i32| a.0 + dx * (c - 2 * a.1) / (2 * dy);
+            let at = |c: i32| a.0 + (dx * (c - 2 * a.1)).checked_div(2 * dy).unwrap_or(0);
             let (x0, x1) = if dy == 0 { (a.0, b.0) } else { (at(c0), at(c1)) };
             self.run(y, x0.min(x1) - lo, x0.max(x1) + hi, color);
         }
@@ -1257,14 +1286,14 @@ impl Raster<'_> {
 
     /// Pixels `x0..=x1` of row `y`, clipped.
     fn run(&mut self, y: i32, x0: i32, x1: i32, color: u16) {
-        let (x0, x1) = (x0.max(0), x1.min(self.w - 1));
+        let (x0, x1) = (x0.max(0), x1.min(self.w.saturating_sub(1)));
         if x0 > x1 || y < 0 || y >= self.h {
             return;
         }
         let row = (y * self.w) as usize;
         if let Some(s) = self.px.get_mut(row + x0 as usize..=row + x1 as usize) {
             s.fill(color);
-            self.written += s.len() as u32;
+            self.written += n32(s.len());
         }
     }
 
@@ -1275,7 +1304,7 @@ impl Raster<'_> {
             return; // ponytail: a longer ring is not drawn; project it twice (bounds, then rows) if one matters
         }
         let mut ring = [(0i32, 0i32); RING];
-        let lim = |v: i64| v.clamp(-(1 << 20), 1 << 20) as i32; // far points stay far, without overflow
+        let lim = |v: i64| i32c(v.clamp(-(1 << 20), 1 << 20)); // far points stay far, without overflow
         let (mut top, mut bottom) = (i32::MAX, i32::MIN);
         for (r, &[u, v]) in ring.iter_mut().zip(pairs) {
             let (x, y) = proj.at(u, v);
@@ -1285,33 +1314,55 @@ impl Raster<'_> {
         if n < 3 || bottom < 0 || top >= self.h {
             return;
         }
+        let Some(poly) = ring.get(..n) else { return };
+        let Some(&last) = poly.last() else { return };
         let mut xs = [0i32; 64];
-        for y in top.max(0)..=bottom.min(self.h - 1) {
+        for y in top.max(0)..=bottom.min(self.h.saturating_sub(1)) {
             let mut k = 0;
-            let mut a = ring[n - 1];
-            for &b in &ring[..n] {
+            let mut a = last;
+            for &b in poly {
                 // edges crossing the row's centre, half open so a vertex counts once
-                if (a.1 <= y) != (b.1 <= y) && k < xs.len() {
-                    let x = i64::from(a.0) + i64::from(b.0 - a.0) * i64::from(y - a.1) / i64::from(b.1 - a.1);
-                    xs[k] = x as i32;
+                if (a.1 <= y) != (b.1 <= y)
+                    && let Some(slot) = xs.get_mut(k)
+                {
+                    let num = i64::from(b.0 - a.0) * i64::from(y - a.1);
+                    *slot = i32c(i64::from(a.0) + num.checked_div(i64::from(b.1 - a.1)).unwrap_or(0));
                     k += 1;
                 }
                 a = b;
             }
-            let xs = &mut xs[..k];
+            let Some(xs) = xs.get_mut(..k) else { continue };
             for i in 1..xs.len() {
                 // insertion sort: a row crosses a few edges (core's sort costs 2 KB of image)
                 let mut j = i;
-                while j > 0 && xs[j - 1] > xs[j] {
-                    xs.swap(j - 1, j);
+                while j > 0 {
+                    match xs.get_mut(j - 1..=j) {
+                        Some([p, q]) if *p > *q => core::mem::swap(p, q),
+                        _ => break,
+                    }
                     j -= 1;
                 }
             }
-            for pair in xs.chunks_exact(2) {
-                self.run(y, pair[0], pair[1] - 1, color);
+            for &[x0, x1] in xs.as_chunks::<2>().0 {
+                self.run(y, x0, x1.saturating_sub(1), color);
             }
         }
     }
+}
+
+/// `d * t / full`, 0 when `full` is 0 (clip only divides by a span the segment crosses, so it is not).
+fn along(d: i64, t: i64, full: i64) -> i64 {
+    d.saturating_mul(t).checked_div(full).unwrap_or(0)
+}
+
+/// Checked conversions for sizes and clamped coordinates: values here are far inside the range.
+fn n32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// An i64 clamped into i32.
+fn i32c(v: i64) -> i32 {
+    i32::try_from(v).unwrap_or(if v < 0 { i32::MIN } else { i32::MAX })
 }
 
 /// Segment `a`-`b` cut to rectangle `r` (x0, y0, x1, y1) (Cohen-Sutherland); None if it misses it.
@@ -1322,7 +1373,7 @@ fn clip(mut a: (i64, i64), mut b: (i64, i64), r: (i64, i64, i64, i64)) -> Option
     for _ in 0..8 {
         let (ca, cb) = (code(a), code(b));
         if ca | cb == 0 {
-            return Some(((a.0 as i32, a.1 as i32), (b.0 as i32, b.1 as i32)));
+            return Some(((i32c(a.0), i32c(a.1)), (i32c(b.0), i32c(b.1))));
         }
         if ca & cb != 0 {
             return None;
@@ -1330,13 +1381,13 @@ fn clip(mut a: (i64, i64), mut b: (i64, i64), r: (i64, i64, i64, i64)) -> Option
         let c = if ca != 0 { ca } else { cb };
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let p = if c & 4 != 0 {
-            (a.0 + dx * (r.1 - a.1) / dy, r.1)
+            (a.0 + along(dx, r.1 - a.1, dy), r.1)
         } else if c & 8 != 0 {
-            (a.0 + dx * (r.3 - a.1) / dy, r.3)
+            (a.0 + along(dx, r.3 - a.1, dy), r.3)
         } else if c & 1 != 0 {
-            (r.0, a.1 + dy * (r.0 - a.0) / dx)
+            (r.0, a.1 + along(dy, r.0 - a.0, dx))
         } else {
-            (r.2, a.1 + dy * (r.2 - a.0) / dx)
+            (r.2, a.1 + along(dy, r.2 - a.0, dx))
         };
         if c == ca {
             a = p;

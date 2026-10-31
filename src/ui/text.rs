@@ -2,6 +2,8 @@
 //! [`Canvas::blit`]. Each glyph is one window of `advance` x `height` pixels, blended onto a known background
 //! colour, so a string overwrites what was under it without a clear first.
 
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
+
 use crate::ui::Canvas;
 
 /// One character: its cell is `advance` x the font height; the ink is the `w` x `h` box at (`x`, `y`) in the
@@ -21,6 +23,9 @@ pub struct Glyph {
     pub at: u32,
 }
 
+/// What a missing glyph draws: nothing, zero wide.
+static BLANK: Glyph = Glyph { advance: 0, x: 0, y: 0, w: 0, h: 0, at: 0 };
+
 /// A font: printable ASCII (0x20..=0x7e), then glyphs for control codes from 1 on (the pixel font's arrows); other
 /// characters are drawn as `?`.
 pub struct Font {
@@ -39,10 +44,7 @@ impl Font {
             k @ 1..0x20 => 0x5e + k,
             k => k.wrapping_sub(0x20),
         };
-        match self.glyphs.get(i) {
-            Some(g) => g,
-            None => &self.glyphs[usize::from(b'?' - 0x20)],
-        }
+        self.glyphs.get(i).or_else(|| self.glyphs.get(usize::from(b'?' - 0x20))).unwrap_or(&BLANK)
     }
 
     /// Coverage 0..=15 of pixel (`px`, `py`) of glyph `g`'s cell.
@@ -76,7 +78,7 @@ pub fn blend(fg: u16, bg: u16, a: u8) -> u16 {
         let (f, b) = ((u32::from(fg) >> shift) & mask, (u32::from(bg) >> shift) & mask);
         ((f * a + b * (15 - a) + 7) / 15) << shift
     };
-    (mix(11, 0x1f) | mix(5, 0x3f) | mix(0, 0x1f)) as u16
+    u16::try_from(mix(11, 0x1f) | mix(5, 0x3f) | mix(0, 0x1f)).unwrap_or(0) // each mix fits its RGB565 field
 }
 
 /// The face of the text (the FONT setting): the project's own dot matrix, or one of the two smooth fonts drawn into its
@@ -167,6 +169,16 @@ fn pick(style: &Style, face: Face, ch: char) -> (&'static Font, &'static Glyph, 
     (style.font, style.font.glyph(ch), scale)
 }
 
+/// The palette entry for a coverage (0 when out of range, which `coverage` never gives).
+fn shade(palette: &[u16; 16], a: u8) -> u16 {
+    palette.get(usize::from(a)).copied().unwrap_or(0)
+}
+
+/// A scale the compiler knows is not zero, for the divisions by it.
+fn nz(k: u32) -> u32 {
+    k.max(1)
+}
+
 /// Where a string goes, relative to the `x` given to [`draw`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Align {
@@ -190,12 +202,12 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     };
     let mut palette = [bg; 16];
     for (a, p) in palette.iter_mut().enumerate() {
-        *p = blend(fg, bg, a as u8);
+        *p = blend(fg, bg, u8::try_from(a).unwrap_or(15));
     }
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
         let w = u32::from(g.advance) * k;
-        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / k, py / k))]);
+        c.blit(x, y, w, style.height(), &mut |px, py| shade(&palette, font.coverage(g, px / nz(k), py / nz(k))));
         x += w;
     }
     width
@@ -208,7 +220,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
     let face = c.face();
     let mut palette = [bg; 16];
     for (a, p) in palette.iter_mut().enumerate() {
-        *p = blend(fg, bg, a as u8);
+        *p = blend(fg, bg, u8::try_from(a).unwrap_or(15));
     }
     let mut x = x;
     for ch in s.chars() {
@@ -221,7 +233,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
         if w == 0 {
             break;
         }
-        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / k, py / k))]);
+        c.blit(x, y, w, style.height(), &mut |px, py| shade(&palette, font.coverage(g, px / nz(k), py / nz(k))));
         x += w;
     }
     x
@@ -235,8 +247,14 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     let face = c.face();
     let ((_, a, ka), (font, g, k)) = (pick(style, face, old), pick(style, face, new));
     // each glyph's ink box in screen pixels from the cell's corner (the two may be drawn at different factors)
-    let boxes = [(a, ka), (g, k)]
-        .map(|(g, k)| (u32::from(g.x) * k, u32::from(g.y) * k, u32::from(g.x + g.w) * k, u32::from(g.y + g.h) * k));
+    let boxes = [(a, ka), (g, k)].map(|(g, k)| {
+        (
+            u32::from(g.x) * k,
+            u32::from(g.y) * k,
+            u32::from(g.x).saturating_add(u32::from(g.w)) * k,
+            u32::from(g.y).saturating_add(u32::from(g.h)) * k,
+        )
+    });
     let inked = boxes.iter().filter(|b| b.2 > b.0 && b.3 > b.1);
     let (x0, y0, x1, y1) =
         inked.fold((u32::MAX, u32::MAX, 0, 0), |u, b| (u.0.min(b.0), u.1.min(b.1), u.2.max(b.2), u.3.max(b.3)));
@@ -250,10 +268,10 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     }
     let mut palette = [bg; 16];
     for (a, p) in palette.iter_mut().enumerate() {
-        *p = blend(fg, bg, a as u8);
+        *p = blend(fg, bg, u8::try_from(a).unwrap_or(15));
     }
     c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
-        palette[usize::from(font.coverage(g, (px + x0) / k, (py + y0) / k))]
+        shade(&palette, font.coverage(g, (px + x0) / nz(k), (py + y0) / nz(k)))
     });
 }
 
@@ -323,7 +341,7 @@ impl<const N: usize> Line<N> {
     /// The text so far.
     pub fn as_str(&self) -> &str {
         // Only whole characters are ever stored (write_str), so this never fails.
-        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+        core::str::from_utf8(self.buf.get(..self.len).unwrap_or(&[])).unwrap_or("")
     }
 
     /// Empties it.
@@ -347,24 +365,26 @@ impl<const N: usize> Line<N> {
     /// ```
     pub fn push_u32(&mut self, v: u32) {
         let mut digits = [0u8; 10];
-        let mut i = digits.len();
+        let mut start = digits.len();
         let mut v = v;
-        loop {
-            i -= 1;
-            digits[i] = b'0' + (v % 10) as u8;
+        // ten digits hold any u32, so the loop ends on v == 0 before it runs out of slots
+        for (j, d) in digits.iter_mut().enumerate().rev() {
+            *d = b'0' + u8::try_from(v % 10).unwrap_or(0);
             v /= 10;
+            start = j;
             if v == 0 {
                 break;
             }
         }
-        self.push_str(core::str::from_utf8(&digits[i..]).unwrap_or(""));
+        self.push_str(core::str::from_utf8(digits.get(start..).unwrap_or(&[])).unwrap_or(""));
     }
 
     /// Appends `v` mod 100 as two digits ("07", "42"): clocks, dates and the menus' values. It prints the value mod 100,
     /// so a two-digit field such as a valid day, month, hour or minute is never wider than two characters.
     pub fn push_2d(&mut self, v: u32) {
-        self.push_str(super::DIGITS[(v / 10 % 10) as usize]);
-        self.push_str(super::DIGITS[(v % 10) as usize]);
+        for d in [v / 10 % 10, v % 10] {
+            self.push_str(usize::try_from(d).ok().and_then(|d| super::DIGITS.get(d)).copied().unwrap_or("0"));
+        }
     }
 }
 
