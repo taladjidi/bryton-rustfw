@@ -537,7 +537,7 @@ pub(crate) struct MenuInput {
     /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
     pub(crate) chosen: bool,
     /// A row that cannot be undone (forget a sensor or the phone, import stock's settings) asked to be confirmed: Start
-    /// on it again acts; any other input clears it (MenuInput::confirm). A past ride's DELETE, asked on its card, is
+    /// on it again acts; any other input clears it (App::confirmed). A past ride's DELETE, asked on its card, is
     /// [`PAST_DELETE`].
     pub(crate) confirm: Option<(Menu, usize)>,
     /// GIVE UP SAVE's step while its row waits in [`MenuInput::confirm`]: two banners of explanation, then two questions.

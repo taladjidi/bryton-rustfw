@@ -374,7 +374,7 @@ impl App {
         if cleared {
             self.unbanner(b); // and the input acts, except Back (below)
         }
-        // a row waiting to be confirmed (MenuInput::confirm): only Start or a tap on it confirms, anything else drops it
+        // a row waiting to be confirmed (App::confirmed): only Start or a tap on it confirms, anything else drops it
         let armed = self.menu.confirm.take();
         if let (Some(_), Screen::Menu(menu, sel)) = (armed, self.screen)
             && !matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
