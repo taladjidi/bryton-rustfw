@@ -146,14 +146,20 @@ impl App {
         }
         self.told_low = low;
         // AUTO: on at the threshold (once: it stays on), off when the charger comes
-        let before = self.saver_auto;
         if charging {
             self.saver_auto = false;
         } else if low_for_saver(self.strip.battery) {
             self.saver_auto = true;
         }
-        if before != self.saver_auto && self.settings.saver == SaverMode::Auto {
-            self.notice(if self.saver_auto { "BATTERY SAVER ON" } else { "BATTERY SAVER OFF" });
+        // said when AUTO's state changes (also when AUTO is chosen while low), "OFF" only when the charger ended it
+        let said = self.settings.saver == SaverMode::Auto && self.saver_auto;
+        if said != self.saver_said {
+            if said {
+                self.notice("BATTERY SAVER ON");
+            } else if !self.saver_auto {
+                self.notice("BATTERY SAVER OFF");
+            }
+            self.saver_said = said;
         }
         false
     }
@@ -203,8 +209,9 @@ impl App {
         let saver = self.saver_on();
         self.strip.saver = saver;
         let mut timeout_ms = LIGHT_TIMEOUTS_S.get(self.settings.light_timeout).copied().unwrap_or(0) * 1000;
-        if saver && (timeout_ms == 0 || timeout_ms > SAVER_LIGHT_S * 1000) {
-            timeout_ms = SAVER_LIGHT_S * 1000; // never off, or long: 10 s
+        if saver && self.ride.state() != ride::State::Running && (timeout_ms == 0 || timeout_ms > SAVER_LIGHT_S * 1000)
+        {
+            timeout_ms = SAVER_LIGHT_S * 1000; // never off, or long: 10 s (a running ride keeps its rider's time-out)
         }
         let on = timeout_ms == 0 || self.light.idle_ms < timeout_ms || self.light.wake;
         let level = match LIGHT_LEVELS.get(self.settings.light_level) {

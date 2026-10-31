@@ -310,7 +310,7 @@ pub struct Settings {
     pub slope_scale: usize,
     /// GNSS SYSTEMS (BIKE): an index in [`gnss::SYSTEMS`] (data 170); the receiver's default (0) in a file that predates it.
     pub gnss_systems: usize,
-    /// BATTERY SAVER (SYSTEM), settings file byte 171.
+    /// BATTERY SAVER (SYSTEM), settings file byte 172.
     pub saver: SaverMode,
     /// LTHR (ME): the lactate threshold heart rate, bpm; 0 until it is set (the LTHR fields show "--"). Kept in
     /// settings.bin only, after the alert limits (byte 66); 0 in a file that predates it.

@@ -157,10 +157,10 @@ OFF, ON, or AUTO (on once at 20 % or less, off at the charger). It reads existin
 
 | Knob | While ON | Estimated saving |
 |------|----------|------------------|
-| GPS | cyclic tracking as GPS POWER SAVER (app/gps.rs `gnss_saver`; an MTB ride stays continuous) | about 4.8 mA over FULL; nothing over AUTO's fast and straight stretches |
+| GPS | cyclic tracking as GPS POWER SAVER (app/gps.rs `gnss_saver`) while no ride is running; a running ride and an MTB ride keep the rider's GPS POWER (the distance comes from the GPS speed) | about 4.8 mA over FULL, when idle or paused only |
 | Backlight level | at most 30 % | 60 to 18 mA from 100 %, 36 to 18 mA from 60 %, nothing in AUTO daylight (1 %) |
-| Backlight time-out | at most 10 s (never off, 30 s and 60 s become 10 s) | up to the lit level (18 to 60 mA) for each second the unit sits unwatched |
-| Redraw | map, graphs and profiles of a ride page every 5 s (app/screens.rs `update_page`); fields and the strip each second; an input at once | well under 1 mA (inferred: the CPU is awake 1.3 % on a ride page) |
+| Backlight time-out | at most 10 s (never off, 30 s and 60 s become 10 s), except under a running ride, which keeps the rider's | up to the lit level (18 to 60 mA) for each second the unit sits unwatched |
+| Redraw | graphs of a ride page every 5 s (app/screens.rs `update_page`); fields, the strip, the map and the profile as before; an input at once | well under 1 mA (inferred: the CPU is awake 1.3 % on a ride page) |
 | GNSS systems | not used: cyclic tracking draws 5 mA with GPS alone or with three systems (table above) | 0 |
 | Phone link | not used: no scan; advertising is already 1 s | under 0.01 mA |
 

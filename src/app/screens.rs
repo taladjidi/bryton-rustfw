@@ -661,11 +661,9 @@ impl App {
             if !due && !matches!(old, Drawn::Map(_)) {
                 continue;
             }
-            // BATTERY SAVER: the map, graphs and profiles look again every SAVER_REDRAW_S seconds, at once on an input
-            if slow
-                && !self.seconds.is_multiple_of(SAVER_REDRAW_S)
-                && matches!(old, Drawn::Map(_) | Drawn::Graph(_) | Drawn::Profile(_))
-            {
+            // BATTERY SAVER: graphs look again every SAVER_REDRAW_S seconds, at once on an input. The map (it follows a
+            // rider and a course) and the profile (its rider marker and segment ghost) keep their rate.
+            if slow && !self.seconds.is_multiple_of(SAVER_REDRAW_S) && matches!(old, Drawn::Graph(_)) {
                 continue;
             }
             let now = match (w, old) {
