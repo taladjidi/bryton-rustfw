@@ -6,6 +6,7 @@ use crate::ui::Canvas;
 
 /// One character: its cell is `advance` x the font height; the ink is the `w` x `h` box at (`x`, `y`) in the
 /// cell, 4 bits of coverage per pixel (high nibble first), row by row from byte `at` of [`Font::alpha`].
+#[derive(Clone, Copy)]
 pub struct Glyph {
     /// Cell width: where the next character starts.
     pub advance: u8,
@@ -23,6 +24,7 @@ pub struct Glyph {
 
 /// A font: printable ASCII (0x20..=0x7e), then glyphs for control codes from 1 on (the pixel font's arrows); other
 /// characters are drawn as `?`.
+#[derive(Clone, Copy)]
 pub struct Font {
     /// Line height in pixels (the height of every cell).
     pub height: u8,
@@ -154,17 +156,20 @@ impl Style {
 /// The font, glyph and scale `ch` is drawn with in `style`: with a face other than PIXEL (the FONT setting) and a smooth font for
 /// the style's scale that has the glyph ([`crate::fonts::smooth`]), that glyph 1:1, else the style's own glyph at its
 /// scale. Both have the same cell, so layouts do not depend on the choice.
-fn pick(style: &Style, face: Face, ch: char) -> (&'static Font, &'static Glyph, u32) {
+fn pick(style: &Style, face: Face, ch: char) -> (Font, Glyph, u32) {
+    // copies: the fonts are in SDRAM, uncached (D-cache off), and a blit's closure reads the glyph's box and the
+    // alpha's slice for every pixel; from the stack (DTCM) instead (2026-10-31, the strip's grey "GPS": its longest
+    // draw 2.2 to 3.0 ms before, 1.5 ms after)
     let scale = style.scale.max(1);
     if face != Face::Pixel
         && let Some(f) = crate::fonts::smooth(face, scale)
     {
         let g = f.glyph(ch);
         if g.advance != 0 {
-            return (f, g, 1);
+            return (*f, *g, 1);
         }
     }
-    (style.font, style.font.glyph(ch), scale)
+    (*style.font, *style.font.glyph(ch), scale)
 }
 
 /// Where a string goes, relative to the `x` given to [`draw`].
@@ -194,6 +199,7 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     }
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
+        let g = &g;
         let w = u32::from(g.advance) * k;
         c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / k, py / k))]);
         x += w;
@@ -213,6 +219,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
     let mut x = x;
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
+        let g = &g;
         let w = (u32::from(g.advance) * k).min(right.saturating_sub(x));
         #[cfg(test)]
         if w < u32::from(g.advance) * k && g.w > 0 {
@@ -252,6 +259,7 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     for (a, p) in palette.iter_mut().enumerate() {
         *p = blend(fg, bg, a as u8);
     }
+    let g = &g;
     c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
         palette[usize::from(font.coverage(g, (px + x0) / k, (py + y0) / k))]
     });

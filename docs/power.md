@@ -207,6 +207,19 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
   when used. Measured on the unit (`tools/profile.py`, RAM run, 10 s windows, the ride's window including its start
   at 20 passes a second): awake on the overview 1.54 to 1.36 %, on the first ride page 1.42 to 1.10 %, a ride running
   1.62 to 1.05 % (21.2 to 13.1 passes a second).
+- **The status strip and the radio's receive (2026-10-31, review findings 7 and 8):** the strip's section split in
+  two (`strip`: its inputs, the next-step lookup and the compare; `strip_draw`: the draws alone). The compare is
+  about 10 us a pass (0.02 %); the cost was the draw, once a second: the grey "GPS" blinking while the receiver
+  searches (indoors, at the start of a ride), 1.4 ms a draw. Its off half is now one fill instead of "GPS" in black,
+  and the text's glyph and font are copied to the stack before a blit (ui/text.rs `pick`: they are in uncached
+  SDRAM, read for every pixel), which halves the longest draw of any text. Measured (`tools/profile.py`, RAM run,
+  10 s windows): `strip` 105 us mean, 2.0 ms max, 0.22 % of wall on the overview and the first ride page, before;
+  after, `strip` 10 us plus `strip_draw` 0.5 to 0.8 ms once a second, 1.5 ms max: 0.07 to 0.10 %. The rest is the
+  grey "GPS" itself, about 2 us a pixel with the D-cache off; a steady "GPS" while searching would remove it. The
+  radio's receive (main.rs `nrf_recv`) now waits two byte times (20 us) for a burst's next byte instead of 200 us,
+  and 200 us only after a full RX FIFO (RTS held the chip; it went on within 4 us on the unit, BOARD.md 11). At the
+  desk (no sensors, about 40 frames a minute) the radio row is traffic, not the wait, and no resync or reset came
+  before or after; the gain is on a ride with sensors (est. 2.4 to 3.2 ms a second, review-P2), still to measure.
 
 ## Stop mode: plan (design, not built)
 

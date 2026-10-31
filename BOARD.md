@@ -448,7 +448,9 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   kernel clock (64 MHz, BRR 64) rather than the bootloader's PLL3; then `sd_ble_enable` and `sd_ble_version_get`
   without any `sd_ble_cfg_set`, both answered (result 0, version 4 / 1 / 50).
 - **Receiving:** polled (`nrf_recv`), the 16-byte RX FIFO and RTS keep the chip's bytes waiting, so nothing is lost
-  on this side however long a pass; how much the chip itself queues meanwhile is not known. So while idle (passes of
+  on this side however long a pass; how much the chip itself queues meanwhile is not known. After a full FIFO is read,
+  the chip's next byte came at most 4 us later (2026-10-31, desk traffic, 52 full-FIFO runs over two minutes); inside
+  a burst not held by RTS, gaps over 20 us between bytes happen (22 a minute, up to 76 us). So while idle (passes of
   250 ms) a byte ends the sleep at once: CR1.RXFNEIE pends USART2's IRQ 38, enabled in the NVIC only around that
   sleep (main.rs `wake_on_io`), interrupts masked. A ride's 100 ms pass (`RIDE_POLL_MS`) does not wake on them
   (`LoopPolicy::begin_sleep`, `bytes`): they wait for the next pass.

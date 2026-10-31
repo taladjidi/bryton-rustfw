@@ -166,7 +166,8 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             match s.gps {
                 Some(bars @ 1..) => draw_bars(c, bars),
                 Some(0) if s.blink => at(c, STRIP_GPS, GREY, Align::Left, "GPS"),
-                _ => at(c, STRIP_GPS, BLACK, Align::Left, "GPS"),
+                // the blink's off half, each second while searching: one fill, not "GPS" drawn in black glyph by glyph
+                _ => c.fill(STRIP_GPS.0, top, STRIP_GPS.1, LABEL.height(), BLACK),
             }
         }
     }
