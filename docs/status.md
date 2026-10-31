@@ -13,7 +13,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
   answers, the marker kept (`tools/dev.py peek` of RTC backup register 30) until then.
 
 - **Three bikes and part wear (src/storage/bikes.rs, src/app/bikes.rs)**: sim only. Still to see: the first start making
-  BIKE 1 from the settings' wheel and ODOMETER (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
+  BIKE 1 from the settings' wheel and ODO (`\Rustfw\bikes.bin` written once, settings.bin untouched); ACTIVE BIKE
   switching the wheel and weight (the speed from a wheel sensor follows); a ride saved, then within a minute its distance
   on the active bike and its parts; a power cut right after "RIDE SAVED" counting the ride once at the next start; a
   part's SERVICE passed and its notice at the start; the scan's time to count on the unit's card (70 rides).
