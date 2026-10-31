@@ -335,7 +335,11 @@ impl Cache {
                 continue;
             }
             if kept != i {
-                self.bytes.copy_within(HEAD + i * ENTRY..HEAD + (i + 1) * ENTRY, HEAD + kept * ENTRY);
+                crate::storage::move_within(
+                    &mut self.bytes,
+                    HEAD + i * ENTRY..HEAD + (i + 1) * ENTRY,
+                    HEAD + kept * ENTRY,
+                );
             }
             kept += 1;
         }
@@ -642,7 +646,7 @@ impl Scan {
         let Some(c) = &mut self.cache else { return self.start(date) };
         if let Some(i) = c.find(&key(file, start)) {
             let len = c.len;
-            c.bytes.copy_within(HEAD + (i + 1) * ENTRY..HEAD + len * ENTRY, HEAD + i * ENTRY);
+            crate::storage::move_within(&mut c.bytes, HEAD + (i + 1) * ENTRY..HEAD + len * ENTRY, HEAD + i * ENTRY);
             c.bytes.get_mut(HEAD + (len - 1) * ENTRY..HEAD + len * ENTRY).unwrap_or(&mut []).fill(0);
             (c.len, c.hint) = (len - 1, 0);
             self.dirty = true;

@@ -459,7 +459,7 @@ impl Basemap {
                 let (Some(&ai), Some(cur)) = (at.get(i), cursor.get_mut(i)) else { continue };
                 let Some(slot) = self.slots.get(ai) else { continue };
                 let Some(words) = store.get(ai * SLOT_WORDS..(ai + 1) * SLOT_WORDS) else { continue };
-                let (feats, pts) = words.split_at(FEATS * 4);
+                let Some((feats, pts)) = words.split_at_checked(FEATS * 4) else { continue };
                 let feats = feats.as_chunks::<4>().0.get(..slot.feats).unwrap_or(&[]);
                 while let Some(f) = feats.get(*cur).filter(|f| f[1] == key) {
                     *cur += 1;

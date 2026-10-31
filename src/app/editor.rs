@@ -685,8 +685,8 @@ impl App {
         let new = Page::preset(4, [Speed, Timer, Dist, Hr, Time, Time, Time, Time]).unwrap_or(BLANK);
         let (pages, count, more) = self.set_mut(which);
         let at = at.min(*count);
-        pages.copy_within(at..PAGES - 1, at + 1);
-        more.copy_within(at..PAGES - 1, at + 1);
+        crate::storage::move_within(pages, at..PAGES - 1, at + 1);
+        crate::storage::move_within(more, at..PAGES - 1, at + 1);
         if let (Some(p), Some(m)) = (pages.get_mut(at), more.get_mut(at)) {
             (*p, *m) = (new, None);
         }
@@ -709,8 +709,8 @@ impl App {
         let which = self.view_set();
         let (pages, count, more) = self.set_mut(which);
         if e.page < *count && *count > 1 {
-            pages.copy_within(e.page + 1..PAGES, e.page);
-            more.copy_within(e.page + 1..PAGES, e.page);
+            crate::storage::move_within(pages, e.page + 1..PAGES, e.page);
+            crate::storage::move_within(more, e.page + 1..PAGES, e.page);
             more[PAGES - 1] = None;
             *count -= 1;
             if which == ride::Profile::Road {

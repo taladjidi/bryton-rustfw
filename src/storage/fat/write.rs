@@ -516,7 +516,7 @@ impl Fat {
     /// An 8.3 name for `name` that nothing in `dir` has: 8 characters of a hash of the long name (so no `~N`
     /// numbering to search), and the extension's first 3 letters or digits.
     fn alias(&mut self, d: &mut impl Disk, dir: File, name: &str) -> Result<[u8; 11], Error> {
-        let ext = name.rfind('.').map_or("", |i| name.get(i + 1..).unwrap_or(""));
+        let ext = crate::storage::rfind_ascii(name, b'.').map_or("", |i| name.get(i + 1..).unwrap_or(""));
         let mut short = [b' '; 11];
         for (s, c) in short[8..].iter_mut().zip(ext.bytes().filter(u8::is_ascii_alphanumeric)) {
             *s = c.to_ascii_uppercase();

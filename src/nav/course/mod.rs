@@ -300,8 +300,7 @@ impl Descent {
         while k > N {
             // the least steep out (the first of them), the rest keep their order
             let Some(low) = (0..k).min_by_key(|&i| all.get(i).map_or(0, |d| d.max_x10)) else { break };
-            let Some(s) = all.get_mut(low..k) else { break };
-            s.rotate_left(1.min(s.len())); // the dropped one goes to the end, past the new k
+            crate::storage::move_within(&mut all, low + 1..k, low);
             k -= 1;
         }
         let mut out = [Descent::NONE; N];

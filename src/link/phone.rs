@@ -513,7 +513,8 @@ impl Inbox {
 /// assert_eq!(l.as_str(), "CHAT");
 /// ```
 pub fn app_name<const N: usize>(l: &mut Line<N>, id: &str) {
-    for c in id.rsplit('.').next().unwrap_or("").chars() {
+    let last = id.get(crate::storage::rfind_ascii(id, b'.').map_or(0, |i| i + 1)..).unwrap_or("");
+    for c in last.chars() {
         l.push_str(c.to_ascii_uppercase().encode_utf8(&mut [0; 4]));
     }
 }
@@ -535,7 +536,7 @@ pub fn wrap(text: &str, cols: usize) -> impl Iterator<Item = &str> {
         let n = if rest.len() <= cols {
             rest.len()
         } else {
-            rest.get(..=cols).and_then(|h| h.rfind(' ')).filter(|&i| i > 0).unwrap_or(cols)
+            rest.get(..=cols).and_then(|h| crate::storage::rfind_ascii(h, b' ')).filter(|&i| i > 0).unwrap_or(cols)
         };
         let (line, tail) = rest.split_at_checked(n)?;
         rest = tail.trim_start();

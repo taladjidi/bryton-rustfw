@@ -25,6 +25,29 @@ pub mod trash;
 pub mod volume;
 pub mod workout_file;
 
+/// `s.copy_within(src, dest)` that cannot panic: elements out of range are skipped (an edit on malformed counts
+/// changes less, never takes the unit down). Overlap-safe like the original.
+pub(crate) fn move_within<T: Copy>(s: &mut [T], src: core::ops::Range<usize>, dest: usize) {
+    let n = src.end.saturating_sub(src.start);
+    let mut cp = |i: usize| {
+        if let Some(&v) = s.get(src.start.saturating_add(i))
+            && let Some(d) = s.get_mut(dest.saturating_add(i))
+        {
+            *d = v;
+        }
+    };
+    if dest <= src.start {
+        (0..n).for_each(&mut cp);
+    } else {
+        (0..n).rev().for_each(&mut cp);
+    }
+}
+
+/// The byte index of the last ASCII `b` in `s` (`str::rfind` pulls in core's memrchr and its bounds checks).
+pub(crate) fn rfind_ascii(s: &str, b: u8) -> Option<usize> {
+    s.bytes().rposition(|c| c == b)
+}
+
 /// The `N` bytes of `b` from `i`, zeros when `b` is too short (a malformed record reads as empty, never panics).
 pub(crate) fn take<const N: usize>(b: &[u8], i: usize) -> [u8; N] {
     i.checked_add(N).and_then(|end| b.get(i..end)).and_then(|s| s.try_into().ok()).unwrap_or([0; N])

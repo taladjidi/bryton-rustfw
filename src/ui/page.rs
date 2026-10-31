@@ -191,18 +191,16 @@ impl Page {
 
     /// `new` in at cell `at`, the fields from there moved on (the last one out).
     fn insert_field(&mut self, at: usize, new: Field) {
-        if let Some(tail) = self.fields.get_mut(at..) {
-            tail.rotate_right(1);
-            if let Some(f) = tail.first_mut() {
-                *f = new;
-            }
+        crate::storage::move_within(&mut self.fields, at..CELLS.saturating_sub(1), at + 1);
+        if let Some(f) = self.fields.get_mut(at) {
+            *f = new;
         }
     }
 
     /// `n` fields from cell `at` out, those after moved back.
     fn remove_fields(&mut self, at: usize, n: usize) {
         if at.checked_add(n).is_some_and(|e| e <= CELLS) {
-            self.fields.copy_within(at + n..CELLS, at);
+            crate::storage::move_within(&mut self.fields, at + n..CELLS, at);
             for f in self.fields.iter_mut().skip(CELLS - n) {
                 *f = Field::Time;
             }
@@ -261,7 +259,7 @@ impl Page {
         if let Some(x) = p.rows.get_mut(r) {
             x.0 = (share - below).max(1);
         }
-        p.rows.copy_within(r + 1..ROWS - 1, r + 2);
+        crate::storage::move_within(&mut p.rows, r + 1..ROWS - 1, r + 2);
         if let Some(x) = p.rows.get_mut(r + 1) {
             *x = (below, 1);
         }
@@ -311,7 +309,7 @@ impl Page {
             *x = ((rs + os).min(SHARE), 1);
         }
         if gone < ROWS {
-            p.rows.copy_within(gone + 1..ROWS, gone);
+            crate::storage::move_within(&mut p.rows, gone + 1..ROWS, gone);
         }
         if let Some(x) = p.rows.last_mut() {
             *x = (0, 0);
@@ -521,7 +519,7 @@ impl Meta {
     /// A page inserted at `at` (the ones after shift up; the new one is ON, unnamed).
     pub fn insert(&mut self, at: usize) {
         if at < crate::PAGES {
-            self.names.copy_within(at..crate::PAGES - 1, at + 1);
+            crate::storage::move_within(&mut self.names, at..crate::PAGES - 1, at + 1);
             if let Some(n) = self.names.get_mut(at) {
                 *n = [b' '; NAME_CHARS];
             }
@@ -533,7 +531,7 @@ impl Meta {
     /// Page `at` removed (the ones after shift down).
     pub fn remove(&mut self, at: usize) {
         if at < crate::PAGES {
-            self.names.copy_within(at + 1.., at);
+            crate::storage::move_within(&mut self.names, at + 1..crate::PAGES, at);
             self.names[crate::PAGES - 1] = [b' '; NAME_CHARS];
             let low = (1u8 << at) - 1;
             self.off = self.off & low | (self.off >> 1) & !low;

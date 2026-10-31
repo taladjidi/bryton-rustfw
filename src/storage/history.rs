@@ -227,7 +227,7 @@ impl Index {
             return;
         }
         let end = self.len.min(RIDES - 1);
-        self.rides.copy_within(at..end, at + 1);
+        crate::storage::move_within(&mut self.rides, at..end, at + 1);
         if let Some(slot) = self.rides.get_mut(at) {
             *slot = r;
         }
@@ -239,7 +239,7 @@ impl Index {
         let kept = self.rides.get(..self.len).unwrap_or(&[]);
         let same = |r: &Ride| (r.file.cluster, r.file.size, r.start) == (file.cluster, file.size, start);
         if let Some(i) = kept.iter().position(same) {
-            self.rides.copy_within(i + 1..self.len, i);
+            crate::storage::move_within(&mut self.rides, i + 1..self.len, i);
             self.len -= 1;
             self.rev = self.rev.wrapping_add(1);
         }

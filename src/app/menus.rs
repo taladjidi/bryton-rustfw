@@ -671,7 +671,9 @@ impl App {
                     && let Some(p) = self.plan.calendar.get(k)
                 {
                     // the day over the length, and the workout's profile beside them: "SAT 24 OCT" is "SAT 24"
-                    let day = label.as_str().rsplit_once(' ').map_or(label.as_str(), |d| d.0);
+                    let day = crate::storage::rfind_ascii(label.as_str(), b' ')
+                        .and_then(|i| label.as_str().get(..i))
+                        .unwrap_or(label.as_str());
                     return ui::draw_workout_row(
                         c,
                         slot,

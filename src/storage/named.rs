@@ -212,11 +212,11 @@ impl Pois {
             if w.off_m <= p.off_m {
                 return;
             }
-            self.list.copy_within(worst + 1..MAX, worst);
+            crate::storage::move_within(&mut self.list, worst + 1..MAX, worst);
             self.n -= 1;
         }
         let at = self.list().partition_point(|q| q.along_m <= p.along_m);
-        self.list.copy_within(at..self.n, at + 1);
+        crate::storage::move_within(&mut self.list, at..self.n, at + 1);
         if let Some(slot) = self.list.get_mut(at) {
             *slot = p;
             self.n += 1;

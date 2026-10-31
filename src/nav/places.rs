@@ -128,10 +128,8 @@ impl Places {
     /// Deletes place `k` (the later ones move up).
     pub fn remove(&mut self, k: usize) {
         let n = self.len();
-        if k < n
-            && let Some(s) = self.list.get_mut(k..n)
-        {
-            s.rotate_left(1.min(s.len()));
+        if k < n {
+            crate::storage::move_within(&mut self.list, k + 1..n, k);
             self.n -= 1;
         }
     }
