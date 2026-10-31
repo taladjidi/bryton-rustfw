@@ -12,6 +12,7 @@ pub mod ign;
 pub mod inflate;
 pub mod ini;
 pub mod named;
+pub mod osm;
 pub mod recorder;
 pub mod route;
 pub mod screenshot;

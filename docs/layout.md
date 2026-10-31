@@ -246,6 +246,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/storage/ign.rs`: the IGN map packs (`\Rustfw\Maps\IGN<z>_<bx>_<by>.PAK`, the format in its module doc),
   made on the computer by `tools/ign_pack.py` (fetch, pack, the synthetic `fixture` in `test-data/ign`); the LZ4
   block decoder. Real IGN tiles never enter the repository.
+- `src/storage/osm.rs`: the OpenStreetMap map packs (`\Rustfw\Maps\osm\OSM<z>_<bx>_<by>.PAK`, 16 x 16 tiles a file,
+  stock's decoded H and P tile records inside; the format in its module doc), made on the computer by
+  `tools/map_pack.py` (an Overpass JSON and a bounding box; its selftest builds a synthetic area and reads it back
+  with an independent reader, and the committed synthetic pack `test-data/osm` equals a fresh `fixture`, which the Rust tests read through `include_bytes!`). `ui/tiles.rs` draws them through the same `load` as stock's tiles (`InPack`), stock's files for a tile the packs lack.
 - `src/storage/route.rs`: stock's routing graph from its map files (`\Map\Update` then `\Map\MapData\<Region>\9-<x>-<y>.dat`,
   section 1, zoom 14): the container, a tile's gzip stream, its protobuf decoded into a `Graph` (a few tiles at once, nodes
   sorted by position, 100 KB), `Maps` (the files found once, one tile a call, into the inflate buffer main.rs takes from

@@ -121,6 +121,10 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
     up to 49 N, finer than zoom 15 enlarged; a one-pixel line can lose a pixel here and there when shrunk), "(c)
     IGN" in the map's corner as
     the licence (Etalab 2.0) asks;
+  - else **OpenStreetMap vector packs** (`\Rustfw\Maps\osm`, made by `tools/map_pack.py` from an Overpass
+    extract of the rider's own area, docs/install.md, "OpenStreetMap maps"): roads by class, tracks and paths (brown,
+    zoom 14), cycleways, rail, water and waterways, drawn by the code that draws stock's tiles; used at a zoom
+    where the pack has the tile under the view's centre, else stock's;
   - else roads and water from stock's tile cache (`\Map\Data\Temp`), also under IGN at the edge of the packed
     area.
   The map is read and drawn once per view change (at most 6 IGN tiles, about 150 KB read); the arrow and the track
