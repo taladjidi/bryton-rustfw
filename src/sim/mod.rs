@@ -213,6 +213,20 @@ pub fn emmc_sector(lba: u32) -> [u8; 512] {
     s
 }
 
+/// The response each command the driver sends with `emmc_cmd` takes. Source: the MMC command set (JESD84-B51, not
+/// public; the names and response types as Linux's include/linux/mmc/mmc.h and the driver's own notes, inferred).
+/// R1b (busy after the response) is R1 here, as [`crate::emmc::Resp`] says. A command not listed is not checked.
+fn expected_resp(index: u8) -> Option<crate::emmc::Resp> {
+    use crate::emmc::Resp;
+    Some(match index {
+        0 | 4 | 15 => Resp::None,
+        1 => Resp::R3,
+        2 | 9 | 10 => Resp::R2,
+        3 | 6 | 7 | 8 | 12 | 13 | 16 | 17 | 18 | 23 | 24 | 25 => Resp::R1,
+        _ => return None,
+    })
+}
+
 impl EmmcCard {
     /// Card status as R1 carries it: the state, ready for data.
     fn status(&self) -> u32 {
@@ -1490,7 +1504,13 @@ impl Board for Sim {
         (self.emmc.host_fast, self.emmc.host_wide) = (fast, wide);
     }
 
-    fn emmc_cmd(&mut self, index: u8, arg: u32, _: crate::emmc::Resp) -> Result<[u32; 4], crate::emmc::BusError> {
+    fn emmc_cmd(&mut self, index: u8, arg: u32, resp: crate::emmc::Resp) -> Result<[u32; 4], crate::emmc::BusError> {
+        if let Some(want) = expected_resp(index) {
+            assert!(
+                want == resp,
+                "eMMC command {index}: the driver waits for {resp:?}, the command's response is {want:?}"
+            );
+        }
         self.emmc.cmd(index, arg)
     }
 

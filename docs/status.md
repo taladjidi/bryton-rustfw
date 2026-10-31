@@ -4,6 +4,18 @@ What this file holds: what the unit has not shown yet, the known problems, and t
 What does not belong: what is built (features.md) and the roadmap (roadmap.md).
 Where to look: features.md for what the firmware does, journal.md for the dated findings, docs/usb.md for the USB drops.
 
+## What the simulator does not model
+
+The simulator (src/sim/) is the host tests' fake board. Nothing below is checked by them; each one is for the unit:
+- `beep` records the frequency only: not the duration, nor the timing of the tone.
+- `cycles` advances by a fixed step per call, not from the CPU's cycle counter (DWT): no measured time awake there.
+- `last_sleep` is constant: the length of a sleep and its wake reason are not tested.
+- The panel's DMA fallback: the simulated panel takes its pixels by plain writes, not by the DMA stream (hw.rs `PanelDma`).
+- The USB core (OTG, PHY, VBUS timing): the dev link runs against a fake computer (`Pc`), not the cable.
+- DBP (the backup domain write enable, PWR_CR1): the simulated backup registers are always writable.
+- The MPU, the caches and the memory attributes: no protection and no cache lines.
+- The eMMC: the card is a model (`EmmcCard`) with fixed timing; only the responses of the commands in `expected_resp` are checked.
+
 ## Not yet seen on the unit
 
 - **The radio receive's short wait (2026-10-31, main.rs `nrf_recv`, review finding 8)**: seen at the desk only (no
