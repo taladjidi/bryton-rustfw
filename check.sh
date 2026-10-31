@@ -73,11 +73,15 @@ fi
 # What the branch changed (against the merge base with origin/main, plus the working tree): the skips below.
 # On main, without a base, or with --full, everything runs.
 changed=""; skipok=0
-if [ $full = 0 ] && [ "$(git branch --show-current)" != main ]; then
+br=$(git branch --show-current)   # empty on a detached HEAD: treated like main (nothing skipped)
+if [ $full = 0 ] && [ -n "$br" ] && [ "$br" != main ]; then
     base=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || true)
     if [ -n "$base" ]; then
-        changed=$( { git diff --name-only "$base"; git status --porcelain | cut -c4- | sed 's/.* -> //'; } | sort -u)
-        skipok=1
+        # shortcut: paths with spaces or newlines are not handled (no -z), none in this repository
+        if d=$(git diff --name-only "$base"); then
+            changed=$( { printf '%s\n' "$d"; git status --porcelain | cut -c4- | sed 's/.* -> //'; } | sort -u)
+            skipok=1
+        fi
     fi
 fi
 # touched REGEX: did a changed path match (always true when nothing may be skipped)
@@ -89,28 +93,6 @@ lane_F() {  # the firmware
     step "stack_check" python3 -I tools/stack_check.py
     step "stack_check selftest" python3 -I tools/stack_check.py selftest
     step "pack.py" python3 -I tools/pack.py
-    # The firmware on Renode's STM32H747 (renode/run.py), when installed (docs/devloop.md, Emulation).
-    export RENODE="${RENODE:-/Applications/Renode.app/Contents/MacOS/renode}"
-    if ! command -v "$RENODE" >/dev/null 2>&1; then
-        skip "renode (not installed)"
-    elif ! touched '^(src/main\.rs|src/board/|link\.x|build\.rs|memory\.x|Cargo\.(toml|lock)|renode/)'; then
-        skip "renode (no change in main.rs, board/, link.x, build.rs, Cargo.toml, renode/)"
-    else
-        renode2() {  # the boot (first screen, then the cable in) and the switch-off; in sequence unless RENODE_PARALLEL=1
-            if [ "${RENODE_PARALLEL:-0}" = 1 ]; then
-                python3 renode/run.py > "$C/renode-boot.log" 2>&1 & p1=$!
-                python3 renode/run.py --off > "$C/renode-off.log" 2>&1 & p2=$!
-                r=0; wait $p1 || r=1; wait $p2 || r=1
-            else
-                r=0
-                python3 renode/run.py > "$C/renode-boot.log" 2>&1 || r=1
-                python3 renode/run.py --off > "$C/renode-off.log" 2>&1 || r=1
-            fi
-            cat "$C"/renode-*.log
-            return $r
-        }
-        step "renode (boot + vbus, off)" renode2
-    fi
 }
 
 lane_H() {  # the host
@@ -164,7 +146,7 @@ lane_P() {  # the Python tools' self-tests
     else
         fontcheck() {
             fontdir=$(mktemp -d)
-            python3 tools/font.py -o "$fontdir/fonts.rs" >/dev/null
+            python3 tools/font.py -o "$fontdir/fonts.rs" >/dev/null || { rm -rf "$fontdir"; echo "tools/font.py failed"; return 1; }
             cmp -s "$fontdir/fonts.rs" src/ui/fonts.rs || { rm -rf "$fontdir"; echo "src/ui/fonts.rs differs from tools/font.py's output: run python3 tools/font.py"; return 1; }
             rm -rf "$fontdir"
         }
@@ -175,6 +157,7 @@ lane_P() {  # the Python tools' self-tests
 ( lane_F ) > "$C/F.log" 2>&1 & pF=$!
 ( lane_H ) > "$C/H.log" 2>&1 & pH=$!
 ( lane_P ) > "$C/P.log" 2>&1 & pP=$!
+trap 'kill 0' INT TERM   # Ctrl-C stops the lane subshells too
 bad=""
 wait "$pF" || bad="$bad F"
 wait "$pH" || bad="$bad H"
@@ -185,10 +168,35 @@ for l in F H P; do
 done
 if [ -n "$bad" ]; then echo "check.sh: FAILED lane(s):$bad (logs in $C/)"; exit 1; fi
 
+# The firmware on Renode's STM32H747 (renode/run.py), when installed (docs/devloop.md, Emulation). After the lanes and
+# only when they passed: it compares the boot screen with target/sim/preview.bmp (lane H's test-host) and needs the
+# image (lane F).
+export RENODE="${RENODE:-/Applications/Renode.app/Contents/MacOS/renode}"
+if ! command -v "$RENODE" >/dev/null 2>&1; then
+    skip "renode (not installed)"
+elif ! touched '^(src/main\.rs|src/lib\.rs|src/app/pass\.rs|src/board/|src/drivers/panel\.rs|src/ui/strip\.rs|src/ui/overview\.rs|link\.x|build\.rs|Cargo\.(toml|lock)|renode/)'; then
+    skip "renode (no change in main.rs, lib.rs, app/pass.rs, board/, drivers/panel.rs, ui/strip.rs, ui/overview.rs, link.x, build.rs, Cargo.toml/lock, renode/)"
+else
+    renode2() {  # the boot (first screen, then the cable in) and the switch-off; in sequence unless RENODE_PARALLEL=1
+        if [ "${RENODE_PARALLEL:-0}" = 1 ]; then
+            python3 renode/run.py > "$C/renode-boot.log" 2>&1 & p1=$!
+            python3 renode/run.py --off > "$C/renode-off.log" 2>&1 & p2=$!
+            r=0; wait $p1 || r=1; wait $p2 || r=1
+        else
+            r=0
+            python3 renode/run.py > "$C/renode-boot.log" 2>&1 || r=1
+            python3 renode/run.py --off > "$C/renode-off.log" 2>&1 || r=1
+        fi
+        cat "$C"/renode-*.log
+        return $r
+    }
+    step "renode (boot + vbus, off)" renode2 || { echo "check.sh: FAILED renode"; exit 1; }
+fi
+
 # The live numbers of the docs (markers, AGENTS.md Docs) need the ELF (lane F) and the test list (lane H). They are
 # written on main (or --full), by the merge step; a branch only reports the stale ones, so it never commits marker
 # churn that conflicts on merge.
-if [ $full = 1 ] || [ "$(git branch --show-current)" = main ]; then
+if [ $full = 1 ] || [ "$br" = main ]; then
     step "numbers.py --write" python3 -I tools/numbers.py --write
 else
     echo "numbers (information only, written on main):"

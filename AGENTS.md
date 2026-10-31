@@ -56,7 +56,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->801 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->799 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
@@ -170,7 +170,7 @@ seconds, and the run ends with all of them and a total:
   tracked files, dead functions in `tools/`, and ruff's pyflakes checks when ruff is installed;
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - **lane F, the firmware:** `cargo clippy --release -- -D warnings`, the firmware build, `tools/stack_check.py` and its
-  selftest (the stack frames against their budgets), `tools/pack.py`, then if Renode is installed `renode/run.py`
+  selftest (the stack frames against their budgets), `tools/pack.py`; after the lanes, if Renode is installed, `renode/run.py`
   (the boot, then the cable in) and `--off` (docs/devloop.md, Emulation), in sequence (`RENODE_PARALLEL=1` runs both
   together), each killed after 300 s (`RENODE_TIMEOUT`) and failing;
 - **lane H, the host:** clippy on the tests and the simulator, `cargo test-host` (unit tests, simulator tests and doc
@@ -186,10 +186,13 @@ seconds, and the run ends with all of them and a total:
   and AGENTS.md.
 
 **Skips, only on a branch** (never on main; each prints a `skip:` line and ends up in the `SKIPPED:` summary): the Python
-self-tests when nothing under `tools/`, `test-data/`, `renode/` or `docs/theming.md` changed; the font regeneration when
+self-tests when nothing under `tools/`, `test-data/`, `renode/`, `docs/theming.md`, `src/ui/tiles.rs` or `check.sh`
+changed (the walk selftest: `src/sim/walk_tests.rs` instead of `src/ui/tiles.rs`); the font regeneration when
 `tools/font.py`, `tools/pixel_font.py`, `tools/fonts/` and `src/ui/fonts.rs` are untouched; Renode when `src/main.rs`,
-`src/board/`, `link.x`, `build.rs`, `Cargo.toml` and `renode/` are untouched. The changes are the diff against the merge
-base with `origin/main` plus the working tree. `./check.sh --full` forces everything. `./check.sh --quick` is the
+`src/lib.rs`, `src/app/pass.rs`, `src/board/`, `src/drivers/panel.rs`, `src/ui/strip.rs`, `src/ui/overview.rs`,
+`link.x`, `build.rs`, `Cargo.toml`, `Cargo.lock` and `renode/` are untouched. Renode runs after the lanes, only when they
+passed (it needs the image and the simulator's preview). The changes are the diff against the merge base with
+`origin/main` plus the working tree; a detached HEAD skips nothing. `./check.sh --full` forces everything. `./check.sh --quick` is the
 iteration tier and **not the gate**: the guards, lint, fmt, host clippy and `cargo test-host`. Commit after the full
 `./check.sh` exits 0.
 

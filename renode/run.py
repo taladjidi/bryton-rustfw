@@ -179,7 +179,9 @@ def main():
         # to `cpu PC` can then be lost at `quit`. The panel traffic checks below still catch a hang.
         print('note: PC not read (log flooded)')
     preview = ROOT / 'target/sim/preview.bmp'
-    if preview.exists():
+    if not preview.exists():
+        fails.append(f'{preview} is missing: run cargo test-host first (the pixel check needs it)')
+    else:
         sim = bmp_rgb(preview)
         for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, the empty notices (src/ui/)
             bad = [x for x in range(W) if rgb(first, x, y) != sim[y][x]]
