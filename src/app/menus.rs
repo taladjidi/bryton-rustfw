@@ -317,12 +317,7 @@ impl App {
                 let label = self.menu_row(m, i).map_or(Line::<16>::new(), |r| r.0);
                 write!(l, "{}|{i}/{}|{}", menu_title(m), self.rows(m), label.as_str())
             }
-            s => {
-                let mut name = Line::<24>::new();
-                let _ = write!(name, "{s:?}");
-                let n = name.as_str();
-                write!(l, "SCREEN {}", n.split('(').next().unwrap_or(n))
-            }
+            s => write!(l, "SCREEN {}", s.name()),
         };
         l
     }

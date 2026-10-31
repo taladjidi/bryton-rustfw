@@ -266,6 +266,19 @@ def selftest():
         def readline(self):
             return (self.out.pop(0) + '\n').encode()
 
+    class Ask:
+        """A link whose `where` answer is canned."""
+        def __init__(self, answer):
+            self.answer = answer
+        def reset_input_buffer(self):
+            pass
+        def write(self, cmd):
+            assert cmd == b'where\n', cmd
+        def readline(self):
+            return (self.answer + '\n').encode()
+    assert command(Ask('where SENSORS|3/7|HEART RATE'), 'where') == 'where SENSORS|3/7|HEART RATE'
+    assert command(Ask('where OVERVIEW'), 'where') == 'where OVERVIEW'
+    assert any(l.strip().startswith("sub.add_parser('where'") for l in open(__file__)), 'where is a subcommand'
     blob = bytes(range(256)) * 40                       # 10240 bytes: answers of 4096, 4096 and 2048
     path = 'Activities\\FILE.FIT'
     chunks = [blob[i:i + 4096].hex() for i in range(0, len(blob), 4096)]

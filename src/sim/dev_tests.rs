@@ -91,6 +91,23 @@ fn where_names_the_cursor_row() {
     let label = app.menu_row(m, i).unwrap().0;
     assert_eq!(ask(&app), format!("where MENU|{i}/{}|{}\n", app.rows(m), label.as_str()));
     assert_eq!(i, 1);
+    // other screens by kind
+    app.screen = Screen::Ride(2);
+    assert_eq!(ask(&app), "where RIDE 2\n");
+    app.screen = Screen::Nearby;
+    assert_eq!(ask(&app), "where SCREEN NEARBY\n");
+    app.screen = Screen::Laps(3);
+    assert_eq!(ask(&app), "where SCREEN LAPS\n");
+    // a cursor past the last row answers an empty label; the answer stays short (labels are 16 characters at most)
+    app.screen = Screen::Menu(Menu::Settings, 99);
+    let a = ask(&app);
+    assert!(a.starts_with("where SETTINGS|99/") && a.ends_with("|\n") && a.len() <= 54, "{a}");
+    // the longest titles and labels: cut by their types, never past the line
+    for m in [Menu::Notifs, Menu::BtTrainers, Menu::Segments, Menu::Climbs] {
+        app.screen = Screen::Menu(m, 0);
+        let a = ask(&app);
+        assert!(a.len() <= 54 && a.ends_with('\n') && a.matches('\n').count() == 1, "{a}");
+    }
 }
 
 /// The screenshot (rendered row by row from the app's state) must equal what the panel shows.

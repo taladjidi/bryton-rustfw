@@ -169,6 +169,31 @@ pub enum Screen {
     SegmentResult,
 }
 
+impl Screen {
+    /// The screen's kind in words for the dev link's `where` (no allocation, no Debug text in the image).
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Screen::Nearby => "NEARBY",
+            Screen::End(_) => "END",
+            Screen::Discard(_) => "DISCARD",
+            Screen::Summary => "SUMMARY",
+            Screen::Past => "PAST",
+            Screen::Laps(_) => "LAPS",
+            Screen::Media => "MEDIA",
+            Screen::Status => "STATUS",
+            Screen::Quick => "QUICK",
+            Screen::Trainer => "TRAINER",
+            Screen::PowerCal => "POWERCAL",
+            Screen::Curve(_) => "CURVE",
+            Screen::Load(_) => "LOAD",
+            Screen::RampResult => "RAMP",
+            Screen::About => "ABOUT",
+            Screen::Notif(..) => "NOTIF",
+            _ => "OTHER",
+        }
+    }
+}
+
 /// Places in the round of the ride pages: the workout page, the pages, then the course page.
 const ROUND: usize = PAGES + 2;
 

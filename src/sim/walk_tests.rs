@@ -31,7 +31,20 @@ const KNOWN: &[(&str, &str, &str)] = &[
 
 /// One key of a path; a Start pressed in a menu also has that menu's title and the label of the row it lands on, so
 /// tools/walk.py finds the row by name on the unit (`where`), whatever data the unit's lists hold.
-type Step = (&'static str, Option<(String, String)>);
+type Step = (&'static str, Option<Target>);
+
+/// The row a Start is pressed on: where it is, and what kind (tools/walk.py's allowlist reads `kind`).
+#[derive(Clone)]
+struct Target {
+    title: String,
+    row: String,
+    idx: usize,
+    rows: usize,
+    /// "set" (Start cycles and saves a setting), "fixed" (a row of a const table: label from the table), "data" (a row
+    /// that only opens what the data holds: a workout, a past ride, a month, a notification, a place, a course) or
+    /// "other" (everything else: acts).
+    kind: &'static str,
+}
 
 struct Walk {
     n: usize,
@@ -76,7 +89,22 @@ fn key(sim: &mut Sim, app: &mut App, w: &mut Walk, k: &'static str) {
     };
     let target = match app.screen() {
         Screen::Menu(m, i) if k == "start" => {
-            Some((menu_title(m).into(), app.menu_row(m, i).map_or(String::new(), |r| r.0.as_str().into())))
+            let row = app.row(m, i);
+            let kind = match row {
+                Some(Row::Set(_)) => "set",
+                Some(r) if r.label().is_some() => "fixed",
+                Some(
+                    Row::Workout(_) | Row::Past(_) | Row::Month(_) | Row::Notif(_) | Row::Place(_) | Row::Course(_),
+                ) => "data",
+                _ => "other",
+            };
+            Some(Target {
+                title: menu_title(m).into(),
+                row: app.menu_row(m, i).map_or(String::new(), |r| r.0.as_str().into()),
+                idx: i,
+                rows: app.rows(m),
+                kind,
+            })
         }
         _ => None,
     };
@@ -313,7 +341,10 @@ fn walk_every_screen() {
             let steps: Vec<String> = k
                 .iter()
                 .map(|(key, t)| match t {
-                    Some((title, row)) => format!("{{\"key\":\"{key}\",\"title\":\"{title}\",\"row\":\"{row}\"}}"),
+                    Some(t) => format!(
+                        "{{\"key\":\"{key}\",\"title\":\"{}\",\"row\":\"{}\",\"idx\":{},\"rows\":{},\"kind\":\"{}\"}}",
+                        t.title, t.row, t.idx, t.rows, t.kind
+                    ),
                     None => format!("{{\"key\":\"{key}\"}}"),
                 })
                 .collect();
@@ -330,6 +361,10 @@ fn walk_every_screen() {
             k.0,
             k.1
         );
+    }
+    let starts: Vec<&Target> = w.paths.iter().flat_map(|p| p.1.iter().filter_map(|s| s.1.as_ref())).collect();
+    for kind in ["fixed", "data", "set", "other"] {
+        std::println!("walk: {kind} Start steps {}", starts.iter().filter(|t| t.kind == kind).count());
     }
     std::println!("walk: {} screens, {} clips, {:?}", w.n, w.found.len(), t0.elapsed());
     assert!(
