@@ -187,8 +187,9 @@ Others
 - [~] Contour lines, POIs, street names on the map (Garmin, Wahoo, Karoo): in IGN's tiles, France only
 - [x] Follow a course (FIT or GPX): line on the map, distance to go (stock, all): sim
 - [~] Off-course alert, back on track (stock, Wahoo, all): sim; the alert and the distance off, no way back drawn
-- [ ] Navigate to the start of a course first (stock)
-- [ ] Reverse a course (stock, Garmin)
+- [~] Navigate to the start of a course first (stock): sim; a straight line (compass point and distance), no routing
+- [x] Reverse a course (stock, Garmin): sim
+- [x] The way back: the ride's own track followed back as a course (Garmin Back to Start): sim
 - [x] Turn-by-turn cues (stock, all): sim
 - [ ] Voice turn-by-turn on a speaker (Garmin, Wahoo, Karoo)
 - [ ] Rerouting on the unit (stock, all)
@@ -226,10 +227,11 @@ Others
 - [x] Workouts synced from TrainingPeaks, intervals.icu (stock, all): sim
 - [x] Workout calendar: today and the next days (stock, Garmin, Wahoo): sim
 - [~] ERG mode to the workout target (stock, all): sim; not yet seen on the trainer
-- [~] Trainer resistance and power modes, by hand (stock): sim; stock's level mode not done
-- [~] Trainer slope from the course grade (Garmin, Wahoo, Karoo): sim
+- [~] Trainer resistance and power modes, by hand (stock): sim; level mode (LVL, 1 to 20) sim only
+- [~] Trainer slope from the course grade, with a scale of 100, 75, 50 or 25 % (Garmin, Wahoo, Karoo): sim
 - [~] FTP ramp test indoors (stock, Garmin, Coros): sim; no max HR or LTHR test, not yet on the trainer
-- [ ] Trainer level mode (stock) and a virtual course turned into a workout (stock)
+- [~] Trainer level mode (stock): sim
+- [ ] A virtual course turned into a workout (stock)
 - [ ] AI Coach / Pace Pilot on the unit: pacing sections and carbohydrate along a course (stock, from the app)
 - [ ] Progress Planner: plan that adapts to load and fatigue (stock app, S810)
 - [ ] Targeted adaptive coaching / daily suggested workouts (Garmin)

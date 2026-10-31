@@ -113,14 +113,14 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - history (phase 4b): the ride index with TSS, the power curve screen (done: 90 days and this ride's, app/curve.rs; the all-time curve and
   the date of each best are not), personal records and best efforts, training load (CTL, ATL, TSB) with its chart and fields, month totals, each ride matched to
   the planned workout; the scan's results written by critical;
-- courses: reverse, navigate to the start, the way back drawn, retrace along the ride's own track, turn cues from
+- courses: ~~reverse, navigate to the start (straight line), retrace along the ride's own track~~ done, sim (features.md, ride menu: REVERSE COURSE, BACK TO START); the way back drawn differently from the course, routed navigation (3d), turn cues from
   stock's `voiceTrip.fit`, POIs and peaks along a course where the map has them;
 - the map: ~~north up or heading up, pinch to zoom~~ done, sim (features.md, Map); our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
 - field sizes that follow the box, ring and bar gauges;
 - ride profiles: gravel, cyclocross, commute, three bikes, auto features per profile, component wear;
 - torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: completed climbs listed with their
   times, detection on or off per profile, descents;
-- trainer: level mode, a course ridden on the trainer (slope from the course), a virtual course as a workout;
+- trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); a virtual course as a workout from the workout list;
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept), a larger ATT MTU,
   the notification's app shown;
 - ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); a battery saver mode; GNSS systems chosen per profile; AssistNow offline data from the

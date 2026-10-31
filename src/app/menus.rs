@@ -167,6 +167,7 @@ impl App {
                     (Row::Ride(RideRow::End), true),
                     (Row::Open(Menu::WorkoutNow), self.workout_running()),
                     (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
+                    (Row::Ride(RideRow::BackToStart), self.track.points().len() >= 2),
                     (Row::Ride(RideRow::Trainer), self.trainer_on()),
                     (Row::Ride(RideRow::Indoor), true),
                     (Row::Set(menu::Setting::Light), true),
@@ -865,6 +866,14 @@ impl App {
             }
             RideRow::StopCourse => {
                 self.stop_course();
+                self.leave_menus();
+            }
+            RideRow::Reverse => {
+                self.reverse_course();
+                self.leave_menus();
+            }
+            RideRow::BackToStart => {
+                self.back_to_start();
                 self.leave_menus();
             }
             RideRow::Trainer => self.open(Screen::Trainer),

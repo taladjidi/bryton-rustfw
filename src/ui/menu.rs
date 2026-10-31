@@ -151,6 +151,10 @@ pub enum Setting {
     GpsPower,
     /// ERG targets corrected so the power meter reads them, on or off (`power_match`, [`crate::power_match`]).
     PowerMatch,
+    /// LEVEL STEP (BIKE): how many levels a press moves in the trainer's LEVEL mode ([`crate::LEVEL_STEPS`]).
+    LevelStep,
+    /// SLOPE SCALE (BIKE): how much of the course's grade the trainer is given ([`crate::SLOPE_SCALES`]).
+    SlopeScale,
     /// The window of the big power value: the live reading, 3, 5 or 10 s (app/settings.rs, POWER_SMOOTH_S).
     PowerSmooth,
     /// AUTO LAP: OFF, BY DISTANCE or BY TIME (`auto_lap`).
@@ -303,6 +307,8 @@ impl Setting {
             Setting::DaylightSaving => "SUMMER TIME",
             Setting::MapUp => "MAP",
             Setting::PowerMatch => "POWER MATCH",
+            Setting::LevelStep => "LEVEL STEP",
+            Setting::SlopeScale => "SLOPE SCALE",
             Setting::Lthr => "LTHR",
             Setting::ZonesBy => "ZONES BY",
             Setting::Zone(0) => "HR Z1",
@@ -621,6 +627,8 @@ impl Row {
                 R::NextStep => "NEXT STEP",
                 R::StopWorkout => "STOP WORKOUT",
                 R::StopCourse => "STOP FOLLOWING",
+                R::Reverse => "REVERSE COURSE",
+                R::BackToStart => "BACK TO START",
                 R::Trainer => "TRAINER CONTROL",
                 R::CalPower => "CALIBRATE POWER",
                 R::Curve => "POWER CURVE",
@@ -654,6 +662,10 @@ pub enum RideRow {
     StopWorkout,
     /// Stops following the course; the ride goes on.
     StopCourse,
+    /// Follows the course the other way ([`crate::course::Course::reverse`]).
+    Reverse,
+    /// The ride's own track back to its start, as a course (app/courses.rs).
+    BackToStart,
     /// Opens the trainer screen (app/trainer.rs).
     Trainer,
     /// Opens the power meter calibration screen (app/powercal.rs).
@@ -668,7 +680,7 @@ pub enum RideRow {
 pub const WORKOUT_NOW: [Row; 2] = [Row::Ride(RideRow::NextStep), Row::Ride(RideRow::StopWorkout)];
 
 /// The course menu of a ride (while one is followed).
-pub const COURSE_NOW: [Row; 1] = [Row::Ride(RideRow::StopCourse)];
+pub const COURSE_NOW: [Row; 2] = [Row::Ride(RideRow::StopCourse), Row::Ride(RideRow::Reverse)];
 
 /// What the phone menu shows ([`PHONE`]): the link (app/phone.rs) and its settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -892,7 +904,7 @@ pub const DISPLAY: [Row; 14] = [
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 20] = [
+pub const BIKE: [Row; 22] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -903,6 +915,8 @@ pub const BIKE: [Row; 20] = [
     Row::Set(Setting::ClimbPage),
     Row::Set(Setting::GpsPower),
     Row::Set(Setting::PowerMatch),
+    Row::Set(Setting::LevelStep),
+    Row::Set(Setting::SlopeScale),
     Row::Set(Setting::PowerSmooth),
     Row::Set(Setting::AutoLap),
     Row::Set(Setting::LapKm),

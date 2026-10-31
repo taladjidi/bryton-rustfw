@@ -685,7 +685,7 @@ fn course_files() {
     let files = paths.map(|p| crate::fat::tests::read_all(&mut fat, &mut d, p).unwrap());
     let mut c = std::boxed::Box::new(Course::new());
     // what was reached: cues read from files, cues kept, cues said
-    let (read_cues, mut kept, mut said) = (core::cell::Cell::new(0u32), 0u32, 0u32);
+    let (read_cues, mut kept, mut said, mut reversed) = (core::cell::Cell::new(0u32), 0u32, 0u32, 0u32);
     // the file's points as read (degrees x 1e-7), to ride along
     let mut way: Vec<(i32, i32)> = Vec::new();
     let mut read = |f: &[u8], gpx: bool, c: &mut Course, way: &mut Vec<(i32, i32)>| {
@@ -723,7 +723,18 @@ fn course_files() {
     };
     let mut noise = bytes(21, 1 << 24);
     let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
-    let mut exercise = |c: &Course, next: &mut dyn FnMut() -> u32, way: &[(i32, i32)]| {
+    let mut exercise = |c: &mut Course, next: &mut dyn FnMut() -> u32, way: &[(i32, i32)]| {
+        // reversed twice: the length kept, the ends swapped, cues in order, then the first way again
+        let n = c.points().len();
+        if n >= 2 {
+            let (len, first, last) = (c.len_m(), c.points()[0], c.points()[n - 1]);
+            c.reverse();
+            assert_eq!((c.points().len(), c.points()[0], c.points()[n - 1], c.len_m()), (n, last, first, len));
+            assert!(c.cues().windows(2).all(|w| w[0].at_m <= w[1].at_m));
+            c.reverse();
+            assert_eq!((c.points().len(), c.points()[0], c.points()[n - 1], c.len_m()), (n, first, last, len));
+            reversed += 1;
+        }
         let mut t = Tracker::new();
         for &(lat, lon) in way.iter().step_by(2) {
             if let Some(Event::Cue(..)) = c.follow(&mut t, lat, lon) {
@@ -764,7 +775,7 @@ fn course_files() {
                 bad[n..].copy_from_slice(&crc.to_le_bytes());
             }
             read(&bad, gpx, &mut c, &mut way);
-            exercise(&c, &mut next, &way);
+            exercise(&mut c, &mut next, &way);
             read(&bad[..bad.len() / 3], gpx, &mut c, &mut way);
         }
     }
@@ -792,11 +803,16 @@ fn course_files() {
             text.extend_from_slice(MARKS[next() as usize % MARKS.len()].as_bytes());
         }
         read(&text, true, &mut c, &mut way);
-        exercise(&c, &mut next, &way);
+        exercise(&mut c, &mut next, &way);
     }
     let gpx = read_cues.get() - from_files;
-    std::println!("course fuzz: {from_files} cues read from the files, {gpx} from GPX marks, {kept} kept, {said} said");
-    assert!(from_files > 1000 && gpx > 500 && kept > 1000 && said > 100, "{from_files}, {gpx}, {kept}, {said}");
+    std::println!(
+        "course fuzz: {from_files} cues read from the files, {gpx} from GPX marks, {kept} kept, {said} said, {reversed} reversed twice"
+    );
+    assert!(
+        from_files > 1000 && gpx > 500 && kept > 1000 && said > 100 && reversed > 100,
+        "{from_files}, {gpx}, {kept}, {said}, {reversed}"
+    );
 }
 
 /// Random shapes into the turn finder (course/cues.rs): random walks of random steps (1 to 300 m, and the same
@@ -2695,6 +2711,7 @@ fn fec_pages_and_commands() {
                 grade_x100: (r() % 2 == 0).then(|| i16::from_le_bytes([r(), r()])),
                 riding: r() % 8 != 0,
                 paused: r() % 4 == 0,
+                level_step: r(),
                 match_q16: (r() % 2 == 0).then(|| i32::from(r()) * 400),
             };
             match r() % 4 {
@@ -5274,6 +5291,53 @@ fn settings_file_time_zone_bytes() {
         short += u32::from(len <= TZ_AT);
     }
     assert!(zones > 1000 && rules > 1000 && wild > 1000 && short > 1000, "{zones} {rules} {wild} {short}");
+}
+
+/// LEVEL STEP and SLOPE SCALE (settings bytes 168, 169): random bytes, in range and wild, files of 168 to 170 bytes;
+/// the indexes read always lie inside their tables. The fuzz reaches kept and wild bytes.
+#[test]
+fn settings_file_trainer_bytes() {
+    use crate::{LEVEL_STEPS, SLOPE_SCALES, SettingsCopy};
+    let mut next = xorshift(0x1e7e);
+    let (mut kept, mut wild) = (0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 168 + (next() % 3) as usize;
+        let (a, b) = (
+            if next().is_multiple_of(2) { (next() % 3) as u8 } else { next() as u8 },
+            if next().is_multiple_of(2) { (next() % 4) as u8 } else { next() as u8 },
+        );
+        sec[28 + 168..28 + 170].copy_from_slice(&[a, b]);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        assert!(st.level_step < LEVEL_STEPS.len() && st.slope_scale < SLOPE_SCALES.len());
+        kept += u32::from(len > 168 && usize::from(a) < LEVEL_STEPS.len());
+        wild += u32::from(len > 169 && usize::from(b) >= SLOPE_SCALES.len());
+    }
+    assert!(kept > 1000 && wild > 1000, "{kept} {wild}");
+}
+
+/// LEVEL mode under random keys and LEVEL STEPs: the level stays 1 to 20 and the brake at most 100 %.
+#[test]
+fn trainer_level_steps() {
+    use crate::trainer::{Command, Drive, LEVELS, Trainer};
+    let mut next = xorshift(0x1e7e1);
+    let mut t = Trainer::default();
+    let none = Drive::default();
+    t.cycle_mode(&none);
+    t.cycle_mode(&none);
+    let (mut lo, mut hi) = (0u32, 0u32);
+    for _ in 0..20_000 {
+        let d = Drive { level_step: next() as u8, ..Drive::default() };
+        t.step_by(&d, next().is_multiple_of(2), next().is_multiple_of(2));
+        assert!((1..=LEVELS).contains(&t.level()));
+        assert!(matches!(t.command(&d), Command::Resistance(h) if h <= 200));
+        lo += u32::from(t.level() == 1);
+        hi += u32::from(t.level() == LEVELS);
+    }
+    assert!(lo > 100 && hi > 100, "{lo} {hi}");
 }
 
 /// Where TIME ZONE is in the settings data.

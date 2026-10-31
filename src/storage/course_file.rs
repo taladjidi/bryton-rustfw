@@ -291,6 +291,14 @@ impl Courses {
         Ok(())
     }
 
+    /// A course being read is given up (the course memory is wanted for another).
+    pub fn cancel_load(&mut self) {
+        if matches!(self.job, Job::Load { .. }) {
+            self.job = Job::Idle;
+            self.next_job();
+        }
+    }
+
     /// Reads course `k` of the list, over the next steps, to follow it (none is followed meanwhile).
     pub fn load(&mut self, k: usize) {
         let Some(e) = self.list.get(k) else { return };

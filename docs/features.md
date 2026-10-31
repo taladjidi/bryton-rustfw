@@ -73,7 +73,11 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   of its zone colour; it is kept in settings.bin after the alert limits (LTHR at byte 66, POWER SMOOTH at 68), and an older file reads the default. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
-  when the course is loaded): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.
+  when the course is loaded; REVERSE COURSE in the ride menu follows it the other way: points, distances, climbs and turns
+  worked out again on the reversed course, the file's own cues dropped; until the rider has joined the course, NEXT TURN
+  shows the way to its start, a compass point and the distance, in a straight line; BACK TO START, also in the ride
+  menu, turns the ride's own track (the map's, already thinned to the course memory) into a course in reverse, with
+  the turns of its shape): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.
 - **Sun, heading, arrival and batteries (nav/sun.rs, app/fields.rs)**: heading as one of 8 compass points (N first)
   from the GNSS course over ground, "--" under 5 km/h or without a fix. Sunrise and sunset in local time, and the time
   left to today's sunset (h:mm, "--" once it has set): NOAA's solar equations (Meeus, ch. 25 and 28, as NOAA's calculator
@@ -456,7 +460,8 @@ MENU
    +- PAUSE / RESUME   as Start; PAUSE stays (END RIDE right under it), RESUME goes back to the page
    +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
    +- WORKOUT >        while a step runs: NEXT STEP (makes a lap, through `step_lap`, as the Lap key does), STOP WORKOUT (the ride goes on)
-   +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on)
+   +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on), REVERSE COURSE
+   +- BACK TO START    once the ride has a track: the ride's own breadcrumb followed back as a course (replaces the one followed)
    +- TRAINER CONTROL  with a trainer paired: its screen (mode, target)
    +- INDOOR ON / OFF  the ride's profile by hand, for this ride
    +- BRIGHTNESS       changed in place
@@ -604,6 +609,14 @@ Rogers et al. 2021; the power marked "~" because it lags on a ramp, and the hear
 intervals or enough clean data; not kept; not a steady-state zone 2 power). APPLY (touch) sets the FTP (to the
 setting's 5 W step), KEEP or Back keeps the one set; Start and Lap keep their ride meaning on the screen. A ramp under
 a whole minute has no result. The ride is recorded and saved as any ride.
+
+**Level and slope.** The trainer screen's Start goes round ERG, RES (5 % a press), LVL, SIM. LVL is a fixed level, 1 to 20,
+each 5 % of resistance (level 20 is 100 %): FE-C page 48 (0.5 % units, level x 10) and FTMS Set Target Resistance Level
+(op 0x04, scaled into the range the trainer reports); +/- and the buttons move it by BIKE > LEVEL STEP (1, 2 or 5
+levels; settings bytes 168). With a course followed on the trainer the slope sent is the course's grade over the next
+200 m at the distance the trainer's speed has ridden (so it is already smoothed), times BIKE > SLOPE SCALE (100, 75, 50
+or 25 %; byte 169), clamped to -10 to +20 %. A virtual course as a workout (started from the workout list) is not
+done: a course is followed from COURSES.
 
 **Release.** The trainer is let go (free resistance: FE-C page 48 at 0 %, FTMS Set Target Resistance Level 0) whenever
 what held it stops, so ERG's last target does not stay on it:

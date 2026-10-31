@@ -11,6 +11,11 @@ A feature not listed here was seen on the unit.
 - **The power curve screen (app/curve.rs, ui/curve.rs, HISTORY > FITNESS > POWER CURVE and the ride menu)**: sim only.
   To check on the unit: the 90-day curve after the scan, the green curve growing during a ride with the meter, the
   cursor by Page and by tap, both ends of the axis legible, and the redraw cost of opening it (`tools/dev.py info`).
+- **Course reverse, the way to the start and BACK TO START (app/courses.rs, nav/course)**: sim only. To check on a ride:
+  follow a course, REVERSE COURSE and ride it the other way (turns the other way round); start away from a course and
+  see NEXT TURN give the compass point and distance until joined; ride out, BACK TO START in the ride menu, and ride
+  back on the breadcrumb with its cues. A reversed or way-back course is not kept across a reset: after one mid-ride
+  nothing is followed (the ride itself resumes).
 
 - **Torque effectiveness and pedal smoothness (drivers/sensors.rs page 0x13, the TE L/R and PS L/R fields)**: sim only.
   The owner's Sigeyi spider PM may not send page 0x13 at all, so its fields would stay "--" for a whole ride. To check:
@@ -193,6 +198,10 @@ A feature not listed here was seen on the unit.
   directory sectors fail to write or read). On the unit it needs a card that really fails, so it may never be seen:
   the row appearing in SYSTEM while stuck, the four banners, and `\Rustfw\Rescue` or the lost chain checked from a
   computer (fsck's `FILE0000.CHK`).
+- **Level mode and the slope scale (training/trainer.rs `Mode::Level`, app/trainer.rs `trainer_drive`)** on the Van Rysel D900:
+  LVL on the trainer screen: level 1 then 20 feel lightest and heaviest, +/- by LEVEL STEP, page 48 (and FTMS op 0x04
+  over BLE) applied; a course followed in SIM with SLOPE SCALE 50 %: the trainer's resistance on the hill is about
+  half of 100 %'s, and the grade stays inside -10 to +20 %. Sim only so far.
 - **The trainer's release (app/trainer.rs, nrf.rs `ant_tx_completed`)** on the Van Rysel D900: the release at stop, end,
   pause and boot (once), and the **switch-off release**: one free resistance sent before the chip goes off, the D900 free
   in the next seconds with the ride saved (ANT+ and over Bluetooth), the 330 ms wait enough. `TX_COMPLETED`'s layout
