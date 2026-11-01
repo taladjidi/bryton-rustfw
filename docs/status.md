@@ -43,6 +43,8 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   `prof`). The gate's named exemptions (`EXEMPT` in src/sim/budget_tests.rs, the owner's performance worklist) are the
   passes that break a limit with these costs: ride start (about 1.1 s of keys unread at 0.2 ms a sector, 1.8 s at 2 ms),
   the checkpoint under a card stall, the save's read-back of a 3 h file, the screenshot's write.
+- **First ride on a fresh card (2026-11-01, src/sim/budget_tests.rs):** the recorder creates its 20 folders and files on the first ride (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms): the Start pass is 1051 to 1730 ms, the gate's one named exemption for it. On a card that already had a ride the Start pass is 53 to 97 ms, and the prepared-card rows (keys 108 to 136 ms, GNSS under 1.1 s) hold the general limits. Open owner decision: prepare the card's folders at boot or when idle, or buffer the first seconds in RAM (a branch's approach, not merged: the golden rule wants ride data on the eMMC as it goes).
+
 - **Review 3 of the chip's reset (2026-11-01):** nothing is sent while PA6 is low or the chip boots (the TX FIFO is flushed
   at the hold: USART_RQR TXFRQ, main.rs `nrf_hold`; to see: no `resyncs` after forcing a reset mid-command), the rider's
   sensor choice and the PAIR window during a reset are applied after it, the switch-off during a reset ends with the chip

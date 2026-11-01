@@ -64,36 +64,36 @@ struct Exempt {
 /// The recorded violations (2026-11-01). The owner's performance worklist.
 const EXEMPT: &[Exempt] = &[
     Exempt {
-        row: "ride start",
+        row: "first ride on a fresh card",
         setting: "0.2 ms/sector",
         key: Some(1206),
         gnss: None,
         lost: None,
-        why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
+        why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
     Exempt {
-        row: "ride start",
+        row: "first ride on a fresh card",
         setting: "2 ms/sector",
         key: Some(1955),
         gnss: Some(2059),
         lost: None,
-        why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
+        why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
     Exempt {
-        row: "ride start, map page",
+        row: "first ride on a fresh card, map page",
         setting: "0.2 ms/sector",
         key: Some(1207),
         gnss: None,
         lost: None,
-        why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
+        why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
     Exempt {
-        row: "ride start, map page",
+        row: "first ride on a fresh card, map page",
         setting: "2 ms/sector",
         key: Some(1955),
         gnss: Some(2228),
         lost: None,
-        why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
+        why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
     Exempt {
         row: "ride start, card stall",
@@ -101,7 +101,7 @@ const EXEMPT: &[Exempt] = &[
         key: Some(1536),
         gnss: Some(1749),
         lost: None,
-        why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task); plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
+        why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md; plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
     },
     Exempt {
         row: "ride start, card stall",
@@ -109,7 +109,7 @@ const EXEMPT: &[Exempt] = &[
         key: Some(2285),
         gnss: Some(2389),
         lost: None,
-        why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task); plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
+        why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md; plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
     },
     Exempt {
         row: "checkpoint, card stall",
@@ -381,12 +381,12 @@ fn the_operations(s: Setting) -> Vec<Row1> {
     let mut rows = Vec::new();
 
     let mut r = Rig::new(card(), s);
-    rows.push(r.start_ride("ride start"));
+    rows.push(r.start_ride("first ride on a fresh card"));
     r.run(600_000);
     rows.push(r.done("ride, 10 min, checkpoints"));
 
     let mut r = Rig::new(card(), s);
-    r.start_ride("ride start");
+    r.start_ride("first ride on a fresh card");
     r.run(70_000);
     r.reset();
     r.press(Press::Short(Key::Start));
@@ -428,9 +428,11 @@ fn the_operations(s: Setting) -> Vec<Row1> {
     for _ in 0..3 {
         r.press(Press::Short(Key::Page));
     }
-    rows.push(r.start_ride("ride start, map page"));
+    rows.push(r.start_ride("first ride on a fresh card, map page"));
     r.run(300_000);
     rows.push(r.done("map ride, 5 min"));
+    rows.push(prepared_start(s, "ride start, prepared card", false));
+    rows.push(prepared_start(s, "ride start, prepared card, map page", true));
 
     let mut r = Rig::new(super::segment_tests::capped_card(), s);
     r.app.set_segment_memory(Box::leak(Box::new(Segments::new())));
@@ -452,6 +454,37 @@ fn the_operations(s: Setting) -> Vec<Row1> {
 
     rows.extend(three_hours(s));
     rows
+}
+
+/// A short ride on a fresh card, saved on the same unit, then the Start measured again: the card's folders and files
+/// are there, so this is the start of every ride after the first. `map` as the map page's row.
+fn prepared_start(s: Setting, name: &'static str, map: bool) -> Row1 {
+    let mut r = Rig::new(crate::fat::tests::image(), s);
+    if map {
+        r.sim.gnss.route = Some(east);
+        r.sim.classic_pages();
+        r.app.set_map_memory(crate::tiles::tests::memory());
+        for _ in 0..3 {
+            r.press(Press::Short(Key::Page));
+        }
+    }
+    r.start_ride("first ride on a fresh card");
+    r.run(70_000);
+    r.press(Press::Short(Key::Start));
+    r.run(1000);
+    r.press(Press::Long(Key::Start));
+    r.press(Press::Short(Key::Start)); // SAVE is the default
+    r.run(3000);
+    r.reset();
+    r.app.screen = Screen::Main; // the main screen, as after a boot: the save leaves the ride's own page up
+    r.app.show(&mut r.sim);
+    if map {
+        for _ in 0..3 {
+            r.press(Press::Short(Key::Page));
+        }
+        r.run(500); // the navigation is back-to-back presses of the test helper, not a latency: settle before the Start
+    }
+    r.start_ride(name)
 }
 
 /// A 3 h ride recorded (the filler passes are long and not measured), then the unit reset mid-ride (the boot resume)
