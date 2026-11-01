@@ -15,7 +15,7 @@ use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
 use bryton_rustfw::dev::{self, Effect, Host, Session, Stats, UsbWatch};
 use bryton_rustfw::usbsnap::{self, Keeper, UsbSnap};
-use bryton_rustfw::{App, Board, msc};
+use bryton_rustfw::{App, Board, UsbLink, msc};
 use static_cell::StaticCell;
 use synopsys_usb_otg::{PhyType, UsbBus, UsbPeripheral};
 use usb_device::bus::{InterfaceNumber, UsbBusAllocator};
@@ -363,10 +363,10 @@ pub fn start() -> Option<Link> {
     })
 }
 
-impl Link {
+impl UsbLink for Link {
     /// Services USB: runs a drive command (msc.rs, through the app) and any bytes received on the dev link through
     /// its protocol.
-    pub fn poll(&mut self, s: &mut Session, app: &mut App, board: &mut impl Board, stats: Stats) -> Effect {
+    fn poll(&mut self, s: &mut Session, app: &mut App, board: &mut impl Board, stats: Stats) -> Effect {
         let mut effect = Effect::None;
         if self.dev.poll(&mut [&mut self.cdc, &mut self.msc]) {
             let mut buf = [0u8; 512];
@@ -402,7 +402,7 @@ impl Link {
     }
 
     /// Keeps servicing USB for `ms`, so the last answer reaches the computer before a reset or a jump.
-    pub fn linger(&mut self, ms: u32) {
+    fn linger(&mut self, ms: u32) {
         // asleep 1 ms between polls (delay_ms turns OTG_HS off in the NVIC, so USB activity waits for the next poll)
         for _ in 0..ms {
             self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
@@ -411,7 +411,7 @@ impl Link {
     }
 
     /// A drive command ran since the last call (its card access may have slept: the caller's sleep slice is lost).
-    pub fn worked(&mut self) -> bool {
+    fn worked(&mut self) -> bool {
         core::mem::take(&mut self.worked)
     }
 
@@ -424,7 +424,7 @@ impl Link {
     ///   [`dev::SOF_LOST_MS`] without a suspend (2026-10-24: the Mac lost the device mid-transfer, green dot), or
     ///   configured once then not for [`dev::UNCONFIGURED_MS`], or suspended after a failed transfer (the port
     ///   disabled, docs/usb.md): a soft disconnect and connect, so the computer may enumerate it again.
-    pub fn watch(&mut self, now_ms: u32, failed: bool) -> UsbWatch {
+    fn watch(&mut self, now_ms: u32, failed: bool) -> UsbWatch {
         let fnsof = rd(DSTS) >> 8 & 0x3fff;
         let state = self.dev.state();
         let (bus, w) = self.watcher.poll(
@@ -445,10 +445,17 @@ impl Link {
     }
 
     /// The first failure's registers since the link came up, once (the app keeps them in backup registers).
-    pub fn snapshot(&mut self) -> Option<UsbSnap> {
+    fn snapshot(&mut self) -> Option<UsbSnap> {
         self.msc.snap.take()
     }
 
+    /// Soft disconnect, so the computer sees the device leave before the next image enumerates again.
+    fn disconnect(&mut self) {
+        modify(DCTL, 0, 1 << 1); // SDIS
+    }
+}
+
+impl Link {
     /// A soft disconnect and connect: the computer sees a detach, then an attach, and enumerates the device again.
     fn reconnect(&mut self, now_ms: u32) {
         modify(DCTL, 0, 1 << 1); // SDIS: the D+ pull-up off
@@ -457,11 +464,6 @@ impl Link {
         modify(DCTL, 1 << 1, 0);
         self.dead = false;
         self.watcher.reconnected(now_ms);
-    }
-
-    /// Soft disconnect, so the computer sees the device leave before the next image enumerates again.
-    pub fn disconnect(&mut self) {
-        modify(DCTL, 0, 1 << 1); // SDIS
     }
 
     /// Writes the buffered bytes in packets of the bus's size (one zero-length packet for none), servicing USB while

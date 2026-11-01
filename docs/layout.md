@@ -59,7 +59,12 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `device.rs`: backlight, buzzer, status strip, switching off, AUTO OFF (`step_auto_off`) and the idle pass length (`pass_ms`). `clock.rs`: RTC decoding, dates, the shown clock (ZONE and SUMMER TIME: `local_time`, the EU and US rules).
   - `loop_policy.rs`: `LoopPolicy`, the main loop's rules, pure and tested on the host: the cable (start USB once,
     reset on an unplug outside a ride), the idle sleep's wake sources, the sleep slices (`TOUCH_MS` while touching),
-    what ends the pass's sleep (`Woke`), and the awake and CPU shares of `info`; main.rs keeps the primitives.
+    what ends the pass's sleep (`Woke`), and the awake and CPU shares of `info`.
+  - `main_loop.rs`: `MainLoop::pass`, the main loop's pass in order (main.rs runs it for ever, the simulator's tests
+    the same code): the stack checks, the cable, the sleep slices with the USB link and its effects (reset, the staged
+    image's run, the stack test, a key, the restart, the watch, the snapshot before the drop), the radio passes a
+    Nordic byte wakes (`App::radio_pass`), the input, the pass counted; against `LoopBoard` (the board's primitives:
+    timer, WFI, edges, reset) and `UsbLink` (usb.rs `Link`).
   - `profile.rs`: the ride profile (ROAD, INDOOR or MTB), chosen from the trainer heard or set by hand, given up when the trainer goes silent.
   - `quick.rs`: the quick panel (`Screen::Quick`, a swipe down): what the rider wants first, top to bottom.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
@@ -327,6 +332,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
+  `loop_model.rs` (not tests: the `Sim`'s side of the main loop, `LoopBoard` on the simulated clock, and `SimLink`, a
+  scripted USB link that logs what the pass asks; `tests.rs` `run_loop` drives lib `MainLoop::pass`, the unit's own code).
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).
 - `src/sim/tests.rs` keeps the shared helpers (`run`, `assert_consistent`, `back`, `KEY`, `STRAP`...) and the boot, key, touch,
   banner, light and misc tests; the rest is by concern: `stock_tests.rs` (the overview's totals, STOCK DATA, fitness, ride

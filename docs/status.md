@@ -166,7 +166,7 @@ A feature not listed here was seen on the unit.
   on a real ride, the trip time through an auto-pause and a Start pause, each lap's power and NP against the power
   meter's own figures, and the uphill and downhill split on a real descent (the 30 s grade lags about 15 s at a change).
 
-- **The stack canary (review S8; link.x `_stack_canary`, main.rs `stack_check`)**: seen on the unit 2026-10-29 from a
+- **The stack canary (review S8; link.x `_stack_canary`, lib app/main_loop.rs `stack_ok`)**: seen on the unit 2026-10-29 from a
   RAM run: `info` and `prof` as before (0.98 % awake idle on the overview), `dev.py stackfault` reset the unit and
   `peek 0x580040c4` read 0xfa000001. Still to see: a DIAG_STOP-free cold boot of an installed build with it (nothing
   changed in the boot, so low risk).

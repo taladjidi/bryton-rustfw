@@ -22,12 +22,10 @@
 mod board;
 
 use board::{hw, usb};
-use bryton_rustfw::dev::{Effect, Session, UsbWatch};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
 use bryton_rustfw::storage::faultlog::Kind;
-use bryton_rustfw::ui::UsbDot;
-use bryton_rustfw::{App, Board, Cable, LoopPolicy, STANDBY_BKP, STANDBY_FLAGS_BKP, Woke, standby_flags_word};
+use bryton_rustfw::{App, Board, MainLoop, STANDBY_BKP, STANDBY_FLAGS_BKP, standby_flags_word};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
@@ -1375,15 +1373,14 @@ fn wake_on_io(keys: bool, radio: bool) {
     wr(if radio { NVIC_ISER0 + 4 } else { NVIC_ICER0 + 4 }, USART2_IRQ);
 }
 
-/// A key went down since the last call (its EXTI flag, cleared here), or (`radio`) a byte from the Nordic chip
-/// waits.
-fn io_edge(radio: bool) -> bool {
+/// A key went down since the last call (its EXTI flag, cleared here).
+fn key_edge() -> bool {
     let keys = rd(EXTI_CPUPR1) & KEY_LINES;
     if keys != 0 {
         wr(EXTI_CPUPR1, keys); // write 1 to clear
         let _ = rd(EXTI_CPUPR1); // the write done
     }
-    keys != 0 || radio && rd(U_ISR) & ISR_RXFNE != 0
+    keys != 0
 }
 
 /// Drops what the Nordic chip sent while the app does not read it (no chip started: `App::radio_up`): RQR.RXFRQ
@@ -1622,6 +1619,75 @@ impl Board for S510 {
     }
 }
 
+/// The main loop's primitives (lib app/main_loop.rs `LoopBoard`): each one the registers or the instruction it names.
+impl bryton_rustfw::LoopBoard for S510 {
+    type Link = usb::Link;
+    fn canary(&mut self) -> u32 {
+        rd(hw::stack_canary())
+    }
+    fn stack_overflowed(&mut self) {
+        hw::fault(Kind::Stack, 0);
+    }
+    fn checkpoint(&mut self, n: u32) {
+        checkpoint(n);
+    }
+    fn vbus(&mut self) -> bool {
+        !pin_low(VBUS.0, VBUS.1)
+    }
+    fn usb_start(&mut self) -> Option<usb::Link> {
+        usb::start()
+    }
+    fn reset(&mut self) {
+        system_reset();
+    }
+    fn run_image(&mut self, size: u32) {
+        // an older image's sleep does not clear these lines: a pending one would end its every WFI, the spin
+        // standby's WFI showed on 2026-10-25 (main.rs `standby`, BOARD.md 9). So the key lines masked and cleared
+        // (RM0399 EXTI CPUIMR1 / CPUPR1), the NVIC lines off, and USART2's RXFNEIE (CR1 bit 5, RM0399 USART_CR1) off
+        wake_on_io(false, false);
+        modify(EXTI_CPUIMR1, KEY_LINES, 0);
+        wr(EXTI_CPUPR1, KEY_LINES);
+        modify(U_CR1, 1 << 5, 0);
+        hw::run_staged(size);
+    }
+    fn overflow_stack(&mut self) {
+        stack_fault(hw::stack_canary());
+    }
+    fn nrf_flush(&mut self) {
+        nrf_flush();
+    }
+    fn wake_on_io(&mut self, keys: bool, bytes: bool) {
+        wake_on_io(keys, bytes);
+    }
+    fn timer_start(&mut self, ms: u32) {
+        timer_start(ms);
+    }
+    fn timer_done(&mut self) -> bool {
+        timer_done()
+    }
+    fn timer_elapsed_ms(&mut self, ms: u32) -> u32 {
+        timer_elapsed_ms(ms)
+    }
+    fn timer_stop(&mut self) {
+        timer_stop();
+    }
+    fn touch_edge(&mut self) -> bool {
+        touch_edge()
+    }
+    fn key_edge(&mut self) -> bool {
+        key_edge()
+    }
+    fn byte_waiting(&mut self) -> bool {
+        rd(U_ISR) & ISR_RXFNE != 0
+    }
+    fn sleep(&mut self) {
+        sleep();
+    }
+    fn take_io(&mut self) -> (u32, u32, u32) {
+        core::mem::take(&mut self.io)
+    }
+}
+
 /// eMMC writes allowed: only in a build made with EMMC_WRITE=1 (the first writes are done with the owner present).
 const EMMC_WRITE: bool = match option_env!("EMMC_WRITE") {
     Some(s) => parse_u32(s) == 1,
@@ -1772,19 +1838,8 @@ fn make_bikes() -> &'static mut bryton_rustfw::BikeStore {
     once(BIKES.try_init_with(bryton_rustfw::BikeStore::new))
 }
 
-/// The stack canary still holds its pattern, or a fault (hw.rs `fault`: the marker, a reset, the ride resumes from its
-/// checkpoint). An overflow cannot be caught when it happens: with interrupts masked (PRIMASK) an MPU guard's fault
-/// escalates to HardFault, whose stacking on the overflowed stack locks the core up (seen on the unit 2026-10-29,
-/// BOARD.md 2). One DTCM load and a compare.
-#[inline(always)]
-fn stack_check() {
-    if !bryton_rustfw::stack_intact(rd(hw::stack_canary())) {
-        hw::fault(Kind::Stack, 0);
-    }
-}
-
 /// Runs the stack down past its canary on purpose (the dev link's `stackfault`, never the UI), then returns, so the
-/// pass's [`stack_check`] must reset the unit. A frame is about 152 B: the 128 B array and the pushed registers,
+/// pass's stack check (lib app/main_loop.rs) must reset the unit. A frame is about 152 B: the 128 B array and the pushed registers,
 /// written before the next call (black_box), and one alignment pad word never written. It stops in the first frame
 /// that reaches below the canary, so less than a frame of `.bss` under it is overwritten before the check, which
 /// follows at once. When a build puts the canary on that pad word (about 1 build in 38) the test misses: no marker,
@@ -1852,162 +1907,10 @@ fn main() -> ! {
     app.set_bike_memory(make_bikes());
     app.set_ride_curve(make_ride_curve());
     checkpoint(5);
-    let mut link: Option<usb::Link> = None;
-    let mut session = Session::new();
-    // the loop's rules (lib app/loop_policy.rs): the cable, the wake sources, the slices, the awake and CPU shares
-    let mut policy = LoopPolicy::new(CPU_HZ, TIMER_MAX_MS);
+    // the loop's pass in order (lib app/main_loop.rs) and its rules (app/loop_policy.rs): the stack checks, the
+    // cable, the wake sources, the slices, USB and its effects, the radio passes, the awake and CPU shares
+    let mut main_loop = MainLoop::new(CPU_HZ, TIMER_MAX_MS);
     loop {
-        // before the step too: an overflow in the last pass's sleep loop (USB, the touch) is caught before the
-        // recorder runs on what it overwrote
-        stack_check();
-        let t0 = cycles();
-        app.step(&mut board);
-        stack_check();
-        app.prof().span(Sec::Step, t0, cycles());
-        checkpoint(6);
-        match policy.cable(!pin_low(VBUS.0, VBUS.1), app.busy()) {
-            Cable::Start => {
-                link = usb::start();
-                app.set_usb(&mut board, if link.is_some() { UsbDot::Powered } else { UsbDot::Failed });
-            }
-            // unplugged, no ride or its card: the reset powers the PHY and the USB core down again
-            Cable::Reset => system_reset(),
-            Cable::Keep => {}
-        }
-        // Sleep until the next pass, waking for USB activity. App work waits for the end of the sleep: it may sleep
-        // too (delay_ms), which would take over this timer.
-        let mut press = None;
-        let mut touched = None;
-        let sleep_start = cycles();
-        let mut woke = false;
-        // the pass's sleep, in slices: TOUCH_MS ones while a finger is on the panel, and one ends early when the
-        // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
-        // while the finger is down)
-        // idle: a longer sleep (App::pass_ms), ended at once by a key or a byte from the Nordic chip, so neither
-        // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before); a ride's
-        // 100 ms pass by a key only (LoopPolicy::begin_sleep): our side holds the chip's bytes (RTS, the RX FIFO);
-        // the chip's ANT event queue is 32 events (BOARD.md 11), its BLE and serialization queues are not known
-        let wake = policy.begin_sleep(app.pass_ms(), app.radio_up());
-        if !wake.radio {
-            nrf_flush();
-        }
-        if wake.io {
-            wake_on_io(true, wake.bytes);
-        }
-        'sleep: loop {
-            // a finger down makes the pass POLL_MS again
-            let Some(slice) = policy.slice(app.pass_ms(), app.touching()) else {
-                break;
-            };
-            timer_start(slice);
-            let w = loop {
-                let usb_at = cycles();
-                if let Some(l) = &mut link {
-                    match l.poll(&mut session, app, &mut board, policy.stats()) {
-                        Effect::Key(p) => press = Some(p),
-                        Effect::Reset => {
-                            l.linger(50);
-                            system_reset();
-                        }
-                        Effect::StackFault => {
-                            l.linger(50);
-                            stack_fault(hw::stack_canary());
-                            stack_check(); // a pass: resets with the fault marker
-                            // a miss (no marker): the tail of .bss is overwritten all the same, so never run on
-                            system_reset();
-                        }
-                        Effect::Run(size) => {
-                            l.linger(50);
-                            l.disconnect();
-                            // an older image's sleep does not clear these lines: a pending one would end its every
-                            // WFI, the spin standby's WFI showed on 2026-10-25 (main.rs `standby`, BOARD.md 9). So
-                            // the key lines masked and cleared (RM0399 EXTI CPUIMR1 / CPUPR1), the NVIC lines off,
-                            // and USART2's RXFNEIE (CR1 bit 5, RM0399 USART_CR1) off
-                            wake_on_io(false, false);
-                            modify(EXTI_CPUIMR1, KEY_LINES, 0);
-                            wr(EXTI_CPUPR1, KEY_LINES);
-                            modify(U_CR1, 1 << 5, 0);
-                            hw::run_staged(size);
-                        }
-                        e => woke |= app.serve(&mut board, l, &session, e),
-                    }
-                    if app.restart_wanted() {
-                        // the computer wrote to the volume and ejected it: a restart drops every cache of it
-                        l.linger(50);
-                        system_reset();
-                    }
-                    let watched = l.watch(policy.now_ms(), app.drive_failed());
-                    // before usb_dropped, which leaves registers 0 and 31 to a snapshot written for this drop
-                    if let Some(s) = l.snapshot() {
-                        app.usb_snapshot(&mut board, &s);
-                    }
-                    let dot = match watched {
-                        UsbWatch::Up => UsbDot::Ready,
-                        UsbWatch::Suspended => UsbDot::Suspended,
-                        UsbWatch::Down => UsbDot::Powered,
-                        UsbWatch::Drop => {
-                            app.usb_dropped(&mut board);
-                            UsbDot::Powered
-                        }
-                    };
-                    // a drive command read or wrote the card, which may have slept and taken over SysTick: without
-                    // this, the sleep's end is lost and the main loop stalls while USB is still served (seen on the
-                    // unit, 2026-10-24: the uptime stopped, the dev link kept answering)
-                    woke |= l.worked();
-                    app.set_usb(&mut board, dot);
-                    app.prof().span(Sec::Usb, usb_at, cycles());
-                }
-                let w = Woke {
-                    touch: touch_edge(),
-                    timer: timer_done(),
-                    io: wake.io && io_edge(wake.bytes),
-                    key: press.is_some(),
-                    usb: woke,
-                };
-                if w.any() {
-                    // a key from the link acts now, so the next command cannot replace it; board work done for the
-                    // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
-                    break w;
-                }
-                sleep();
-            };
-            policy.slept(if w.timer { slice } else { timer_elapsed_ms(slice) });
-            timer_stop();
-            // the panel before the early end below: with the USB drive busy, every slice ends early, and touch was
-            // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
-            if w.read_touch(app.touching()) {
-                // a gesture acts after the sleep: acting may sleep too (delay_ms), which takes over SysTick
-                let t = cycles();
-                touched = app.touch(&mut board, policy.take_touch_ms());
-                app.prof().span(Sec::Touch, t, cycles());
-                if touched.is_some() {
-                    break 'sleep;
-                }
-            }
-            if w.ends_pass() {
-                break;
-            }
-        }
-        if wake.io {
-            wake_on_io(false, false);
-        }
-        let sleep_cycles = cycles().wrapping_sub(sleep_start);
-        let slept = policy.slept_ms();
-        app.prof().clock.slept(slept, sleep_cycles / (CPU_HZ / 1_000_000));
-        let t1 = cycles();
-        if press.is_some() || touched.is_some() {
-            if let Some(p) = press {
-                app.press(&mut board, p);
-            }
-            if let Some(i) = touched {
-                app.input(&mut board, i);
-            }
-            app.prof().span(Sec::Input, t1, cycles());
-        }
-        checkpoint(7);
-        // the app's work is the pass less its sleep loop (USB polls, a WFI that does not sleep)
-        let pass_ms = policy.account(cycles().wrapping_sub(t0), sleep_cycles);
-        app.prof().pass(pass_ms, slept);
-        app.prof().io(core::mem::take(&mut board.io));
+        main_loop.pass(app, &mut board);
     }
 }

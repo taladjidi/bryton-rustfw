@@ -59,6 +59,8 @@ pub struct Watch {
     /// The last refusal seen (command, code). A refusal is believed when it comes twice: a damaged link can
     /// turn a response into an error code, and a restart is cheap.
     refusal: Option<(u8, u32)>,
+    /// The time radio passes (App::radio_pass) counted since the last step: the step counts the rest.
+    pub(crate) ahead_ms: u32,
 }
 
 impl Watch {
@@ -77,6 +79,7 @@ impl Watch {
             phone_owed: false,
             refused: false,
             refusal,
+            ahead_ms: 0,
         }
     }
 }
@@ -118,10 +121,11 @@ impl App {
         r != Err(nrf::Error::Timeout)
     }
 
-    /// Once a pass, after the chip's events were read: counts the quiet, and recovers when the link is out of step.
-    pub(crate) fn watch_radio(&mut self, b: &mut impl Board) {
+    /// After the chip's events were read (a step, a radio pass), `dt` ms after the last time: counts the quiet, and
+    /// recovers when the link is out of step.
+    pub(crate) fn watch_radio(&mut self, b: &mut impl Board, dt: u32) {
         let heard = core::mem::take(&mut self.rx.heard);
-        let (w, dt) = (&mut self.watch, self.dt_ms);
+        let w = &mut self.watch;
         w.quiet_ms = if heard { 0 } else { w.quiet_ms.saturating_add(dt) };
         w.wait_ms = w.wait_ms.saturating_sub(dt);
         w.calm_ms = w.calm_ms.saturating_add(dt);

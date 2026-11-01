@@ -670,7 +670,9 @@ impl App {
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
-        self.watch_radio(b);
+        // what the radio passes in this pass's sleep did not count yet (main_loop.rs)
+        let radio_ms = pass_ms.saturating_sub(core::mem::take(&mut self.watch.ahead_ms));
+        self.watch_radio(b, radio_ms);
         t = self.timed(b, Sec::Radio, t);
         self.poll_gnss(b);
         t = self.timed(b, Sec::Gnss, t);
@@ -695,7 +697,7 @@ impl App {
         t = now;
         self.pair_asked(b);
         self.live.tick(pass_ms);
-        self.radio.tick(pass_ms);
+        self.radio.tick(radio_ms);
         let (lost, back) = self.radio.lost_event(self.ride.state() != ride::State::Idle);
         for (mask, word, kind) in [(lost, " LOST", Banner::Alarm), (back, " BACK", Banner::Info)] {
             let mut l = Line::<32>::new();

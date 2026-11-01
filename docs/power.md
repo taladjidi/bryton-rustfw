@@ -185,7 +185,9 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
 - **Done (lib `App::pass_ms`, main.rs's sleep):** with no ride or its card, no key for 30 s (`IDLE_AFTER_MS`, the
   default OFF AFTER), no finger, no tone or banner timed by the passes and the card not lent to the computer, a pass
   every 250 ms (`IDLE_POLL_MS`) instead of 50. Nothing waits for it: the touch INT (as before), a key's falling edge
-  (EXTI 1 to 4, BOARD.md 5) and a byte from the Nordic chip (BOARD.md 11) end the sleep at once. A pending IRQ ends
+  (EXTI 1 to 4, BOARD.md 5) end the sleep at once; a byte from the Nordic chip (BOARD.md 11) wakes it for a radio pass
+  (`App::radio_pass`: the chip read, its watch, the sensors' silence; the step at the sleep's end; review 2026-11-01,
+  finding 57: a byte ran the whole step). A pending IRQ ends
   WFI with PRIMASK set (ARMv7-M ARM B1.5.19: WFI completes on any exception that would be taken were PRIMASK clear),
   so no handler is needed, as for the touch line. The timers count each pass's real length (`App::dt_ms`) already.
   It applies with the cable in too: USB's own interrupt ends the sleep for its traffic (no SOF interrupt is unmasked),
