@@ -30,7 +30,7 @@ pub mod ui;
 pub use drivers::{
     ambient, battery, ble, emmc, fec, fecble, ftms, gnss, mga, nrf, panel, periph, powercal, sensors, touch,
 };
-pub use link::{dev, msc, phone, prof, usbsnap};
+pub use link::{dev, msc, packets, phone, prof, usbsnap};
 pub use nav::{altitude, climbs_ahead, course, math, places, segment, segment_match, sun};
 pub use storage::{
     bikes, copies, fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds,

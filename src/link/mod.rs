@@ -4,6 +4,7 @@
 
 pub mod dev;
 pub mod msc;
+pub mod packets;
 pub mod phone;
 pub mod prof;
 pub mod usbsnap;
