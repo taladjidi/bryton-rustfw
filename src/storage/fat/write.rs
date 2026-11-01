@@ -2048,4 +2048,209 @@ pub(crate) mod tests {
         assert_eq!(fat.find(&mut d, root, "Own"), Ok(made));
         assert_eq!(fsck(&d.0), Ok(0));
     }
+
+    /// Every write lands between the first FAT sector and the volume's last sector, both included: never the boot
+    /// sector or FSInfo, never at or past the end, never an lba that wraps (B12: the guard's mutants survived).
+    #[test]
+    fn a_write_stays_on_the_volume() {
+        let mut d = Ram(image(), 0);
+        let fat = Fat::mount(&mut d).unwrap();
+        let (one, two) = ([5u8; SECTOR], [6u8; 2 * SECTOR]);
+        for (lba, buf, what) in [
+            (fat.total - 1, &one[..], "the last sector"),
+            (fat.total - 2, &two[..], "the last two"),
+            (fat.fat_start, &one[..], "the first FAT sector"),
+        ] {
+            assert_eq!(fat.write(&mut d, lba, buf), Ok(()), "{what}");
+            assert_eq!(&d.0[lba as usize * SECTOR..][..buf.len()], buf, "{what}: written");
+        }
+        let before = d.0.clone();
+        for (lba, buf, what) in [
+            (fat.total, &one[..], "past the end"),
+            (fat.total - 1, &two[..], "across the end"),
+            (u32::MAX, &one[..], "an lba that wraps"),
+            (fat.fat_start - 1, &one[..], "the reserved sectors"),
+            (1, &one[..], "FSInfo"),
+            (0, &one[..], "the boot sector"),
+        ] {
+            assert_eq!(fat.write(&mut d, lba, buf), Err(Error::Corrupt), "{what}");
+        }
+        assert!(d.0 == before, "nothing written");
+    }
+
+    /// Near the volume's end: with only the last cluster free, a grow takes it (from a hint before it, from one in
+    /// its own FAT sector, from one past the end), writes its last sector (the volume's last data sector), and the
+    /// next grow is refused, never a cluster past the end (the FAT sector's slack past the last cluster reads free).
+    #[test]
+    fn the_last_cluster_is_found_and_nothing_past_it() {
+        let base = image();
+        let per = SECTOR as u32 / 4;
+        let mut d = Ram(base.clone(), 0);
+        let fat = Fat::mount(&mut d).unwrap();
+        let last = fat.clusters + 1;
+        assert_ne!((last + 1) % per, 0, "the last FAT sector has slack past the last cluster");
+        let mut img = base.clone();
+        for c in 2..last {
+            for k in 0..fat.fats {
+                let at = (fat.fat_start + k * fat.fat_size) as usize * SECTOR + c as usize * 4;
+                if u32_at(&img, at) & 0x0fff_ffff == 0 {
+                    img[at..at + 4].copy_from_slice(&0x0fff_fff7u32.to_le_bytes());
+                }
+            }
+        }
+        // from the start, the middle, the last FAT sector, the last cluster, past it: found, the first FAT read only
+        for from in [2, last / 2, last - (last % per) + 1, last, last + 1, u32::MAX] {
+            let mut w = Farthest(Ram(img.clone(), 0), 0);
+            assert_eq!(fat.find_free(&mut w, from), Ok(last), "from {from}");
+            assert!(w.1 <= fat.fat_start + fat.fat_size, "from {from}: read to {}, past the first FAT", w.1);
+        }
+        assert_eq!(fsck(&img), Ok(0), "filled");
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let mut h = fat.create(&mut d, fat.root(), "END.BIN", T).unwrap();
+        let data = std::vec![9u8; fat.spc as usize * SECTOR];
+        fat.write_sectors(&mut d, &mut h, 0, &data).unwrap();
+        assert_eq!((h.first, h.last), (last, last));
+        assert!(fat.lba(last) + fat.spc <= fat.total, "inside the volume");
+        assert_eq!(&d.0[fat.lba(last) as usize * SECTOR..][..data.len()], &data[..]);
+        assert_eq!(fat.write_sectors(&mut d, &mut h, fat.spc, &[1; SECTOR]), Err(Error::Refused), "full");
+        assert_eq!(h.clusters, 1);
+        fat.set_size(&mut d, &mut h, data.len() as u32, T).unwrap();
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// A disk that keeps where its farthest read ended.
+    struct Farthest(Ram, u32);
+
+    impl Disk for Farthest {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.1 = self.1.max(lba + (buf.len() / SECTOR) as u32);
+            self.0.read(lba, buf)
+        }
+    }
+
+    /// A disk that counts its writes.
+    struct Writes(Ram, u32);
+
+    impl Disk for Writes {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Writes {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            self.1 += 1;
+            self.0.write(lba, buf)
+        }
+    }
+
+    /// FAT changes in one sector: the sector read once and written once to each FAT copy (not once a change: more
+    /// writes, more sectors a cut can tear), both entries in it, the top 4 bits of each kept (fatgen103), nothing
+    /// else in the FAT changed.
+    #[test]
+    fn set_entries_writes_a_fat_sector_once() {
+        let mut d = Writes(Ram(image(), 0), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let (a, b) = (1000, 1001);
+        let (start, size) = (fat.fat_start, fat.fat_size);
+        let at = |f: u32, c: u32| (start + f * size) as usize * SECTOR + c as usize * 4;
+        for f in 0..fat.fats {
+            d.0.0[at(f, b)..][..4].copy_from_slice(&0xa000_0000u32.to_le_bytes());
+        }
+        let before = d.0.0.clone();
+        fat.entry(&mut d, 5).unwrap(); // another FAT sector cached
+        d.0.1 = 0;
+        fat.set_entries(&mut d, &[(a, EOC), (b, 0x0123_4567)]).unwrap();
+        assert_eq!((d.0.1, d.1), (1, fat.fats), "one read, one write a FAT copy");
+        let img = &d.0.0;
+        for f in 0..fat.fats {
+            assert_eq!((u32_at(img, at(f, a)), u32_at(img, at(f, b))), (EOC, 0xa123_4567), "FAT {f}");
+        }
+        let changed: Vec<usize> = (0..img.len()).filter(|&i| img[i] != before[i]).map(|i| i / 4 * 4).collect();
+        assert!(changed.iter().all(|&i| [at(0, a), at(0, b), at(1, a), at(1, b)].contains(&i)), "{changed:?}");
+    }
+
+    /// The long name pieces a remove marks stop at the first that is not one of its own: another entry (even one
+    /// whose byte 13 equals the checksum), another name's piece, the directory's end, a deleted piece; its own are
+    /// marked back to the first, and the sector before is asked for only when they reach slot 0.
+    #[test]
+    fn mark_long_name_stops_at_what_is_not_its_own() {
+        let sum = 0x5a;
+        let piece = |first: u8, sum: u8| {
+            let mut e = [0u8; 32];
+            (e[0], e[11], e[13]) = (first, 0x0f, sum);
+            e
+        };
+        let mut file = [b'A'; 32];
+        (file[11], file[13]) = (ARCHIVE, sum);
+        for (before, what) in [
+            (file, "another file"),
+            (piece(1, sum ^ 1), "another name"),
+            (piece(0, sum), "the end"),
+            (piece(0xe5, sum), "deleted"),
+        ] {
+            let mut s = [0u8; SECTOR];
+            s[..32].copy_from_slice(&before);
+            let was = s;
+            assert!(!mark_long_name(&mut s, 1, sum), "{what}: stops");
+            assert!(s == was, "{what}: left as it was");
+        }
+        let mut s = [0u8; SECTOR];
+        s[..32].copy_from_slice(&piece(0x42, sum));
+        s[32..64].copy_from_slice(&piece(1, sum));
+        assert!(!mark_long_name(&mut s, 2, sum), "its first piece: done");
+        assert_eq!((s[0], s[32]), (0xe5, 0xe5));
+        let mut s = [0u8; SECTOR];
+        s[..32].copy_from_slice(&piece(2, sum));
+        assert!(mark_long_name(&mut s, 1, sum), "no first piece here: the sector before");
+        assert!(mark_long_name(&mut s, 0, sum), "slot 0: the sector before");
+    }
+
+    /// The names this writer gives: printable ASCII, 1 to `NAME` long, none of FAT's forbidden characters, no space
+    /// or dot first or last; a refused one is never created.
+    #[test]
+    fn only_valid_names_are_given() {
+        let (max, over) = ("a".repeat(NAME), "a".repeat(NAME + 1));
+        for ok in ["a", "~", "a b.c~", "a b", max.as_str(), "x.y.z", "!#$%&'()+,-;=@[]^_`{}"] {
+            assert!(valid_name(ok), "{ok:?}");
+        }
+        let mut bad = std::vec![std::string::String::new(), over, " a".into(), "a ".into(), ".a".into(), "a.".into()];
+        bad.extend(["a\x7fb", "a\x1fb", "a\u{e9}b"].map(std::string::String::from));
+        bad.extend(b"\"*/:<>?\\|".iter().map(|&c| std::format!("a{}b", char::from(c))));
+        for b in &bad {
+            assert!(!valid_name(b), "{b:?}");
+        }
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let before = d.0.clone();
+        for b in &bad {
+            assert_eq!(fat.create(&mut d, fat.root(), b, T).err(), Some(Error::Refused), "{b:?}");
+        }
+        assert!(d.0 == before, "nothing written");
+    }
+
+    /// A long name piece as the spec has it: the name's units, one 0x0000 after the last (unless it fills its
+    /// piece), 0xffff in the rest; the 8.3 entry after the pieces, with its checksum in each.
+    #[test]
+    fn long_name_pieces_end_with_a_zero_then_ffff() {
+        let unit = |e: &[u8; 32], i: usize| u16::from_le_bytes([e[AT[i]], e[AT[i] + 1]]);
+        let short = *b"ABCDEFGHTXT";
+        let (e, n) = dir_entries("abc", short, ARCHIVE, 7, 0, T);
+        assert_eq!(n, 2);
+        assert_eq!((e[0][0], e[0][11], e[0][13]), (0x41, 0x0f, short_sum(&short)));
+        assert_eq!(
+            (0..13).map(|i| unit(&e[0], i)).collect::<Vec<_>>(),
+            [97, 98, 99, 0].iter().copied().chain([0xffff; 9]).collect::<Vec<_>>()
+        );
+        assert_eq!(&e[1][..11], &short);
+        // 13 units: a full piece, no terminator; 14: a second piece holding the last and the zero
+        let thirteen = "abcdefghijklm";
+        let (e, n) = dir_entries(thirteen, short, ARCHIVE, 7, 0, T);
+        assert_eq!((n, e[0][0]), (2, 0x41));
+        assert!((0..13).all(|i| unit(&e[0], i) == u16::from(thirteen.as_bytes()[i])));
+        let (e, n) = dir_entries("abcdefghijklmn", short, ARCHIVE, 7, 0, T);
+        assert_eq!((n, e[0][0], e[1][0]), (3, 0x42, 0x01));
+        assert_eq!((unit(&e[0], 0), unit(&e[0], 1), unit(&e[0], 2)), (u16::from(b'n'), 0, 0xffff));
+    }
 }
