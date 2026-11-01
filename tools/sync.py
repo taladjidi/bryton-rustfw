@@ -207,6 +207,8 @@ class Volume:
         tmp = p.with_name(p.name + '.tmp')
         try:
             with open(tmp, 'wb') as f:
+                if fcntl is not None and hasattr(fcntl, 'F_NOCACHE'):
+                    fcntl.fcntl(f.fileno(), fcntl.F_NOCACHE, 1)  # the pages written are not kept for the read back
                 f.write(data)
                 f.flush()
                 flush(f.fileno())
@@ -282,10 +284,14 @@ class SameHost(urllib.request.HTTPRedirectHandler):
     """A redirect to another host does not carry the Authorization header (the API key or the bearer token)."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new and urllib.parse.urlparse(newurl).netloc != urllib.parse.urlparse(req.full_url).netloc:
-            new.headers.pop('Authorization', None)
-        return new
+        a, b = urllib.parse.urlparse(req.full_url), urllib.parse.urlparse(newurl)
+        if (a.scheme, a.netloc) != (b.scheme, b.netloc):
+            # a 307 / 308 of a POST is refused by the base class (None), so no body (client_secret) is re-sent
+            new = super().redirect_request(req, fp, code, msg, headers, newurl)
+            if new:
+                new.headers.pop('Authorization', None)
+            return new
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 OPENER = urllib.request.build_opener(SameHost)
@@ -730,13 +736,17 @@ def selftest():
     class Hop(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             seen.append((self.path, self.headers.get('Authorization')))
-            if self.path.startswith('/to-'):
-                self.send_response(302)
-                self.send_header('Location', f'http://{self.path[4:]}:{self.server.server_port}/end')
+            if self.path.startswith(('/to-', '/post-')):
+                self.send_response(307 if self.path.startswith('/post-') else 302)
+                self.send_header('Location', f'http://{self.path.split("-", 1)[1]}:{self.server.server_port}/end')
             else:
                 self.send_response(200)
             self.send_header('Content-Length', '0')
             self.end_headers()
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            self.do_GET()
 
         def log_message(self, *a):
             pass
@@ -746,8 +756,11 @@ def selftest():
     base = f'http://127.0.0.1:{srv.server_port}'
     request('GET', base + '/to-localhost', {'Authorization': 'secret'})
     request('GET', base + '/to-127.0.0.1', {'Authorization': 'secret'})
+    n = len(seen)
+    st, _ = request('POST', base + '/post-localhost', {'Authorization': 'secret'}, form={'client_secret': 'x'})
+    assert st == 307 and seen[n:] == [('/post-localhost', 'secret')], seen[n:]  # the body is not re-sent
     srv.shutdown()
-    assert seen == [('/to-localhost', 'secret'), ('/end', None), ('/to-127.0.0.1', 'secret'), ('/end', 'secret')], seen
+    assert seen[:4] == [('/to-localhost', 'secret'), ('/end', None), ('/to-127.0.0.1', 'secret'), ('/end', 'secret')], seen
     with tempfile.TemporaryDirectory() as td:
         Volume(td).write('a/b.bin', b'xyz')
         assert read_back(Path(td, 'a/b.bin')) == b'xyz' and not list(Path(td, 'a').glob('*.tmp'))

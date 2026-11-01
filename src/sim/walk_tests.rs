@@ -93,7 +93,7 @@ fn key(sim: &mut Sim, app: &mut App, w: &mut Walk, k: &'static str) {
             let kind = match row {
                 Some(Row::Set(_)) => "set",
                 // an allowlist: only rows that open a screen or show a figure are pressed on the unit
-                Some(Row::Open(_) | Row::About | Row::Storage(_)) => "fixed",
+                Some(Row::Open(_) | Row::About | Row::Storage(_) | Row::Nearby | Row::Part(..)) => "fixed",
                 Some(
                     Row::Workout(_) | Row::Past(_) | Row::Month(_) | Row::Notif(_) | Row::Place(_) | Row::Course(_),
                 ) => "data",

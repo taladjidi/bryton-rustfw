@@ -55,9 +55,9 @@ class Nrf(dev.Regs):
     def send(self, packet, wait=2.0):
         """Sends one packet (2-byte length header included) and returns what arrives within `wait` seconds."""
         # inferred (nrf_soc.h from memory, not checked): SD_FLASH_PAGE_ERASE / WRITE / PROTECT = SOC_SVC_BASE 0x20 + 9..11
-        # as the op byte after the type; 0xC0 opens a SLIP frame, the DFU bootloader's framing (BOARD.md 11)
-        if packet[:1] == b'\xc0' or (len(packet) > 3 and packet[3] in FLASH_OPS):
-            raise SystemExit('nrf.py: DFU and flash packets are refused: the Nordic firmware is not ours to replace')
+        # as the op byte after the type 00 (a SoftDevice command; BOARD.md 11: ANT commands are type 06)
+        if len(packet) > 3 and packet[2] == 0 and packet[3] in FLASH_OPS:
+            raise SystemExit('nrf.py: flash packets are refused: the Nordic firmware is not ours to replace')
         for b in packet:
             while not self.peek(USART2 + ISR) & TXFNF:
                 pass
