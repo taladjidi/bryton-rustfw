@@ -89,7 +89,7 @@ impl Survey {
             let fat = Fat::mount(d)?;
             // FSInfo's count is only a hint (stale after a power cut, or a writer that did not keep it): shown as an
             // estimate ([`Survey::free_estimate`]) while the FAT is counted, which always happens
-            self.free = fat.fsinfo_free(d);
+            self.free = fat.free_clusters(d).ok().flatten();
             self.fat = Some(fat);
             self.stage = Stage::Free;
         }
@@ -254,14 +254,14 @@ mod tests {
         let fat = Fat::mount(&mut d).unwrap();
         let (mut next, mut free) = (2, 0);
         assert!(fat.count_free(&mut d, &mut next, &mut free, u32::MAX).unwrap());
-        assert_eq!(fat.fsinfo_free(&mut d), Some(free), "the test volume's FSInfo is whole");
+        assert_eq!(fat.free_clusters(&mut d).unwrap(), Some(free), "the test volume's FSInfo is whole");
         let whole = Some(fat.clusters_bytes(free));
         assert_eq!(survey(img.clone()).free(), whole);
         // the FSInfo lead signature damaged: no count from it, the survey counts the FAT to the same
         let info = usize::from(u16::from_le_bytes([img[48], img[49]])) * SECTOR;
         let mut bad = img.clone();
         bad[info] = 0;
-        assert_eq!(fat.fsinfo_free(&mut crate::fat::tests::Ram(bad.clone(), 0)), None);
+        assert_eq!(fat.free_clusters(&mut crate::fat::tests::Ram(bad.clone(), 0)).unwrap(), None);
         assert_eq!(survey(bad).free(), whole);
         // a count of 0xffffffff ("not known") or past the clusters: the same fallback
         let mut unknown = img.clone();

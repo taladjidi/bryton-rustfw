@@ -48,6 +48,17 @@ pub(crate) fn rfind_ascii(s: &str, b: u8) -> Option<usize> {
     s.bytes().rposition(|c| c == b)
 }
 
+/// Seals a record sector (recorder/rec.rs, trash.rs): the FIT CRC-16 of its first 510 bytes in its last two.
+pub(crate) fn seal16(s: &mut [u8; fat::SECTOR]) {
+    let crc = fit::crc(0, &s[..fat::SECTOR - 2]);
+    s[fat::SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+}
+
+/// True if `s` holds its seal ([`seal16`]): a sector torn or never written does not.
+pub(crate) fn sealed16(s: &[u8; fat::SECTOR]) -> bool {
+    fit::crc(0, &s[..fat::SECTOR - 2]).to_le_bytes() == s[fat::SECTOR - 2..]
+}
+
 /// The `N` bytes of `b` from `i`, zeros when `b` is too short (a malformed record reads as empty, never panics).
 pub(crate) fn take<const N: usize>(b: &[u8], i: usize) -> [u8; N] {
     i.checked_add(N).and_then(|end| b.get(i..end)).and_then(|s| s.try_into().ok()).unwrap_or([0; N])

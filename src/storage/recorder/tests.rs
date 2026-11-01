@@ -2540,6 +2540,24 @@ fn the_apps_files_are_made_at_a_rides_start_and_once() {
     assert_eq!(d.written, 0, "nothing written");
 }
 
+/// The review of 2026-10-31 (storage, 8): a file of [`KEPT`] longer than listed (a newer build's, an older build
+/// flashed after it) is left as it is: not cut back, nothing written, no FAT sync at each ride's start.
+#[test]
+fn a_kept_file_longer_than_listed_is_left_alone() {
+    let mut d = card(kept_card());
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let dir = fat.open(&mut d, DIR).unwrap();
+    let (name, size) = KEPT[0];
+    let mut h = fat.locate(&mut d, dir, name).unwrap();
+    let longer = size + SECTOR_U32;
+    fat.write_sectors(&mut d, &mut h, size / SECTOR_U32, &[7; SECTOR]).unwrap();
+    fat.set_size(&mut d, &mut h, longer, (0, 0)).unwrap();
+    d.written = 0;
+    make_kept(&mut fat, &mut d, (0, 0)).unwrap();
+    assert_eq!(d.written, 0, "nothing written");
+    assert_eq!(fat.locate(&mut d, dir, name).map(|h| h.size), Ok(longer), "{name} kept whole");
+}
+
 /// The review of 2026-10-29, S7: on a card from before (a saved ride, `\Rustfw` and its records, none of the app's
 /// files), the next ride's start makes them; a power cut at every sector of that start (plain and torn) leaves the
 /// volume clean, the saved ride whole, and the ride after it finishes the job and is saved. Entries are lost only
@@ -3374,7 +3392,8 @@ fn the_rescue_keeps_the_next_rides_reserve() {
 
 #[test]
 fn clusters_for_a_size() {
-    assert_eq!(clusters_for(0, 16_384), 1, "an empty file still has its cluster");
-    assert_eq!((clusters_for(16_384, 16_384), clusters_for(16_385, 16_384)), (1, 2));
-    assert_eq!(clusters_for(100, 0), 100, "no division by zero");
+    let fat = Fat::mount(&mut crate::fat::tests::Ram(crate::fat::tests::image(), 0)).unwrap();
+    let c = fat.cluster_bytes();
+    assert_eq!(fat.clusters_for(0), 1, "an empty file still has its cluster");
+    assert_eq!((fat.clusters_for(c), fat.clusters_for(c + 1)), (1, 2));
 }

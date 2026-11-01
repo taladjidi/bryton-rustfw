@@ -138,8 +138,7 @@ impl App {
             // before the drive is lent, read only meanwhile (drive_on; the review of 2026-10-29, S4); a damaged
             // volume: dropped, as drive_on does
             self.trash_tried = true;
-            let t = fat::write::dos_time(self.rec_time().0);
-            self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t) == Err(fat::Error::Io);
+            self.finish_trash(b);
         }
         let t0 = self.prof.clock.us(b);
         if self.stock.status() == stock::Status::Running {
@@ -211,6 +210,15 @@ impl App {
         }
     }
 
+    /// [`trash::finish`]: `trash_check` kept unless no move is left pending (the review of 2026-10-31: a full card's
+    /// `Refused` left the move pending and lent the card writable). A damaged volume (`Corrupt`, or no FAT32 at all)
+    /// drops it: the move cannot use the volume either, and a computer is to mend it.
+    pub(crate) fn finish_trash(&mut self, b: &mut impl Board) {
+        let t = fat::write::dos_time(self.rec_time().0);
+        let r = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t);
+        self.trash_check = r.is_err_and(|e| !matches!(e, fat::Error::Corrupt | fat::Error::NotFat32));
+    }
+
     /// DELETE on a past ride's card (a tap on it or Start held asks, Start or a tap again does: [`PAST_DELETE`]): the ride moved into
     /// `\Rustfw\Deleted` ([`trash::delete`]: kept, never erased), its full copy too; the history, the totals and the
     /// power curve without it at once; back to the list. Never while a ride runs or waits to be saved or resumed.
@@ -235,6 +243,8 @@ impl App {
                 self.survey.start(); // the count and the oldest rides changed (STORAGE, if it is under this card)
                 self.clamp_menu(); // the list one ride shorter: the selection on the next one, or the last
             }
+            // refused before anything moved, or put back: nothing pending (trash.rs `delete`)
+            Err(fat::Error::Refused) => self.alarm_notice("CARD FULL"),
             Err(_) => {
                 self.trash_check = true; // a move the failure left midway, finished at the next scan or lending
                 self.alarm_notice("DELETE FAILED");

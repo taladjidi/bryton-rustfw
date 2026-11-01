@@ -645,6 +645,45 @@ fn a_cut_delete_whose_finish_fails_is_tried_again() {
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
+/// The review of 2026-11-01: DELETE on a full card whose `\Rustfw\Deleted` needs a cluster for the name: refused
+/// before any entry changes, said "CARD FULL" (not DELETE FAILED), the ride still in `\Activities`, nothing left to
+/// finish (`trash_check` not set for nothing).
+#[test]
+fn delete_on_a_full_card_says_so() {
+    use crate::storage::trash::tests::{file, full_card};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = full_card();
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::History));
+    app.press(&mut sim, Press::Short(Key::Start));
+    while app.stock.status() == crate::stock::Status::Running || app.trash_check {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 120_000);
+    }
+    for _ in 0..10 {
+        if app.screen() != Screen::Menu(Menu::History, 2) {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+    }
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 2));
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..100 {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        if app.screen() == Screen::Past {
+            break;
+        }
+    }
+    assert_eq!(app.screen(), Screen::Past);
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.notes.text.as_str(), "CARD FULL");
+    assert!(!app.trash_check, "nothing to finish");
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some());
+}
+
 /// DELETE with more rides than the scan's cache holds (storage/stock.rs `CACHE_RIDES`): the scan starts again to
 /// count the rides left out of the cache, and HISTORY loses the ride deleted at once, not when that scan ends.
 #[test]
