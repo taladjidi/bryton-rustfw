@@ -363,7 +363,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/fonts/`: Barlow Semi Condensed Bold (`BarlowSemiCondensed-Bold.ttf`) and its OFL.txt licence, for the SMOOTH fonts (`tools/font.py`).
 - `tools/progress.py`: a progress bar when tqdm is installed, nothing otherwise (cosmetic).
 - `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
-  SHA256SUMS.
+  SHA256SUMS before saving anything (then by rename); `selftest` (check.sh, a fake download).
 - `tools/stack_check.py`: the firmware's stack frames against their budgets, the stack's size (from the canary
   to the top; check.sh, after the build).
 - `tools/panics.py` (`--max N`: exit 1 above N sites; check.sh runs `--max 0`): every panic site of the release ELF (bounds, unwrap, overflow, explicit) with its source line (src/ or a
@@ -375,7 +375,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   tool functions, ruff F and E9; check.sh, before cargo), `selftest`.
 - `tools/review.py`: the per-branch review report (cargo-mutants on the diff, new jscpd clones, lint; `--base REF`, `--quick`
   (mutants only under src/storage/), `selftest`, which check.sh runs; the report itself is not in check.sh; config `.cargo/mutants.toml`).
-- `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo).
+- `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo). A
+  write needs the one 0483:5720 device (stock's drive shares it) and the bootloader byte sum of R039 iap.bin
+  (0x00548f3c, or `--boot-sum-is`), never a FAT or MBR sector in the probe's reply; `--write-vanilla`
+  needs IMG.raw's SHA256SUMS line; `selftest` (check.sh, fakes only, no USB).
 - `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
   commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored
   `ant_key.bin`, and build.rs passes it to main.rs as `ANT_KEY` (None without the file). Shimano's private network

@@ -82,6 +82,7 @@ they are not in the image. `panics.py` shows them again if a caller appears.
 | endpoint.rs:211 `EndpointOut::read` | `borrow_ref_mut` | `try_borrow_mut`, `Err(WouldBlock)` |
 | endpoint.rs:215 `buffer_state` | `borrow_ref` | `try_borrow`, `Empty` |
 | endpoint_memory.rs:46-60 `read_packet` | `self.buffer[index]`, `buf[..4]`, `&mut buf[4..]`, `[..current_size]` | `get_mut(..data_size)` then by 4-byte chunks zipped with the words: the same volatile reads, the same bytes |
+| endpoint_memory.rs:38 `read_packet` | `BufferOverflow` (a packet longer than the caller's buffer, e.g. an EP0 OUT stage longer than announced) returned with `has_data` still set | `has_data = false` first: the packet is dropped, the endpoint takes the next one, and RXFLVL no longer holds the OTG_HS interrupt pending (every WFI returned at once). Not a panic site; the review of 2026-10-31 |
 | endpoint_memory.rs:82 `fill_from_fifo` | `&self.buffer[..words]` (after the capacity check) | `get`, `Err(BufferOverflow)` |
 | endpoint_memory.rs:153-168 `allocate_tx_buffer` | `assert!(ep_number < 9)`, `[ep_number]` twice | `get` / `get_mut`, `Err(InvalidEndpoint)` |
 | endpoint_memory.rs:179 `tx_fifo_size_words` | `[ep_number]` | `get`, 0 |

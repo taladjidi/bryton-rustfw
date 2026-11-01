@@ -69,6 +69,10 @@ pub trait Host {
     fn poke(&mut self, addr: u32, value: u32);
     /// Sends what [`Host::send`] queued, so the answer reaches the computer now. Default: nothing queues.
     fn flush(&mut self) {}
+    /// Output is being dropped (nobody reads): long answers stop reading the card. Default: never.
+    fn dead(&self) -> bool {
+        false
+    }
 }
 
 /// The peripheral space (RM0399 memory map) that `peek` and `poke` may reach.
@@ -273,7 +277,13 @@ struct Load {
     got: u32,
     acc: u32,
     head: [u8; HEAD],
+    /// The main loop's clock when bytes last came: an upload silent for [`LOAD_STALL_MS`] is dropped.
+    seen_ms: u32,
 }
+
+/// An upload that got no byte for this long (above any pass of the main loop) was abandoned (the computer's script was killed): the next bytes are a
+/// command again, not more image.
+const LOAD_STALL_MS: u32 = 5000;
 
 /// Protocol state: the current command line, or the image being loaded.
 pub struct Session {
@@ -282,6 +292,8 @@ pub struct Session {
     load: Option<Load>,
     path: [u8; 64],
     path_len: usize,
+    /// The line in progress passed the buffer: it is answered `err line too long`, not run cut.
+    overflow: bool,
 }
 
 impl Default for Session {
@@ -293,7 +305,7 @@ impl Default for Session {
 impl Session {
     /// Waiting for a command.
     pub const fn new() -> Self {
-        Session { line: [0; 64], len: 0, load: None, path: [0; 64], path_len: 0 }
+        Session { line: [0; 64], len: 0, load: None, path: [0; 64], path_len: 0, overflow: false }
     }
 
     /// The path of the last `ls` or `get`.
@@ -303,6 +315,14 @@ impl Session {
 
     /// Takes bytes from the computer; `stats` is for `info`.
     pub fn feed(&mut self, mut data: &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
+        // the clock is the main loop's: `load` sees a gap between packets, not the time of the connection
+        if self.load.take_if(|l| stats.uptime_ms.wrapping_sub(l.seen_ms) > LOAD_STALL_MS).is_some() {
+            (self.len, self.overflow) = (0, false);
+            h.send(b"err load timeout\n");
+        }
+        if let Some(l) = &mut self.load {
+            l.seen_ms = stats.uptime_ms;
+        }
         while !data.is_empty() {
             if let Some(l) = &mut self.load {
                 let n = data.len().min((l.size - l.got) as usize);
@@ -335,7 +355,12 @@ impl Session {
             let Some((&b, rest)) = data.split_first() else { break };
             data = rest;
             if b == b'\n' || b == b'\r' {
-                let effect = self.command(app, stats, h);
+                let effect = if core::mem::take(&mut self.overflow) {
+                    h.send(b"err line too long\n");
+                    Effect::None
+                } else {
+                    self.command(app, stats, h)
+                };
                 self.len = 0;
                 if effect != Effect::None {
                     return effect;
@@ -343,6 +368,8 @@ impl Session {
             } else if let Some(slot) = self.line.get_mut(self.len) {
                 *slot = b;
                 self.len += 1;
+            } else {
+                self.overflow = true;
             }
         }
         Effect::None
@@ -353,6 +380,11 @@ impl Session {
         let mut words = line.split(|&c| c == b' ').filter(|w| !w.is_empty());
         match words.next() {
             None => {}
+            // a RAM run mid-ride loses up to 60 s of it; the card commands stall the loop (and the recorder) for
+            // seconds; a poke can hit the card's controller: all wait for a settled ride, as wtest does
+            Some(b"load" | b"reset" | b"find" | b"bench" | b"sector" | b"poke") if !app.ride_settled() => {
+                h.send(b"err ride open\n");
+            }
             Some(b"info") => {
                 h.send(
                     concat!("bryton-rustfw ", env!("CARGO_PKG_VERSION"), " ", env!("GIT_DESCRIBE"), " up ").as_bytes(),
@@ -403,6 +435,9 @@ impl Session {
                 h.send(b"shot 240 320\n");
                 let mut bytes = [0u8; 2 * W as usize];
                 for y in 0..H {
+                    if h.dead() {
+                        break;
+                    }
                     let row = app.render_row(y);
                     for (pair, &p) in bytes.chunks_exact_mut(2).zip(&row.px) {
                         pair.copy_from_slice(&p.to_be_bytes());
@@ -412,7 +447,7 @@ impl Session {
             }
             Some(b"load") => match (words.next().and_then(parse), words.next().and_then(parse)) {
                 (Some(size), Some(sum)) if (HEAD as u32..=STAGE_MAX).contains(&size) => {
-                    self.load = Some(Load { size, sum, got: 0, acc: 0, head: [0; HEAD] });
+                    self.load = Some(Load { size, sum, got: 0, acc: 0, head: [0; HEAD], seen_ms: stats.uptime_ms });
                     h.send(b"ready\n");
                 }
                 _ => h.send(b"err usage: load <size 156..1048576> <sum>\n"),
@@ -515,8 +550,8 @@ impl Session {
             },
             Some(b"bench") => {
                 match (words.next().and_then(parse), words.next().and_then(parse), words.next().and_then(parse)) {
-                    (Some(lba), Some(n @ 1..=32), Some(count @ 1..=100_000)) => return Effect::Bench(lba, n, count),
-                    _ => h.send(b"err usage: bench <lba> <sectors 1..32> <count>\n"),
+                    (Some(lba), Some(n @ 1..=32), Some(count @ 1..=1000)) => return Effect::Bench(lba, n, count),
+                    _ => h.send(b"err usage: bench <lba> <sectors 1..32> <count 1..1000>\n"),
                 }
             }
             Some(b"prof") => match words.next() {
@@ -686,7 +721,7 @@ pub fn find_sectors(
     let mut buf = [0u8; 16 * emmc::SECTOR];
     let (mut at, mut lines) = (lba, 0);
     let end = lba.saturating_add(count);
-    while at < end && lines < 512 {
+    while at < end && lines < 512 && !h.dead() {
         let n = (end - at).min(16);
         let chunk = buf.get_mut(..n as usize * emmc::SECTOR).unwrap_or_default();
         if let Err(e) = read(at, chunk) {
@@ -720,6 +755,9 @@ pub fn send_ls(h: &mut impl Host, d: &mut impl crate::fat::Disk, path: &str) {
         return h.send(b"err not found\n");
     };
     for _ in 0..4096 {
+        if h.dead() {
+            return;
+        }
         match fat.list(d, &mut c) {
             Ok(Some(e)) => {
                 h.send(&hex(e.file.size)[..8]);

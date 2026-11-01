@@ -178,7 +178,8 @@ seconds, and the run ends with all of them and a total:
   links), `cargo deny check` (when installed), then what the tests wrote: `tools/fit_check.py` on the test rides when
   fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's Python) and `tools/walk.py selftest`;
 - **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `sync.py`, `assist.py`, `segments.py`,
-  `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py` and `theme.py selftest`, and
+  `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py`, `iaprecover.py`, `fetch_firmware.py` and
+  `theme.py selftest`, and
   `tools/font.py` regenerating `src/ui/fonts.rs` into a temporary file with `cmp` failing on a diff (skipped without PIL);
 - **the live numbers**, after the lanes (they need the ELF and the test list): `tools/numbers.py --write` (each changed
   marker printed) **only on main** (or with `--full`), by the merge step. A branch runs `--check` and prints the stale
