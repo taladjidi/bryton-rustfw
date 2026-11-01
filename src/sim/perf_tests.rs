@@ -337,7 +337,7 @@ fn idle_overview_searching() {
 }
 
 /// With a fix, after each NAV-PVT the receiver is read again just before the next one, not every 200 ms (review of
-/// 2026-10-31, finding 10), at 20 passes a second and at a ride's 10: about one read of idle fill a second besides the
+/// 2026-10-31, finding 10), at 20 passes a second: about one read of idle fill a second besides the
 /// PVT's, and the fix still lands within its second (never older than a second and a read's wait).
 #[test]
 fn gnss_read_waits_for_the_next_pvt() {
@@ -346,6 +346,7 @@ fn gnss_read_waits_for_the_next_pvt() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 20_000); // powered, configured, fixed
     assert!(app.gps.sent >= 5 && app.gps.ano.done(), "nothing left to send");
+    // 50 ms passes, and 100 ms to show the wait counts ms, not passes
     for pass in [POLL_MS, 100] {
         let (g, end, mut oldest) = (sim.gnss.got.len(), sim.ms + 60_000, 0);
         while sim.ms < end {

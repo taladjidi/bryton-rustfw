@@ -199,16 +199,13 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
   largest part (0.23 %). Half the CPU's awake time, which is a fraction of a mA (0.5 % of the difference between
   Run and Sleep currents): the loop Stop mode needs (a long sleep that wakes on what matters) more than a saving in
   itself.
-- **A running ride (2026-10-31, review finding 9; the 100 ms pass was taken out on 2026-11-01, a ride runs the short pass again, 1.62 % awake against 1.05 %; this describes what was tried):** a pass every 100 ms while nothing wants the
-  short one (no finger, key held, tone, banner, editor, AssistNow data, card failure, course or road-ahead tile being
-  read, trainer link: its control messages go one a pass). A key ends the sleep at once; the Nordic chip's bytes do not (its sensors' broadcasts would end nearly every
-  sleep): our side holds them (RTS and the RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11, the
-  enable's 0x20), its BLE and serialization queues are not known. With it (finding 10): the GNSS read waits 800 ms
-  after a whole NAV-PVT (8.8 to 5.0 SPI4 transfers a second in the simulation), the light read every 500 ms for the
-  backlight and every 5 s for THEME AUTO alone, and the per-pass date conversions and the page's widget list only
-  when used. Measured on the unit (`tools/profile.py`, RAM run, 10 s windows, the ride's window including its start
-  at 20 passes a second): awake on the overview 1.54 to 1.36 %, on the first ride page 1.42 to 1.10 %, a ride running
-  1.62 to 1.05 % (21.2 to 13.1 passes a second).
+- **Tried 2026-10-31 (18e270e, review finding 9) and taken out 2026-11-01 as a suspect of the ride's radio dropouts:**
+  a running ride used a 100 ms pass, and the Nordic chip's bytes did not end it. Measured with the 100 ms pass on the
+  unit: riding 1.62 % to 1.05 % awake, 21.2 to 13.1 passes a second.
+- **Finding 10 (2026-10-31), in place:** with a fix, the GNSS read waits 800 ms after a whole NAV-PVT (8.8 to 5.0 SPI4
+  transfers a second in the simulation), the light read comes every 500 ms for the backlight and every 5 s for THEME
+  AUTO alone, and the per-pass date conversions and the page's widget list run only when used. Measured on the unit
+  (`tools/profile.py`, RAM run, 10 s windows): awake on the overview 1.54 to 1.36 %, on the first ride page 1.42 to 1.10 %.
 - **The status strip and the radio's receive (2026-10-31, review findings 7 and 8):** the strip's section split in
   two (`strip`: its inputs, the next-step lookup and the compare; `strip_draw`: the draws alone). The compare is
   about 10 us a pass (0.02 %); the cost was the draw, once a second: the grey "GPS" blinking while the receiver

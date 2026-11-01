@@ -213,8 +213,7 @@ impl App {
     /// no key for [`IDLE_AFTER_MS`], no finger, no tone or banner timed by the passes, the card not lent to the
     /// computer, no AssistNow Offline data left to send, a few seconds after the receiver starts), else [`POLL_MS`] (a
     /// running ride included: a 100 ms ride pass was tried on 2026-10-31 and taken out on 2026-11-01, docs/status.md).
-    /// Measured 2026-10-28
-    /// overnight on the overview: 20 passes/s of 0.4 ms each.
+    /// Measured 2026-10-28 overnight on the overview: 20 passes/s of 0.4 ms each.
     pub fn pass_ms(&self) -> u32 {
         let quiet = !self.touching()
             && self.tones.quiet()

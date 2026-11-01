@@ -21,7 +21,7 @@ use crate::ble::{self, Event};
 use crate::phone::{self as ph, Media, Stored};
 use crate::*;
 
-/// How many passes a media key's release is tried: 10 passes (0.5 to 1 s, a pass is 50 or 100 ms).
+/// How many passes a media key's release is tried: 10 passes (0.5 to 1 s, a pass is 50 or 250 ms).
 const RELEASE_TRIES: u8 = 10;
 
 /// Advertising while pairing: interval (0.625 ms units) and time-out (s).

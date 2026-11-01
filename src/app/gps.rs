@@ -39,8 +39,8 @@ fn one(f: [u8; 32]) -> Msg {
 /// Passes between two AssistNow Offline messages (one a pass would be 1.7 kB/s; mga.rs has the pace).
 pub const ANO_GAP: u8 = 1;
 
-/// GNSS bytes read per pass at most: 128 per 50 ms is 2560 bytes/s, twenty times NAV-PVT at 1 Hz; at a ride's
-/// 100 ms passes 1 280 B/s, about 12 times NAV-PVT. A pass stops at the first 32 bytes of idle fill
+/// GNSS bytes read per pass at most: 128 per 50 ms is 2560 bytes/s, twenty times NAV-PVT at 1 Hz. A pass stops
+/// at the first 32 bytes of idle fill
 /// between frames, so most passes read 32.
 pub(crate) const GNSS_READ: usize = 128;
 
