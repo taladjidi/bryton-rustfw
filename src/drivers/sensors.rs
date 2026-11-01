@@ -52,7 +52,6 @@
 //!   test's press sequence is replayed by the `di2_presses` test. Double presses are not decoded (stock neither).
 
 use crate::nrf::SensorId;
-use crate::trainer::MAX_W;
 
 /// A kind of ANT+ sensor, one ANT channel each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -317,6 +316,10 @@ fn set_half_percent(live: &mut Live, m: Metric, b: u8) {
 
 /// A value older than this is dropped (the sensor stopped or went out of range).
 pub const STALE_MS: u32 = 5000;
+
+/// The most a power meter's page may say (W): real sprint peaks are 2 000 to 2 600 W. The trainer's own limit
+/// ([`crate::trainer::MAX_W`], the ERG target ceiling) applies to its readings only.
+pub const METER_MAX_W: u16 = 4000;
 
 /// The latest value of each [`Metric`], and its age.
 #[derive(Default)]
@@ -616,10 +619,14 @@ impl Decoders {
             // ponytail: the standard power-only page (0x10) only, which every power meter sends; torque pages
             // (0x11, 0x12) when a meter that needs them shows up
             Kind::Power if d[0] == 0x10 => {
-                // past MAX_W is no reading (inferred: D00001086 gives no invalid value for page 0x10's power)
-                if u16_at(6) <= MAX_W {
-                    live.set(Metric::Power, u16_at(6));
+                // A power past METER_MAX_W is a glitch frame (inferred: D00001086 gives page 0x10 no invalid value, and 0xffff
+                // is 65 535 W): the whole page is dropped and the second has no power, not the previous one held (the
+                // recorder then writes none for it, as for a dropout). Sprint peaks of 2 000 to 2 600 W are real.
+                if u16_at(6) > METER_MAX_W {
+                    live.clear(Metric::Power);
+                    return;
                 }
+                live.set(Metric::Power, u16_at(6));
                 if d[2] != 0xff && d[2] & 0x80 != 0 && d[2] & 0x7f <= 100 {
                     live.set(Metric::Balance, u16::from(d[2] & 0x7f));
                 }
@@ -954,10 +961,13 @@ mod tests {
     #[test]
     fn implausible_values_are_no_reading() {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
-        dec.decode(Kind::Power, [0x10, 1, 0xff, 255, 0, 0, 0xff, 0xff], 2105, &mut live);
-        assert_eq!((live.get(Metric::Power), live.get(Metric::Cadence)), (None, None), "65535 W, 255 rpm");
-        dec.decode(Kind::Power, [0x10, 1, 0xff, 250, 0, 0, 0xd0, 0x07], 2105, &mut live);
-        assert_eq!((live.get(Metric::Power), live.get(Metric::Cadence)), (Some(2000), Some(250)), "the caps are in");
+        dec.decode(Kind::Power, [0x10, 1, 0xff, 90, 0, 0, 0xd0, 0x07], 2105, &mut live);
+        assert_eq!((live.get(Metric::Power), live.get(Metric::Cadence)), (Some(2000), Some(90)));
+        dec.decode(Kind::Power, [0x10, 1, 0x80 | 50, 91, 0, 0, 0xff, 0xff], 2105, &mut live);
+        assert_eq!(live.get(Metric::Power), None, "65535 W: no reading, the 2000 W not held");
+        assert_eq!((live.get(Metric::Balance), live.get(Metric::Cadence)), (None, Some(90)), "the whole page skipped");
+        dec.decode(Kind::Power, [0x10, 1, 0xff, 250, 0, 0, 0xa0, 0x0f], 2105, &mut live);
+        assert_eq!((live.get(Metric::Power), live.get(Metric::Cadence)), (Some(4000), Some(250)), "the caps are in");
         dec.decode(Kind::Hr, [4, 0, 0, 0, 0, 0, 0, 255], 2105, &mut live);
         assert_eq!(live.get(Metric::Hr), None, "255 bpm");
         // 20 turns in 1 s is 1200 rpm: a wheel could, a crank not

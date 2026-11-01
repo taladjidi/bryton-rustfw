@@ -180,9 +180,8 @@ pub struct Reading {
     pub seen: u8,
     /// The last Indoor Bike Data notification had More Data set: the next one continues its record ([`crate::ftms::bike_data`]).
     pub bike_more: bool,
-    /// General pages (16) since the last trainer-data page (25), saturating: past [`crate::fec::P25_MISSED`] the power and
-    /// cadence of page 25 are no longer the trainer's word.
-    pub p25_missed: u8,
+    /// Time since the last trainer-data page (25), ms ([`crate::fec::age`]).
+    pub p25_ms: u32,
 }
 
 impl Reading {

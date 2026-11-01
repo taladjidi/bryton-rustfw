@@ -140,7 +140,11 @@ impl Rx {
         {
             for j in i..self.kept_n - 1 {
                 let (a, b) = (self.slot(j), self.slot(j + 1));
-                (self.kept[a], self.kept_len[a]) = (self.kept[b], self.kept_len[b]);
+                if let (Some(&row), Some(&len)) = (self.kept.get(b), self.kept_len.get(b))
+                    && let (Some(r), Some(l)) = (self.kept.get_mut(a), self.kept_len.get_mut(a))
+                {
+                    (*r, *l) = (row, len);
+                }
             }
             self.kept_n -= 1;
         }
@@ -265,8 +269,10 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
     send(b, payload);
     let op = payload.get(1).copied();
     // a call that timed out may still be answered: that late answer is not this call's (the next channel's open has
-    // the same op), so one answer of its op is swallowed. If it never came, this call times out too and forgets it.
-    let mut late = rx.late.take();
+    // the same op), so one answer of its op is swallowed. If it never came, this call fails once (it swallowed the
+    // real answer) and does not arm another: the next call is clean.
+    let armed = rx.late.take();
+    let mut late = armed;
     let response = |p: &[u8]| match *p {
         [RESP, o, ..] if late == Some(o) => {
             late = None;
@@ -287,7 +293,7 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
     let r = wait(b, rx, response).unwrap_or(Err(Error::Timeout));
     if r == Err(Error::Timeout) {
         rx.timeouts = rx.timeouts.saturating_add(1);
-        rx.late = op.filter(|_| late.is_none());
+        rx.late = op.filter(|_| armed.is_none() || late.is_some()); // not after a swallow
     }
     if let (Err(e), Some(op)) = (r, op) {
         rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
@@ -750,8 +756,8 @@ impl Nearby {
         Nearby { devices: [NONE; Self::MAX], count: 0 }
     }
 
-    /// Notes a report: its signal strength, and its name if it carries one. True if the device is new or its name
-    /// changed (the rssi alone is not a change worth a redraw).
+    /// Notes a report: its signal strength, and its name if it carries one. True if the device is new, its name changed
+    /// or its signal moved to another 4 dBm bucket (a jitter inside one is not worth a redraw).
     pub fn add(&mut self, r: &AdvReport) -> bool {
         let known = self.devices.iter().take(self.count).position(|d| d.addr == r.addr);
         let new = known.is_none() && self.count < Self::MAX;
@@ -766,12 +772,14 @@ impl Nearby {
             return false;
         };
         d.addr = r.addr;
+        // the list draws the signal in buckets of 4 dBm and sorts by it: a move into another bucket is a change
+        let moved = d.rssi >> 2 != r.rssi >> 2;
         d.rssi = r.rssi;
         if let Some(m) = ad_maker(r.data) {
             d.maker = Some(m);
         }
         let renamed = ad_name(r.data).is_some_and(|name| bytes::set_ascii(&mut d.name, &mut d.name_len, name));
-        new || renamed
+        new || renamed || moved
     }
 
     /// Distinct devices heard.
@@ -857,6 +865,16 @@ mod tests {
         };
         assert_eq!(call_with(None), Err(Error::Code(5)), "taken for the answer");
         assert_eq!(call_with(Some(SD_BLE_VERSION_GET)), Ok(()), "swallowed: the real answer follows");
+        // the chip never answered A: B loses its answer to the swallow and fails once, C is clean
+        let mut sim = crate::sim::Sim::new(9, 0, 0);
+        let _app = crate::App::start(&mut sim, None);
+        let mut rx = Rx::new();
+        let ask = [CMD, SD_BLE_VERSION_GET, 1];
+        sim.nordic.hung = true;
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "A: silent");
+        sim.nordic.hung = false;
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: its answer swallowed");
+        assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "C: clean");
     }
 
     #[test]
@@ -884,10 +902,12 @@ mod tests {
         assert_eq!(n.strongest().next().unwrap().maker, Some("iPhone/Mac"));
         assert!(n.add(&report(2, -50, &[4, 0x09, b'H', b'R', 0xff])));
         assert!(n.add(&report(1, -40, &[3, 0x08, b'P', b'C'])), "same address, a name: listed again");
-        assert!(!n.add(&report(1, -45, &[3, 0x08, b'P', b'C'])), "the rssi alone: no change");
+        assert!(!n.add(&report(1, -39, &[3, 0x08, b'P', b'C'])), "a jitter inside the bucket: no change");
+        assert!(n.add(&report(1, -50, &[3, 0x08, b'P', b'C'])), "another bucket: the row and the order change");
+        n.add(&report(1, -40, &[3, 0x08, b'P', b'C']));
         let list: std::vec::Vec<_> =
             n.strongest().map(|d| (d.addr[0], d.rssi, std::string::String::from(d.name()))).collect();
-        assert_eq!(list, [(1, -45, "PC".into()), (2, -50, "HR?".into())]);
+        assert_eq!(list, [(1, -40, "PC".into()), (2, -50, "HR?".into())]);
         for i in 0..40 {
             n.add(&report(10 + i, -60, &[]));
         }

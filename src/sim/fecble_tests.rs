@@ -220,8 +220,10 @@ fn both_protocols_prefer_ftms() {
     assert!(!app.ftms.found(&report(&fec_list, 2)), "a repeat: the list is as it was");
     assert!(app.ftms.found(&report(&ftms_data, 1)), "the FE-C one offers FTMS too");
     let mut louder = report(&ftms_data, 2);
+    louder.rssi = -49;
+    assert!(!app.ftms.found(&louder), "a jitter inside the bucket: the list is not redrawn for it");
     louder.rssi = -30;
-    assert!(!app.ftms.found(&louder), "the signal alone is no change: the list is not redrawn for it");
+    assert!(app.ftms.found(&louder), "another bucket");
     let protos: Vec<Proto> = app.ftms.found.iter().take(app.ftms.n_found).map(|d| d.proto).collect();
     assert_eq!(protos, [Proto::Ftms, Proto::Ftms]);
 }

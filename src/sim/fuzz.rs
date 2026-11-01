@@ -416,9 +416,9 @@ fn power_pages_mixed() {
             live.tick(1000); // values age out within 5 messages
             dec.decode(Kind::Power, d, 2105, &mut live);
             // the plausibility caps: out-of-range power and cadence never reach `live`, and the fuzz sends them
-            let over = d[0] == 0x10 && u16::from_le_bytes([d[6], d[7]]) > crate::trainer::MAX_W;
+            let over = d[0] == 0x10 && u16::from_le_bytes([d[6], d[7]]) > crate::sensors::METER_MAX_W;
             capped += usize::from(over);
-            assert!(live.get(Metric::Power).is_none_or(|v| v <= crate::trainer::MAX_W), "power");
+            assert!(live.get(Metric::Power).is_none_or(|v| v <= crate::sensors::METER_MAX_W), "power");
             assert!(live.get(Metric::Cadence).is_none_or(|v| v <= 250), "cadence");
             let mut hr = Live::default();
             dec.decode(Kind::Hr, [4, 0, 0, 0, 0, 0, 0, d[7]], 2105, &mut hr);

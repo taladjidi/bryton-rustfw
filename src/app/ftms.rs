@@ -61,6 +61,8 @@ const TRIES: u8 = 3;
 const NOTIFYING: [(u16, u8); 3] = [(BIKE_DATA, 1), (STATUS, 1), (CONTROL, 2)];
 /// FE-C over BLE: the trainer's messages.
 const NOTIFYING_FEC: [(u16, u8); 1] = [(fecble::NOTIFY, 1)];
+/// A record's continuation (More Data) comes within this of its first part, else it was lost.
+const MORE_DATA_MS: u32 = 2000;
 /// The characteristics read once.
 const READS: [u16; 3] = [FEATURE, RESISTANCE_RANGE, POWER_RANGE];
 
@@ -201,7 +203,7 @@ impl Default for Ftms {
 
 impl Ftms {
     /// The value handle of characteristic `uuid` (0: not found).
-    fn handle(&self, uuid: u16) -> u16 {
+    pub(crate) fn handle(&self, uuid: u16) -> u16 {
         self.chars.get(..self.n_chars).unwrap_or(&[]).iter().find(|c| c.0 == uuid).map_or(0, |c| c.2)
     }
 
@@ -246,8 +248,8 @@ impl Ftms {
             None => return false,
         };
         let Some(d) = self.found.get_mut(i) else { return false };
+        let mut changed = known.is_none() || d.rssi >> 2 != r.rssi >> 2;
         (d.peer, d.rssi) = (peer, r.rssi);
-        let mut changed = known.is_none();
         if let Some(p) = proto
             && (p == Proto::Ftms || known.is_none())
         {
@@ -290,6 +292,7 @@ impl App {
         self.ftms.unlink();
         (self.ftms.wait_ms, self.ftms.fails, self.ftms.vs) = (0, fails, 0); // the chip forgets the UUID base too
         *self.radio.heard_ms.at_mut(Kind::Trainer) = u32::MAX;
+        self.trainer.reading.bike_more = false;
     }
 
     /// After a resync of the Nordic link, whose dropped bytes may have held the trainer's DISCONNECTED: a link the
@@ -720,7 +723,7 @@ impl App {
     }
 
     /// A notification or indication from the trainer: its data, its status, the Control Point's responses.
-    fn ftms_hvx(&mut self, b: &mut impl Board, handle: u16, data: &[u8]) {
+    pub(crate) fn ftms_hvx(&mut self, b: &mut impl Board, handle: u16, data: &[u8]) {
         let f = &mut self.ftms;
         if f.fec {
             if handle != 0 && handle == f.handle(fecble::NOTIFY) {
@@ -730,6 +733,11 @@ impl App {
         } else if handle == f.handle(BIKE_DATA) {
             if self.radio.heard_ms.at(Kind::Trainer) >= sensors::STALE_MS {
                 self.trainer.lost(); // back after a drop-out: what was sent is not known to stand
+            }
+            // a continuation that never came (lost notification, a link made again) must not keep the next record
+            // from clearing its absent fields
+            if self.radio.heard_ms.at(Kind::Trainer) > MORE_DATA_MS {
+                self.trainer.reading.bike_more = false;
             }
             ftms::bike_data(data, &mut self.trainer.reading);
             self.trainer.reading.modes = self.ftms.modes;

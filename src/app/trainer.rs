@@ -139,8 +139,12 @@ impl App {
         let heard = |k: Kind| self.radio.heard(k);
         let r = self.trainer.reading;
         // a glitch past the trainer's own limit is no reading (the ANT+ meter's pages have the same cap)
-        if let (Some(p), false) = (r.power.filter(|&p| p <= trainer::MAX_W), heard(Kind::Power)) {
-            self.live.set(Metric::Power, p);
+        if let (Some(p), false) = (r.power, heard(Kind::Power)) {
+            if p <= trainer::MAX_W {
+                self.live.set(Metric::Power, p);
+            } else {
+                self.live.clear(Metric::Power); // no reading for this second, not the last one held
+            }
         }
         if let (Some(c), false) = (r.cadence, heard(Kind::Power) || heard(Kind::Cadence) || heard(Kind::SpeedCadence)) {
             self.live.set(Metric::Cadence, u16::from(c));
@@ -166,6 +170,7 @@ impl App {
         if before.is_some_and(|s| s != self.with_trainer_now(ui::trainer::shown)) {
             self.tlink.second = true;
         }
+        fec::age(&mut self.trainer.reading, self.dt_ms);
         self.tlink.pm_ms += self.dt_ms;
         if self.tlink.pm_ms >= 1000 {
             self.tlink.pm_ms -= 1000;
