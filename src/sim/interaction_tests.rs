@@ -124,12 +124,12 @@ fn speed_pages(t: u64) -> [u8; 8] {
         [0x52, 0, 0xff, 0, 0, 0, 0xa0, 3 | 2 << 4]
     } else {
         let n = (t / 100) as u16;
-        let (time, count) = ((n * 102).to_le_bytes(), n.to_le_bytes());
+        let (time, count) = (n.wrapping_mul(102).to_le_bytes(), n.to_le_bytes());
         [0, 0, 0, 0, time[0], time[1], count[0], count[1]]
     }
 }
 
-fn quick_unit(phone: bool) -> (Sim, App) {
+pub(super) fn quick_unit(phone: bool) -> (Sim, App) {
     const ID: SensorId = SensorId { device: 7, trans: 5 };
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();

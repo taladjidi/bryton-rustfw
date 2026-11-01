@@ -22,6 +22,45 @@ pub struct Glyph {
     pub at: u32,
 }
 
+/// Most alpha bytes any glyph of any font has (a test checks it against [`crate::fonts`]).
+const INK_MAX: usize = 1200;
+
+/// One glyph's alpha bytes copied from the font (SDRAM, uncached) to the stack once, so the per-pixel reads of a blit
+/// hit DTCM.
+struct Ink {
+    g: Glyph,
+    alpha: [u8; INK_MAX],
+}
+
+impl Ink {
+    fn new(font: &Font, g: &Glyph) -> Ink {
+        let mut alpha = [0; INK_MAX];
+        let at = g.at as usize;
+        let n = ((usize::from(g.w) * usize::from(g.h)).div_ceil(2)).min(INK_MAX);
+        if let (Some(src), Some(dst)) = (font.alpha.get(at..at + n), alpha.get_mut(..n)) {
+            dst.copy_from_slice(src);
+        }
+        Ink { g: *g, alpha }
+    }
+
+    /// Coverage 0..=15 of pixel (`px`, `py`) of the glyph's cell.
+    fn coverage(&self, px: u32, py: u32) -> u8 {
+        let g = &self.g;
+        let (x, y) = (px.wrapping_sub(u32::from(g.x)), py.wrapping_sub(u32::from(g.y)));
+        if x >= u32::from(g.w) || y >= u32::from(g.h) {
+            return 0;
+        }
+        let n = y * u32::from(g.w) + x;
+        let byte = self.alpha.get((n >> 1) as usize).copied().unwrap_or(0);
+        if n & 1 == 0 { byte >> 4 } else { byte & 0xf }
+    }
+}
+
+/// `v / k` for a scale `k` (1 almost always: no division).
+fn per(v: u32, k: u32) -> u32 {
+    if k == 1 { v } else { v.checked_div(k).unwrap_or(0) }
+}
+
 /// A font: printable ASCII (0x20..=0x7e), then glyphs for control codes from 1 on (the pixel font's arrows); other
 /// characters are drawn as `?`.
 #[derive(Clone, Copy)]
@@ -48,17 +87,6 @@ impl Font {
             Some(g) => g,
             None => self.glyphs.get(usize::from(b'?' - 0x20)).unwrap_or(&BLANK),
         }
-    }
-
-    /// Coverage 0..=15 of pixel (`px`, `py`) of glyph `g`'s cell.
-    fn coverage(&self, g: &Glyph, px: u32, py: u32) -> u8 {
-        let (x, y) = (px.wrapping_sub(u32::from(g.x)), py.wrapping_sub(u32::from(g.y)));
-        if x >= u32::from(g.w) || y >= u32::from(g.h) {
-            return 0;
-        }
-        let n = y * u32::from(g.w) + x;
-        let byte = self.alpha.get((g.at + n / 2) as usize).copied().unwrap_or(0);
-        if n % 2 == 0 { byte >> 4 } else { byte & 0xf }
     }
 
     /// Width of `s` in pixels.
@@ -202,13 +230,11 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     }
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
+        let ink = Ink::new(&font, &g);
         let g = &g;
         let w = u32::from(g.advance) * k;
         c.blit(x, y, w, style.height(), &mut |px, py| {
-            palette
-                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
-                .copied()
-                .unwrap_or(0)
+            palette.get(usize::from(ink.coverage(per(px, k), per(py, k)))).copied().unwrap_or(0)
         });
         x += w;
     }
@@ -227,6 +253,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
     let mut x = x;
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
+        let ink = Ink::new(&font, &g);
         let g = &g;
         let w = (u32::from(g.advance) * k).min(right.saturating_sub(x));
         #[cfg(test)]
@@ -237,10 +264,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
             break;
         }
         c.blit(x, y, w, style.height(), &mut |px, py| {
-            palette
-                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
-                .copied()
-                .unwrap_or(0)
+            palette.get(usize::from(ink.coverage(per(px, k), per(py, k)))).copied().unwrap_or(0)
         });
         x += w;
     }
@@ -272,16 +296,9 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     for (a, p) in palette.iter_mut().enumerate() {
         *p = blend(fg, bg, a as u8);
     }
-    let g = &g;
+    let ink = Ink::new(&font, &g);
     c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
-        palette
-            .get(usize::from(font.coverage(
-                g,
-                (px + x0).checked_div(k).unwrap_or(0),
-                (py + y0).checked_div(k).unwrap_or(0),
-            )))
-            .copied()
-            .unwrap_or(0)
+        palette.get(usize::from(ink.coverage(per(px + x0, k), per(py + y0, k)))).copied().unwrap_or(0)
     });
 }
 
@@ -418,6 +435,18 @@ mod tests {
     use crate::fonts::PIXEL;
     use crate::ui::tests::Frame;
     use crate::ui::{BLACK, WHITE};
+
+    #[test]
+    fn ink_buffer_holds_every_glyph() {
+        let most = (2..=8)
+            .filter_map(|k| crate::fonts::smooth(Face::Barlow, k))
+            .chain([&PIXEL])
+            .flat_map(|f| f.glyphs.iter())
+            .map(|g| (usize::from(g.w) * usize::from(g.h)).div_ceil(2))
+            .max();
+        assert!(most.is_some_and(|m| m <= INK_MAX), "{most:?}");
+        assert!(most.is_some_and(|m| m + 100 > INK_MAX), "INK_MAX is {INK_MAX}, the most is {most:?}");
+    }
 
     const PIX2: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
     const PIX4: Style = Style { font: &PIXEL, scale: 4, fg: WHITE, bg: BLACK };

@@ -92,27 +92,7 @@ pub fn draw_screen(c: &mut impl Canvas, head: &str, best: &[u16; N], ride: &[u16
 /// The plot: a grid, the 90-day curve, this ride's over it, in one window; the watts at the top and the middle.
 pub fn draw_plot(c: &mut impl Canvas, best: &[u16; N], ride: &[u16; N]) {
     let ymax = scale(best, ride);
-    let (a, r) = (rows(best, ymax), rows(ride, ymax));
-    let (bg, grid, ca, cr) = (c.ink(BLACK), c.ink(DARK), c.ink(ACCENT), c.ink(GREEN));
-    let on = |y: &[Option<u8>; COLS], x: usize, py: u32| {
-        // a column covers its row and the next column's (a steep part has no gaps), two rows thick
-        let Some(v) = y.get(x).copied().flatten().map(u32::from) else { return false };
-        let n = y.get(x + 1).copied().flatten().map_or(v, u32::from);
-        (v.min(n)..=v.max(n) + 1).contains(&py)
-    };
-    let gx = GRID_PM.map(|pm| (u32::from(pm) * (PLOT.2 - 1) / 1000) as usize);
-    c.blit(PLOT.0, PLOT.1, PLOT.2, PLOT.3, &mut |x, y| {
-        let x = x as usize;
-        if on(&r, x, y) {
-            cr
-        } else if on(&a, x, y) {
-            ca
-        } else if gx.contains(&x) || y % (PLOT.3 / 4) == 0 || y == PLOT.3 - 1 {
-            grid
-        } else {
-            bg
-        }
-    });
+    plot_cols(c, &rows(best, ymax), &rows(ride, ymax), 0, COLS);
     let grey = Style { fg: GREY, ..LABEL };
     // 2x: four digits ("2500") take 48 px, the margin left of the plot; a larger top is shown as 9999 (the scale is not)
     let small = grey;
@@ -121,6 +101,44 @@ pub fn draw_plot(c: &mut impl Canvas, best: &[u16; N], ride: &[u16; N]) {
         l.push_u32(u32::from(v).min(9999));
         draw_in(c, &small, 0, y, PLOT.0 - 2, Align::Right, l.as_str());
     }
+}
+
+/// The plot's columns `x0..x1` in one window.
+fn plot_cols(c: &mut impl Canvas, a: &[Option<u8>; COLS], r: &[Option<u8>; COLS], x0: usize, x1: usize) {
+    let (bg, grid, ca, cr) = (c.ink(BLACK), c.ink(DARK), c.ink(ACCENT), c.ink(GREEN));
+    let on = |y: &[Option<u8>; COLS], x: usize, py: u32| {
+        // a column covers its row and the next column's (a steep part has no gaps), two rows thick
+        let Some(v) = y.get(x).copied().flatten().map(u32::from) else { return false };
+        let n = y.get(x + 1).copied().flatten().map_or(v, u32::from);
+        (v.min(n)..=v.max(n) + 1).contains(&py)
+    };
+    let gx = GRID_PM.map(|pm| (u32::from(pm) * (PLOT.2 - 1) / 1000) as usize);
+    c.blit(PLOT.0 + x0 as u32, PLOT.1, (x1 - x0) as u32, PLOT.3, &mut |x, y| {
+        let x = x as usize + x0;
+        if on(r, x, y) {
+            cr
+        } else if on(a, x, y) {
+            ca
+        } else if gx.contains(&x) || y % (PLOT.3 / 4) == 0 || y == PLOT.3 - 1 {
+            grid
+        } else {
+            bg
+        }
+    });
+}
+
+/// The plot after this ride's curve went from `old` to `ride`: only the columns between the first and the last that
+/// changed (a column draws its row and the next column's), the whole plot when the scale moved.
+pub fn update_plot(c: &mut impl Canvas, best: &[u16; N], old: &[u16; N], ride: &[u16; N]) {
+    let ymax = scale(best, ride);
+    if scale(best, old) != ymax {
+        return draw_plot(c, best, ride);
+    }
+    let (a, r0, r1) = (rows(best, ymax), rows(old, ymax), rows(ride, ymax));
+    let differs = |x: usize| r0.get(x) != r1.get(x);
+    let Some(first) = (0..COLS).find(|&x| differs(x)) else { return };
+    let last = (0..COLS).rfind(|&x| differs(x)).unwrap_or(first);
+    plot_cols(c, &a, &r1, first.saturating_sub(1), (last + 1).min(COLS));
 }
 
 /// The cursor's strip (a tick for each duration, a white mark at the chosen one) and the readout under it.
@@ -187,6 +205,30 @@ mod tests {
         let y = rows(&short, 500);
         assert!(y[col_of(10) as usize].is_some());
         assert!(y[col_of(11) as usize + 1..].iter().all(Option::is_none));
+    }
+
+    /// The plot after a ride's curve grew equals the plot drawn whole, from fewer pixels.
+    #[test]
+    fn update_plot_equals_the_whole_plot() {
+        let best = curve(|d| (250 + 20_000 / d.max(1)) as u16);
+        let mut old = best.map(|b| b / 2);
+        old[9..].fill(0); // the ride so far: nothing past 9 durations
+        let mut new = old;
+        new[9] = best[9] / 2; // one more duration
+        let (mut f, mut g, mut h) = (Frame::new(), Frame::new(), Frame::new());
+        draw_plot(&mut f, &best, &old);
+        update_plot(&mut f, &best, &old, &new);
+        draw_plot(&mut g, &best, &new);
+        assert!(f.px == g.px, "an update is the whole plot");
+        update_plot(&mut h, &best, &new, &new);
+        assert!(h.px.iter().all(|&p| p == BLACK), "no change, nothing drawn");
+        // a gain past the scale redraws it all
+        new[9] = 60_000;
+        let mut k = Frame::new();
+        draw_plot(&mut k, &best, &old);
+        update_plot(&mut k, &best, &old, &new);
+        draw_plot(&mut g, &best, &new);
+        assert!(k.px == g.px);
     }
 
     #[test]

@@ -530,12 +530,20 @@ pub(crate) struct Quick {
     pub(crate) scroll: (u32, u32),
     /// ZERO armed until, and its result shown until (epoch seconds, app/quick.rs).
     pub(crate) zero: (Option<u32>, Option<u32>),
+    /// Each sensor line's value as drawn, and its colour: a changed value redraws only the characters that differ.
+    pub(crate) vals: [(crate::text::Line<16>, u16); ui::quick::ROWS],
 }
 
 impl Quick {
     /// The state at start.
     pub(crate) fn new() -> Self {
-        Quick { shown: [0; app::QUICK_BOXES], shape: 0, scroll: (0, 0), zero: (None, None) }
+        Quick {
+            shown: [0; app::QUICK_BOXES],
+            shape: 0,
+            scroll: (0, 0),
+            zero: (None, None),
+            vals: [(crate::text::Line::new(), 0); ui::quick::ROWS],
+        }
     }
 }
 

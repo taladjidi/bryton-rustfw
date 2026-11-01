@@ -388,3 +388,66 @@ fn idle_bus_budgets() {
         assert_eq!(app.gps.pvt.is_some_and(|p| p.good()), fix.is_some(), "the fix read all the same");
     }
 }
+
+/// What a screen costs left alone for a minute after it settled: pixels, panel windows and card bytes a second.
+fn steady(sim: &mut Sim, app: &mut App) -> (u64, u64, u64) {
+    run(sim, app, 20_000);
+    let (px, win, by) = (sim.pixels, sim.windows, sim.emmc.bytes_read);
+    run(sim, app, 60_000);
+    ((sim.pixels - px) / 60, (sim.windows - win) / 60, (sim.emmc.bytes_read - by) / 60)
+}
+
+/// The screens `perf_budgets` does not reach, each left alone for a minute after it settles. A budget is the measured
+/// value plus 20 % (printed beside it, so a drift shows before it fails); a screen that reads the card while it sits
+/// still costs the eMMC's power and the pass's time (review 2026-11-01, finding 37).
+#[test]
+fn screen_budgets() {
+    // a ride under way (power meter, strap, a fix), then the screen opened by `open`
+    let riding = |open: &dyn Fn(&mut Sim, &mut App)| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+        let mut app = App::start(&mut sim, Some(KEY));
+        app.settings.light_level = 0;
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 20_000);
+        open(&mut sim, &mut app);
+        steady(&mut sim, &mut app)
+    };
+    let show = |s: &mut Sim, a: &mut App, screen| {
+        a.open(screen);
+        a.show(s);
+    };
+    // (name, measured, budget = measured 2026-11-01 + 20 %: px/s, windows/s, card B/s; the quick panel's 1996 B/s read
+    // while it sits is a finding, not a budget to relax)
+    let mut got = std::vec![
+        ("end card", riding(&|s, a| show(s, a, Screen::End(1))), (5, 1, 10)),
+        ("trainer page", riding(&|s, a| show(s, a, Screen::Trainer)), (2700, 11, 10)),
+        ("ramp result", riding(&|s, a| show(s, a, Screen::RampResult)), (5, 1, 10)),
+        (
+            "power curve",
+            riding(&|s, a| {
+                a.open_curve();
+                a.show(s);
+            }),
+            (5, 1, 10)
+        ),
+        ("saver on", riding(&|_, a| a.settings.saver = SaverMode::On), (2200, 5, 10)),
+    ];
+    let (mut sim, mut app) = super::interaction_tests::quick_unit(true);
+    app.open_quick();
+    app.show(&mut sim);
+    got.push(("quick panel", steady(&mut sim, &mut app), (870, 3, 2400)));
+    let mut over = std::vec::Vec::new();
+    for (name, (px, win, by), (bp, bw, bb)) in got {
+        std::println!("{name}: {px} px/s, {win} windows/s, {by} B/s read (budget {bp}, {bw}, {bb})");
+        if px > bp || win > bw || by > bb {
+            over.push(std::format!("{name}: {px}, {win}, {by} over {bp}, {bw}, {bb}"));
+        }
+    }
+    assert!(over.is_empty(), "{over:?}");
+}
