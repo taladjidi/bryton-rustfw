@@ -74,9 +74,6 @@ const LTI: usize = 11;
 const NOTIFYING: [&[(usize, usize)]; 3] =
     [&[(NS, NS_CCCD), (DS, DS_CCCD)], &[(RC, RC_CCCD), (EU, EU_CCCD)], &[(CT, CT_CCCD)]];
 
-/// The link's ATT MTU: the default, never raised (a larger one is suspected of the radio chip's silences, 2026-11-01).
-const ATT_MTU: usize = 23;
-
 /// The client's progress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Disc {
@@ -960,7 +957,7 @@ impl App {
             // one already out
             let known = id.is_empty()
                 || id.len() >= 24
-                || id.len() + 3 > ATT_MTU - 3
+                || id.len() + 3 > usize::from(ble::ATT_MTU) - 3
                 || self.phone.apps.get(id).is_some()
                 || self.phone.asking == Some(a.app);
             if !known && self.phone.queue(Op::App(a.app)) {

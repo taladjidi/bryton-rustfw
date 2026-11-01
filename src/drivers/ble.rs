@@ -432,9 +432,13 @@ pub fn sys_attr_get(b: &mut impl Board, rx: &mut Rx, conn: u16, out: &mut [u8]) 
     }
 }
 
-/// Answers the peer's MTU exchange with our Server Rx MTU: 23, the default, so the link never grows past it.
+/// The ATT MTU the unit uses on every link: the default 23; a larger one (2026-10-31, eb2d025) was taken out after the
+/// 2026-11-01 ride's radio dropouts.
+pub const ATT_MTU: u16 = 23;
+
+/// Answers the peer's MTU exchange with our Server Rx MTU, [`ATT_MTU`], so the link never grows past it.
 pub fn exchange_mtu_reply(b: &mut impl Board, rx: &mut Rx, conn: u16) -> Result<(), Error> {
-    Cmd::new(GATTS_EXCHANGE_MTU_REPLY).u16(conn).u16(23).run(b, rx)
+    Cmd::new(GATTS_EXCHANGE_MTU_REPLY).u16(conn).u16(ATT_MTU).run(b, rx)
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -46,7 +46,7 @@ pub const TIMEOUT_MS: u32 = 500;
 pub const GARBAGE: usize = 512;
 
 /// Longest BLE event kept while a command waits ([`Rx::pop`]): a Chars discovery answer of 14 characteristics at
-/// the 103-byte MTU is 11 + 14 x 9 = 137 bytes (review 2026-11-01), so 160.
+/// 11 + 14 x 9 = 137 bytes (review 2026-11-01), so 160.
 pub const KEPT: usize = 160;
 /// Events kept at most: an ANCS answer of the longest message the inbox keeps (120 bytes) and a long title is about
 /// 180 bytes, ten notifications of 20 at the 23-byte ATT MTU, read in one pass (eight lost it).
@@ -807,7 +807,7 @@ mod tests {
     fn a_long_event_is_kept_and_the_ring_wraps() {
         let mut rx = Rx::new();
         let mut out = [0; KEPT];
-        // 137 bytes: a Chars answer of 14 characteristics at MTU 103; and many more events than the ring holds, popped
+        // 137 bytes: a Chars answer of 14 characteristics; and many more events than the ring holds, popped
         // as they come, so the head goes round
         let mut long = std::vec![BLE_EVT, 0x39];
         long.resize(137, 7);
