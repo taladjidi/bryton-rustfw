@@ -27,8 +27,9 @@ impl App {
             if self.trash_check && self.ride_settled() {
                 // a delete a cut left, finished first (the review of 2026-10-25): lent, the ride would be in neither
                 // folder, a computer's fsck could free or reconnect its chain, and the move would then link the
-                // ride's name onto it. A card error or a full card: lent read only (below), finished at the next scan or lending; a
-                // damaged volume (`Corrupt`), which the move cannot use either: lent writable, for a computer to mend
+                // ride's name onto it. A card error, or a full card that cannot even put it back: lent read only
+                // (below), finished at the next scan or lending; a damaged volume (`Corrupt`), which the move cannot
+                // use either: lent writable, for a computer to mend
                 self.finish_trash(b);
             }
             self.past.stop(); // a past ride being read

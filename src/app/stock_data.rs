@@ -243,6 +243,8 @@ impl App {
                 self.survey.start(); // the count and the oldest rides changed (STORAGE, if it is under this card)
                 self.clamp_menu(); // the list one ride shorter: the selection on the next one, or the last
             }
+            // refused before anything moved, or put back: nothing pending (trash.rs `delete`)
+            Err(fat::Error::Refused) => self.alarm_notice("CARD FULL"),
             Err(_) => {
                 self.trash_check = true; // a move the failure left midway, finished at the next scan or lending
                 self.alarm_notice("DELETE FAILED");
