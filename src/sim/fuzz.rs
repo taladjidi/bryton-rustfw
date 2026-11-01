@@ -1905,6 +1905,7 @@ fn phone_link_events() {
     ];
     let (mut answers, mut notifs, mut fresh, mut stored, mut rejected, mut bonds) = (0usize, 0, 0, 0, 0, 0);
     let (mut sim, mut app) = started();
+    sim.nordic.limits.sec_contexts = u8::MAX;
     for seed in 1..=8u32 {
         let v: Vec<u8> = bytes(seed, 1 << 16).collect();
         for c in v.chunks_exact(48) {
@@ -3626,6 +3627,7 @@ fn ftms_link_events() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     sim.nordic.ftms = Some(FtmsSim::new());
+    sim.nordic.limits.sec_contexts = u8::MAX;
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 4000);
     app.sensors_store.bt = sim.nordic.ftms.as_ref().map(FtmsSim::peer); // paired
@@ -3766,6 +3768,7 @@ fn fecble_link_events() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     sim.nordic.ftms = Some(FtmsSim::new_fec());
+    sim.nordic.limits.sec_contexts = u8::MAX;
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 4000);
     app.sensors_store.bt = sim.nordic.ftms.as_ref().map(FtmsSim::peer);

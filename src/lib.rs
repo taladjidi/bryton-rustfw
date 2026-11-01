@@ -89,8 +89,9 @@ pub trait Board {
     fn standby(&mut self);
     /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands.
     fn nrf_reset(&mut self);
-    /// Bytes to the Nordic chip, in order (the chip's flow control may hold them a little).
-    fn nrf_send(&mut self, data: &[u8]);
+    /// Bytes to the Nordic chip, in order; returns how many it took. The chip's flow control (CTS) may hold them: one
+    /// that does not move for [`nrf::PUT_WAIT_US`] ends the call, and the caller keeps the rest ([`nrf::send`]).
+    fn nrf_send(&mut self, data: &[u8]) -> usize;
     /// Bytes received from the Nordic chip, at most `buf.len()`; never waits.
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
     /// One 16-bit reading of ADC3 channel `channel` (BOARD.md 12; 1: the battery, 19: VREFINT); None if the ADC did
