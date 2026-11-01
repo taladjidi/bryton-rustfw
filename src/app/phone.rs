@@ -133,7 +133,7 @@ pub struct Phone {
     io_failed: bool,
     save: bool,
     /// The GATT server was set up.
-    ready: bool,
+    pub(crate) ready: bool,
     adv: Adv,
     /// The PHONE menu's PAIR window: pairing accepted until a bond, the window's end or the link's (the advertising
     /// stops at a connection, so it cannot tell).
@@ -487,6 +487,10 @@ impl App {
 
     /// The PHONE menu's PAIR: advertise to be found for [`ADV_FAST`]'s time.
     pub(crate) fn phone_pair(&mut self, b: &mut impl Board) {
+        if self.watch.reset != Reset::None {
+            self.watch.pairing = true; // the chip is not ready: the restart opens the window
+            return self.say("PAIR FROM THE PHONE");
+        }
         if self.phone.conn.is_some() {
             return self.say("CONNECTED ALREADY");
         }
@@ -504,6 +508,10 @@ impl App {
 
     /// The PHONE menu's FORGET: the link dropped, the bond erased.
     pub(crate) fn phone_forget(&mut self, b: &mut impl Board) {
+        if self.watch.reset != Reset::None {
+            (self.phone.stored.bond, self.phone.save, self.watch.pairing) = (None, true, false); // the restart advertises nothing
+            return self.say("PHONE FORGOTTEN");
+        }
         if let Some(conn) = self.phone.conn {
             let _ = ble::disconnect(b, &mut self.rx, conn);
         }

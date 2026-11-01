@@ -193,7 +193,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/drivers/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
 - `src/drivers/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
-  `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `src/sim/mod.rs` has a model of the chip (`Nordic`). BLE
+  `Board` byte primitives `nrf_hold` (PA6, one edge) / `nrf_send` / `nrf_recv`; `src/sim/mod.rs` has a model of the chip (`Nordic`). BLE
   events that arrive while a command waits are kept (`Rx::pop`); the main loop acts on events only once the bytes
   read are framed (a command sent mid-read would take the rest of the stream out of order).
 - `src/drivers/ble.rs`: the SoftDevice API v5 calls of the phone link (GAP peripheral, GATT server and client), the
@@ -344,6 +344,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   NACK bursts, `bus.expect`), `touch_model.rs` (the touch chip: reset low time, Init, Idle and the lost first report,
   five contacts), `key_model.rs` (contact bounce for a key script) and `peripheral_tests.rs` (each rule, the bus
   recovery, the bounce and a stuck Start through the app's real input path, the sensor bus fuzz).
+  `chip_link.rs` (the link's transport and queues in the simulated chip, on for every sim test: the 16-byte RX and TX
+  FIFOs byte by byte at 10 us, RTS and CTS, the 15 us frame gap, the response behind an event frame in flight and the CTS
+  hold it causes, the 96-slot queue with its pull rule, the ANT queue of 32, the security contexts, the hung chip) and
+  `chip_link_tests.rs` (each fatal condition hangs the model, the holds, the 2026-11-01 deadlock of `nrf::send`).
   `loop_model.rs` (not tests: the `Sim`'s side of the main loop, `LoopBoard` on the simulated clock, and `SimLink`, a
   scripted USB link that logs what the pass asks; `tests.rs` `run_loop` drives lib `MainLoop::pass`, the unit's own code).
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).

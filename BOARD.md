@@ -429,6 +429,11 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
      PD5 TX      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\_/ first command
                     |<- 150 ms -->|<----------- 800 ms ----------->|
                     USART2 up     released                 drop one glitch byte, clear errors
+  The firmware does not wait inside a pass: the board has one primitive per edge (`Board::nrf_hold(true / false)`,
+  main.rs `nrf_hold` / `nrf_release`), and the library times the two waits across the main loop's passes
+  (`nrf::RESET_HOLD_MS` 150, `nrf::BOOT_MS` 800, app/nrf_watch.rs `restart_step`: Held, Boot, then the configuration,
+  the ANT channels and the phone link, one stage a pass). Only the start at boot and the power-off of a mis-framed
+  chip use the blocking `Board::nrf_reset` sequence.
 - **Framing:** a 2-byte little-endian length, then the payload. No delimiter, no checksum, no handshake and no
   resync: after a bad frame, reset the chip. (SLIP is only the DFU bootloader's, at 115200 baud.)
 - **Frame on the wire:**
@@ -457,6 +462,19 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   250 ms) a byte wakes the sleep at once: CR1.RXFNEIE pends USART2's IRQ 38, enabled in the NVIC only around that
   sleep (main.rs `wake_on_io`), interrupts masked; the bytes are read by a radio pass and the sleep goes on (lib
   `App::radio_pass`, app/main_loop.rs; review 2026-11-01, finding 57). 2026-10-31 to 11-01 a ride's 100 ms pass did not wake on them; taken out.
+- **A reset while running (app/nrf_watch.rs `restart_step`), what the host may send:**
+
+     PA6 reset   ~~~~\______________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     chip        running  |   in reset   |   booting (800 ms)   |   takes commands
+     host TX     (flushed: TXFRQ) NOTHING sent       NOTHING sent    configure, ANT, phone
+                         |<- 150 ms ->|<----- 800 ms ----->|   one stage per pass
+  `nrf_hold(true)` flushes our TX FIFO and RX FIFO (RM0399 USART_RQR TXFRQ bit 4, RXFRQ bit 3): the peer's reset flushes
+  nothing on our side, so a byte left there would reach the fresh chip. `rx.broken` is set from the start of the reset to
+  the end of the boot, so `call` / `send` return at once; the rider's sensor choices and the PAIR window are kept and
+  applied when it is over. The simulator is strict about it: a byte sent in the window, or left in the FIFO at the
+  release, panics the test unless it sets `expect_reset_bytes`. The switch-off during a reset resets the chip once
+  more through the broken-link path (about 1 s), then powers it down: whether the unit cuts the chip's power in standby
+  is not known (stock leaves PA6 as it is), so it is switched off by its own command.
 - **Power off:** `sd_power_system_off` (`00 32`), no response; stock sends nothing else first and leaves PA6 /
   PI4 as they are. The next start's reset pulse wakes the chip (nRF52 pin reset; inferred, to see on the unit).
 - **Scanning (API v5 layout, seen on the unit 2026-10-23):** `sd_ble_gap_scan_start` `00 8a 01 [flags]
@@ -553,6 +571,35 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   `01 <op> <result>` and does not hang. The SoftDevice is stubbed, so only the app's decoding and its answer are
   proven, not the result value; the SVC numbers of those stubs are inferred from the v5 headers' order. Not yet on
   the unit: a dated line in docs/status.md ("seen on the unit") proves one instead.
+- **The link's transport and queues, as the simulator models them (`src/sim/chip_link.rs`, on for every sim test).**
+  Sources: RM0399 (USART FIFO mode: 16 bytes, hardware RTS), Bryton's nRF app, reversed (the chip's side), an emulator of
+  that app (the gap), and nRF52832 PS (UARTE). What is inferred is marked.
+  - *Our side:* USART2's RX FIFO is 16 bytes; our RTS drops when it is full (inferred: it may drop one byte earlier), the
+    chip's TX stalls mid-frame and resumes exactly where it stopped, with no time-out. A byte is 10 us at 1 Mbaud. Our
+    TX FIFO is 16 bytes and drains only while the chip's RTS (our CTS) allows.
+  - *The chip's TX:* one frame in flight on a single TX buffer; 15 us between two frames (measured in an emulator of
+    Bryton's app, 2026-11-01; it replaces the 80 us that was inferred). A burst read with a 20 us wait therefore ends at
+    each frame (the next byte comes 25 us after the last); a 200 us wait spans it.
+  - *The chip's RX and its CTS hold:* a command's 2-byte header read, the chip holds our CTS until the previous
+    command's response is queued; queuing needs the TX buffer, which an event frame in flight keeps while it waits on our
+    RTS. So two commands back to back while an event frame is stalled on our full FIFO deadlock the sender unless it
+    keeps reading: the chip takes the second header and our 16-byte FIFO, no more. No new event frame starts between a
+    command's header and its response.
+  - *Events:* 96 slots; one SoftDevice pull brings all pending BLE events, then all pending ANT ones; more than the free
+    slots hangs the app; after a put leaves 0 free it stops pulling until more than 48 are free. The SoftDevice's ANT
+    queue holds 32 (from the ANT enable); what it does when full is inferred (the newest is lost), the S332 text was not found.
+  - *Security contexts:* 8, taken by `sd_ble_gap_sec_params_reply` (accepting), freed by BLE_GAP_EVT_AUTH_STATUS or
+    DISCONNECTED; a 9th hangs the app.
+  - *A hung chip* never sends again, takes 2 to 6 more bytes (4 in the model) and holds CTS until a reset.
+  - *Our USART2 setup* (main.rs `nrf_hold`): `USART_CR1` FIFOEN (bit 29) is set, so both FIFOs are on (16 bytes each, RM0399
+    USART FIFO mode), and `USART_CR3` has RTSE (bit 8) and CTSE (bit 9) set: hardware RTS drops when the RX FIFO is full
+    and the transmitter waits while CTS is high (RM0399 USART, hardware flow control).
+  - *Our `nrf_send`* (main.rs) returns at once how many bytes the TX FIFO took (no spinning). Until 2026-11-01 it gave
+    up after 10 ms on one byte and returned **mid-frame**: the chip then got a frame shorter than its header said and
+    hung for ever. `nrf::send` now puts the header and the payload as one frame, keeps reading the chip's bytes into
+    `Rx` while CTS is held (which lets the chip finish its event frame, queue the response and release CTS), sleeps 1 ms
+    when nothing moved, and fails with `Timeout` after 500 ms without a byte either way (a hung chip). A frame that went
+    out partly marks the link broken: no frame is sent before the watchdog resets the chip through PA6, on its next pass.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.
 - **SoftDevice API version 5** (S132 / S332 v5.x, nRF5 SDK 14): stock's GATTS request encoders use 0xa0 service add,

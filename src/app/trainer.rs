@@ -275,7 +275,7 @@ impl App {
                 self.tlink.acked = true;
                 self.tlink.cmds |= fit::cmd_bit(page[0]);
             }
-            Err(nrf::Error::Timeout) if self.tlink.acked => self.trainer.unsent(), // a byte lost: sent again
+            Err(nrf::Error::Timeout) if self.tlink.acked || self.rx.broken => self.trainer.unsent(), // a byte lost, or a mis-framed link (not a refusal): sent again
             Err(nrf::Error::Timeout) => {
                 // no answer to the first one: the message's layout is a guess. Not tried again until the chip starts
                 // again, and the chip is not reset over it (ant_ack keeps the watchdog's count)

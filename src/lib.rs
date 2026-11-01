@@ -87,10 +87,25 @@ pub trait Board {
     }
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
-    /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands.
-    fn nrf_reset(&mut self);
-    /// Bytes to the Nordic chip, in order (the chip's flow control may hold them a little).
-    fn nrf_send(&mut self, data: &[u8]);
+    /// Nordic chip's reset line PA6 (BOARD.md 11), one edge and no wait: `true` brings USART2 up and pulls the line low,
+    /// `false` releases it. The waits are the library's (`nrf::RESET_HOLD_MS`, `nrf::BOOT_MS`): the radio watchdog
+    /// resets the chip across passes (app/nrf_watch.rs) so the main loop never blocks on it.
+    fn nrf_hold(&mut self, held: bool);
+    /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands. Blocks
+    /// about a second: the start at boot only.
+    fn nrf_reset(&mut self)
+    where
+        Self: Sized,
+    {
+        self.nrf_hold(true);
+        self.delay_ms(nrf::RESET_HOLD_MS);
+        self.nrf_hold(false);
+        self.delay_ms(nrf::BOOT_MS);
+        nrf::flush(self);
+    }
+    /// Bytes to the Nordic chip, in order; returns at once how many the TX FIFO took. The chip's flow control (CTS) may
+    /// hold them: the caller keeps the rest and offers it again after reading and sleeping ([`nrf::send`]).
+    fn nrf_send(&mut self, data: &[u8]) -> usize;
     /// Bytes received from the Nordic chip, at most `buf.len()`; never waits.
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
     /// One 16-bit reading of ADC3 channel `channel` (BOARD.md 12; 1: the battery, 19: VREFINT); None if the ADC did
