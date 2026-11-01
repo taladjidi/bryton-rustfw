@@ -45,6 +45,14 @@ pub struct Power {
     n: usize,
     /// The sums of the last 3, 10, 30 s.
     sums: [u32; 3],
+    /// The NP window: the last 30 s of the ride's power, a dropout after power was heard as 0 W (apart from the
+    /// display ring above, which restarts on a dropout: a lost sensor reads "--"), its slot, count and sum.
+    wring: [u16; 30],
+    wi: usize,
+    wn: usize,
+    wsum: u32,
+    /// Power has been heard this ride (or lap, carried by [`Power::new_lap`]): a later dropout counts as 0 W.
+    heard: bool,
     /// The ride: seconds with power, max, the sum of 30 s averages to the 4th power and their count, work (J).
     secs: u32,
     max: u16,
@@ -66,6 +74,11 @@ impl Power {
     pub const fn new() -> Self {
         Power {
             ring: [0; RING],
+            wring: [0; 30],
+            wi: 0,
+            wn: 0,
+            wsum: 0,
+            heard: false,
             i: 0,
             n: 0,
             sums: [0; 3],
@@ -80,7 +93,17 @@ impl Power {
 
     /// A new ride: the ride's totals back to zero, W' full (the rolling averages go on).
     pub fn new_ride(&mut self) {
-        *self = Power { ring: self.ring, i: self.i, n: self.n, sums: self.sums, ..Power::default() };
+        *self = Power {
+            ring: self.ring,
+            i: self.i,
+            n: self.n,
+            sums: self.sums,
+            wring: self.wring,
+            wi: self.wi,
+            wn: self.wn,
+            wsum: self.wsum,
+            ..Power::default()
+        };
     }
 
     /// One second: `p` the power now (None: no meter or stale), `ride` after its own second, CP and W' (J).
@@ -102,24 +125,48 @@ impl Power {
     /// One second's power, counted in the ride's totals if `moving`: [`Power::second`] without W' balance (a ride
     /// read back from its file, a second a record).
     pub fn sample(&mut self, p: Option<u16>, moving: bool) {
-        // A dropout once the ride has had power is a second at 0 W, window and seconds kept: Golden Cheetah's NP
+        // The display ring restarts on a dropout (a lost sensor reads "--"). The ride's totals do not: once power
+        // was heard, a dropout is a second at 0 W in the NP window, the work and the seconds, as Golden Cheetah's NP
         // (src/Metrics/Coggan.cpp `IsoPower`) rolls over every sample, none skipped, and counts them all in its
-        // seconds, so TSS counts the dropout's time. Before the first reading there is no meter: the ring restarts.
-        let p = p.or((self.secs > 0).then_some(0));
+        // seconds, so TSS counts the dropout's time and the averages agree. Before the first reading: no meter.
         match p {
             Some(p) => self.push(p),
             None => (self.n, self.sums) = (0, [0; 3]),
         }
-        if let (Some(p), true) = (p, moving) {
+        self.heard |= p.is_some();
+        let q = p.or(self.heard.then_some(0));
+        if let Some(q) = q {
+            self.push_np(q);
+        }
+        if let (Some(p), true) = (q, moving) {
             self.secs = self.secs.saturating_add(1);
             self.max = self.max.max(p);
             self.work_j = self.work_j.saturating_add(u64::from(p));
-            if self.n >= 30 {
-                let a = u64::from((self.sums[2] + 15) / 30);
+            if self.wn >= 30 {
+                let a = u64::from((self.wsum + 15) / 30);
                 self.np_sum = self.np_sum.saturating_add(a * a * a * a);
                 self.np_n = self.np_n.saturating_add(1);
             }
         }
+    }
+
+    /// A new lap's power: nothing counted, `heard` carried over from the ride so a dropout in its first seconds is
+    /// a 0 W second as it is in the ride.
+    pub fn new_lap(heard: bool) -> Power {
+        Power { heard, ..Power::new() }
+    }
+
+    fn push_np(&mut self, q: u16) {
+        if self.wn >= 30 {
+            let old = self.wring.get(self.wi).copied().unwrap_or(0);
+            self.wsum = self.wsum.saturating_sub(u32::from(old));
+        }
+        if let Some(slot) = self.wring.get_mut(self.wi) {
+            *slot = q;
+        }
+        self.wsum = self.wsum.saturating_add(u32::from(q));
+        self.wi = (self.wi + 1) % 30;
+        self.wn = (self.wn + 1).min(30);
     }
 
     fn push(&mut self, p: u16) {
@@ -268,7 +315,8 @@ mod tests {
         for _ in 0..30 {
             p.second(None, &r, 250, 20_000);
         }
-        assert_eq!(p.rolling(2), Some(0), "the window holds 30 zeros");
+        assert_eq!(p.rolling(2), None, "the display reads -- while the sensor is lost");
+        assert_eq!(p.average(5), None);
         for _ in 0..60 {
             p.second(Some(200), &r, 250, 20_000);
         }

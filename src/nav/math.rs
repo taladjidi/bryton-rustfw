@@ -198,7 +198,7 @@ mod tests {
 
     /// Expected lengths from GeographicLib's WGS84 inverse geodesic (Karney; `geographiclib` 2.x, Python
     /// `Geodesic.WGS84.Inverse(lat1, lon1, lat2, lon2)['s12']`), one-off run, values pasted. The plane is local, so
-    /// 100 km legs are allowed 0.25 % (a plane at the first point, not the midpoint).
+    /// the legs are within 0.03 % (measured under 0.02 %); the old Bhaskara cosine was off by up to 0.2 %, so a regression to it fails.
     #[test]
     fn lengths_against_a_geodesic() {
         let e7 = |d: f64| (d * 1e7).round() as i32;
@@ -212,9 +212,10 @@ mod tests {
         ];
         for (a, b, want) in cases {
             let (lat, lon) = (e7(a.0), e7(a.1));
-            let (x, y) = plane_mm((lat, lon, cos_q16(lat)), e7(b.0), e7(b.1));
+            let mid = e7((a.0 + b.0) / 2.0); // the plane at the leg's middle latitude
+            let (x, y) = plane_mm((lat, lon, cos_q16(mid)), e7(b.0), e7(b.1));
             let got = sqrt((x * x + y * y) as f64) / 1000.0;
-            assert!((got - want).abs() <= want * 0.0025, "{a:?} to {b:?}: {got} m, geodesic {want}");
+            assert!((got - want).abs() <= want * 0.0003, "{a:?} to {b:?}: {got} m, geodesic {want}");
         }
     }
 
@@ -243,7 +244,7 @@ mod tests {
     #[test]
     fn project_across_zero() {
         let o = (0, 0, cos_q16(0));
-        assert_eq!(project(o, 9043, 8983), (99, 99));
+        assert_eq!(project(o, 9043, 8983), (99, 99)); // 99.99 m, whole metres truncated
         assert_eq!(project(o, -9043, -8983), (-99, -99));
         let o = (-4521, -4491, cos_q16(-4521));
         assert_eq!(project(o, 4522, 4492), (99, 99));

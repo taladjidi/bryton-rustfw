@@ -696,8 +696,7 @@ pub(crate) mod tests {
         let broken = names.iter().position(|n| n == "BROKEN").unwrap();
         for i in (0..names.len()).filter(|&i| names[i].starts_with("HILL")) {
             let e = *c.list.get(i).unwrap();
-            // the card was made with 111.32 km per degree both ways; a degree of latitude is 110.57 km (math.rs)
-            assert!(e.dist_m.unwrap().abs_diff(4993) <= 14, "{}: {:?}", e.name(), e.dist_m);
+            assert!(e.dist_m.unwrap().abs_diff(5000) <= 10, "{}: {:?}", e.name(), e.dist_m);
             assert_eq!(load(&mut c, &mut d, i), Progress::Loaded(true), "{i}");
             let k = c.course.climbs();
             assert_eq!(k.len(), 1, "{i}: {k:?}");
@@ -723,7 +722,7 @@ pub(crate) mod tests {
         turns.remove(water);
         assert_eq!(turns.len(), found.len(), "{stated:?} {found:?}");
         for (s, f) in turns.iter().zip(&found) {
-            assert!(s.1 == f.1 && s.0.abs_diff(f.0) <= 20, "{s:?} {f:?}: {stated:?} {found:?}");
+            assert!(s.1 == f.1 && s.0.abs_diff(f.0) <= 12, "{s:?} {f:?}: {stated:?} {found:?}");
         }
         assert!(c.list.get(broken).unwrap().dist_m.is_none(), "not a FIT file: no points");
         assert_eq!(load(&mut c, &mut d, broken), Progress::Loaded(false));

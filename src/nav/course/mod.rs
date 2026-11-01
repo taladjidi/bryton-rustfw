@@ -793,11 +793,11 @@ impl Course {
     pub fn lat_lon(&self, p: (i32, i32)) -> Option<(i32, i32)> {
         let (lat, lon, cos) = self.origin?;
         let (north, east) = crate::math::mm_per_degree(cos);
-        let dlat = i64::from(p.1) * 10_000_000_000 / north;
+        let dlat = (i64::from(p.1) * 10_000_000_000).checked_div(north.max(1)).unwrap_or(0);
         let dlon = (i64::from(p.0) * 10_000_000_000).checked_div(east.max(1)).unwrap_or(0);
         Some((
             (i64::from(lat) + dlat).clamp(-900_000_000, 900_000_000) as i32,
-            (i64::from(lon) + dlon).clamp(-1_800_000_000, 1_800_000_000) as i32,
+            (i64::from(lon) + dlon + 1_800_000_000).rem_euclid(3_600_000_000) as i32 - 1_800_000_000, // wraps at 180
         ))
     }
 
@@ -1368,8 +1368,8 @@ pub(crate) mod tests {
         assert_eq!(c.points()[0], (0, 0));
         assert!((c.points().last().unwrap().1 - 150_000).abs() < 20);
         assert!(c.dist[..c.len - 1].windows(2).all(|w| w[1] - w[0] >= c.step_m && w[1] - w[0] < c.step_m + 20));
-        // 5 m steps are 452 units of 1.1 cm: the rounding of each leaves the total 0.02 % short
-        assert!((149_960..=150_010).contains(&c.len_m()), "the distance of every point given: {}", c.len_m());
+        // the odometer truncates each of the 30 000 steps to the millimetre: 0.5 mm each, 15 m short
+        assert!((149_975..=150_010).contains(&c.len_m()), "the distance of every point given: {}", c.len_m());
     }
 
     /// Climbs worked out by hand: 1 km flat at 100 m, 2 km up to 220 m (6 %), a 200 m dip of 5 m, 800 m up 40 m
@@ -1411,16 +1411,18 @@ pub(crate) mod tests {
     /// Following a course: along and off, a fix beside it, the window moving with the rider.
     #[test]
     fn follows() {
-        let c = course(&lines(&[(0.0, 0.0, 0.0), (2000.0, 0.0, 0.0), (2000.0, 2000.0, 0.0)], 10.0));
+        // a centimetre past each metre, so that the plane's whole metres (truncated) land on the intended one
+        let c = course(&lines(&[(0.01, 0.01, 0.0), (2000.01, 0.01, 0.0), (2000.01, 2000.01, 0.0)], 10.0));
+        let fix_c = |x: f64, y: f64| fix(x + 0.01, y + 0.01);
         let mut t = Tracker::default();
         for x in (0..1950).step_by(8) {
-            let (lat, lon) = fix(f64::from(x), 30.0);
+            let (lat, lon) = fix_c(f64::from(x), 30.0);
             assert_eq!(c.follow(&mut t, lat, lon), None);
             assert!(t.along_m.abs_diff(x as u32) <= 3 && t.off_m.unwrap().abs_diff(30) <= 1, "{x}: {t:?}");
         }
-        let (lat, lon) = fix(2030.0, 1000.0);
+        let (lat, lon) = fix_c(2030.0, 1000.0);
         c.follow(&mut t, lat, lon);
-        assert!(t.along_m.abs_diff(3000) <= 5 && t.off_m == Some(30), "found again after a jump: {t:?}");
+        assert!(t.along_m.abs_diff(3000) <= 2 && t.off_m == Some(30), "found again after a jump: {t:?}");
     }
 
     /// An out-and-back: going out, the outbound leg; past the turn, the return leg, though both are as near.

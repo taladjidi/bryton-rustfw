@@ -192,7 +192,9 @@ impl Default for Ahead {
     }
 }
 
-/// Metres from `units` of 1e-7 degrees of latitude (0.011132 m each, as map.rs).
+/// Metres from `units` of 1e-7 degrees of latitude (0.011132 m each, as map.rs). This file's own plane differs from
+/// math.rs `plane_mm` by up to 0.7 % (the equatorial degree for both axes); accepted: it only sizes snap radii, turn
+/// penalties and the trace's tolerance, never a distance shown.
 fn units_m(units: u64) -> u64 {
     units * 11_132 / 1_000_000
 }
@@ -201,7 +203,7 @@ fn units_m(units: u64) -> u64 {
 /// latitude, clamped (a node farther than 23 km is of no use to a trace, and the arithmetic stays in an i64).
 fn vec2(a: (i32, i32), b: (i32, i32), cos: i64) -> (i64, i64) {
     let lim = 1i64 << 21; // 23 km: far enough for any road near the rider, and the products below fit an i64
-    let dx = ((i64::from(b.1) - i64::from(a.1)) * cos) >> 16;
+    let dx = (crate::math::dlon(a.1, b.1) * cos) >> 16; // wrapped at 180 degrees
     (dx.clamp(-lim, lim), (i64::from(b.0) - i64::from(a.0)).clamp(-lim, lim))
 }
 
@@ -892,10 +894,10 @@ pub(crate) mod tests {
     /// The trace's points in metres east and north of the origin.
     fn points(a: &Ahead) -> Vec<(f64, f64)> {
         let (lat0, lon0) = metres(0.0, 0.0);
-        let cos = 40_295.0 / 65_536.0;
+        let (north, east) = crate::math::mm_per_degree(cos_q16(lat0));
         a.path[..a.n]
             .iter()
-            .map(|p| (f64::from(p.lon - lon0) * 0.011_132 * cos, f64::from(p.lat - lat0) * 0.011_057_431))
+            .map(|p| (f64::from(p.lon - lon0) * east as f64 / 1e10, f64::from(p.lat - lat0) * north as f64 / 1e10))
             .collect()
     }
 

@@ -20,7 +20,7 @@ pub(super) fn course_route(ms: u64) -> (i32, i32, i32) {
         y -= 150.0;
     }
     let m_per_unit = 0.011_132; // metres per 1e-7 degree, as map.rs (at 0 N the same east and north)
-    ((y / m_per_unit) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
+    ((y / 0.011_057_431) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
 }
 
 /// The list row of stock's hill (in \PlanTrip: the first HILL listed).
@@ -410,7 +410,7 @@ fn zigzag_route(ms: u64) -> (i32, i32, i32) {
         (s, at) = (s - len, (b.0, b.1, heading));
     }
     let m_per_unit = 0.011_132;
-    ((at.1 / m_per_unit) as i32, (at.0 / m_per_unit) as i32, (at.2 * 1e5) as i32)
+    ((at.1 / 0.011_057_431) as i32, (at.0 / m_per_unit) as i32, (at.2 * 1e5) as i32)
 }
 
 /// Turn-by-turn on the zigzag's GPX track (its turns found on its shape): each turn said in the banner with its
@@ -480,7 +480,7 @@ fn course_cues_ride() {
     let texts: Vec<_> = said.iter().map(|s| s.1.as_str()).collect();
     assert_eq!(texts, want.iter().map(|w| w.1.as_str()).collect::<Vec<_>>(), "{said:?}");
     for (s, w) in said.iter().zip(&want) {
-        assert!((s.0 - w.0).abs() <= 24.0 + w.0 * 0.007, "{s:?} where {w:?}"); // a fix a second, looked at every 500 ms
+        assert!((s.0 - w.0).abs() <= 24.0, "{s:?} where {w:?}"); // a fix a second, looked at every 500 ms
     }
     let beeps = sim.tones[tones..].iter().filter(|&&hz| hz == 1800).count();
     assert_eq!(beeps, 3 * cues.len(), "a beep at 200 m, two at the turn");
@@ -823,7 +823,7 @@ fn climb_page_picture() {
             s => (s - 4000.0, 500.0, 90.0),
         };
         let m_per_unit = 0.011_132;
-        ((y / m_per_unit) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
+        ((y / 0.011_057_431) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
     }
     // 4, 7, 10 and 6 % in 500 m sections from 2000 m
     fn alt_m(s: f64) -> f64 {
@@ -1216,12 +1216,12 @@ fn reverse_route(ms: u64) -> (i32, i32, i32) {
         s if s < 3000.0 => (0.0, 500.0 - (s - 1000.0), 180.0),
         s => (-(s - 3000.0), -1500.0, 270.0),
     };
-    ((y / 0.011_132) as i32, (x / 0.011_132) as i32, (heading * 1e5) as i32)
+    ((y / 0.011_057_431) as i32, (x / 0.011_132) as i32, (heading * 1e5) as i32)
 }
 
 /// 400 m south of the hill's start (2 km west, 1.5 km south of the origin), still.
 fn south_of_start(_: u64) -> (i32, i32, i32) {
-    ((-1900.0 / 0.011_132) as i32, (-2000.0 / 0.011_132) as i32, 0)
+    ((-1900.0 / 0.011_057_431) as i32, (-2000.0 / 0.011_132) as i32, 0)
 }
 
 fn course_app(sim: &mut Sim) -> App {

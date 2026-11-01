@@ -36,7 +36,7 @@ fn grid(east: f64, north: f64) -> (i16, i16) {
 
 /// The same in a tile of zoom `z`.
 fn grid_at(z: u32, east: f64, north: f64) -> (i16, i16) {
-    let (lon, phi) = (east / 111_320.0, (north / 111_320.0).to_radians());
+    let (lon, phi) = (east / 111_320.0, (north / 110_574.3).to_radians());
     let n = f64::from(1u32 << z);
     let tx = (lon + 180.0) / 360.0 * n;
     let ty = (1.0 - (phi.tan() + 1.0 / phi.cos()).ln() / core::f64::consts::PI) / 2.0 * n;
@@ -106,9 +106,9 @@ fn names_along_the_hill() {
     let names: std::vec::Vec<_> = {
         let p = app.pois.as_deref().unwrap();
         assert!(p.done(), "the scan ended");
-        p.list().iter().map(|p| (p.name(), p.ele_m, p.col, p.along_m / 500, p.off_m / 25)).collect()
+        p.list().iter().map(|p| (p.name(), p.ele_m, p.col, (p.along_m + 250) / 500, p.off_m / 25)).collect() // the POIs are 1000 and 3000 m along: bins centred on them, so a metre cannot flip one
     };
-    assert_eq!(names, [("COL DE TEST", 1333, true, 2, 2), ("PIC D'ESSAI", 1777, false, 5, 1)], "{names:?}");
+    assert_eq!(names, [("COL DE TEST", 1333, true, 2, 2), ("PIC D'ESSAI", 1777, false, 6, 1)], "{names:?}");
     // before a fix: from the start
     assert!(["1 KM", "950 M", "900 M"].contains(&text(&app).as_str()), "{}", text(&app));
     sim.gnss.fix = Some(8000);
