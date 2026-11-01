@@ -28,12 +28,34 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   `prof`). The gate's named exemptions (`EXEMPT` in src/sim/budget_tests.rs, the owner's performance worklist) are the
   passes that break a limit with these costs: ride start (about 1.1 s of keys unread at 0.2 ms a sector, 1.8 s at 2 ms),
   the checkpoint under a card stall, the save's read-back of a 3 h file, the screenshot's write.
+- **Review 3 of the chip's reset (2026-11-01):** nothing is sent while PA6 is low or the chip boots (the TX FIFO is flushed
+  at the hold: USART_RQR TXFRQ, main.rs `nrf_hold`; to see: no `resyncs` after forcing a reset mid-command), the rider's
+  sensor choice and the PAIR window during a reset are applied after it, the switch-off during a reset ends with the chip
+  in system off (current in standby, as after a normal switch-off), a put is bounded to 1 s whatever the chip floods.
+
 - **The receiver's answers and its SPI limits (2026-11-01, BOARD.md 13 "The receiver's rules"):** with `tools/gnss.py`, read
   back (VALGET) the four CFG-SIGNAL keys after the start-up and CFG-SPI-MAXFF / CFG-SPI-EXTENDEDTIMEOUT; MON-COMMS
   (txErrors, tx buffer usage) after a ride; a deliberate 2 s gap between reads to see the stream stop (in the simulator the
   longest unread gap is 2.2 to 3.3 s in the link, recorder and segment tests and 6.1 s in the 20 us hang test: the Nordic
   reset's 950 ms, the start-up after it, against the receiver's 1.5 s time-out, so one to three NAV-PVT epochs go missing); the MGA-ACK info codes for
   ANO with CFG-NAVSPG-ACKAIDING on. Until then G1 to G4 and G6 are inferred.
+- **The radio chip's reset no longer blocks the main loop (2026-11-01, app/nrf_watch.rs `restart_step`, `Board::nrf_hold`).**
+  A reset used to hold the pass for about 1 s (PA6 low 150 ms, 800 ms of boot, then the start's commands): the GNSS went
+  unread for 2 to 3 s, the screen froze and keys were late. It is a state machine over the passes now; the simulator's
+  worst pass during a live chip's reset is under 1 ms of its time (was 950 ms and more), a dead chip's 520 ms (one
+  command time-out; was 1470 ms). To see on the unit: `tools/dev.py info` `radio resets` after forcing one, the screen
+  and keys alive meanwhile, the sensors back about 1.2 s after the reset began. Also: a truncated frame resets at
+  once (first break of a calm period), the power-off resets a mis-framed chip first (about 1 s more before standby).
+
+- **The Nordic send path (2026-11-01, `nrf::send` and main.rs `nrf_send`): a frame is never cut short.** `nrf_send` used to
+  give up after 10 ms on one byte (the chip holding CTS) and return mid-frame, which hangs the chip for ever; it now returns
+  how many bytes the TX FIFO took, and `nrf::send` reads the chip's bytes while CTS is held, bounded by 500 ms without a byte either way, each wait a 1 ms sleep, and a frame that went out partly marks the link broken so the watchdog resets the chip at once. ANT events that arrive during a command are kept for the next pass (`Rx::keep_last`), not dropped. The simulator
+  models the link byte by byte (`chip_link.rs`, BOARD.md 11), and its tests reproduce the deadlock (two commands back to back
+  behind a stalled event frame). To see on the unit: `tools/dev.py info` at a ride's start and after 10 min, `radio resets`
+  and `resyncs` unchanged, commands answered while sensors stream (a phone's pairing with three sensors on).
+- **The ANT search time-out stays at 30 s (2026-11-01):** after a chip reset every channel times out together; the
+  simulator's burst (8 channels, SEARCH_TIMEOUT and CHANNEL_CLOSED each, on a queue already at 22) peaks at 37 of the 48
+  the chip's pull rule allows (`the_search_timeouts_of_all_channels_together_stay_under_the_hang_limit`), a margin of 11.
 - **The radio receive's wait (main.rs `nrf_recv`): the short wait of finding 8 (2026-10-31) was taken out on 2026-11-01**,
   back to 200 us after every byte. The chip's app needs more than 20 us (inferred) to pull and encode its next event, so the
   20 us wait ended each read after one frame; the drain fell behind a ride's events and the chip's 96-slot queue

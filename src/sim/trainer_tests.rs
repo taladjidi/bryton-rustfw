@@ -23,7 +23,7 @@ fn power210(_: u64) -> [u8; 8] {
 }
 
 /// The unit with an FE-C trainer in range, already paired (register 14), the rider making 180 W.
-fn unit() -> (Sim, App) {
+pub(super) fn unit() -> (Sim, App) {
     super::tests::unit_with(Some(KEY), |sim| {
         sim.own_settings();
         sim.backup[14] = Kind::Trainer.to_word(ID);

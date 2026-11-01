@@ -332,9 +332,13 @@ impl App {
         self.rec.full.checkpoint_now();
         self.step_recorder(b);
         self.hold_pages(b); // pages changed and not in the file yet: the registers keep them (app/editor.rs)
+        let resetting = matches!(self.watch.reset, Reset::Held | Reset::Boot);
+        // a chip in reset or boot has `rx.broken` set: `system_off` resets it once more, waits its boot, then powers it down
         if self.ble.is_some() {
             self.release_trainer(b); // not left at the last target until its own time-out
-            nrf::system_off(b);
+        }
+        if self.ble.is_some() || resetting {
+            nrf::system_off(b, &mut self.rx);
         }
         b.gnss_power(false);
         play(b, &BEEP_OFF);

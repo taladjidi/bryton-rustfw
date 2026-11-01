@@ -93,7 +93,7 @@ fn every_command_rustfw_builds_decodes_on_the_chip() {
     }
     let _ = ble::descriptor_add(b, rx, 2, 0x2908, &[0, 1], ble::ENCRYPTED);
     let _ = ble::value_set(b, rx, 3, &[7; 100]);
-    nrf::system_off(b);
+    nrf::system_off(b, &mut nrf::Rx::new());
     // every modelled row was exercised
     let sent: Vec<(u8, u8)> = b.nordic.got.iter().map(|p| (p[0], p[1])).collect();
     let missing: Vec<&str> = CMDS.iter().filter(|c| !sent.contains(&(c.kind, c.op))).map(|c| c.name).collect();
@@ -106,7 +106,7 @@ fn hangs_on(payload: &[u8], want: &'static str) {
     let mut s = Sim::new(8, 0, 0);
     s.nordic.expect_hang = Some(want);
     s.nrf_reset();
-    nrf::send(&mut s, payload);
+    let _ = nrf::send(&mut s, &mut nrf::Rx::new(), payload);
     assert!(s.nordic.hung, "{payload:02x?} did not hang the chip");
 }
 
@@ -144,7 +144,7 @@ fn the_simulated_chip_hangs_as_the_real_one_does() {
 fn a_hang_in_a_test_that_does_not_expect_one_fails_loudly() {
     let mut s = Sim::new(8, 0, 0);
     s.nrf_reset();
-    nrf::send(&mut s, &[0, 0x61]);
+    let _ = nrf::send(&mut s, &mut nrf::Rx::new(), &[0, 0x61]);
 }
 
 #[test]
