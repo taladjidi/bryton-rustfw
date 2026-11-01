@@ -361,7 +361,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   port (it implements `Host`) and the mass storage interface (its class requests, and `msc::Pipe` over its bulk
   endpoints, each wait 1 s at most).
 - `src/board/hw.rs`: the unsafe primitives (above).
-- `tools/dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
+- `tools/dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks (`run.py`, `s510.repl`, `s510.resc`), and the radio spike: `nrf_run.py` (not in check.sh) boots the firmware with `NrfUsart.cs`, a C# USART2 for Renode that bridges to `tools/nrf_emu.py --serve`.
 - `tools/assist.py`: downloads u-blox's AssistNow Offline data with the rider's own token (environment or
   `~/.config/bryton-rustfw/assist.json`, never in the repository), keeps today's and later messages, and copies them to
   `\Rustfw\mga.ubx` on the mounted unit, compared after the copy (docs/sync.md). `assist.py selftest` (check.sh): no network.
