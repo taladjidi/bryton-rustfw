@@ -684,6 +684,65 @@ fn delete_on_a_full_card_says_so() {
     assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some());
 }
 
+/// The Opus review of trash.rs, 3: DELETE of a ride whose earlier delete was left pending and which a computer then
+/// moved into `\Backup`: the move is not done (two names on one chain), the record done, and the ride is not
+/// deleted: its own notice (not "RIDE DELETED", not "CARD FULL"), HISTORY and the totals keep it (it dropped them,
+/// and the next scan brought it back).
+#[test]
+fn delete_of_a_ride_a_computer_moved_says_so() {
+    use crate::storage::trash::tests::{file, pending_named, volume};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = volume();
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::History));
+    app.press(&mut sim, Press::Short(Key::Start));
+    while app.stock.status() == crate::stock::Status::Running || app.trash_check {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 120_000);
+    }
+    for _ in 0..10 {
+        if app.screen() != Screen::Menu(Menu::History, 2) {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+    }
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 2));
+    let row = |app: &App| app.menu_row(Menu::History, 2).map(|(l, v, _)| std::format!("{} {}", l.as_str(), v.as_str()));
+    let (row0, all0) = (row(&app), app.stock.out.all);
+    assert_eq!(row0.as_deref(), Some("20/10 08:00 14.4 KM"));
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..100 {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        if app.screen() == Screen::Past {
+            break;
+        }
+    }
+    assert_eq!(app.screen(), Screen::Past);
+    // meanwhile: an earlier delete of it cut after its record, then the ride moved into \Backup by a computer
+    let mut d = crate::fat::tests::Ram(pending_named(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let backup = fat.mkdir(&mut d, fat.root(), "Backup", (0, 0)).unwrap();
+    let acts = fat.open(&mut d, "Activities").unwrap();
+    let h = fat.locate(&mut d, acts, "261020080000.fit").unwrap();
+    fat.link(&mut d, backup, "261020080000.fit", &h, (0, 0)).unwrap();
+    fat.remove(&mut d, &h).unwrap();
+    sim.emmc.image = d.0;
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.notes.text.as_str(), "RIDE MOVED BY PC");
+    run(&mut sim, &mut app, u64::from(POLL_MS)); // the banner drawn
+    sim.save("past_delete_moved");
+    let img = &sim.emmc.image;
+    assert_eq!(crate::fat::write::tests::fsck(img), Ok(0), "one name on the chain");
+    assert!(file(img, "Backup/261020080000.fit").is_some(), "where the computer put it");
+    assert!(file(img, "Rustfw/Deleted/261020080000.fit").is_none());
+    let mut d = crate::fat::tests::Ram(img.clone(), 0);
+    assert_eq!(crate::trash::finish(&mut d, (0, 0)), Ok(false), "the record done");
+    assert_eq!(row(&app), row0, "HISTORY keeps it");
+    assert_eq!(app.stock.out.all.rides, all0.rides, "and the totals");
+}
+
 /// DELETE with more rides than the scan's cache holds (storage/stock.rs `CACHE_RIDES`): the scan starts again to
 /// count the rides left out of the cache, and HISTORY loses the ride deleted at once, not when that scan ends.
 #[test]

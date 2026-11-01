@@ -241,7 +241,7 @@ impl App {
         let r = self.past.ride;
         let t = fat::write::dos_time(self.rec_time().0);
         match trash::delete(&mut emmc::Volume(&mut self.emmc, b), &r.file, t) {
-            Ok(()) => {
+            Ok(None) => {
                 self.stock.forget(&r.file, r.start, self.date);
                 self.notice("RIDE DELETED");
                 self.close();
@@ -249,7 +249,12 @@ impl App {
                 self.clamp_menu(); // the list one ride shorter: the selection on the next one, or the last
             }
             // refused before anything moved, or put back: nothing pending (trash.rs `delete`)
-            Err(fat::Error::Refused) => self.alarm_notice("CARD FULL"),
+            Err(fat::Error::Refused) | Ok(Some(trash::Left::PutBack)) => self.alarm_notice("CARD FULL"),
+            // not in \Activities by its chain: a computer renamed or moved it (trash.rs `delete`); left there, so
+            // the history keeps it, nothing pending
+            Ok(Some(trash::Left::Elsewhere)) => self.alarm_notice("RIDE MOVED BY PC"),
+            // its chain shorter than its size (trash.rs `moves`: left named, nothing pending): a computer to mend it
+            Ok(Some(trash::Left::Damaged)) => self.alarm_notice("RIDE DAMAGED"),
             Err(_) => {
                 self.trash_check = true; // a move the failure left midway, finished at the next scan or lending
                 self.alarm_notice("DELETE FAILED");

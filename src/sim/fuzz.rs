@@ -6704,21 +6704,25 @@ fn osm_renders_over_damaged_packs() {
     assert!(by_osm > 10 && by_stock > 10 && with_features > 10, "{by_osm} {by_stock} {with_features}");
 }
 
-/// `trash::kept_by_a_repair` (trash.rs) over folders a computer's repair makes (the final review of the B1a
-/// follow-up: a new input path): random `FOUND.nnn`, `LOST.DIR` and other folders, root files (`.CHK`, `.REC`,
-/// others), some on the ride's chain; the answer is true exactly when a root file or a file of a repair folder is on
-/// it, and both answers are reached over the seeds.
+/// `trash::named_on_top` (trash.rs) over folders a computer's repair makes and others a computer makes (the final
+/// review of the B1a follow-up: a new input path): random `FOUND.nnn`, `LOST.DIR` and other folders, root files
+/// (`.CHK`, `.REC`, others), some on the ride's chain (its own entry in `\Activities` removed: a lost chain); the
+/// answer is true exactly when a root file or a file of a root folder is on it, and both answers are reached over
+/// the seeds.
 #[test]
 fn repair_folders() {
     use crate::fat::Fat;
     use crate::fat::tests::Ram;
     use crate::fat::write::Handle;
     const T: (u16, u16) = (0x5b58, 0x6000);
-    let base = crate::fat::tests::image();
-    let ride = {
-        let mut d = Ram(base.clone(), 0);
+    let (base, ride) = {
+        let mut d = Ram(crate::fat::tests::image(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
-        fat.open(&mut d, "Activities/261020080000.fit").unwrap()
+        let acts = fat.open(&mut d, "Activities").unwrap();
+        let h = fat.locate(&mut d, acts, "261020080000.fit").unwrap();
+        let ride = fat.open(&mut d, "Activities/261020080000.fit").unwrap();
+        fat.remove(&mut d, &h).unwrap(); // its chain named by nothing
+        (d.0, ride)
     };
     let (mut yes, mut no) = (0, 0);
     for seed in 1..60u32 {
@@ -6729,18 +6733,18 @@ fn repair_folders() {
         let on = Handle { first: ride.cluster, size: ride.size, ..Handle::default() };
         let mut want = false;
         for k in 0..1 + rnd() % 4 {
-            let (folder, counts) = match rnd() % 4 {
-                0 => (std::format!("FOUND.{:03}", k), true),
-                1 => (std::string::String::from("LOST.DIR"), true),
-                2 => (std::format!("found{k}"), false), // no dot: not a repair's folder
-                _ => (std::format!("Photos{k}"), false),
+            let folder = match rnd() % 4 {
+                0 => std::format!("FOUND.{:03}", k),
+                1 => std::string::String::from("LOST.DIR"),
+                2 => std::format!("found{k}"),
+                _ => std::format!("Backup{k}"), // a computer's own folder
             };
             let Ok(dir) = fat.ensure_dir(&mut d, root, &folder, T) else { continue };
             for n in 0..rnd() % 4 {
                 let name = std::format!("FILE{n:04}.CHK");
                 if rnd().is_multiple_of(3) {
                     if fat.link(&mut d, dir, &name, &on, T).is_ok() {
-                        want |= counts;
+                        want = true;
                     }
                 } else {
                     let _ = fat.create(&mut d, dir, &name, T);
@@ -6758,11 +6762,11 @@ fn repair_folders() {
                 let _ = fat.create(&mut d, root, &name, T);
             }
         }
-        let got = crate::trash::kept_by_a_repair(&mut fat, &mut d, ride.cluster);
+        let got = crate::trash::named_on_top(&mut fat, &mut d, ride.cluster);
         assert_eq!(got, Ok(want), "seed {seed}");
         if want { yes += 1 } else { no += 1 }
     }
-    assert!(yes > 10 && no > 10, "{yes} named by a repair, {no} not");
+    assert!(yes > 10 && no > 10, "{yes} named, {no} not");
 }
 
 /// What the FAT writer's model holds: each path under `\Model` and its bytes (None: a folder).
