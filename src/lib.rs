@@ -279,6 +279,8 @@ pub struct App {
     date: (u16, u8, u8),
     /// The shown clock minus the RTC, seconds (0 under TIME ZONE CLOCK or before an offset from UTC is learnt).
     clock_delta_s: i32,
+    /// What the shown clock was last worked out from (RTC words, zone, summer-time rule, learnt offset): `read_clock`.
+    clock_key: Option<app::ClockKey>,
     /// The sun's rise and set (local minutes) for the date and minute of the last pass that changed it: the key, then
     /// the times (None without a fix, the zone learnt, or in polar day or night). Worked out at most once a minute.
     sun: Option<SunNow>,
@@ -508,6 +510,7 @@ impl App {
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
+            clock_key: None,
             clock_delta_s: 0, // the registers hold no TIME ZONE: CLOCK until the settings file is read
             sun: None,
             heading: None,

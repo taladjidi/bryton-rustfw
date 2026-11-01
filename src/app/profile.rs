@@ -54,6 +54,7 @@ impl App {
         &mut self,
         p: ride::Profile,
     ) -> (&mut [page::Page], &mut usize, &mut [Option<page::Page>; PAGES]) {
+        self.gps.map_on = None; // every page edit goes through here: the map test is made again
         match p.page_set() {
             ride::Profile::Indoor => (&mut self.indoor.pages, &mut self.indoor.count, &mut self.indoor.more),
             ride::Profile::Mtb => (&mut self.mtb.pages, &mut self.mtb.count, &mut self.mtb.more),
@@ -167,10 +168,13 @@ impl App {
     /// Each pass: the climb page enters the round after the page on screen when the warning fires, and leaves it
     /// at the top (shown then, the round goes on to the page after its home).
     pub(crate) fn settle_climb(&mut self, b: &mut impl Board) {
-        let on = self.page_on(CLIMB);
+        let on =
+            self.segment_now().is_some() || (self.settings.climb_page && self.on_climb() && !self.has_climb_page());
+        // set first: page_on(CLIMB) reads it, here and for every reader later in the pass
+        let was = core::mem::replace(&mut self.climb.on, on);
         // the anchor is the page shown when the page joins (any of the round); one that leaves the round (a set
         // switch, a page deleted, an indoor skip) is replaced by the page shown
-        if on && (!self.climb.on || !self.page_on(self.climb.after)) {
+        if on && (!was || !self.page_on(self.climb.after)) {
             self.climb.after =
                 if let Screen::Ride(n) = self.screen { if n != CLIMB { n } else { self.climb.after } } else { 0 };
             if let (false, Screen::Ride(n)) = (self.page_on(self.climb.after), self.ride_page(0, 1)) {
@@ -178,10 +182,9 @@ impl App {
             }
         }
         self.open_climb(on, b);
-        if on == self.climb.on {
+        if on == was {
             return;
         }
-        self.climb.on = on;
         if !on && self.screen == Screen::Ride(CLIMB) {
             self.screen = self.ride_page(place(self.climb.after) + 1, 1);
             self.show(b);
@@ -253,6 +256,7 @@ impl App {
             return;
         }
         self.set_shown = now;
+        self.gps.map_on = None;
         self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         let fix = |app: &Self, s: Screen| match s {
             Screen::Ride(n) if n < PAGES && !app.page_on(n) => app.ride_page(0, 1),
