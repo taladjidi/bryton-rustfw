@@ -56,6 +56,8 @@ struct Walk {
     paths: Vec<(String, Vec<Step>)>,
     seen: Vec<Menu>,
     found: Vec<(String, Clip)>,
+    /// "NNN-path hash" per screen saved: the golden list (test-data/walk.hashes).
+    hashes: Vec<String>,
 }
 
 impl Walk {
@@ -73,7 +75,10 @@ impl Walk {
         self.n += 1;
         let file: String =
             self.cur.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
-        sim.save(&format!("walk/{:03}-{file}", self.n));
+        let name = format!("{:03}-{file}", self.n);
+        sim.save(&format!("walk/{name}"));
+        let h = sim.screen.iter().fold(0x811c_9dc5, |h, p| crate::fnv(h, &p.to_le_bytes()));
+        self.hashes.push(format!("{name} {h:08x}"));
         self.paths.push((self.cur.clone(), self.keys.clone()));
     }
 }
@@ -227,24 +232,23 @@ fn power1200(_: u64) -> [u8; 8] {
 
 /// The unit with stock's rides read, every sensor paired with a 5-digit id, a power meter and a fix.
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    sim.own_settings();
-    sim.gnss.fix = Some(8000);
-    for (n, k) in Kind::ALL.into_iter().enumerate() {
-        let id = SensorId { device: 44945 - n as u16, trans: 5 };
-        sim.backup[k.backup()] = k.to_word(id);
-        if k == Kind::Power {
-            sim.nordic.sensors.push(AntSensor {
-                device_type: 0x0b,
-                id: id.device,
-                data: power1200,
-                network: 0,
-                ack: &[],
-            });
+    let (mut sim, mut app) = super::tests::unit_with(Some(KEY), |sim| {
+        sim.own_settings();
+        sim.gnss.fix = Some(8000);
+        for (n, k) in Kind::ALL.into_iter().enumerate() {
+            let id = SensorId { device: 44945 - n as u16, trans: 5 };
+            sim.backup[k.backup()] = k.to_word(id);
+            if k == Kind::Power {
+                sim.nordic.sensors.push(AntSensor {
+                    device_type: 0x0b,
+                    id: id.device,
+                    data: power1200,
+                    network: 0,
+                    ack: &[],
+                });
+            }
         }
-    }
-    let mut app = App::start(&mut sim, Some(KEY));
+    });
     app.set_bike_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::BikeStore::default())));
     app.settings.ftp = 200;
     run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 20_000);
@@ -320,11 +324,43 @@ fn the_detector_sees_a_cut_label() {
     assert_eq!(clips::take(), [("draw_in", "CASSETTE".into(), 48)]);
 }
 
+/// The golden check: every screen's FNV-1a against test-data/walk.hashes. An intended screen change: run with
+/// `WALK_HASHES=write`, review the diff of the file, commit it with the change (docs/devloop.md).
+fn check_hashes(now: &[String]) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test-data/walk.hashes");
+    let text = format!("{}\n", now.join("\n"));
+    if std::env::var("WALK_HASHES").is_ok_and(|v| v == "write") {
+        std::fs::write(&path, &text).unwrap();
+        panic!("walk hashes refreshed: rerun without WALK_HASHES"); // a write run never counts as a pass
+    }
+    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let diff: Vec<String> = text
+        .lines()
+        .zip(old.lines().chain(std::iter::repeat("")))
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| format!("now {a}, golden {b:?}"))
+        .collect();
+    assert!(
+        diff.is_empty() && text.lines().count() == old.lines().count(),
+        "screens differ from test-data/walk.hashes ({} of {}); WALK_HASHES=write refreshes it:\n{}",
+        diff.len(),
+        text.lines().count(),
+        diff.iter().take(10).cloned().collect::<Vec<_>>().join("\n")
+    );
+}
+
 #[test]
 fn walk_every_screen() {
     let t0 = std::time::Instant::now();
-    let mut w =
-        Walk { n: 0, keys: Vec::new(), cur: String::new(), paths: Vec::new(), seen: Vec::new(), found: Vec::new() };
+    let mut w = Walk {
+        n: 0,
+        keys: Vec::new(),
+        cur: String::new(),
+        paths: Vec::new(),
+        seen: Vec::new(),
+        found: Vec::new(),
+        hashes: Vec::new(),
+    };
     let dir = out_dir().join("walk");
     if let Err(e) = std::fs::remove_dir_all(&dir) {
         assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "{e}");
@@ -363,6 +399,7 @@ fn walk_every_screen() {
             k.1
         );
     }
+    check_hashes(&w.hashes);
     let starts: Vec<&Target> = w.paths.iter().flat_map(|p| p.1.iter().filter_map(|s| s.1.as_ref())).collect();
     for kind in ["fixed", "data", "set", "other"] {
         std::println!("walk: {kind} Start steps {}", starts.iter().filter(|t| t.kind == kind).count());

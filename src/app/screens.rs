@@ -223,7 +223,7 @@ impl App {
             Screen::Curve(k) => self.draw_curve(c, k),
             Screen::Load(k) => self.draw_load(c, k),
             Screen::Notif(k, top) => self.draw_notif(c, k, top),
-            Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"), env!("GIT_DATE")),
+            Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), ABOUT_DESCRIBE, ABOUT_DATE),
             Screen::Nearby => {
                 ui::draw_back(c); // the title itself is drawn again as the count changes, the "<" once
                 if self.ble.is_some() {
@@ -768,3 +768,13 @@ impl App {
         row
     }
 }
+
+/// The About screen's build lines: fixed under test, so the golden screen hashes (test-data/walk.hashes) hold across commits.
+#[cfg(test)]
+const ABOUT_DESCRIBE: &str = "v0.0-test";
+#[cfg(not(test))]
+const ABOUT_DESCRIBE: &str = env!("GIT_DESCRIBE");
+#[cfg(test)]
+const ABOUT_DATE: &str = "2026-01-01";
+#[cfg(not(test))]
+const ABOUT_DATE: &str = env!("GIT_DATE");

@@ -16,14 +16,13 @@ pub(super) fn started() -> (Sim, App) {
 
 /// [`started`] on a card that offers reliable writes (a cut then tears no sector) or not.
 fn started_on(reliable: bool) -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    if reliable {
-        sim.emmc.rel_param = crate::emmc::EN_REL_WR;
-    }
-    sim.own_settings();
-    sim.classic_pages();
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = super::tests::unit_with(None, |sim| {
+        if reliable {
+            sim.emmc.rel_param = crate::emmc::EN_REL_WR;
+        }
+        sim.own_settings();
+        sim.classic_pages();
+    });
     run(&mut sim, &mut app, PAGES_LOAD_MS as u64 + 200);
     (sim, app)
 }

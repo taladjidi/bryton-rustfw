@@ -330,8 +330,9 @@ fn fault_log_capped() {
 }
 
 /// A power cut after every sector of an append that crosses a sector boundary (the log 500 bytes long), and of one that
-/// starts the log again (at the cap): the log is the old one, the old one and the line, or (started again) empty or the
-/// line alone, never a mix; the volume as fsck takes it after a cut, the rides as they were.
+/// starts the log again (at the cap): the log is the old one, the old one and the line, or (started again) the line
+/// alone, or the line then the old log from the next sector (a cut between the line and the size: never emptied first,
+/// an empty file on a cluster that fsck_msdos rejects); the volume as fsck takes it after a cut, the rides as they were.
 #[test]
 fn fault_log_cut_at_every_sector() {
     for size in [500, CAP - 30] {
@@ -350,11 +351,9 @@ fn fault_log_cut_at_every_sector() {
             run(&mut sim, &mut app, 5000);
             let img = &sim.emmc.image;
             let got = log(img).unwrap_or_else(|| panic!("size {size}, cut {cut}: the log gone"));
-            assert!(
-                got == old || got == new || (again && got.is_empty()),
-                "size {size}, cut {cut}: {} bytes",
-                got.len()
-            );
+            let (g, o) = (got.as_bytes(), old.as_bytes());
+            let mixed = again && g.len() == o.len() && g.starts_with(new.as_bytes()) && g[512..] == o[512..];
+            assert!(got == old || got == new || mixed, "size {size}, cut {cut}: {} bytes", got.len());
             let scan = fsck_cut(img).unwrap_or_else(|e| panic!("size {size}, cut {cut}: {e}"));
             // a cut while the tail is freed leaves the rest of it lost (a chain no entry names), at most the log's
             let most = if again { CAP / (16 << 10) + 1 } else { 1 };

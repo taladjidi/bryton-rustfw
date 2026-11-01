@@ -3,11 +3,10 @@
 
 use super::tests::run;
 use super::*;
+use crate::ui::GREEN;
 
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = super::tests::unit_with(None, |_| {});
     app.settings.light_level = 0; // 100 %
     app.settings.light_timeout = 0; // never off
     app.settings.gps_power = GpsPower::Full;
@@ -84,6 +83,26 @@ fn the_strip_tag_is_drawn() {
     app.settings.saver = SaverMode::On;
     run(&mut sim, &mut app, 3000);
     sim.save("saver_strip");
+    assert!(tag_pixels(&sim) > 0, "the green S is on screen");
+    app.settings.saver = SaverMode::Off;
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(tag_pixels(&sim), 0, "and gone with the saver");
+}
+
+/// The strip's top row for the capitals (strip.rs), and the pixels of the box (x, width) from `top + dy`, `h` high.
+fn strip_box(sim: &Sim, (x, w): (u32, u32), dy: u32, h: u32) -> Vec<u16> {
+    let top = crate::ui::STRIP_H - crate::ui::LABEL.height() + dy;
+    (top..top + h).flat_map(|y| (x..x + w).map(move |x| sim.screen[(y * crate::ui::W + x) as usize])).collect()
+}
+
+/// Green pixels in the saver tag's box.
+fn tag_pixels(sim: &Sim) -> usize {
+    strip_box(sim, crate::ui::STRIP_SAVER, 2, 10).iter().filter(|&&p| p == GREEN).count()
+}
+
+/// The pixels of the USB symbol's box.
+fn usb_box(sim: &Sim) -> Vec<u16> {
+    strip_box(sim, crate::ui::STRIP_USB, 0, 14)
 }
 
 /// A battery voltage the charge estimate calls `p` percent.
@@ -166,8 +185,15 @@ fn the_tag_clears_usb_and_a_full_battery() {
     sim.charger = true;
     sim.battery_mv = Some(4250);
     app.settings.saver = SaverMode::On;
+    app.set_usb(&mut sim, UsbDot::Ready);
     run(&mut sim, &mut app, 12_000);
     sim.save("saver_strip_usb");
+    let (tag, usb) = (tag_pixels(&sim), usb_box(&sim));
+    assert!(tag > 0, "the tag is drawn");
+    assert!(usb.iter().any(|&p| p != 0), "the symbol is drawn");
+    sim.battery_mv = Some(3700); // a shorter text: 1 or 2 digits
+    run(&mut sim, &mut app, 12_000);
+    assert_eq!((tag_pixels(&sim), usb_box(&sim)), (tag, usb), "the percent text leaves them alone");
 }
 
 /// The battery poll reads VREFINT (channel 19) and then the battery (channel 1), in that order; a failed battery

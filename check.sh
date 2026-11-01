@@ -8,6 +8,7 @@
 # Each step prints its wall seconds; a lane writes target/check/<lane>.log, shown on failure.
 set -e
 cd "$(dirname "$0")"
+unset WALK_HASHES # a refresh run panics on purpose and must never count as a pass
 full=0; quick=0; verbose=0
 for a in "$@"; do
     case $a in
@@ -133,8 +134,8 @@ lane_H() {  # the host
     }
     if command -v cargo-deny >/dev/null 2>&1; then step "cargo deny" deny; else skip "cargo-deny (not installed)"; fi
     # An independent FAT checker on the volumes the tests wrote (target/fat/*.img, raw images: a recorded and saved
-    # ride after a cut and its resume, a HISTORY delete, a full card's refusal, a create and move): fsck_msdos on
-    # macOS, fsck.vfat on Linux, read only (-n). Any error it reports fails.
+    # ride after a cut and its resume, a HISTORY delete, a full card's refusal, a create and move, a cut right after a
+    # create): fsck_msdos on macOS, fsck.vfat on Linux, read only (-n). Any error it reports fails.
     fat_check() {
         PATH="$PATH:/sbin:/usr/sbin"
         if command -v fsck_msdos >/dev/null 2>&1; then fs="fsck_msdos -n"
@@ -147,7 +148,7 @@ lane_H() {  # the host
             n=$((n + 1))
             $fs "$img" > "$C/fsck.out" 2>&1 || { cat "$C/fsck.out"; echo "fsck: $fs failed on $img"; return 1; }
         done
-        [ $n -ge 4 ] || { echo "fsck: only $n images in target/fat (4 expected: the tests write them)"; return 1; }
+        [ $n -ge 5 ] || { echo "fsck: only $n images in target/fat (5 expected: the tests write them)"; return 1; }
         echo "fsck: $n images clean"
     }
     step "fat fsck" fat_check

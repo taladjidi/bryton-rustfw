@@ -24,10 +24,7 @@ fn smooth(sim: &mut Sim, app: &mut App) {
 }
 
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.own_settings();
-    sim.emmc.image = crate::fat::tests::image();
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = super::tests::unit_with(None, |sim| sim.own_settings());
     app.set_usb(&mut sim, UsbDot::Ready);
     run(&mut sim, &mut app, 1000);
     (sim, app)

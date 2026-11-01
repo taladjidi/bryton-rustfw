@@ -76,8 +76,8 @@ pub struct Sim {
     /// The work an eMMC read costs, ns a byte (reading and parsing what was read: about 430 on the unit, 2.3 MB/s,
     /// `tools/dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`prof::Clock::us`]. 0 (the default): free.
     pub work_ns_per_byte: u64,
-    /// Work done so far, ns. Must not advance by more than 4 s between two Clock reads: the u32 cycle counter wraps
-    /// at 4.29 s of work and Clock catches one wrap only.
+    /// Work done so far, ns. Must not advance by more than 21 s between two Clock reads: the u32 cycle counter wraps
+    /// at 21.47 s of work (200 MHz) and Clock catches one wrap only.
     pub awake_ns: u64,
     /// The cycle counter ([`Board::cycles`]): each read moves it on by [`Sim::cycles_step`], wrapping as CYCCNT does.
     pub cycles: u32,
@@ -1372,6 +1372,7 @@ impl Sim {
 }
 
 impl Board for Sim {
+    const CPU_HZ: u32 = 200_000_000; // main.rs's: cycle maths is tested at the unit's clock
     fn panel_power_on(&mut self) {
         self.powered = true;
         self.ms += 150;
@@ -1599,9 +1600,9 @@ impl Board for Sim {
     }
 
     fn cycles(&mut self) -> u32 {
-        // the awake time at 1 GHz (Board::CPU_HZ): a cycle is a nanosecond; cycles_step moves it on a read as well
+        // the awake time at the unit's 200 MHz (Board::CPU_HZ): a cycle is 5 ns; cycles_step moves it on a read as well
         self.cycles = self.cycles.wrapping_add(self.cycles_step);
-        (self.awake_ns as u32).wrapping_add(self.cycles)
+        ((self.awake_ns / 5) as u32).wrapping_add(self.cycles)
     }
 
     fn emmc_writable(&self) -> bool {

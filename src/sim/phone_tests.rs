@@ -24,11 +24,7 @@ fn iphone(script: Vec<(u64, Act)>) -> PhoneSim {
 
 /// A unit with the synthetic volume, and a phone in range.
 fn unit(phone: PhoneSim) -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    sim.nordic.phone = Some(phone);
-    let app = App::start(&mut sim, None);
-    (sim, app)
+    super::tests::unit_with(None, |sim| sim.nordic.phone = Some(phone))
 }
 
 fn ph_mtu(sim: &Sim) -> u16 {

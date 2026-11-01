@@ -78,7 +78,7 @@ pub trait Board {
     /// Sleeps `ms` milliseconds (SysTick and WFI on the unit; the simulator advances its clock).
     fn delay_ms(&mut self, ms: u32);
     /// The CPU clock the cycle counter runs at, Hz: [`prof::Clock`] turns cycles into microseconds with it. The
-    /// default (1 GHz: a cycle is a nanosecond) is the simulator's.
+    /// default (1 GHz: a cycle is a nanosecond) is for a board that does not time; the simulator runs at the unit's 200 MHz.
     const CPU_HZ: u32 = 1_000_000_000;
     /// The DWT cycle counter (CYCCNT, 32 bits, wrapping; stopped in WFI): the profiler's clock ([`prof`]) and, through
     /// [`prof::Clock`], the awake time. 0 always: nothing is timed.

@@ -29,10 +29,10 @@ fn scramble() -> Theme {
 }
 
 fn unit(image: Option<Vec<u8>>) -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.own_settings();
-    sim.emmc.image = image.unwrap_or_else(crate::fat::tests::image);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = super::tests::unit_with(None, |sim| {
+        sim.own_settings();
+        sim.emmc.image = image.unwrap_or_else(crate::fat::tests::image);
+    });
     run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
     (sim, app)
 }

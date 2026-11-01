@@ -5146,13 +5146,30 @@ fn recovery_sectors<T: PartialEq + std::fmt::Debug>(
 
 #[test]
 fn recovery_records() {
+    use super::Sim;
     use crate::fit::RECORD_LEN;
-    use crate::recorder::{Phase, rec::Rec};
+    use crate::recorder::{Phase, Recorder, rec::Rec};
     use crate::ride::RIDE_WORDS;
-    let (mut recorder, mut trash, mut restored) = ([0u32; 4], [0u32; 4], 0);
+    let (mut recorder, mut trash, mut restored, mut resumed) = ([0u32; 4], [0u32; 4], 0, 0);
+    // a card that has seen a ride: the folder and the record file a fuzzed record is put in
+    let base = {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = crate::App::start(&mut sim, None);
+        super::tests::run(&mut sim, &mut app, 1000);
+        app.press(&mut sim, crate::Press::Short(crate::Key::Start));
+        super::tests::run(&mut sim, &mut app, 3000);
+        sim.emmc.image
+    };
+    let rec_lba = {
+        let mut d = crate::fat::tests::Ram(base.clone(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let cluster = fat.open(&mut d, "Rustfw/ride.rec").unwrap().cluster;
+        fat.lba(cluster)
+    };
     for seed in 1..=64u32 {
         let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9) ^ 0x5ec0_0001);
-        for _ in 0..100 {
+        for i in 0..100 {
             let mut name = [0u8; 12];
             name.iter_mut().for_each(|b| *b = next() as u8);
             let mut fit = [0u8; RECORD_LEN];
@@ -5195,6 +5212,18 @@ fn recovery_records() {
             let _ = (rd.descent_m(), rd.uphill_m(), rd.downhill_m(), rd.max_alt_m(), rd.more_words(&p));
             restored += usize::from(p.np().is_some() && p.wbal_j().is_some() && rd.max_alt_m().is_some());
 
+            // one record per seed through a card (Recorder::recover_from): the totals it resumes from are the record's
+            if i == 0 && phase != Phase::Done {
+                let mut img = base.clone();
+                let at = (rec_lba as usize + 2) * crate::fat::SECTOR;
+                img[at..at + crate::fat::SECTOR].copy_from_slice(&r.to_sector());
+                img[at + 3 * crate::fat::SECTOR..at + 4 * crate::fat::SECTOR].fill(0); // the other copy: none
+                let mut rec = Recorder::new();
+                rec.recover(&mut crate::fat::tests::Ram(img, 0), (2026, 10, 23, 10, 0, 0));
+                assert_eq!(rec.more(), r.more, "seed {seed}: the resume totals");
+                resumed += 1;
+            }
+
             // the trash's move record: each file of the move is there or not, with its CRC or without
             let moved = |next: &mut dyn FnMut() -> u32| {
                 (!next().is_multiple_of(3)).then(|| (next(), next(), (next().is_multiple_of(2)).then(|| next() as u16)))
@@ -5223,6 +5252,7 @@ fn recovery_records() {
             recovery_sectors(&mut next, &expect, sector, crate::trash::Rec::from_sector, &mut trash);
         }
     }
+    assert!(resumed > 20, "{resumed} records resumed through a card");
     assert!(restored > 400, "{restored} resumes with NP, W' balance and max altitude");
     // a 16-bit CRC misses about 2^-16 of the changes: at most 4 accepted per 6400 damaged sectors, all equal
     for c in [recorder, trash] {
@@ -5937,6 +5967,7 @@ fn fault_log_files() {
             let sectors = 1 + r() % 140;
             let data: Vec<u8> = bytes(seed, sectors as usize * 512).collect();
             fat.write_sectors(&mut d, &mut h, 0, &data).unwrap();
+            fat.set_size(&mut d, &mut h, sectors * 512, t).unwrap(); // the chain in its entry
             let s = match r() % 4 {
                 0 => r(),                       // anything
                 1 => CAP - r() % 300,           // near the cap
@@ -6618,4 +6649,466 @@ fn repair_folders() {
         if want { yes += 1 } else { no += 1 }
     }
     assert!(yes > 10 && no > 10, "{yes} named by a repair, {no} not");
+}
+
+/// What the FAT writer's model holds: each path under `\Model` and its bytes (None: a folder).
+type Model = std::collections::BTreeMap<std::string::String, Option<Vec<u8>>>;
+
+/// One operation of the FAT writer as the firmware uses them (storage/fat/write.rs's pub fns).
+#[derive(Clone, Debug)]
+enum FatOp {
+    /// `Fat::create` of a name in a folder.
+    Create(std::string::String, std::string::String),
+    /// Bytes added at a file's end: its last sector read, `write_sectors` from there, then `set_size`.
+    Append(std::string::String, Vec<u8>),
+    /// `set_size` to fewer bytes (the chain cut back).
+    Truncate(std::string::String, u32),
+    /// `Fat::remove`.
+    Delete(std::string::String),
+    /// The move: `make_room` in the folder it goes to, `remove`, then `link` under a name there.
+    Move(std::string::String, std::string::String, std::string::String),
+    /// `Fat::mkdir`.
+    Mkdir(std::string::String, std::string::String),
+}
+
+/// Names the model gives (lower case: the writer ignores case, the model does not), short and long.
+const MODEL_NAMES: [&str; 8] =
+    ["a.fit", "b.fit", "ride 1.fit", "261020080000.fit", "x", "a much longer ride name.fit", "c.txt", "d"];
+
+fn model_op(r: &mut impl FnMut() -> u32, m: &Model) -> FatOp {
+    use FatOp::*;
+    let dirs: Vec<std::string::String> =
+        core::iter::once("Model".into()).chain(m.iter().filter(|e| e.1.is_none()).map(|e| e.0.clone())).collect();
+    let files: Vec<(&std::string::String, usize)> =
+        m.iter().filter_map(|(p, v)| v.as_ref().map(|v| (p, v.len()))).collect();
+    let dir = dirs[r() as usize % dirs.len()].clone();
+    let name: std::string::String = MODEL_NAMES[r() as usize % MODEL_NAMES.len()].into();
+    let kind = if files.is_empty() { [0, 5][r() as usize % 2] } else { r() % 6 };
+    let Some(&(file, len)) = files.get(r() as usize % files.len().max(1)) else {
+        return if kind == 5 { Mkdir(dir, name) } else { Create(dir, name) };
+    };
+    match kind {
+        0 => Create(dir, name),
+        1 => {
+            // sometimes past a cluster (16 KB) or two
+            let n = if r().is_multiple_of(6) { 16_000 + r() % 30_000 } else { 1 + r() % 1500 };
+            Append(file.clone(), (0..n).map(|_| r() as u8).collect())
+        }
+        2 if len > 0 => Truncate(file.clone(), r() % len as u32),
+        3 => Delete(file.clone()),
+        // the firmware moves to a free name only (trash.rs `ready`, the save's step 3): one taken is a create
+        4 if !m.contains_key(&std::format!("{dir}/{name}")) => Move(file.clone(), dir, name),
+        5 => Mkdir(dir, name),
+        _ => Create(dir, name),
+    }
+}
+
+/// `op` on the model: false if the writer must refuse it (the name taken), the model unchanged.
+fn model_apply(m: &mut Model, op: &FatOp) -> bool {
+    use FatOp::*;
+    match op {
+        Create(dir, n) | Mkdir(dir, n) => {
+            let p = std::format!("{dir}/{n}");
+            if m.contains_key(&p) {
+                return false;
+            }
+            m.insert(p, matches!(op, Create(..)).then(Vec::new));
+        }
+        Append(p, data) => m.get_mut(p).and_then(Option::as_mut).unwrap().extend_from_slice(data),
+        Truncate(p, s) => m.get_mut(p).and_then(Option::as_mut).unwrap().truncate(*s as usize),
+        Delete(p) => drop(m.remove(p)),
+        Move(f, dir, n) => {
+            let v = m.remove(f).unwrap();
+            m.insert(std::format!("{dir}/{n}"), v);
+        }
+    }
+    true
+}
+
+/// `op` through the FAT writer.
+fn fat_apply(
+    fat: &mut crate::fat::Fat,
+    d: &mut impl crate::fat::DiskWrite,
+    op: &FatOp,
+) -> Result<(), crate::fat::Error> {
+    use FatOp::*;
+    const T: (u16, u16) = (0x5b58, 0x6000);
+    fn locate(
+        fat: &mut crate::fat::Fat,
+        d: &mut impl crate::fat::DiskWrite,
+        p: &str,
+    ) -> Result<crate::fat::write::Handle, crate::fat::Error> {
+        let (dir, name) = p.rsplit_once('/').unwrap();
+        let dir = fat.open(d, dir)?;
+        fat.locate(d, dir, name)
+    }
+    match op {
+        Create(dir, n) => {
+            let dir = fat.open(d, dir)?;
+            fat.create(d, dir, n, T).map(drop)
+        }
+        Mkdir(dir, n) => {
+            let dir = fat.open(d, dir)?;
+            fat.mkdir(d, dir, n, T).map(drop)
+        }
+        Append(p, data) => {
+            let mut h = locate(fat, d, p)?;
+            let (sector, at) = (h.size / 512, h.size as usize % 512);
+            let mut buf = std::vec![0u8; (at + data.len()).div_ceil(512) * 512];
+            if at > 0 {
+                let mut s = [0u8; 512];
+                fat.read_sector(d, &h, sector, &mut s)?;
+                buf[..at].copy_from_slice(&s[..at]);
+            }
+            buf[at..at + data.len()].copy_from_slice(data);
+            fat.write_sectors(d, &mut h, sector, &buf)?;
+            let size = h.size + data.len() as u32;
+            fat.set_size(d, &mut h, size, T)
+        }
+        Truncate(p, s) => {
+            let mut h = locate(fat, d, p)?;
+            fat.set_size(d, &mut h, *s, T)
+        }
+        Delete(p) => {
+            let h = locate(fat, d, p)?;
+            fat.remove(d, &h)
+        }
+        Move(f, dir, n) => {
+            let h = locate(fat, d, f)?;
+            let dst = fat.open(d, dir)?;
+            fat.make_room(d, dst, n)?;
+            fat.remove(d, &h)?;
+            fat.link(d, dst, n, &h, T).map(drop)
+        }
+    }
+}
+
+/// What the volume holds under `\Model`, as [`Model`].
+fn model_listing(d: &mut crate::fat::tests::Ram) -> Model {
+    let mut fat = crate::fat::Fat::mount(d).unwrap();
+    let (mut out, mut dirs) = (Model::new(), std::vec![std::string::String::from("Model")]);
+    while let Some(p) = dirs.pop() {
+        let dir = fat.open(d, &p).unwrap();
+        let mut c = fat.cursor(dir).unwrap();
+        while let Some(e) = fat.list(d, &mut c).unwrap() {
+            let name = core::str::from_utf8(e.name()).unwrap();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let path = std::format!("{p}/{name}");
+            if e.file.dir {
+                dirs.push(path.clone());
+                out.insert(path, None);
+            } else {
+                let mut v = std::vec![0u8; e.file.size as usize];
+                assert_eq!(fat.read_at(d, &e.file, 0, &mut v).unwrap(), v.len(), "{path}");
+                out.insert(path, Some(v));
+            }
+        }
+    }
+    out
+}
+
+/// The review of 2026-11-01 (38): the FAT writer against a model. Pseudo-random sequences of the operations the
+/// firmware uses ([`FatOp`]) in `\Model` of the test volume, beside a map of what each path holds: after every
+/// operation the listing and every file's bytes equal the model, a name taken is refused with nothing written, and
+/// fsck passes. Then each sequence cut at a sector inside an operation of each kind, and the boot's repair (the FATs
+/// synced): the listing is the model before that operation or after it (a move cut between its remove and its link:
+/// the file in neither folder, its chain lost, as the module doc says; the recorder's record names it), fsck passes
+/// (lost clusters allowed, a chain past its size only for the file a cut append or cut back left so). Every kind
+/// is reached, done and cut.
+#[test]
+fn fat_writer_against_a_model() {
+    use crate::fat::Fat;
+    use crate::fat::write::tests::{Cut, fsck, fsck_cut};
+    let base = {
+        let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        fat.mkdir(&mut d, root, "Model", (0, 0)).unwrap();
+        d.0
+    };
+    let kind = |op: &FatOp| match op {
+        FatOp::Create(..) => 0,
+        FatOp::Append(..) => 1,
+        FatOp::Truncate(..) => 2,
+        FatOp::Delete(..) => 3,
+        FatOp::Move(..) => 4,
+        FatOp::Mkdir(..) => 5,
+    };
+    let (mut done, mut cut, mut refused) = ([0u32; 6], [0u32; 6], 0);
+    for seed in 1..=10u32 {
+        let mut r = xorshift(seed);
+        // the sequence, uncut: each operation's writes (from, to) kept for the cuts below
+        let mut c = Cut(crate::fat::tests::Ram(base.clone(), 0), u32::MAX);
+        let mut fat = Fat::mount(&mut c).unwrap();
+        let (mut m, mut ops) = (Model::new(), Vec::new());
+        for i in 0..40 {
+            let op = model_op(&mut r, &m);
+            let what = std::format!("seed {seed}, op {i} {op:?}");
+            let from = u32::MAX - c.1;
+            let before = c.0.0.clone();
+            let ok = model_apply(&mut m, &op);
+            let got = fat_apply(&mut fat, &mut c, &op);
+            if ok {
+                got.unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                done[kind(&op)] += 1;
+            } else {
+                assert_eq!(got, Err(crate::fat::Error::Refused), "{what}");
+                assert!(c.0.0 == before, "{what}: written");
+                refused += 1;
+            }
+            assert!(model_listing(&mut c.0) == m, "{what}: the listing");
+            assert!(fsck(&c.0.0).is_ok(), "{what}: {:?}", fsck(&c.0.0));
+            ops.push((op, from, u32::MAX - c.1));
+        }
+        // cut inside one operation of each kind that wrote (the first after a random one), then the boot
+        for k in 0..6 {
+            let start = r() as usize % ops.len();
+            let Some(&(_, from, to)) =
+                ops.iter().cycle().skip(start).take(ops.len()).find(|o| kind(&o.0) == k && o.2 > o.1)
+            else {
+                continue;
+            };
+            let at = from + r() % (to - from);
+            let mut c = Cut(crate::fat::tests::Ram(base.clone(), 0), at);
+            let mut fat = Fat::mount(&mut c).unwrap();
+            let (mut m, mut left) = (Model::new(), None);
+            for (op, ..) in &ops {
+                let before = m.clone();
+                let ok = model_apply(&mut m, op);
+                match fat_apply(&mut fat, &mut c, op) {
+                    Err(crate::fat::Error::Io) => {
+                        left = Some((op.clone(), before, m));
+                        break;
+                    }
+                    got => assert_eq!(got.is_ok(), ok, "seed {seed}, cut at {at}: {op:?}"),
+                }
+            }
+            let (op, before, after) = left.expect("cut inside the sequence");
+            let what = std::format!("seed {seed}, cut at write {at} in {op:?}");
+            let mut d = c.0;
+            Fat::mount(&mut d).unwrap().sync_fats(&mut d).unwrap(); // the boot's
+            let scan = fsck_cut(&d.0).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(scan.apart, 0, "{what}: the FATs synced");
+            assert!(scan.past.len() <= usize::from(matches!(op, FatOp::Append(..) | FatOp::Truncate(..))), "{what}");
+            let got = model_listing(&mut d);
+            let unnamed = match &op {
+                FatOp::Move(f, ..) => before.iter().filter(|e| e.0 != f).map(|(p, v)| (p.clone(), v.clone())).collect(),
+                _ => before.clone(),
+            };
+            assert!(got == before || got == after || got == unnamed, "{what}: the listing {got:?}");
+            cut[kind(&op)] += 1;
+        }
+    }
+    std::println!("FAT model: done {done:?}, cut {cut:?}, {refused} refused");
+    assert!(done.iter().all(|&n| n > 10) && cut.iter().all(|&n| n >= 3) && refused > 5, "{done:?} {cut:?} {refused}");
+}
+
+/// B1b-1's re-check (a): `Fat::ensure_own_dir` on generated entries of the folder's name (any attribute, any
+/// cluster words, several of them, other names between): never a panic; Ok is a folder found again the same with
+/// nothing more written; and the only entries it changes are folder entries on cluster 0 of that name (marked
+/// deleted, with their long name pieces), besides a new folder's entry at the folder's end. Seeds reaching the
+/// repair, Ok, Corrupt and Refused are counted.
+#[test]
+fn own_folder_entries() {
+    use crate::fat::Fat;
+    use crate::fat::write::tests::raw_entry;
+    const T: (u16, u16) = (0x5b58, 0x6000);
+    let base = {
+        let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        fat.mkdir(&mut d, root, "Top", T).unwrap();
+        d.0
+    };
+    let (mut mended, mut ok, mut corrupt, mut refused) = (0, 0, 0, 0);
+    for seed in 1..=400u32 {
+        let mut r = xorshift(seed);
+        let mut d = crate::fat::tests::Ram(base.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let top = fat.open(&mut d, "Top").unwrap();
+        for k in 0..1 + r() % 6 {
+            let name = ["Own", "own", "OWN", "Other"][r() as usize % 4];
+            let attr = [0x10, 0x10, 0x20, 0x00, 0x30, 0x11, (r() as u8) & !0x0f][r() as usize % 7];
+            let hi = [0, 0, 0, 1, 0xffff, r() & 0xffff][r() as usize % 6];
+            let lo = [0, 0, 3, 100, r() & 0xffff][r() as usize % 5];
+            raw_entry(&mut fat, &mut d, top, name, attr, hi << 16 | lo, k as u8);
+        }
+        let lba = fat.lba(top.cluster) as usize * 512;
+        let before = d.0[lba..lba + fat.cluster_bytes() as usize].to_vec();
+        let what = std::format!("seed {seed}");
+        match fat.ensure_own_dir(&mut d, top, "Own", T) {
+            Ok(f) => {
+                assert!(f.dir, "{what}");
+                assert_eq!(fat.find(&mut d, top, "Own"), Ok(f), "{what}: found again");
+                let now = d.0.clone();
+                assert_eq!(fat.ensure_own_dir(&mut d, top, "Own", T), Ok(f), "{what}: the same");
+                assert!(d.0 == now, "{what}: written again");
+                ok += 1;
+            }
+            Err(crate::fat::Error::Corrupt) => corrupt += 1,
+            Err(crate::fat::Error::Refused) => refused += 1,
+            Err(e) => panic!("{what}: {e:?}"),
+        }
+        let after = &d.0[lba..lba + before.len()];
+        let mut marked = 0;
+        for (i, (a, b)) in before.chunks(32).zip(after.chunks(32)).enumerate() {
+            if a == b || a[0] == 0 || a[0] == 0xe5 {
+                continue; // the same, or a free slot (a new entry; the slots before it marked)
+            }
+            let cluster = u32::from(a[20]) << 16 | u32::from(a[21]) << 24 | u32::from(a[26]) | u32::from(a[27]) << 8;
+            let torn = a[11] & 0x10 != 0 && a[11] != 0x0f && cluster == 0;
+            assert!(b[0] == 0xe5 && b[1..] == a[1..] && (torn || a[11] == 0x0f), "{what}: slot {i} changed");
+            marked += usize::from(torn);
+        }
+        mended += usize::from(marked > 0);
+    }
+    std::println!("own folder: {mended} mended, {ok} ok, {corrupt} corrupt, {refused} refused");
+    assert!(mended > 40 && ok > 40 && corrupt > 20 && refused > 20, "{mended} {ok} {corrupt} {refused}");
+}
+
+/// `dev.rs check_image` (the checks before a USB image run, review finding 38) on headers built field by field,
+/// each field right or wrong: Ok exactly when every check holds, else the first failing check's error, in the
+/// order the function makes them. Every outcome reached.
+#[test]
+fn image_headers() {
+    let mut seen = std::collections::BTreeMap::new();
+    for seed in 1..=20_000u32 {
+        let mut r = xorshift(seed);
+        let size = [0x9c, 0x4_0000, r() % 0x20_0000, 0][r() as usize % 4];
+        let len = [0x9c, 0x200, 0x9b, 8, 0][r() as usize % 5];
+        let good = |r: &mut dyn FnMut() -> u32| !r().is_multiple_of(5);
+        let (tag_ok, size_ok, sp_ok, reset_ok) = (good(&mut r), good(&mut r), good(&mut r), good(&mut r));
+        let mut head = std::vec![0u8; len.max(0x9c)];
+        let sp = if sp_ok { 0x2000_0001 + r() % 0x2_0000 } else { [0x2000_0000, 0x2002_0001, r()][r() as usize % 3] };
+        let reset = if reset_ok && size > 0 {
+            (0xd000_0000 + r() % size) | 1
+        } else {
+            [(0xd000_0000 + size) | 1, 0xd000_0000, 0xcfff_ffff, r() & !1][r() as usize % 4]
+        };
+        head[0..4].copy_from_slice(&sp.to_le_bytes());
+        head[4..8].copy_from_slice(&reset.to_le_bytes());
+        let digits =
+            |r: &mut dyn FnMut() -> u32| [b'0' + (r() % 10) as u8, b'0' + (r() % 10) as u8, b'0' + (r() % 10) as u8];
+        let [a, b, c] = digits(&mut r);
+        head[0x94..0x98].copy_from_slice(&if tag_ok {
+            [b'R', a, b, c]
+        } else {
+            [[b'r', a, b, c], [b'R', a, b'x', c], [b'S', a, b, c]][r() as usize % 3]
+        });
+        let word = if size_ok { size } else { size ^ (1 + r() % 0xffff) };
+        head[0x98..0x9c].copy_from_slice(&word.to_le_bytes());
+        head.truncate(len);
+        let reset_in = reset & 1 == 1 && (0xd000_0000..0xd000_0000u32.wrapping_add(size)).contains(&reset);
+        let sp_in = 0x2000_0000 < sp && sp <= 0x2002_0000;
+        let want = if len < 0x9c {
+            Err("short image")
+        } else if !tag_ok {
+            Err("no R### tag at 0x94")
+        } else if !size_ok {
+            Err("size word at 0x98 differs from the upload")
+        } else if !sp_in {
+            Err("initial SP not in DTCM")
+        } else if !reset_in {
+            Err("reset vector not Thumb code in the image")
+        } else {
+            Ok(())
+        };
+        let got = crate::dev::check_image(&head, size);
+        assert_eq!(got, want, "seed {seed}: sp {sp:#x} reset {reset:#x} size {size:#x} len {len}");
+        *seen.entry(got).or_insert(0) += 1;
+    }
+    assert_eq!(seen.len(), 6, "{seen:?}");
+    assert!(seen.values().all(|&n| n > 100), "{seen:?}");
+}
+
+/// `cues.rs Turn::from_text` (a GPX cue's word, review finding 38) on words built from the planners' words: each in
+/// any case with separators (spaces, `_`, `-`, tabs, line ends) anywhere gives the word's turn; a roundabout with
+/// any exit digit; random letters never panic. A word past 16 letters is no turn.
+#[test]
+fn cue_words() {
+    use crate::course::Turn;
+    const WORDS: [&str; 42] = [
+        "left",
+        "tl",
+        "turnleft",
+        "right",
+        "tr",
+        "turnright",
+        "slightleft",
+        "leftslight",
+        "tsll",
+        "kl",
+        "keepleft",
+        "stayleft",
+        "bearleft",
+        "leftfork",
+        "slightright",
+        "rightslight",
+        "tslr",
+        "kr",
+        "keepright",
+        "stayright",
+        "bearright",
+        "rightfork",
+        "sharpleft",
+        "leftsharp",
+        "tshl",
+        "sharpright",
+        "rightsharp",
+        "tshr",
+        "uturn",
+        "tu",
+        "tlu",
+        "tru",
+        "uturnleft",
+        "uturnright",
+        "straight",
+        "continue",
+        "summit",
+        "water",
+        "food",
+        "danger",
+        "firstaid",
+        "rndb",
+    ];
+    let (mut turns, mut rounds, mut none) = (0, 0, 0);
+    for seed in 1..=20_000u32 {
+        let mut r = xorshift(seed);
+        let w = WORDS[r() as usize % WORDS.len()];
+        let mut plain = w.as_bytes().to_vec();
+        let exit = r() % 10;
+        let pre = [&b"rndb"[..], b"rnlb", b"roundabout_e"][r() as usize % 3];
+        if w == "rndb" {
+            plain = pre.iter().copied().filter(|&c| c != b'_').collect();
+            plain.push(b'0' + exit as u8);
+        }
+        let want = Turn::from_text(&plain);
+        let mut s = Vec::new();
+        for &c in &plain {
+            while r().is_multiple_of(4) {
+                s.push(b" _-\t\r\n"[r() as usize % 6]);
+            }
+            s.push(if r().is_multiple_of(2) { c.to_ascii_uppercase() } else { c });
+        }
+        assert_eq!(Turn::from_text(&s), want, "seed {seed}: {:?}", core::str::from_utf8(&s));
+        match want {
+            Some(Turn::Roundabout(n)) => {
+                assert_eq!(u32::from(n), exit, "seed {seed}");
+                rounds += 1;
+            }
+            Some(_) => turns += 1,
+            None => {
+                assert!(w == "rndb" && exit == 0, "seed {seed}: {w} no turn");
+                none += 1;
+            }
+        }
+        // random letters, and a word grown past 16
+        let junk: Vec<u8> = (0..r() % 24).map(|_| b"abcdeflrstu _-019"[r() as usize % 17]).collect();
+        let _ = Turn::from_text(&junk);
+        let long: Vec<u8> = plain.iter().chain(b"xxxxxxxxxxxxxxxx").copied().collect();
+        assert_eq!(Turn::from_text(&long), None, "seed {seed}");
+    }
+    assert!(turns > 10_000 && rounds > 100 && none > 10, "{turns} {rounds} {none}");
 }

@@ -9,13 +9,12 @@ const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const ID: SensorId = SensorId { device: 5555, trans: 0xf1 };
 
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    sim.own_settings();
-    sim.backup[14] = Kind::Trainer.to_word(ID);
-    sim.nordic.sensors.push(AntSensor { device_type: 0x11, id: 5555, data: |_| [0; 8], network: 0, ack: &[] });
-    sim.nordic.trainer.rider_w = 180;
-    let mut app = App::start(&mut sim, Some(KEY));
+    let (mut sim, mut app) = super::tests::unit_with(Some(KEY), |sim| {
+        sim.own_settings();
+        sim.backup[14] = Kind::Trainer.to_word(ID);
+        sim.nordic.sensors.push(AntSensor { device_type: 0x11, id: 5555, data: |_| [0; 8], network: 0, ack: &[] });
+        sim.nordic.trainer.rider_w = 180;
+    });
     app.settings.light_timeout = 0; // never off: a key after the time-out would only wake the light
     run(&mut sim, &mut app, 4000);
     (sim, app)

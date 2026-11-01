@@ -18,15 +18,15 @@ fn power210(_: u64) -> [u8; 8] {
 
 /// The unit with stock's rides read, the fields CTL, ATL and TSB on the first page and a power meter at 210 W.
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    sim.own_settings();
-    sim.backup[Kind::Power.backup()] = Kind::Power.to_word(ID);
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
-    let w = PageCfg { layout: 4, fields: [Field::Ctl, Field::Atl, Field::Tsb, Field::Tss, Field::Time, Field::Time] }
-        .to_words();
-    (sim.backup[26], sim.backup[27]) = (w[0], w[1]);
-    let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+    let (mut sim, mut app) = super::tests::unit_with(Some([1, 2, 3, 4, 5, 6, 7, 8]), |sim| {
+        sim.own_settings();
+        sim.backup[Kind::Power.backup()] = Kind::Power.to_word(ID);
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
+        let w =
+            PageCfg { layout: 4, fields: [Field::Ctl, Field::Atl, Field::Tsb, Field::Tss, Field::Time, Field::Time] }
+                .to_words();
+        (sim.backup[26], sim.backup[27]) = (w[0], w[1]);
+    });
     app.settings.ftp = 200;
     run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 20_000);
     assert!(app.stock.ready() && app.pmc.load.is_built(), "stock's rides are read and the load built");
