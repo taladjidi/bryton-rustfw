@@ -44,7 +44,6 @@ pub trait NrfExt {
 }
 
 type KeyScript = Box<dyn Fn(u64) -> u8>;
-type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 
 pub struct Sim {
     pub screen: Vec<u16>,
@@ -108,46 +107,8 @@ pub struct Sim {
     pub main: LoopModel,
 }
 
-/// The Sitronix touch controller (BOARD.md 17), as the protocol doc describes it: Init for 50 ms after its reset
-/// is released, then Normal; INT low while a finger is down; the registers the driver reads.
-pub struct TouchChip {
-    /// When the reset was released (None: held in reset, or never released).
-    run_since: Option<u64>,
-    finger: FingerScript,
-    /// A second finger, for a pinch.
-    finger2: FingerScript,
-    /// Point reads so far (the app reads only while a finger is down).
-    pub reads: u32,
-}
-
-impl TouchChip {
-    fn ready(&self, ms: u64) -> bool {
-        self.run_since.is_some_and(|t| ms >= t + 50)
-    }
-
-    fn read(&mut self, ms: u64, reg: u8, buf: &mut [u8]) -> bool {
-        let Some(t) = self.run_since else { return false }; // in reset: no acknowledge
-        let mut regs = [0u8; 0x40];
-        regs[0x00] = 0x05; // version
-        regs[0x01] = if ms >= t + 50 { 0x00 } else { 0x01 }; // Normal, else Init
-        regs[0x04..0x07].copy_from_slice(&[0x01, 0xf0, 0x40]); // 240 x 320
-        regs[0x0c..0x10].copy_from_slice(&[0, 0, 1, 2]);
-        regs[0x3f] = 2;
-        if let Some((x, y)) = (self.finger)(ms).filter(|_| self.ready(ms)) {
-            regs[0x12..0x15].copy_from_slice(&[0x80 | (x >> 4 & 0x70) as u8 | (y >> 8 & 7) as u8, x as u8, y as u8]);
-        }
-        if let Some((x, y)) = (self.finger2)(ms).filter(|_| self.ready(ms)) {
-            regs[0x16..0x19].copy_from_slice(&[0x80 | (x >> 4 & 0x70) as u8 | (y >> 8 & 7) as u8, x as u8, y as u8]);
-        }
-        if reg == 0x12 {
-            self.reads += 1;
-        }
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b = regs.get(usize::from(reg) + i).copied().unwrap_or(0);
-        }
-        true
-    }
-}
+mod touch_model;
+pub use touch_model::TouchChip;
 
 /// SEC_COUNT of the simulated eMMC: about 31 GB, as the unit's.
 pub const EMMC_SECTORS: u32 = 0x03a3_e000;
@@ -472,129 +433,8 @@ impl EmmcCard {
     }
 }
 
-/// The chips on the sensor bus, as their registers behave (BOARD.md 16).
-pub struct Bus {
-    /// The ambient light, tenths of a lux; None: no light sensor (it never acknowledges).
-    pub lux10: Option<u32>,
-    /// The light sensor's registers (written ones kept).
-    light: [u8; 0x20],
-    /// When the light sensor left standby (None: in standby).
-    light_on_since: Option<u64>,
-    /// Time the light sensor has spent measuring, ms (up to its last standby).
-    pub light_on_ms: u64,
-    /// Light readings taken.
-    pub light_reads: u32,
-    /// Transactions on the bus (reads and writes, any chip): each one the CPU polls through on the unit.
-    pub transactions: u32,
-    /// The barometer's pressure and temperature (hPa x 10, C x 100); None: no barometer.
-    pub baro: Option<(u32, i16)>,
-    /// The barometer follows this altitude (mm, a function of the time in ms) on the sea-level pressure `baro_p0`
-    /// (1/4096 hPa), instead of `baro`'s pressure: a simulated climb, with `baro_noise` counts of 1/4096 hPa of
-    /// pseudo-random noise on each reading.
-    pub baro_alt: Option<fn(u64) -> i32>,
-    /// See `baro_alt`.
-    pub baro_p0: u32,
-    /// See `baro_alt`.
-    pub baro_noise: u32,
-    /// When the last one-shot conversion is done (None: none asked since the last read).
-    baro_done: Option<u64>,
-    /// One-shot conversions asked.
-    pub baro_conversions: u32,
-    /// The accelerometer's CTRL_REG1 (0x77, running at 400 Hz, as stock leaves it).
-    pub accel_ctrl1: u8,
-}
-
-impl Bus {
-    fn read(&mut self, now: u64, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
-        use crate::ambient::*;
-        self.transactions += 1;
-        match addr {
-            LIGHT_ADDR => {
-                let Some(lux10) = self.lux10 else { return false };
-                let ready = self.light_on_since.is_some_and(|t| now >= t + 100);
-                let raw = lux10.min(0x3_ffff);
-                let mut regs = self.light;
-                regs[0x06] = LIGHT_ID;
-                regs[0x07] = if ready { 0x08 } else { 0 };
-                regs[0x0d..0x10].copy_from_slice(&raw.to_le_bytes()[..3]);
-                if reg == 0x0d {
-                    assert!(ready, "light read before its conversion");
-                    assert_eq!((regs[0x04], regs[0x05]), (0x22, 0x02), "the lux scale assumes 18 bits, gain 6");
-                    self.light_reads += 1;
-                }
-                for (i, b) in buf.iter_mut().enumerate() {
-                    *b = regs[(usize::from(reg) + i) % regs.len()];
-                }
-                true
-            }
-            BARO_ADDR => {
-                let Some((p, t)) = self.baro else { return false };
-                let ready = self.baro_done.is_some_and(|d| now >= d);
-                let mut regs = [0u8; 0x30];
-                regs[0x0f] = BARO_ID;
-                regs[0x27] = if ready { 0x03 } else { 0 };
-                let raw = match self.baro_alt {
-                    Some(f) => {
-                        let h = f64::from(f(now)) / 44_307_694.0;
-                        let noise = (now.wrapping_mul(2_654_435_761) >> 7) as u32 % (2 * self.baro_noise + 1);
-                        ((f64::from(self.baro_p0) * (1.0 - h).powf(1.0 / 0.190284)) as u32)
-                            .saturating_add(noise)
-                            .saturating_sub(self.baro_noise)
-                    }
-                    None => p * 4096 / 10,
-                };
-                regs[0x28..0x2b].copy_from_slice(&raw.to_le_bytes()[..3]);
-                regs[0x2b..0x2d].copy_from_slice(&t.to_le_bytes());
-                if reg == 0x28 {
-                    self.baro_done = None;
-                }
-                for (i, b) in buf.iter_mut().enumerate() {
-                    *b = regs[(usize::from(reg) + i) % regs.len()];
-                }
-                true
-            }
-            ACCEL_ADDR => true,
-            _ => false,
-        }
-    }
-
-    fn write(&mut self, now: u64, addr: u8, reg: u8, data: &[u8]) -> bool {
-        use crate::ambient::*;
-        self.transactions += 1;
-        match addr {
-            LIGHT_ADDR if self.lux10.is_some() => {
-                for (i, &v) in data.iter().enumerate() {
-                    self.light[(usize::from(reg) + i) % 0x20] = v;
-                }
-                if reg == 0 {
-                    match (data[0] & 0x02 != 0, self.light_on_since) {
-                        (true, None) => self.light_on_since = Some(now),
-                        (false, Some(t)) => {
-                            self.light_on_ms += now - t;
-                            self.light_on_since = None;
-                        }
-                        _ => {}
-                    }
-                }
-                true
-            }
-            BARO_ADDR if self.baro.is_some() => {
-                if reg == 0x11 && data[0] & 1 != 0 {
-                    self.baro_done = Some(now + 20);
-                    self.baro_conversions += 1;
-                }
-                true
-            }
-            ACCEL_ADDR => {
-                if reg == 0x20 {
-                    self.accel_ctrl1 = data[0];
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-}
+mod sensor_model;
+pub use sensor_model::Bus;
 
 /// Where the simulated fix is (degrees x 1e-7): in the sea near 0 N 0 E, nowhere real, as the synthetic volume's
 /// rides and tiles (AGENTS.md, "Public repository").
@@ -1310,22 +1150,8 @@ impl Sim {
             pixels: 0,
             windows: 0,
             emmc: EmmcCard::default(),
-            bus: Bus {
-                lux10: Some(3000), // 300 lux: indoors
-                light: [0; 0x20],
-                light_on_since: None,
-                light_on_ms: 0,
-                light_reads: 0,
-                transactions: 0,
-                baro: Some((10_132, 2150)),
-                baro_alt: None,
-                baro_p0: crate::altitude::P_STD,
-                baro_noise: 0,
-                baro_done: None,
-                baro_conversions: 0,
-                accel_ctrl1: 0x77,
-            },
-            touch: TouchChip { run_since: None, finger: Box::new(|_| None), finger2: Box::new(|_| None), reads: 0 },
+            bus: Bus::new(),
+            touch: TouchChip::new(),
             work_ns_per_byte: 0,
             awake_ns: 0,
             cycles: 0,
@@ -1339,13 +1165,13 @@ impl Sim {
 
     /// The finger on the touch panel as a function of the simulated time in ms (None: lifted).
     pub fn finger(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
-        self.touch.finger = Box::new(f);
+        self.touch.set_finger(f);
         self
     }
 
     /// A second finger on the touch panel, as [`Sim::finger`].
     pub fn finger2(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
-        self.touch.finger2 = Box::new(f);
+        self.touch.set_finger2(f);
         self
     }
 
@@ -1660,16 +1486,20 @@ impl Board for Sim {
         self.bus.write(self.ms, addr, reg, data)
     }
 
+    fn i2c_recover(&mut self) {
+        self.bus.recover();
+    }
+
     fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool {
         self.touch.read(self.ms, reg, buf)
     }
 
     fn touch_reset(&mut self, run: bool) {
-        self.touch.run_since = if run { self.touch.run_since.or(Some(self.ms)) } else { None };
+        self.touch.reset(run, self.ms);
     }
 
     fn touch_int(&mut self) -> bool {
-        self.touch.ready(self.ms) && (self.touch.finger)(self.ms).is_some()
+        self.touch.int(self.ms)
     }
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
@@ -1841,3 +1671,7 @@ mod drive_tests;
 
 #[cfg(test)]
 mod diag_tests;
+
+mod key_model;
+#[cfg(test)]
+mod peripheral_tests;

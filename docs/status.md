@@ -18,6 +18,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **The sensor bus clear (2026-11-01, main.rs `i2c_clear`, BOARD.md 16 "Bus clear"):** nine SCL pulses and a STOP on
+  PD12 / PD13, run at start when no chip answers and after 3 failed transfers in a row. Never run on the unit: check it
+  with a scope or by holding SDA low from a test fixture, and that a healthy bus is left as `i2c_init` leaves it.
+  The sim's sensor rules S1 to S3 (BDU lock, one-shot clear, new-data bit) and the touch chip's Idle (T2, the lost first
+  report, 2 s) are inferred from the datasheets' wording, not seen.
+
 - **The receiver's answers and its SPI limits (2026-11-01, BOARD.md 13 "The receiver's rules"):** with `tools/gnss.py`, read
   back (VALGET) the four CFG-SIGNAL keys after the start-up and CFG-SPI-MAXFF / CFG-SPI-EXTENDEDTIMEOUT; MON-COMMS
   (txErrors, tx buffer usage) after a ride; a deliberate 2 s gap between reads to see the stream stop (in the simulator the

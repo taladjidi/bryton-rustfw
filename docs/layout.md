@@ -340,6 +340,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `gnss_model.rs` (the GNSS receiver, strict like the Nordic table: its rules G1 to G10 with their sources, ACK / NAK and
   MGA-ACK answers, the 1.5 s stream time-out, MAXFF, the 4 kB buffer; a test that provokes a rule sets `gnss.expect`) and
   `gnss_model_tests.rs` (each rule, every frame `gnss.rs` builds against the table, the retry of a refused configuration).
+  `sensor_model.rs` (the sensor bus I2C4, strict like the GNSS model: rules S1 to S6 with sources, a stuck bus,
+  NACK bursts, `bus.expect`), `touch_model.rs` (the touch chip: reset low time, Init, Idle and the lost first report,
+  five contacts), `key_model.rs` (contact bounce for a key script) and `peripheral_tests.rs` (each rule, the bus
+  recovery, the bounce and a stuck Start through the app's real input path, the sensor bus fuzz).
   `loop_model.rs` (not tests: the `Sim`'s side of the main loop, `LoopBoard` on the simulated clock, and `SimLink`, a
   scripted USB link that logs what the pass asks; `tests.rs` `run_loop` drives lib `MainLoop::pass`, the unit's own code).
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).

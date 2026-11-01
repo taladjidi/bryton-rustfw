@@ -112,6 +112,9 @@ pub const TOUCH_MS: u32 = 10;
 /// four (review of 2026-10-31, finding 10: an I2C read the CPU polls).
 pub const LIGHT_MS: u32 = 500;
 
+/// Sensor bus transfers failing in a row before the bus is cleared (`App::sensor_ok`).
+pub const I2C_RECOVER_AFTER: u8 = 3;
+
 /// How often the light is read when only THEME AUTO wants it (the backlight not following it, the menu not showing it):
 /// one reading each 5 s, each counting its 5 s of the switch's [`ui::theme::HOLD_S`] ([`ui::theme::DayNight`]), so the
 /// theme still switches after 30 s of the other light. The switch is decided and drawn while the screen is off too:
@@ -304,11 +307,14 @@ impl App {
         match (wanted, self.light.measuring) {
             (true, false) => {
                 self.light.measuring = ambient::light_start(b);
+                self.sensor_ok(b, self.light.measuring);
                 // the first reading a second on (a conversion done) at most: THEME AUTO's first decides at once
                 self.light.ms = every.saturating_sub(1000);
             }
             (true, true) if self.light.ms >= every => {
-                if let Some(lux10) = ambient::light_read(b) {
+                let read = ambient::light_read(b);
+                self.sensor_ok(b, read.is_some());
+                if let Some(lux10) = read {
                     self.light.auto_level = self.light.auto.update(lux10);
                     let dt = self.light.ms;
                     self.light.ms = 0;
@@ -320,6 +326,16 @@ impl App {
                 self.light.measuring = false;
             }
             _ => {}
+        }
+    }
+
+    /// A sensor bus transfer's outcome: after [`I2C_RECOVER_AFTER`] failures in a row the library asks the board to
+    /// clear the bus (a chip may hold SDA low after a reset in the middle of a read; one pass of nine clock pulses).
+    pub(crate) fn sensor_ok(&mut self, b: &mut impl Board, ok: bool) {
+        self.light.fails = if ok { 0 } else { self.light.fails + 1 };
+        if self.light.fails >= I2C_RECOVER_AFTER {
+            self.light.fails = 0;
+            b.i2c_recover();
         }
     }
 

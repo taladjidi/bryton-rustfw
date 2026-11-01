@@ -71,7 +71,8 @@ impl App {
                 let read = ambient::baro_read_raw(b);
                 self.baro = read.map(|(p, t)| ((p * 10 + 2048) / 4096, t));
                 self.alt.feed(read.map(|(p, _)| p));
-                ambient::baro_start(b);
+                let started = ambient::baro_start(b);
+                self.sensor_ok(b, started);
             }
         }
         self.alt_storage(b);
