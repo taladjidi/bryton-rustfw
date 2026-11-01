@@ -3,7 +3,8 @@
 chip's real app"). The test bench of the radio chip: the library's real radio code can drive the real app byte for
 byte, with the SoftDevice replaced by stubs.
 
-  python3 -I tools/nrf_emu.py selftest    boot, ANT event layouts, slice-size invariance, RTS hold, queue limit, hang
+  python3 -I tools/nrf_emu.py selftest    boot, ANT event layouts, slice-size invariance, RTS hold, queue limit, hang,
+                                          the commands stock never sends
   python3 -I tools/nrf_emu.py --serve      the UART as a byte pipe (src/sim/nrf_emu_tests.rs)
 
 NOTHING of the binary is in this repository: it is read at run time from NRF_BIN (default
@@ -75,6 +76,14 @@ SVC_ANT_EVENT_GET = 0xC1
 # with every 0xC0+ number accepted): accepted with success and no output written, which is right for the setters
 # (channel assign / id / period / frequency / open, network key, enable: inputs only). Any other ANT number stops.
 ANT_NO_OUTPUT = {0xC2, 0xC4, 0xCC, 0xCD, 0xD1, 0xD3, 0xDA, 0xFA}
+# The calls of the commands stock never sends (chip_table.rs, Stock::Never): the table's opcodes are the SVC numbers
+# the app issues (BLE_SVC_BASE 0x60 + the offset in ble_gap.h / ble_gattc.h / ble_gatts.h of S132 v5). Inferred from
+# the v5 enumeration order, not checked against the header text. Only result 0 is stubbed.
+NEVER_SVC = {0x74, 0x78, 0x8D, 0x9D, 0xA3, 0xA4}
+# The six commands stock never sends, as rustfw's builders encode them (chip_table_tests.rs, NEVER_BYTES: the same
+# hex, checked there against the builders' output).
+NEVER_CMDS = ["0074", "0078c403", "008d", "009d00000d00", "00a3020001010829010121000200000200020001000101",
+              "00a4ffff0300010000030001070707"]
 EVENT_RX = 0x80  # ant_parameters.h: the broadcast data event
 NOT_FOUND = 5  # NRF_ERROR_NOT_FOUND
 
@@ -458,7 +467,7 @@ class Emu:
                 self.uc.mem_write(a[2], buf)
             else:
                 ret = NOT_FOUND
-        elif n in ANT_NO_OUTPUT:
+        elif n in ANT_NO_OUTPUT or n in NEVER_SVC:
             pass
         else:
             self._fail(f"unknown SVC {n:#x} at pc {self.reg('pc'):#x}")
@@ -696,6 +705,19 @@ def selftest():
         assert not e2.frames()
     assert len(seen) == 1, seen
     print(f"ok: unknown opcode hangs ({seen.pop()[0]}), identical at two slice sizes")
+    # the commands stock never sends: each is answered [01][op][result u32] and does not hang the app
+    for hx in NEVER_CMDS:
+        pl = bytes.fromhex(hx)
+        n2 = boot_emu()
+        n2.send(pl)
+        try:
+            n2.run(50_000)
+        except Hang as ex:
+            raise AssertionError(f"command {pl[1]:#x} hung the app: {ex}") from None
+        fr = n2.frames()
+        assert len(fr) == 1 and fr[0][:2] == bytes([1, pl[1]]) and len(fr[0]) >= 6, \
+            f"command {pl[1]:#x}: {[p.hex() for p in fr]}"
+    print(f"ok: {len(NEVER_CMDS)} commands stock never sends are answered [01][op][result], no hang")
     return 0
 
 

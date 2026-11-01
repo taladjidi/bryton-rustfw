@@ -16,6 +16,11 @@
 //! Bryton's nRF app, reversed: the opcode set, the 384 byte packet limit, the decoders' exact-length rule (checked
 //! for 0x69) and the GATT client write's 20 byte value buffer (the SDK default, ATT MTU 23 minus 3).
 //! Opcodes the chip has and rustfw never sends are listed as present with the layout "not modelled".
+//!
+//! Each row also says whether stock firmware sends the same command ([`Stock`]). That flag is from stock firmware,
+//! reversed (its command list, BOARD.md 11): `Sends` for every command stock encodes, `Never` for the rest. A `Never`
+//! row is proven on Bryton's real app by `tools/nrf_emu.py selftest`, and chip_table_tests.rs fails for one without
+//! that proof.
 
 extern crate std;
 use std::{format, string::String, vec::Vec};
@@ -69,6 +74,15 @@ pub enum Out {
     None,
 }
 
+/// Whether stock firmware sends a command too (stock firmware, reversed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stock {
+    /// Stock encodes this command.
+    Sends,
+    /// Stock never encodes it: the chip's answer to it is proven on Bryton's real app, not on stock's traffic.
+    Never,
+}
+
 /// A command the table models.
 pub struct Cmd {
     /// 0 BLE or SoC, 6 ANT.
@@ -81,6 +95,8 @@ pub struct Cmd {
     pub args: &'static [L],
     /// The response's outputs.
     pub out: Out,
+    /// Whether stock firmware sends it too.
+    pub stock: Stock,
     /// The SDK decoder (file: function).
     pub src: &'static str,
 }
@@ -106,8 +122,8 @@ const NONE: &[L] = &[];
 const PTR: L = L::Cond(&[]);
 
 macro_rules! cmd {
-    ($k:expr, $op:expr, $name:expr, $args:expr, $out:expr, $src:expr) => {
-        Cmd { kind: $k, op: $op, name: $name, args: $args, out: $out, src: $src }
+    ($k:expr, $op:expr, $name:expr, $args:expr, $out:expr, $stock:expr, $src:expr) => {
+        Cmd { kind: $k, op: $op, name: $name, args: $args, out: $out, stock: $stock, src: $src }
     };
 }
 
@@ -115,25 +131,43 @@ use Out::{Any, Fixed};
 
 /// Every command rustfw sends (or may send), with its layout.
 pub const CMDS: &[Cmd] = &[
-    cmd!(0, 0x32, "sd_power_system_off", NONE, Out::None, "nrf_soc_conn.c: power_system_off_req_dec"),
-    cmd!(0, 0x60, "sd_ble_enable", NONE, Fixed(0), "ble_conn.c: ble_enable_req_dec (API 4 and later: no arguments)"),
+    cmd!(0, 0x32, "sd_power_system_off", NONE, Out::None, Stock::Sends, "nrf_soc_conn.c: power_system_off_req_dec"),
+    cmd!(
+        0,
+        0x60,
+        "sd_ble_enable",
+        NONE,
+        Fixed(0),
+        Stock::Sends,
+        "ble_conn.c: ble_enable_req_dec (API 4 and later: no arguments)"
+    ),
     cmd!(
         0,
         0x62,
         "sd_ble_uuid_vs_add",
         &[L::Cond(&[L::Raw(16)]), PTR],
         Fixed(2),
+        Stock::Sends,
         "ble_conn.c: ble_uuid_vs_add_req_dec"
     ),
-    cmd!(0, 0x65, "sd_ble_version_get", &[PTR], Fixed(5), "ble_conn.c: ble_version_get_req_dec"),
-    cmd!(0, 0x66, "sd_ble_user_mem_reply", &[L::U16, L::Absent], Fixed(0), "ble_conn.c: ble_user_mem_reply_req_dec"),
-    cmd!(0, 0x69, "sd_ble_cfg_set", &[L::Cfg], Fixed(0), "ble_conn.c: ble_cfg_set_req_dec"),
+    cmd!(0, 0x65, "sd_ble_version_get", &[PTR], Fixed(5), Stock::Sends, "ble_conn.c: ble_version_get_req_dec"),
+    cmd!(
+        0,
+        0x66,
+        "sd_ble_user_mem_reply",
+        &[L::U16, L::Absent],
+        Fixed(0),
+        Stock::Sends,
+        "ble_conn.c: ble_user_mem_reply_req_dec"
+    ),
+    cmd!(0, 0x69, "sd_ble_cfg_set", &[L::Cfg], Fixed(0), Stock::Sends, "ble_conn.c: ble_cfg_set_req_dec"),
     cmd!(
         0,
         0x72,
         "sd_ble_gap_adv_data_set",
         &[L::Len8(31), L::Len8(31)],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_adv_data_set_req_dec"
     ),
     cmd!(
@@ -142,26 +176,53 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gap_adv_start",
         &[L::Cond(&[L::U8, L::Cond(ADDR), L::U8, L::U16, L::U16, L::U8]), L::U8],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_adv_start_req_dec; ble_gap_struct_serialization.c: ble_gap_adv_params_t_dec"
     ),
-    cmd!(0, 0x74, "sd_ble_gap_adv_stop", NONE, Fixed(0), "ble_gap_conn.c: ble_gap_adv_stop_req_dec"),
+    cmd!(0, 0x74, "sd_ble_gap_adv_stop", NONE, Fixed(0), Stock::Never, "ble_gap_conn.c: ble_gap_adv_stop_req_dec"),
     cmd!(
         0,
         0x75,
         "sd_ble_gap_conn_param_update",
         &[L::U16, L::Cond(CONN4)],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_conn_param_update_req_dec"
     ),
-    cmd!(0, 0x76, "sd_ble_gap_disconnect", &[L::U16, L::U8], Fixed(0), "ble_gap_conn.c: ble_gap_disconnect_req_dec"),
-    cmd!(0, 0x78, "sd_ble_gap_appearance_set", &[L::U16], Fixed(0), "ble_gap_conn.c: ble_gap_appearance_set_req_dec"),
-    cmd!(0, 0x7a, "sd_ble_gap_ppcp_set", &[L::Cond(CONN4)], Fixed(0), "ble_gap_conn.c: ble_gap_ppcp_set_req_dec"),
+    cmd!(
+        0,
+        0x76,
+        "sd_ble_gap_disconnect",
+        &[L::U16, L::U8],
+        Fixed(0),
+        Stock::Sends,
+        "ble_gap_conn.c: ble_gap_disconnect_req_dec"
+    ),
+    cmd!(
+        0,
+        0x78,
+        "sd_ble_gap_appearance_set",
+        &[L::U16],
+        Fixed(0),
+        Stock::Never,
+        "ble_gap_conn.c: ble_gap_appearance_set_req_dec"
+    ),
+    cmd!(
+        0,
+        0x7a,
+        "sd_ble_gap_ppcp_set",
+        &[L::Cond(CONN4)],
+        Fixed(0),
+        Stock::Sends,
+        "ble_gap_conn.c: ble_gap_ppcp_set_req_dec"
+    ),
     cmd!(
         0,
         0x7c,
         "sd_ble_gap_device_name_set",
         &[L::Cond(&[L::U8]), L::Len16(31)],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_device_name_set_req_dec (name buffer BLE_GAP_DEVNAME_MAX_LEN, conn_mw_ble_gap.c)"
     ),
     cmd!(
@@ -170,6 +231,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gap_authenticate",
         &[L::U16, L::Cond(SEC)],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_authenticate_req_dec; ble_gap_sec_params_t_dec"
     ),
     cmd!(
@@ -178,6 +240,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gap_sec_params_reply",
         &[L::U16, L::U8, L::Cond(SEC), L::Cond(KEYS)],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_sec_params_reply_req_dec; ble_gap_sec_keyset_t_dec"
     ),
     cmd!(
@@ -186,6 +249,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gap_sec_info_reply",
         &[L::U16, L::Cond(&[L::Raw(17)]), L::Cond(&[L::Raw(16)]), L::Cond(&[L::Raw(16)])],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_sec_info_reply_req_dec; ble_gap_enc_info_t_dec, ble_gap_irk_t_dec, ble_gap_sign_info_t_dec"
     ),
     cmd!(
@@ -194,24 +258,35 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gap_scan_start",
         &[L::Cond(&[L::U8, L::U16, L::U16, L::U16])],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_scan_start_req_dec; ble_gap_scan_params_t_dec"
     ),
-    cmd!(0, 0x8b, "sd_ble_gap_scan_stop", NONE, Fixed(0), "ble_gap_conn.c: ble_gap_scan_stop_req_dec"),
+    cmd!(0, 0x8b, "sd_ble_gap_scan_stop", NONE, Fixed(0), Stock::Sends, "ble_gap_conn.c: ble_gap_scan_stop_req_dec"),
     cmd!(
         0,
         0x8c,
         "sd_ble_gap_connect",
         &[L::Cond(ADDR), L::Cond(&[L::U8, L::U16, L::U16, L::U16]), L::Cond(CONN4), L::U8],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_connect_req_dec"
     ),
-    cmd!(0, 0x8d, "sd_ble_gap_connect_cancel", NONE, Fixed(0), "ble_gap_conn.c: ble_gap_connect_cancel_req_dec"),
+    cmd!(
+        0,
+        0x8d,
+        "sd_ble_gap_connect_cancel",
+        NONE,
+        Fixed(0),
+        Stock::Never,
+        "ble_gap_conn.c: ble_gap_connect_cancel_req_dec"
+    ),
     cmd!(
         0,
         0x8f,
         "sd_ble_gap_phy_update",
         &[L::U16, L::Cond(&[L::U8, L::U8])],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_phy_update_req_dec"
     ),
     cmd!(
@@ -220,6 +295,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gap_data_length_update",
         &[L::U16, L::Cond(CONN4), PTR],
         Fixed(0),
+        Stock::Sends,
         "ble_gap_conn.c: ble_gap_data_length_update_req_dec"
     ),
     cmd!(
@@ -228,6 +304,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gattc_primary_services_discover",
         &[L::U16, L::U16, L::Cond(UUID)],
         Fixed(0),
+        Stock::Sends,
         "ble_gattc_conn.c: ble_gattc_primary_services_discover_req_dec"
     ),
     cmd!(
@@ -236,6 +313,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gattc_characteristics_discover",
         &[L::U16, L::Cond(&[L::U16, L::U16])],
         Fixed(0),
+        Stock::Sends,
         "ble_gattc_conn.c: ble_gattc_characteristics_discover_req_dec"
     ),
     cmd!(
@@ -244,15 +322,25 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gattc_descriptors_discover",
         &[L::U16, L::Cond(&[L::U16, L::U16])],
         Fixed(0),
+        Stock::Sends,
         "ble_gattc_conn.c: ble_gattc_descriptors_discover_req_dec"
     ),
-    cmd!(0, 0x9a, "sd_ble_gattc_read", &[L::U16, L::U16, L::U16], Fixed(0), "ble_gattc_conn.c: ble_gattc_read_req_dec"),
+    cmd!(
+        0,
+        0x9a,
+        "sd_ble_gattc_read",
+        &[L::U16, L::U16, L::U16],
+        Fixed(0),
+        Stock::Sends,
+        "ble_gattc_conn.c: ble_gattc_read_req_dec"
+    ),
     cmd!(
         0,
         0x9c,
         "sd_ble_gattc_write",
         &[L::U16, L::Cond(&[L::U8, L::U8, L::U16, L::U16, L::Len16(GATTC_WRITE_MAX)])],
         Fixed(0),
+        Stock::Sends,
         "ble_gattc_conn.c: ble_gattc_write_req_dec; ble_gattc_write_params_t_dec; value buffer BLE_GATTC_WRITE_P_VALUE_LEN_MAX, 20 bytes in Bryton's build"
     ),
     cmd!(
@@ -261,6 +349,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gattc_hv_confirm",
         &[L::U16, L::U16],
         Fixed(0),
+        Stock::Never,
         "ble_gattc_conn.c: ble_gattc_hv_confirm_req_dec"
     ),
     cmd!(
@@ -269,6 +358,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_service_add",
         &[L::U8, L::Cond(UUID), PTR],
         Fixed(3),
+        Stock::Sends,
         "ble_gatts_conn.c: ble_gatts_service_add_req_dec"
     ),
     cmd!(
@@ -277,6 +367,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_characteristic_add",
         &[L::U16, L::Cond(CHAR_MD), L::Cond(ATTR), PTR],
         Fixed(9),
+        Stock::Sends,
         "ble_gatts_conn.c: ble_gatts_characteristic_add_req_dec; ble_gatts_char_md_t_dec, ble_gatts_attr_t_dec, ble_gatts_attr_md_t_dec"
     ),
     cmd!(
@@ -285,6 +376,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_descriptor_add",
         &[L::U16, L::Cond(ATTR), PTR],
         Fixed(3),
+        Stock::Never,
         "ble_gatts_conn.c: ble_gatts_descriptor_add_req_dec"
     ),
     cmd!(
@@ -293,6 +385,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_value_set",
         &[L::U16, L::U16, L::Cond(&[L::U16, L::Len16(512)])],
         Any,
+        Stock::Never,
         "ble_gatts_conn.c: ble_gatts_value_set_req_dec; ble_gatts_value_t_dec"
     ),
     cmd!(
@@ -301,6 +394,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_hvx",
         &[L::U16, L::Cond(&[L::U16, L::U8, L::U16, L::Hvx])],
         Any,
+        Stock::Sends,
         "ble_gatts_conn.c: ble_gatts_hvx_req_dec; ble_gatts_hvx_params_t_dec"
     ),
     cmd!(
@@ -309,6 +403,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_sys_attr_set",
         &[L::U16, L::Len16(512), L::U32],
         Fixed(0),
+        Stock::Sends,
         "ble_gatts_conn.c: ble_gatts_sys_attr_set_req_dec"
     ),
     cmd!(
@@ -317,6 +412,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_sys_attr_get",
         &[L::U16, L::Cond(&[L::U16]), PTR, L::U32],
         Any,
+        Stock::Sends,
         "ble_gatts_conn.c: ble_gatts_sys_attr_get_req_dec"
     ),
     cmd!(
@@ -325,6 +421,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ble_gatts_exchange_mtu_reply",
         &[L::U16, L::U16],
         Fixed(0),
+        Stock::Sends,
         "ble_gatts_conn.c: ble_gatts_exchange_mtu_reply_req_dec"
     ),
     cmd!(
@@ -333,6 +430,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_enable",
         &[L::Cond(&[L::U8, L::U8, L::U16, L::U32, L::U16])],
         Fixed(0),
+        Stock::Sends,
         "ant_enable.c: ant_enable_req_dec; ANT_ENABLE_dec"
     ),
     cmd!(
@@ -341,6 +439,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_network_address_set",
         &[L::U8, L::Raw(8)],
         Fixed(0),
+        Stock::Sends,
         "ant_network_address_set.c: ant_network_address_set_req_dec"
     ),
     cmd!(
@@ -349,6 +448,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_channel_assign",
         &[L::U8, L::U8, L::U8, L::U8],
         Fixed(0),
+        Stock::Sends,
         "ant_channel_assign.c: ant_channel_assign_req_dec"
     ),
     cmd!(
@@ -357,6 +457,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_channel_id_set",
         &[L::U8, L::U16, L::U8, L::U8],
         Fixed(0),
+        Stock::Sends,
         "ant_channel_id_set.c: ant_channel_id_set_req_dec"
     ),
     cmd!(
@@ -365,6 +466,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_channel_low_priority_rx_search_timeout_set",
         &[L::U8, L::U8],
         Fixed(0),
+        Stock::Sends,
         "ant_channel_low_priority_rx_search_timout_set.c"
     ),
     cmd!(
@@ -373,6 +475,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_channel_radio_freq_set",
         &[L::U8, L::U8],
         Fixed(0),
+        Stock::Sends,
         "ant_channel_radio_freq_set.c: ant_channel_radio_freq_set_req_dec"
     ),
     cmd!(
@@ -381,6 +484,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_channel_period_set",
         &[L::U8, L::U16],
         Fixed(0),
+        Stock::Sends,
         "ant_channel_period_set.c: ant_channel_period_set_req_dec"
     ),
     cmd!(
@@ -389,6 +493,7 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_channel_open_with_offset",
         &[L::U8, L::U16],
         Fixed(0),
+        Stock::Sends,
         "ant_channel_open_with_offset.c: ant_channel_open_with_offset_req_dec"
     ),
     // the size byte is bounded by the ANT message (9, inferred); the SDK checks only the bytes left
@@ -398,15 +503,25 @@ pub const CMDS: &[Cmd] = &[
         "sd_ant_acknowledge_message_tx",
         &[L::U8, L::Sized],
         Fixed(0),
+        Stock::Sends,
         "ant_acknowledge_message_tx.c: ant_acknowledge_message_tx_req_dec"
     ),
-    cmd!(6, 0xc5, "sd_ant_channel_close", &[L::U8], Fixed(0), "ant_channel_close.c: ant_channel_close_req_dec"),
+    cmd!(
+        6,
+        0xc5,
+        "sd_ant_channel_close",
+        &[L::U8],
+        Fixed(0),
+        Stock::Sends,
+        "ant_channel_close.c: ant_channel_close_req_dec"
+    ),
     cmd!(
         6,
         0xd4,
         "sd_ant_channel_id_get",
         &[L::U8],
         Fixed(4),
+        Stock::Sends,
         "ant_channel_id_get.c: ant_channel_id_get_req_dec (response: u16 number, u8 type, u8 transmission)"
     ),
 ];

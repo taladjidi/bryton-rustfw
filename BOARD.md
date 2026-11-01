@@ -538,6 +538,21 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   (GAP 0x10 to 0x23, GATT client 0x30 to 0x3B, GATT server 0x50 to 0x56, common 0x01) with their encoders
   (`ble_*_evt_conn.c`), at most 262 bytes before encoding, and the 44-byte ANT event; `src/sim/chip_table_tests.rs`
   builds every command rustfw has and `fuzz.rs` builds every event from these layouts.
+- **Stock's envelope on the link (stock firmware, reversed; the chip's serialization layer of nRF5 SDK 14):** stock's
+  USART is interrupt driven both ways, 1 Mbaud 8N1 with hardware RTS and CTS: it takes every byte as it arrives and
+  queues the decoded events, so no main loop drains it, and it never abandons a command it has started (CTS holds the
+  byte as long as the chip needs). Each command waits for its response for 5 s at most and is never retried; a
+  time-out never resets the chip, and no keep-alive is sent. The chip's RTS is held only in stock's own stop mode
+  (about 100 ms at most, never during a recording). Stock encodes 60 opcodes (44 of type 00, 16 of type 06) and six
+  `sd_ble_cfg_set` ids; `src/sim/chip_table.rs` marks each row `Stock::Sends` or `Stock::Never`.
+- **Commands rustfw sends that stock never does** (`Stock::Never`; the gate is `every_command_stock_never_sends_is_proven`
+  in chip_table_tests.rs): `0x74` `sd_ble_gap_adv_stop`, `0x78` `sd_ble_gap_appearance_set`, `0x8D`
+  `sd_ble_gap_connect_cancel`, `0x9D` `sd_ble_gattc_hv_confirm`, `0xA3` `sd_ble_gatts_descriptor_add` and `0xA4`
+  `sd_ble_gatts_value_set`. Each is proven on Bryton's real app by `python3 -I tools/nrf_emu.py selftest`: the bytes
+  rustfw's builders produce (pinned in chip_table_tests.rs as `NEVER_BYTES`) are sent to the app, which answers
+  `01 <op> <result>` and does not hang. The SoftDevice is stubbed, so only the app's decoding and its answer are
+  proven, not the result value; the SVC numbers of those stubs are inferred from the v5 headers' order. Not yet on
+  the unit: a dated line in docs/status.md ("seen on the unit") proves one instead.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.
 - **SoftDevice API version 5** (S132 / S332 v5.x, nRF5 SDK 14): stock's GATTS request encoders use 0xa0 service add,

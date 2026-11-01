@@ -27,9 +27,12 @@ TABLE = {
 def select(paths):
     """The filters for these changed paths, or ['ALL'] / ['NONE']."""
     out = set()
+    read = files_the_tests_read(Path(__file__).resolve().parent.parent)
     for p in paths:
         if not p:
             continue
+        if p in read:  # a file a test reads (a doc included): every test may depend on it
+            return ['ALL']
         if re.match(r'(tools/|renode/)', p) or re.match(r'docs/[^/]*\.md$', p) and p != 'docs/features.md' or p.endswith('README.md'):
             continue
         m = re.match(r'src/([a-z_]+)/', p)

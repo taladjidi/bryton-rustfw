@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::{ble, nrf};
-use chip_table::{CMDS, Hang};
+use chip_table::{CMDS, Hang, Stock};
 
 /// A simulated chip that only checks the commands against the table.
 fn table_sim() -> Sim {
@@ -159,4 +159,52 @@ fn a_long_app_identifier_is_not_sent_to_the_chip() {
     let sent = s.nordic.got.len();
     assert_eq!(ble::write(&mut s, &mut rx, 0, 0x0d, &app[..n]), Err(nrf::Error::Code(12)));
     assert_eq!(s.nordic.got.len(), sent, "nothing went to the chip");
+}
+
+/// The commands stock never sends (`Stock::Never` rows), proven on Bryton's real app by `tools/nrf_emu.py selftest`:
+/// its NEVER list replays the bytes of [`NEVER_BYTES`], and the app answers each with `01 <op> <result>`, no hang.
+/// Keep the two lists in step.
+const EMULATED: &[u8] = &[0x74, 0x78, 0x8d, 0x9d, 0xa3, 0xa4];
+
+/// The `Stock::Never` commands as rustfw's builders send them, in hex (what the selftest replays).
+const NEVER_BYTES: &[&str] = &[
+    "0074",
+    "0078c403",
+    "008d",
+    "009d00000d00",
+    "00a3020001010829010121000200000200020001000101",
+    "00a4ffff0300010000030001070707",
+];
+
+#[test]
+fn every_command_stock_never_sends_is_proven() {
+    // a dated "seen on the unit" line in docs/status.md (its opcode in hex) proves one too
+    let seen = include_str!("../../docs/status.md").to_lowercase();
+    let unproven: Vec<&str> = CMDS
+        .iter()
+        .filter(|c| c.stock == Stock::Never)
+        .filter(|c| !EMULATED.contains(&c.op))
+        .filter(|c| !seen.lines().any(|l| l.contains(&format!("0x{:02x}", c.op)) && l.contains("2026-")))
+        .map(|c| c.name)
+        .collect();
+    assert!(unproven.is_empty(), "stock never sends these, and nothing proves the chip answers them: {unproven:?}");
+}
+
+#[test]
+fn the_never_commands_go_out_as_the_selftest_replays_them() {
+    let mut sim = table_sim();
+    let mut rx = nrf::Rx::new();
+    let b = &mut sim;
+    let rx = &mut rx;
+    b.nrf_reset();
+    let _ = ble::adv_stop(b, rx);
+    let _ = ble::appearance_set(b, rx, 0x03c4);
+    let _ = ble::connect_cancel(b, rx);
+    let _ = ble::hv_confirm(b, rx, 0, 0x000d);
+    let _ = ble::descriptor_add(b, rx, 2, 0x2908, &[0, 1], ble::ENCRYPTED);
+    let _ = ble::value_set(b, rx, 3, &[7; 3]);
+    let hex: Vec<std::string::String> =
+        b.nordic.got.iter().map(|p| p.iter().map(|x| format!("{x:02x}")).collect()).collect();
+    let want: Vec<std::string::String> = NEVER_BYTES.iter().map(|s| (*s).into()).collect();
+    assert_eq!(hex, want, "the bytes tools/nrf_emu.py selftest must replay");
 }
