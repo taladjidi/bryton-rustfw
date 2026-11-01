@@ -4,11 +4,15 @@
 use super::{Local, Phase, TAG};
 use crate::fat::{Error, SECTOR};
 use crate::fit::{LAP_WORDS, RECORD_LEN};
-use crate::ride::RIDE_WORDS;
+use crate::ride::{MORE_WORDS, RIDE_WORDS};
 
 /// Where [`Rec::lap`] starts: after the ride words, in bytes every build before left zero.
 const LAP_AT: usize = 192;
-const _: () = assert!(128 + 4 * RIDE_WORDS <= LAP_AT && LAP_AT + 4 * LAP_WORDS <= SECTOR - 2);
+/// Where [`Rec::more`] starts: after the lap sums, in bytes every build before left zero.
+const MORE_AT: usize = 228;
+const _: () = assert!(
+    128 + 4 * RIDE_WORDS <= LAP_AT && LAP_AT + 4 * LAP_WORDS <= MORE_AT && MORE_AT + 4 * MORE_WORDS <= SECTOR - 2
+);
 
 /// One recovery record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +34,10 @@ pub(crate) struct Rec {
     /// The current lap's sums ([`crate::fit::Writer::lap_words`]), bytes 192..228, after the ride words: zeros in the
     /// records of the builds before them, which ignore these bytes (the lap then averages from the resume).
     pub(crate) lap: [u32; LAP_WORDS],
+    /// The ride's totals beyond its words ([`crate::ride::Ride::more_words`]: uphill, downhill, max altitude and the
+    /// power's NP, work, max and W' balance), bytes 228..280: zeros in the records of the builds before them, which
+    /// ignore these bytes (the totals then count from the resume).
+    pub(crate) more: [u32; MORE_WORDS],
 }
 
 impl Rec {
@@ -49,6 +57,9 @@ impl Rec {
             c.copy_from_slice(&w.to_le_bytes());
         }
         for (c, w) in s[LAP_AT..LAP_AT + 4 * LAP_WORDS].chunks_exact_mut(4).zip(self.lap) {
+            c.copy_from_slice(&w.to_le_bytes());
+        }
+        for (c, w) in s[MORE_AT..MORE_AT + 4 * MORE_WORDS].chunks_exact_mut(4).zip(self.more) {
             c.copy_from_slice(&w.to_le_bytes());
         }
         crate::storage::seal16(&mut s);
@@ -77,6 +88,7 @@ impl Rec {
             discard: s[22] == 1,
             checked: (s[23] == 1).then(|| u16::from_le_bytes([s[28], s[29]])),
             lap: core::array::from_fn(|k| word(LAP_AT + 4 * k)),
+            more: core::array::from_fn(|k| word(MORE_AT + 4 * k)),
         };
         r.name.copy_from_slice(&s[9..21]);
         r.fit.copy_from_slice(&s[32..32 + RECORD_LEN]);

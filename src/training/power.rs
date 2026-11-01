@@ -24,6 +24,8 @@ use crate::ride::{Ride, State, ZONE_COLORS};
 
 /// The rolling averages offered, seconds.
 pub const WINDOWS: [u32; 3] = [3, 10, 30];
+/// Words of [`Power::to_words`].
+pub const POWER_WORDS: usize = 7;
 /// Seconds of power kept: at least the longest window.
 const RING: usize = 32;
 const _: () = assert!(RING >= 30);
@@ -104,6 +106,28 @@ impl Power {
             wsum: self.wsum,
             ..Power::default()
         };
+    }
+
+    /// The ride's totals as words, for the recorder's recovery record ([`Power::resume`] reads them back): the NP
+    /// sum (2 words) and count, the work (J, held to `u32`: 596 h at 2000 W), the seconds, max power with `heard`
+    /// (bit 16) and a W' balance there (bit 17), the W' balance (mJ, within +-65 535 000).
+    pub fn to_words(&self) -> [u32; POWER_WORDS] {
+        let wbal = self.wbal_mj.unwrap_or(0).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        let flags = u32::from(self.max) | u32::from(self.heard) << 16 | u32::from(self.wbal_mj.is_some()) << 17;
+        let work = self.work_j.min(u64::from(u32::MAX)) as u32;
+        [self.np_sum as u32, (self.np_sum >> 32) as u32, self.np_n, work, self.secs, flags, wbal as u32]
+    }
+
+    /// A ride resumed after a reset: its totals from [`Power::to_words`] (all zeros, a record of a build before
+    /// them: [`Power::new_ride`], the totals then cover the time since the resume), the rolling averages go on.
+    /// The NP window starts again: the first 29 s after the resume add no NP sample.
+    pub fn resume(&mut self, w: &[u32; POWER_WORDS]) {
+        self.new_ride();
+        let [lo, hi, np_n, work, secs, flags, wbal] = *w;
+        (self.np_sum, self.np_n, self.work_j, self.secs) =
+            (u64::from(lo) | u64::from(hi) << 32, np_n, work.into(), secs);
+        (self.max, self.heard) = (flags as u16, flags & 1 << 16 != 0);
+        self.wbal_mj = (flags & 1 << 17 != 0).then_some(i64::from(wbal as i32));
     }
 
     /// One second: `p` the power now (None: no meter or stale), `ride` after its own second, CP and W' (J).

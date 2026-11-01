@@ -1734,6 +1734,7 @@ fn a_damaged_record_is_refused() {
             discard: false,
             checked: None,
             lap: [seq; crate::fit::LAP_WORDS],
+            more: [seq + 1; crate::ride::MORE_WORDS],
         }
     };
     let s = r(5, Phase::Recording).to_sector();
@@ -1752,6 +1753,17 @@ fn a_damaged_record_is_refused() {
     let crc = crate::fit::crc(0, &old[..SECTOR - 2]);
     old[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
     assert_eq!(Rec::from_sector(&old).map(|r| r.lap), Some([0; crate::fit::LAP_WORDS]));
+    // the totals beyond the ride words, bytes 228..280 and the ride's word 15 (188..192): zero in the records of the
+    // builds before them, read as none (no new tag); nothing after them
+    assert_eq!(s[228..280], [6u8, 0, 0, 0].repeat(13)[..]);
+    assert!(s[280..SECTOR - 2].iter().all(|&b| b == 0));
+    let mut old = s;
+    old[188..192].fill(0);
+    old[228..280].fill(0);
+    let crc = crate::fit::crc(0, &old[..SECTOR - 2]);
+    old[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+    let back = Rec::from_sector(&old).unwrap();
+    assert_eq!((back.more, back.ride[15]), ([0; crate::ride::MORE_WORDS], 0));
     for at in [0, 4, 8, 9, 24, 40, 100, 511] {
         let mut bad = s;
         bad[at] ^= 0x10;
@@ -3709,4 +3721,138 @@ fn clusters_for_a_size() {
     let c = fat.cluster_bytes();
     assert_eq!(fat.clusters_for(0), 1, "an empty file still has its cluster");
     assert_eq!((fat.clusters_for(c), fat.clusters_for(c + 1)), (1, 2));
+}
+
+/// One second of the totals test ride: 30 km/h, 600 W for the first 30 s of every 5 min (W' drains), 150 W after
+/// it, 250 W (CP) the rest; on the barometer (reference 1), climbing from 100 m to 300 m over 10 min and back.
+fn totals_input(t: u32) -> crate::ride::Input {
+    let power = match t % 300 {
+        0..30 => 600,
+        30..120 => 150,
+        _ => 250,
+    };
+    let up = t % 1200;
+    let alt = 100_000 + 333 * if up < 600 { up } else { 1200 - up } as i32;
+    crate::ride::Input { speed_x10: Some(300), power: Some(power), alt_mm: Some(alt), alt_ref: 1, ..Default::default() }
+}
+
+/// The ride and its power from second `from + 1` to `to` (CP 250 W, W' 20 kJ), as the app's pass does.
+fn totals_ride(r: &mut crate::ride::Ride, p: &mut crate::power::Power, from: u32, to: u32) {
+    for t in from + 1..=to {
+        let i = totals_input(t);
+        r.second(&i);
+        p.second(i.power, r, 250, 20_000);
+    }
+}
+
+/// The ride and power a restart at a checkpoint gives back: their words through the recovery record's sector, read
+/// as the app's resume reads them (riding.rs `Resumed`), then Start.
+fn restarted(r: &crate::ride::Ride, p: &crate::power::Power) -> (crate::ride::Ride, crate::power::Power) {
+    let rec = Rec {
+        seq: 1,
+        phase: Phase::Recording,
+        name: NAME,
+        cluster: 7,
+        fit: [0; RECORD_LEN],
+        ride: r.to_words(),
+        discard: false,
+        checked: None,
+        lap: [0; crate::fit::LAP_WORDS],
+        more: r.more_words(p),
+    };
+    let back = Rec::from_sector(&rec.to_sector()).unwrap();
+    let mut r = crate::ride::Ride::resumed(&back.ride, &back.more);
+    let mut p2 = crate::power::Power::new();
+    p2.resume(&crate::ride::power_words(&back.more));
+    r.start_pause();
+    (r, p2)
+}
+
+/// Finding 65 (review 2026-11-01): a 2 h ride restarted at every checkpoint (each minute, the cut right after a
+/// record, so no second is ridden twice: 119 restarts) ends with the totals of the ride never cut. Exact: kJ, max
+/// power, the W' balance at the end and at its lowest, the max altitude, the timer. What a resume starts again costs
+/// a little per restart: the NP window refills (its first 29 s add no NP sample: 119 restarts drop half the samples
+/// here, so NP within 4 % and TSS, s x NP^2, within 8 %; one restart: the next test); the ascent's low point and the
+/// descent's high point restart (at most the 3 m hysteresis and a second's 0.33 m each); the 20 m climbing window
+/// refills (60 s at 4 %: 500 m of uphill or downhill each).
+#[test]
+fn totals_go_on_across_a_restart_at_every_checkpoint() {
+    use crate::{power::Power, ride::Ride};
+    const N: u32 = 7200;
+    let (mut whole, mut wp) = (Ride::new(), Power::new());
+    whole.start_pause();
+    let mut low_whole = i32::MAX;
+    for t in 0..N {
+        totals_ride(&mut whole, &mut wp, t, t + 1);
+        low_whole = low_whole.min(wp.wbal_j().unwrap());
+    }
+    let (mut r, mut p) = (Ride::new(), Power::new());
+    r.start_pause();
+    let mut low = i32::MAX;
+    for t in 0..N {
+        if t > 0 && t % 60 == 0 {
+            (r, p) = restarted(&r, &p);
+        }
+        totals_ride(&mut r, &mut p, t, t + 1);
+        low = low.min(p.wbal_j().unwrap());
+    }
+    assert!(low_whole < 10_000, "W' drained: {low_whole} J");
+    assert_eq!((p.kj(), p.max(), p.wbal_j(), low), (wp.kj(), wp.max(), wp.wbal_j(), low_whole));
+    assert_eq!((r.timer_s(), r.max_alt_m(), whole.max_alt_m()), (N, Some(299), Some(299)));
+    for (got, want) in [(r.descent_m(), whole.descent_m()), (r.ascent_m(), whole.ascent_m())] {
+        assert!(want >= 1190 && got <= want && got + 119 * 4 >= want, "{got} m of {want}");
+    }
+    let (np, np_whole) = (u32::from(p.np().unwrap()), u32::from(wp.np().unwrap()));
+    assert!(np.abs_diff(np_whole) * 25 <= np_whole, "NP {np} of {np_whole}");
+    let (tss, tss_whole) = (p.tss(250).unwrap(), wp.tss(250).unwrap());
+    assert!(tss.abs_diff(tss_whole) * 25 <= tss_whole * 2, "TSS {tss} of {tss_whole}");
+    for (got, want) in [(r.uphill_m(), whole.uphill_m()), (r.downhill_m(), whole.downhill_m())] {
+        assert!(want > 20_000 && got <= want && got + 119 * 500 >= want, "{got} m of {want}");
+    }
+}
+
+/// The same restart at one checkpoint at a time, every minute of a 1 h ride: NP within 2 % (29 samples of 3571
+/// missing, the 600 W efforts weighing most in the 4th power: 3 W at worst here), TSS within 3 %.
+/// And a record of a build before the totals (bytes 228..280 and word 15 zero) resumes as before them: the totals
+/// count from the resume, W' full.
+#[test]
+fn totals_go_on_across_one_restart_and_an_older_record_starts_them_again() {
+    use crate::{power::Power, ride::Ride};
+    const N: u32 = 3600;
+    let (mut whole, mut wp) = (Ride::new(), Power::new());
+    whole.start_pause();
+    totals_ride(&mut whole, &mut wp, 0, N);
+    for c in (60..N).step_by(60) {
+        let (mut r, mut p) = (Ride::new(), Power::new());
+        r.start_pause();
+        totals_ride(&mut r, &mut p, 0, c);
+        (r, p) = restarted(&r, &p);
+        totals_ride(&mut r, &mut p, c, N);
+        assert_eq!((p.kj(), p.max(), p.wbal_j()), (wp.kj(), wp.max(), wp.wbal_j()), "restart at {c}");
+        assert_eq!(r.max_alt_m(), whole.max_alt_m(), "restart at {c}");
+        assert!(r.descent_m() <= whole.descent_m() && r.descent_m() + 4 >= whole.descent_m(), "restart at {c}");
+        let (np, np_whole) = (u32::from(p.np().unwrap()), u32::from(wp.np().unwrap()));
+        assert!(np.abs_diff(np_whole) * 50 <= np_whole, "restart at {c}: NP {np} of {np_whole}");
+        let (tss, tss_whole) = (p.tss(250).unwrap(), wp.tss(250).unwrap());
+        assert!(tss.abs_diff(tss_whole) * 100 <= tss_whole * 3, "restart at {c}: TSS {tss} of {tss_whole}");
+    }
+    // the older record: what the resume did before the totals were kept
+    let (mut r, mut p) = (Ride::new(), Power::new());
+    r.start_pause();
+    totals_ride(&mut r, &mut p, 0, 1800);
+    let mut old = r.to_words();
+    old[15] = 0;
+    let mut back = Ride::resumed(&old, &[0; crate::ride::MORE_WORDS]);
+    let mut p2 = p;
+    p2.resume(&[0; crate::power::POWER_WORDS]);
+    let mut fresh = p;
+    fresh.new_ride();
+    assert_eq!(p2, fresh, "zeros: a new ride's power, the rolling averages kept");
+    assert_eq!((p2.kj(), p2.max(), p2.np(), p2.wbal_j()), (0, None, None, None));
+    assert_eq!((back.descent_m(), back.uphill_m(), back.max_alt_m(), back.timer_s()), (0, 0, None, 1800));
+    back.start_pause();
+    totals_ride(&mut back, &mut p2, 1799, 1829); // seconds 1800 to 1829
+    // 30 s at 600 W from the resume (its 5 min effort), 350 W over CP: from full
+    let from_resume = (p2.kj(), p2.max(), p2.wbal_j(), back.max_alt_m());
+    assert_eq!(from_resume, (18, Some(600), Some(20_000 - 30 * 350), Some(299)), "from the resume");
 }

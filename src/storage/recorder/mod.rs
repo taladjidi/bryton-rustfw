@@ -31,8 +31,9 @@
 //! valid one wins: never the data length, so a finished ride's record cannot pass for a new ride's), the phase
 //! (done, starting, recording, saving), the file's identity (its name and first cluster: a resume opens only that
 //! file and checks both), the FIT writer's state ([`fit::RECORD_LEN`] bytes, its own CRC) and the app's ride totals
-//! (`ride::Ride::to_words`, their count checked), the current lap's sums ([`fit::Writer::lap_words`]); the sector's
-//! CRC last.
+//! (`ride::Ride::to_words`, their count checked), the current lap's sums ([`fit::Writer::lap_words`]), the totals a
+//! resume goes on from beyond them (`ride::Ride::more_words`: uphill, downhill, max altitude, the power's NP, work,
+//! max and W' balance); the sector's CRC last.
 //!
 //! **The save** (End), each step done again after a reset by [`Recorder::recover`] from the phase in the record:
 //! 1. the end messages and a checkpoint whose record says "saving";
@@ -148,7 +149,7 @@
 use crate::fat::write::{Handle, dos_time};
 use crate::fat::{DiskWrite, Error, Fat, File, SECTOR, SECTOR_U32};
 use crate::fit::{self, Sample, Sink, Writer};
-use crate::ride::RIDE_WORDS;
+use crate::ride::{MORE_WORDS, RIDE_WORDS};
 
 pub(crate) mod rec;
 use rec::{Rec, file_name};
@@ -340,7 +341,8 @@ pub const BEATS_QUEUED: usize = 40;
 /// (the record also holds [`RIDE_WORDS`], byte 21, checked). One exception: a new field may go in bytes every
 /// earlier build writes as zero (`to_sector` starts from a zeroed sector, the CRC covers the whole sector and
 /// earlier builds ignore those bytes), provided all zeros reads as "absent" and is harmless: `checked` (bytes 23,
-/// 28..30), the lap sums (192..228, rec.rs `LAP_AT`).
+/// 28..30), the lap sums (192..228, rec.rs `LAP_AT`), the ride's descent (its word 15, bytes 188..192), its other
+/// totals and its power's (228..280, rec.rs `MORE_AT`).
 const TAG: [u8; 4] = *b"RFR2";
 const _: () = assert!(128 + 4 * RIDE_WORDS <= SECTOR - 2 && RIDE_WORDS < 256);
 
@@ -431,6 +433,8 @@ pub struct Recorder {
     ended: bool,
     /// The app's ride totals at the last second; the last record's time.
     ride: [u32; RIDE_WORDS],
+    /// The app's totals beyond the ride words ([`Recorder::set_more`]), kept in the record as they are.
+    more: [u32; MORE_WORDS],
     last_rec: u32,
     /// The full copy, resumed: the seconds up to here are in its file already (its checkpoint may be later than the
     /// clean one's, which the app goes on from), so they are not written twice.
@@ -545,6 +549,7 @@ impl Recorder {
             want: false,
             ended: false,
             ride: [0; RIDE_WORDS],
+            more: [0; MORE_WORDS],
             last_rec: 0,
             skip_to: 0,
             wait: 0,
@@ -914,6 +919,17 @@ impl Recorder {
         self.ride = ride;
         self.put(16, |w, sink| w.pause(sink, time));
         self.want = true;
+    }
+
+    /// The app's totals now beyond the ride words ([`crate::ride::Ride::more_words`]), for the next recovery record.
+    pub fn set_more(&mut self, more: [u32; MORE_WORDS]) {
+        self.more = more;
+    }
+
+    /// The totals of the ride [`Recorder::recover`] reopened (`Resumed`), as its record kept them (all zeros from a
+    /// build before them).
+    pub fn more(&self) -> [u32; MORE_WORDS] {
+        self.more
     }
 
     /// Resumed at `time`.
@@ -1456,7 +1472,8 @@ impl Recorder {
         let mut rec = self.rec.ok_or(Error::NotFound)?;
         let seq = self.seq.wrapping_add(1);
         let (name, fit, ride, discard) = (self.name, self.writer.to_record(), self.ride, self.discard);
-        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap: self.writer.lap_words() };
+        let (lap, more) = (self.writer.lap_words(), self.more);
+        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap, more };
         let slot = 3 * (seq % 2);
         match copies {
             Some((first, last)) => {
@@ -1755,7 +1772,7 @@ impl Recorder {
         let Some(r) = best.filter(|r| r.phase != Phase::Done) else { return Ok(Outcome::Nothing) };
         // the FATs were synced by the caller: the cut may have been between the two, or torn one
         let writer = Writer::from_record(&r.fit).map(|w| w.with_lap_words(&r.lap));
-        (self.name, self.ride, self.discard) = (r.name, r.ride, r.discard);
+        (self.name, self.ride, self.more, self.discard) = (r.name, r.ride, r.more, r.discard);
         let size = writer.map_or(0, |w| 16 + w.data_len());
         match (r.phase, writer) {
             (Phase::Saving, Some(w)) => {
