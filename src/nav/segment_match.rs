@@ -104,9 +104,7 @@ impl Default for Matcher {
 
 /// Plane millimetres east and north of `o` (degrees x 1e-7 and the cosine of its latitude), as [`step_mm`]'s plane.
 fn mm(o: (i32, i32, i64), lat: i32, lon: i32) -> (i64, i64) {
-    let dy = (i64::from(lat) - i64::from(o.0)) * 11_132 / 1000;
-    let dx = (i64::from(lon) - i64::from(o.1)) * 11_132 * o.2 / 65_536 / 1000;
-    (dx, dy)
+    crate::math::plane_mm(o, lat, lon)
 }
 
 /// A start pair that is in use (stored as (0, 0) when unused).
@@ -128,11 +126,12 @@ pub fn near(h: &Header, lat: i32, lon: i32) -> bool {
     Entry::of(h).is_some_and(|e| e.near(lat, lon))
 }
 
-/// [`APPROACH_M`] in degrees x 1e-7 of latitude and of longitude at `lat` (1 m is 89.8e-7 degrees of latitude; a degree
-/// of longitude is shorter by the cosine).
+/// [`APPROACH_M`] in degrees x 1e-7 of latitude and of longitude at `lat`, from the same lengths of a degree as
+/// [`plane_mm`](crate::math::plane_mm) (the prefilter box must not be narrower than the exact test).
 fn reach(lat: i32) -> (i64, i64) {
-    let dlat = i64::from(APPROACH_M) * 1_000_000 / 11_132;
-    (dlat, dlat * 65_536 / cos_q16(lat).max(1000))
+    let (north, east) = crate::math::mm_per_degree(cos_q16(lat));
+    let units = |per_degree: i64| (i64::from(APPROACH_M) * 10_000_000_000).checked_div(per_degree).unwrap_or(0);
+    (units(north.max(1)), units(east.max(1_000_000))) // a floor of 1 km per degree of longitude at the poles
 }
 
 /// What the idle matcher needs of a segment: 32 bytes, so the index of 128 segments is 4 KB (a [`Header`] is about
@@ -197,11 +196,12 @@ impl Entry {
     /// [`Entry::near`] with the longitude reach at `lat` (from [`reach`]), worked out once for all entries.
     fn near_in(&self, lat: i32, lon: i32, dlon: i64) -> bool {
         let dlat = reach(lat).0;
-        let (la, lo_) = (i64::from(lat), i64::from(lon));
+        let la = i64::from(lat);
+        // the longitude differences wrap at 180 degrees (a box itself across it is not handled)
         la >= i64::from(self.lo.0) - dlat
             && la <= i64::from(self.hi.0) + dlat
-            && lo_ >= i64::from(self.lo.1) - dlon
-            && lo_ <= i64::from(self.hi.1) + dlon
+            && crate::math::dlon(self.lo.1, lon) >= -dlon
+            && crate::math::dlon(self.hi.1, lon) <= dlon
     }
 }
 
@@ -470,7 +470,7 @@ pub(crate) mod tests {
 
     /// A fix `east` m east of the segment's start and `north` m north, degrees x 1e-7.
     pub(crate) fn at(east: f64, north: f64) -> (i32, i32) {
-        ((north / 0.011132).round() as i32, 100_000_000 + (east / 0.011132).round() as i32)
+        ((north / 0.011057431).round() as i32, 100_000_000 + (east / 0.011132).round() as i32)
     }
 
     /// Runs `fixes` (one a second from t = 0) through the matcher the way S3 will; the events, in order.
@@ -619,7 +619,7 @@ pub(crate) mod tests {
             x ^= x >> 17;
             x ^= x << 5;
             let (e, n) = (f64::from(x % 13) - 6.0, f64::from((x >> 8) % 13) - 6.0);
-            f.push((stop.0 + (n / 0.011132) as i32, stop.1 + (e / 0.011132) as i32));
+            f.push((stop.0 + (n / 0.011057431) as i32, stop.1 + (e / 0.011132) as i32));
         }
         let ev = drive(&mut Matcher::new(), &s, &f);
         assert_eq!(ev.last(), Some(&Event::Lost(ID)), "{ev:?}");

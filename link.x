@@ -8,7 +8,7 @@
    copies and the staging area) is the map's memory, handed out once by hw.rs map_memory: nothing is linked there
    either. AXISRAM (D1, 512 KB, unused by this firmware otherwise) holds the app itself (main.rs make_app's static
    cell), the course memory (make_courses), the scan's cache of stock's rides (make_scan_cache), the road ahead
-   (make_ahead), the live segments (make_segments) and FITNESS's reading of the recent rides (make_thresholds), this ride's power curve (make_ride_curve), the scan of stock's rides (make_stock_scan), the past ride's card (make_past) and the three bikes (make_bikes; sizes: tools/numbers.py), in DTCM's .bss the app left too little
+   (make_ahead), the live segments (make_segments) and FITNESS's reading of the recent rides (make_thresholds), this ride's power curve (make_ride_curve), the scan of stock's rides (make_stock_scan), the past ride's card (make_past) and the three bikes (make_bikes) and the course's named points (make_pois; sizes: tools/numbers.py), in DTCM's .bss the app left too little
    stack (2026-10-24, an overflow on opening a workout). It is
    zeroed at reset as .bss is (hw.rs). Its top 4 KB (PANELDMA) are the panel DMA's buffers (hw.rs PanelDma). */
 MEMORY
@@ -68,6 +68,9 @@ SECTIONS
     _sbikes = .;
     *(.bss._ZN13bryton_rustfw10make_bikes5BIKES*)
     _ebikes = .;
+    _spois = .;
+    *(.bss._ZN13bryton_rustfw9make_pois4POIS*)
+    _epois = .;
     . = ALIGN(4); _eaxi = .;
   } > AXISRAM
   ASSERT(_eaxi > _saxi, "the app's cell is not in AXISRAM: its section name changed (main.rs make_app)")
@@ -78,7 +81,8 @@ SECTIONS
   ASSERT(_ecurve > _scurve, "the ride's power curve is not in AXISRAM: its section name changed (main.rs make_ride_curve)")
   ASSERT(_ebikes > _sbikes, "the bikes are not in AXISRAM: their section name changed (main.rs make_bikes)")
   ASSERT(_estockscan > _sstockscan, "the scan of stock's rides is not in AXISRAM: its section name changed (main.rs make_stock_scan)")
-  ASSERT(_epast > _spast, "the past ride's card is not in AXISRAM: its section name changed (main.rs make_past)")
+  ASSERT(_epois > _spois, "the course's named points are not in AXISRAM: their section name changed (main.rs make_pois)")
+  ASSERT(_epast > _spast,"the past ride's card is not in AXISRAM: its section name changed (main.rs make_past)")
   ASSERT(_ecourses > _scourses,"the course memory is not in AXISRAM: its section name changed (main.rs make_courses)")
   .bss (NOLOAD) : ALIGN(4) { _sbss = .; *(.bss .bss.*) *(COMMON); . = ALIGN(4); _ebss = .; } > DTCM
   _image_size = LOADADDR(.data) + SIZEOF(.data) - ORIGIN(SDRAM);

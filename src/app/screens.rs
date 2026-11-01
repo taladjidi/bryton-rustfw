@@ -160,7 +160,8 @@ impl App {
         let Some((m, g)) = self.summary else { return };
         let (_, _, cols, h) = ui::card::ELEV;
         let base = Some(&self.basemap);
-        ui::card::draw(c, &self.ride_card(), (&self.track, m.view, base), &|i| self.graph_bar(g, cols, h, i));
+        let cx = self.graph_ctx();
+        ui::card::draw(c, &self.ride_card(), (&self.track, m.view, base), &|i| self.graph_bar(&cx, g, cols, h, i));
     }
 
     /// The card's map on screen (the ride just ended, a past ride): its view and its track's origin.
@@ -388,7 +389,8 @@ impl App {
                     Drawn::Graph(g) => {
                         self.draw_graph_axes(c, bx, g);
                         let a = ui::graph_area(bx);
-                        ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
+                        let cx = self.graph_ctx();
+                        ui::draw_graph(c, a, &|k| self.graph_bar(&cx, g, a.2, a.3, k));
                     }
                     Drawn::Dial(text, fg, level) => {
                         let cols = self.dial_colors(f);

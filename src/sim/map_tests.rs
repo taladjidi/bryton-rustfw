@@ -30,7 +30,7 @@ fn route_from(ms: u64, (lat0, lon0): (i32, i32), sign: f64) -> (i32, i32, i32) {
     let heading = (x1 - x).atan2(y1 - y).to_degrees().rem_euclid(360.0);
     let m_per_unit = 0.011_132; // metres per 1e-7 degree of latitude, as map.rs
     let cos = (f64::from(lat0) * 1e-7).to_radians().cos();
-    (lat0 + (y / m_per_unit) as i32, lon0 + (x / m_per_unit / cos) as i32, (heading * 1e5) as i32)
+    (lat0 + (y / 0.011_057_431) as i32, lon0 + (x / m_per_unit / cos) as i32, (heading * 1e5) as i32)
 }
 
 /// The ride west and south of 0 N 0 E, where the synthetic tiles are (tools/fat_image.py).

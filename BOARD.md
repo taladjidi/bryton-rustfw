@@ -260,7 +260,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   NVIC_ISPR0 0x00000c00, ICSR 0x0041b000, VECTPENDING 27 = IRQ 11, DMA1_LISR 0), so every WFI returned at once until
   the next transfer. An abort sets TCIF (RM0399 DMA,
   stream disable). **Seen on the unit 2026-10-27** (from RAM): a first timeout of 10 ms cut full-screen fills
-  (0x7ffe pixels take 10.5 ms at 50 MHz); 30 ms since. Renode 1.17's SPI model has no transmit DMA request: there
+  (0x7ffe pixels take 10.5 ms at 50 MHz); 30 ms since, doubled per SPI1 divider step (16 MHz: 32.8 ms, bound 60;
+  8 MHz: 65.5 ms, bound 80, SysTick's longest; main.rs `dma_timeout_ms`). When the stream will not stop at start-up
+  (EN still 1), it may still write SPI1_TXDR, so the SPI is taken as dead (no CPU writes either: blank panel). Renode 1.17's SPI model has no transmit DMA request: there
   the first wait times out and the CPU path takes over (the pixels still match). **Cache contract:** the D-cache is
   off, so no maintenance; PANELDMA is 4 KB-aligned so one MPU region can make it non-cacheable when the D-cache is
   turned on (or clean it by address before each start: hw.rs).
@@ -348,7 +350,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   while they hold page changes the file does not have yet, `PAGES_NEWER`), each behind a
   tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
   the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts and the Di2 presses' actions, tag 0x9; 0xc2 in earlier builds) and 29
-  (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
+  (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets; past 3 in a row it parks
+  instead, SysTick off and every NVIC line disabled and unpended so the parked WFI sleeps: ARMv7-M ARM B1.5.19), 30 (a ride open on the card,
   0x52430001, lib.rs `RIDE_BKP`), 31 (USB drops the link recovered from, tag 0x0b, `USB_DROPS_BKP`) and 0 (what the USB drive saw last at a
   drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md) and 15 (the USB snapshot of a link's first failure, tag 0xd2, `SNAP_BKP`: 8 words of
   3 bytes are packed, src/link/usbsnap.rs, but only 15 is free, so words 1 and 2 go to 0 and 31 (after a snapshot
@@ -902,7 +905,7 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
 |---|---|
 | bus | **I2C1** (0x40005400), PB6 SCL, PB7 SDA, AF4, open drain, no internal pull; RCC_APB1LENR bit 21, reset APB1LRSTR bit 21 |
 | stock's timing | kernel clock D2PCLK1 12.5 MHz, TIMINGR 0x00100414 (about 400 kHz, inferred); HAL analog filter call with 0 (on, inferred from HAL's encoding), digital filter off |
-| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line). This firmware: EXTI6 from port C (SYSCFG EXTICR2), falling edge, unmasked for the CPU, EXTI9_5 enabled in the NVIC only so the edge wakes WFI (interrupts stay masked); the main loop clears EXTI PR1 bit 6 and reads it back; the NVIC pending bit is cleared just before each WFI with every wake source's (main.rs `sleep`): cleared right after the EXTI write, the still-asserted line pended IRQ 23 again and it stuck (seen 2026-10-27: NVIC_ISPR0 0x00800400, ICSR 0x00427000, VECTPENDING 39 = IRQ 23, with EXTI_CPUPR1 0x00000010, line 6 clear), so every WFI returned at once |
+| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line). This firmware: EXTI6 from port C (SYSCFG EXTICR2), falling edge, unmasked for the CPU, EXTI9_5 enabled in the NVIC only so the edge wakes WFI (interrupts stay masked); the main loop clears EXTI PR1 bit 6 and reads it back; the NVIC pending bit is cleared just before each WFI with every wake source's (main.rs `sleep`): cleared right after the EXTI write, the still-asserted line pended IRQ 23 again and it stuck (seen 2026-10-27: NVIC_ISPR0 0x00800400, ICSR 0x00427000, VECTPENDING 39 = IRQ 23, with EXTI_CPUPR1 0x00000010, line 6 clear), so every WFI returned at once. IRQ 23 (and OTG_HS, IRQ 77) are disabled in the NVIC for the length of a `delay_ms` (a disabled line does not wake WFI, ARMv7-M ARM B1.5.19; the EXTI flag stays latched for the main loop's slice), else a touch during a pass made each of its delays spin |
 | power | PG3 high, shared with the panel (already high in this firmware) |
 | reset | **PH3**, high to run (active-low RESET: the chip answers on I2C1 once PH3 is high, seen on the unit) |
 

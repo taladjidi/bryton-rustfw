@@ -403,7 +403,7 @@ impl Link {
 
     /// Keeps servicing USB for `ms`, so the last answer reaches the computer before a reset or a jump.
     pub fn linger(&mut self, ms: u32) {
-        // asleep between polls (WFI in delay_ms; USB activity ends a sleep early, the next poll serves it)
+        // asleep 1 ms between polls (delay_ms turns OTG_HS off in the NVIC, so USB activity waits for the next poll)
         for _ in 0..ms {
             self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
             delay_ms(1);

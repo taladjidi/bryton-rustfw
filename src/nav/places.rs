@@ -227,11 +227,10 @@ impl Places {
 /// assert_eq!(dist_bearing((0, 0), (-8983, -8983)).1, 225);
 /// ```
 pub fn dist_bearing(a: (i32, i32), b: (i32, i32)) -> (u32, u16) {
-    let cos = crate::math::cos_q16(a.0);
     let clamp = |v: i64| v.clamp(-(1 << 31), 1 << 31);
     // mm east and north, as course.rs step_mm
-    let dy = clamp((i64::from(b.0) - i64::from(a.0)) * 11_132 / 1000);
-    let dx = clamp((i64::from(b.1) - i64::from(a.1)) * 11_132 * cos / 65_536 / 1000);
+    let (dx, dy) = crate::math::plane_mm((a.0, a.1, crate::math::cos_q16(a.0)), b.0, b.1);
+    let (dx, dy) = (clamp(dx), clamp(dy));
     let mm = crate::course::step_mm(a, b);
     // angle_deg is counter-clockwise from its first vector: north to the place, turned to clockwise
     let deg = -crate::course::angle_deg((0, 1), (dx, dy));

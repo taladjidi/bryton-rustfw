@@ -909,7 +909,7 @@ pub(super) fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, f
 
 /// Draws `s` in `style` from `x`, character by character, only those that differ from `old` (all: None), each in its
 /// cell, nothing at or right of `right`.
-fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s: &str, old: Option<&str>) {
+pub(crate) fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s: &str, old: Option<&str>) {
     let cell = CELL * style.scale;
     for (i, ch) in s.char_indices() {
         let cx = x + i as u32 * cell;

@@ -118,9 +118,10 @@ impl App {
             return self.show(b); // the scan finished under it: the 90 days and the CP line, whole
         }
         if self.ride_best() != self.curve_shown && self.now_s().is_multiple_of(REDRAW_S) {
-            self.curve_shown = self.ride_best();
+            let new = self.ride_best();
+            let old = core::mem::replace(&mut self.curve_shown, new);
             let mut p = panel::Panel(b, self.area(), self.look());
-            ui::curve::draw_plot(&mut p, &self.curve_best(), &self.ride_best());
+            ui::curve::update_plot(&mut p, &self.curve_best(), &old, &self.ride_best());
             ui::curve::draw_cursor(&mut p, &self.curve_best(), &self.ride_best(), k);
         }
     }

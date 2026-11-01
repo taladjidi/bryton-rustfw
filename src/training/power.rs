@@ -45,6 +45,14 @@ pub struct Power {
     n: usize,
     /// The sums of the last 3, 10, 30 s.
     sums: [u32; 3],
+    /// The NP window: the last 30 s of the ride's power, a dropout after power was heard as 0 W (apart from the
+    /// display ring above, which restarts on a dropout: a lost sensor reads "--"), its slot, count and sum.
+    wring: [u16; 30],
+    wi: usize,
+    wn: usize,
+    wsum: u32,
+    /// Power has been heard this ride (or lap, carried by [`Power::new_lap`]): a later dropout counts as 0 W.
+    heard: bool,
     /// The ride: seconds with power, max, the sum of 30 s averages to the 4th power and their count, work (J).
     secs: u32,
     max: u16,
@@ -66,6 +74,11 @@ impl Power {
     pub const fn new() -> Self {
         Power {
             ring: [0; RING],
+            wring: [0; 30],
+            wi: 0,
+            wn: 0,
+            wsum: 0,
+            heard: false,
             i: 0,
             n: 0,
             sums: [0; 3],
@@ -80,7 +93,17 @@ impl Power {
 
     /// A new ride: the ride's totals back to zero, W' full (the rolling averages go on).
     pub fn new_ride(&mut self) {
-        *self = Power { ring: self.ring, i: self.i, n: self.n, sums: self.sums, ..Power::default() };
+        *self = Power {
+            ring: self.ring,
+            i: self.i,
+            n: self.n,
+            sums: self.sums,
+            wring: self.wring,
+            wi: self.wi,
+            wn: self.wn,
+            wsum: self.wsum,
+            ..Power::default()
+        };
     }
 
     /// One second: `p` the power now (None: no meter or stale), `ride` after its own second, CP and W' (J).
@@ -102,20 +125,48 @@ impl Power {
     /// One second's power, counted in the ride's totals if `moving`: [`Power::second`] without W' balance (a ride
     /// read back from its file, a second a record).
     pub fn sample(&mut self, p: Option<u16>, moving: bool) {
+        // The display ring restarts on a dropout (a lost sensor reads "--"). The ride's totals do not: once power
+        // was heard, a dropout is a second at 0 W in the NP window, the work and the seconds, as Golden Cheetah's NP
+        // (src/Metrics/Coggan.cpp `IsoPower`) rolls over every sample, none skipped, and counts them all in its
+        // seconds, so TSS counts the dropout's time and the averages agree. Before the first reading: no meter.
         match p {
             Some(p) => self.push(p),
             None => (self.n, self.sums) = (0, [0; 3]),
         }
-        if let (Some(p), true) = (p, moving) {
+        self.heard |= p.is_some();
+        let q = p.or(self.heard.then_some(0));
+        if let Some(q) = q {
+            self.push_np(q);
+        }
+        if let (Some(p), true) = (q, moving) {
             self.secs = self.secs.saturating_add(1);
             self.max = self.max.max(p);
             self.work_j = self.work_j.saturating_add(u64::from(p));
-            if self.n >= 30 {
-                let a = u64::from((self.sums[2] + 15) / 30);
+            if self.wn >= 30 {
+                let a = u64::from((self.wsum + 15) / 30);
                 self.np_sum = self.np_sum.saturating_add(a * a * a * a);
                 self.np_n = self.np_n.saturating_add(1);
             }
         }
+    }
+
+    /// A new lap's power: nothing counted, `heard` carried over from the ride so a dropout in its first seconds is
+    /// a 0 W second as it is in the ride.
+    pub fn new_lap(heard: bool) -> Power {
+        Power { heard, ..Power::new() }
+    }
+
+    fn push_np(&mut self, q: u16) {
+        if self.wn >= 30 {
+            let old = self.wring.get(self.wi).copied().unwrap_or(0);
+            self.wsum = self.wsum.saturating_sub(u32::from(old));
+        }
+        if let Some(slot) = self.wring.get_mut(self.wi) {
+            *slot = q;
+        }
+        self.wsum = self.wsum.saturating_add(u32::from(q));
+        self.wi = (self.wi + 1) % 30;
+        self.wn = (self.wn + 1).min(30);
     }
 
     fn push(&mut self, p: u16) {
@@ -177,14 +228,15 @@ impl Power {
         (self.np_n > 0).then(|| (self.np_sum / u64::from(self.np_n)).isqrt().isqrt().min(u64::from(u16::MAX)) as u16)
     }
 
-    /// Intensity factor x 100: NP / FTP.
+    /// Intensity factor x 100: NP / FTP (None without an FTP: a ratio to 0 W says nothing, not IF 25000).
     pub fn if_x100(&self, ftp: u16) -> Option<u32> {
-        self.np().map(|np| u32::from(np) * 100 / u32::from(ftp.max(1)))
+        self.np().filter(|_| ftp > 0).map(|np| u32::from(np) * 100 / u32::from(ftp))
     }
 
     /// Training stress score: (s x NP x IF) / (FTP x 3600) x 100 = s x NP^2 x 100 / (FTP^2 x 3600).
     pub fn tss(&self, ftp: u16) -> Option<u32> {
-        Some(tss(self.secs, self.np()?, ftp))
+        let np = self.np().filter(|_| ftp > 0)?;
+        Some(tss(self.secs, np, ftp))
     }
 
     /// Average power over the seconds counted, W (None before one).
@@ -250,6 +302,67 @@ mod tests {
         assert_eq!(tss(u32::MAX, u16::MAX, 1), tss(1_000_000, u16::MAX, 1), "no overflow from a damaged file");
     }
     use crate::ride::Input;
+
+    /// A second with no reading after power was heard counts as 0 W in the window and in the seconds (Golden Cheetah's
+    /// `IsoPower` rolls over every sample): 60 s at 200 W, 30 s of dropout, 60 s at 200 W.
+    #[test]
+    fn a_dropout_is_zero_watts() {
+        let (mut p, r) = (Power::default(), riding());
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        let before = p.np();
+        for _ in 0..30 {
+            p.second(None, &r, 250, 20_000);
+        }
+        assert_eq!(p.rolling(2), None, "the display reads -- while the sensor is lost");
+        assert_eq!(p.average(5), None);
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        assert_eq!(p.secs, 150, "the dropout's seconds count toward TSS");
+        assert!(p.np() < before, "{:?} < {before:?}", p.np());
+        let mut q = Power::default(); // no meter at all: nothing counted
+        for _ in 0..60 {
+            q.second(None, &r, 250, 20_000);
+        }
+        assert_eq!((q.secs, q.np()), (0, None));
+    }
+
+    /// With the ring kept through an auto-pause (the ride is not moving), the paused seconds sit in the 30 s window
+    /// but are not counted: NP of the seconds after the stop is pulled down by the zeros, `secs` is the moving ones.
+    #[test]
+    fn np_across_an_auto_pause() {
+        let (mut p, r) = (Power::default(), riding());
+        let mut stopped = Ride::new();
+        stopped.start_pause();
+        stopped.second(&Input { speed_x10: Some(0), ..Input::default() });
+        assert!(!stopped.moving());
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        for _ in 0..30 {
+            p.second(Some(0), &stopped, 250, 20_000);
+        }
+        assert_eq!(p.secs, 60, "paused seconds are not counted");
+        for _ in 0..30 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        let np_after = p.np().unwrap();
+        assert!(np_after < 200, "{np_after}");
+        assert_eq!(p.secs, 90);
+    }
+
+    /// No FTP: no IF and no TSS (the screens show "--"), not a ratio to 0 W.
+    #[test]
+    fn no_ftp_no_score() {
+        let (mut p, r) = (Power::default(), riding());
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        assert_eq!((p.if_x100(0), p.tss(0)), (None, None));
+        assert!(p.if_x100(200).is_some() && p.tss(200).is_some());
+    }
 
     fn riding() -> Ride {
         let mut r = Ride::new();

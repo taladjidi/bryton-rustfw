@@ -1010,7 +1010,7 @@ fn turn_finder_shapes() {
             };
             let step = if next() % 50 == 0 { 0.0 } else { f64::from(1 + next() % 300) };
             (x, y) = (x + step * heading.cos(), y + step * heading.sin());
-            let (lat, lon) = ((y / 0.011_132) as i32, (x / 0.011_132) as i32);
+            let (lat, lon) = ((y / 0.011_057_431) as i32, (x / 0.011_132) as i32);
             c.add(Pt { lat, lon, alt_dm: None, split: next() % 500 == 0, dist_m: None });
         }
         c.finish();

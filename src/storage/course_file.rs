@@ -614,7 +614,7 @@ pub(crate) mod tests {
         });
         assert_eq!(v, [true, false, true, true, false, true]);
         let m = odo.len_m().unwrap();
-        assert!(m.abs_diff(1112 + 111 + 1112) <= 2, "the 9.9 km and 10 km jumps left out: {m}");
+        assert!(m.abs_diff(1106 + 111 + 1106) <= 2, "the 9.9 km and 10 km jumps left out: {m}");
     }
 
     /// Cues in GPX: BRouter's "gpsies" style (`wpt` with `sym` and `type`), its Locus style (`sym` on a track
