@@ -26,6 +26,8 @@
 //! - **a delete** only marks the entry (and its long name pieces) 0xe5: the rest of the entry, its first cluster
 //!   included, stays, so a lost file can be found by hand. Only the recorder's own entries are ever deleted, and the
 //!   old entry of a ride HISTORY's DELETE moves into `\Rustfw\Deleted` (`trash`, the second half of a move).
+//! - **a revive** ([`Fat::revive`], the undo of a move a full card cannot finish): the first bytes a delete marked
+//!   written back, the long name's pieces in the sector before first; no cluster taken.
 //! - **FSInfo** (free count, next free hint) is written after the FAT sectors it counts; a cut between leaves the
 //!   count a little high, which the FAT32 spec allows (it is a hint) and [`Fat::sync_fats`] puts right.
 //!
@@ -46,7 +48,8 @@
 #![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
 use super::{
-    DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, SECTOR_U32, lfn_eq, short_eq, short_sum, u32_at,
+    DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, SECTOR_U32, fold, lfn_eq, short_eq, short_sum,
+    u16_at, u32_at,
 };
 
 /// End of chain, as written.
@@ -121,6 +124,9 @@ fn valid_name(name: &str) -> bool {
         && b.last().is_some_and(|c| ![b' ', b'.'].contains(c))
 }
 
+/// Where a long name piece holds its 13 UTF-16 units.
+const AT: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+
 /// The directory entries of `name`: its long name pieces (last first) then the 8.3 entry `short`; how many.
 fn dir_entries(
     name: &str,
@@ -138,7 +144,6 @@ fn dir_entries(
     });
     let pieces = name.len().div_ceil(13).min(5);
     let sum = short_sum(&short);
-    const AT: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
     for (k, e) in out.iter_mut().take(pieces).enumerate() {
         // entry k holds piece (pieces - k): the last piece first
         let n = pieces - k;
@@ -771,6 +776,127 @@ impl Fat {
             lba = prev;
         }
         Ok(())
+    }
+
+    /// Makes the entry of `name` that [`Fat::remove`] marked deleted in `dir` (on the chain from `first`, `size`
+    /// bytes) live again, taking no cluster: the first bytes written back, the long name's ordinals and the 8.3
+    /// entry's first character, which the long name's checksum fixes (each of the 256 values gives another sum). The
+    /// long name's pieces in the sector before first, then the entry's own sector, so a cut between leaves at worst
+    /// orphan pieces (taken up by the next call). False if there is no such entry, or its long name is not `name`
+    /// (never revived as another name), or a live entry has that name. The undo of a move a full card cannot finish
+    /// (trash.rs `put_back`).
+    pub fn revive(
+        &mut self,
+        d: &mut impl DiskWrite,
+        dir: File,
+        name: &str,
+        first: u32,
+        size: u32,
+    ) -> Result<bool, Error> {
+        match self.find(d, dir, name) {
+            Err(Error::NotFound) => {}
+            Ok(_) => return Ok(false), // two entries of one name: never
+            Err(e) => return Err(e),
+        }
+        let mut cluster = dir.cluster;
+        for _ in 0..DIR_ENTRIES / (SECTOR_U32 / 32) {
+            for sec in 0..self.spc {
+                let lba = self.lba(cluster) + sec;
+                let mut s = [0u8; SECTOR];
+                self.read(d, lba, &mut s)?;
+                for (i, e) in s.as_chunks::<32>().0.iter().enumerate() {
+                    if e[0] == 0 {
+                        return Ok(false); // the end of the folder
+                    }
+                    let on = u32::from(u16_at(e, 20)) << 16 | u32::from(u16_at(e, 26));
+                    let gone = e[0] == 0xe5 && e[11] != 0x0f && e[11] & DIR == 0;
+                    if gone && on == first && u32_at(e, 28) == size && self.revive_at(d, dir, lba, &s, i, name)? {
+                        return Ok(true);
+                    }
+                }
+            }
+            match self.next(d, cluster)? {
+                Some(c) => cluster = c,
+                None => return Ok(false),
+            }
+        }
+        Err(Error::Corrupt)
+    }
+
+    /// [`Fat::revive`] of the 8.3 entry `slot` of sector `lba` (read: `s`), if the deleted pieces before it are
+    /// `name`'s long name and no live entry has its 8.3 name (a computer or stock may have given it to a new file).
+    fn revive_at(
+        &mut self,
+        d: &mut impl DiskWrite,
+        dir: File,
+        lba: u32,
+        s: &[u8; SECTOR],
+        slot: usize,
+        name: &str,
+    ) -> Result<bool, Error> {
+        let pieces = name.len().div_ceil(13).min(5);
+        // the sector before (when the long name starts there) and this one, as one run of 32 entries
+        let mut two = [0u8; 2 * SECTOR];
+        two.get_mut(SECTOR..).ok_or(Error::Corrupt)?.copy_from_slice(s);
+        let prev = if pieces > slot {
+            let Some(p) = self.dir_sector_before(d, dir.cluster, lba)? else { return Ok(false) };
+            self.read(d, p, two.get_mut(..SECTOR).ok_or(Error::Corrupt)?)?;
+            Some(p)
+        } else {
+            None
+        };
+        let at = ENTRIES + slot;
+        let ents = two.as_chunks_mut::<32>().0;
+        let sum = ents.get(at - 1).ok_or(Error::Corrupt)?[13];
+        let short = ents.get_mut(at).ok_or(Error::Corrupt)?;
+        let mut alias = [0u8; 11];
+        alias.copy_from_slice(short.get(..11).ok_or(Error::Corrupt)?);
+        let Some(b0) = (1..=0xffu8).filter(|&b| b != 0xe5).find(|&b| {
+            alias[0] = b;
+            short_sum(&alias) == sum
+        }) else {
+            return Ok(false);
+        };
+        alias[0] = b0;
+        if self.alias_taken(d, dir, &alias)? {
+            return Ok(false);
+        }
+        short[0] = b0;
+        for k in 1..=pieces {
+            let e = ents.get_mut(at - k).ok_or(Error::Corrupt)?;
+            let ord = u8::try_from(k).map_err(|_| Error::Corrupt)? | if k == pieces { 0x40 } else { 0 };
+            if e[11] != 0x0f || e[13] != sum || (e[0] != 0xe5 && e[0] != ord) {
+                return Ok(false);
+            }
+            for (i, &a) in AT.iter().enumerate() {
+                let n = (k - 1) * 13 + i;
+                let want = match name.as_bytes().get(n) {
+                    Some(&c) => u16::from(c),
+                    None if n == name.len() => 0,
+                    None => continue, // padding
+                };
+                if fold(u16_at(e, a)) != fold(want) {
+                    return Ok(false);
+                }
+            }
+            e[0] = ord;
+        }
+        if let Some(p) = prev {
+            self.write(d, p, two.get(..SECTOR).ok_or(Error::Corrupt)?)?;
+        }
+        self.write(d, lba, two.get(SECTOR..).ok_or(Error::Corrupt)?)?;
+        Ok(true)
+    }
+
+    /// A live entry of `dir` has the 8.3 name `alias` (its 11 bytes as stored).
+    fn alias_taken(&mut self, d: &mut impl Disk, dir: File, alias: &[u8; 11]) -> Result<bool, Error> {
+        let mut c = self.cursor(dir)?;
+        while let Some((e, _)) = self.next_raw(d, &mut c)? {
+            if e.get(..11) == Some(&alias[..]) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The sector before `lba` in the folder whose chain starts at `dir` (None at its start, or `dir` unknown).
@@ -1424,6 +1550,7 @@ pub(crate) mod tests {
             seed ^= seed << 17;
             seed
         };
+        let mut revived = 0; // entries removed, then made live again (Fat::revive): the fuzz reaches it
         for round in 0..60 {
             let mut bad = img.clone();
             if round % 2 == 1 {
@@ -1451,8 +1578,9 @@ pub(crate) mod tests {
                                 let size = (rnd() as u32) % ((at + n as u32) * SECTOR as u32 + 1);
                                 let _ = fat.set_size(&mut d, &mut h, size, T);
                             }
-                            if rnd() % 3 == 0 {
-                                let _ = fat.remove(&mut d, &h);
+                            if rnd() % 3 == 0 && fat.remove(&mut d, &h).is_ok() && rnd() % 2 == 0 {
+                                let (first, size) = (h.first, h.size);
+                                revived += usize::from(fat.revive(&mut d, root, &name, first, size) == Ok(true));
                             }
                         }
                     }
@@ -1463,6 +1591,7 @@ pub(crate) mod tests {
                 assert_eq!(fsck(&d.0).map(|_| ()), Ok(()), "round {round}");
             }
         }
+        assert!(revived > 10, "{revived} revived");
     }
 
     /// A disk whose power goes during its `.1`-th next sector write, which lands torn: its first `.2` bytes new, the
@@ -1541,5 +1670,76 @@ pub(crate) mod tests {
         assert_eq!(fat.write_sectors(&mut d, &mut bare, 0, &[1; SECTOR]), Err(Error::Corrupt));
         assert_eq!(bare.first, h.first);
         assert!(d.0 == before, "nothing written");
+    }
+
+    /// An entry [`Fat::remove`] marked deleted made live again by [`Fat::revive`], its long name whole: never under
+    /// another name, never for another chain or size, never beside a live entry of the name.
+    #[test]
+    fn a_removed_entry_is_revived() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let mut h = fat.create(&mut d, root, "261020080000.fit", T).unwrap();
+        fat.write_sectors(&mut d, &mut h, 0, &[3; SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut h, 100, T).unwrap();
+        let whole = d.0.clone();
+        fat.remove(&mut d, &h).unwrap();
+        assert_eq!(fat.revive(&mut d, root, "261020080001.fit", h.first, 100), Ok(false), "another name");
+        assert_eq!(fat.revive(&mut d, root, "261020080000.fit", h.first, 99), Ok(false), "another size");
+        assert_eq!(fat.revive(&mut d, root, "261020080000.fit", h.first + 1, 100), Ok(false), "another chain");
+        assert_eq!(fat.revive(&mut d, root, "261020080000.FIT", h.first, 100), Ok(true), "case ignored");
+        assert!(d.0 == whole, "as before the remove");
+        assert_eq!(read_all(&mut fat, &mut d, "261020080000.fit").len(), 100);
+        assert_eq!(fsck(&d.0), Ok(0));
+        assert_eq!(fat.revive(&mut d, root, "261020080000.fit", h.first, 100), Ok(false), "live already");
+        // its 8.3 name given to a new file meanwhile (a computer or stock): never two live entries of one 8.3 name
+        fat.remove(&mut d, &h).unwrap();
+        let other = fat.create(&mut d, root, "other.bin", T).unwrap();
+        let (from, to) = (h.entry_lba as usize * SECTOR + 32 * usize::from(h.slot), other.entry_lba as usize * SECTOR);
+        let alias: Vec<u8> = whole[from..from + 11].to_vec();
+        d.0[to + 32 * usize::from(other.slot)..][..11].copy_from_slice(&alias);
+        assert_eq!(fat.revive(&mut d, root, "261020080000.fit", h.first, 100), Ok(false), "8.3 name taken");
+    }
+
+    /// The review of 2026-11-01 (revive, 4): a long name that crosses a sector edge (stock's and computers' do;
+    /// this writer's never), its 8.3 entry at slot 0, removed and made live again with a cut between its two
+    /// writes: the pieces of the sector before live, the 8.3 entry still deleted, which our reader skips (orphan
+    /// pieces: chkdsk would drop them), and the next revive finishes it.
+    #[test]
+    fn a_revive_across_a_sector_edge_survives_a_cut() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let dir = fat.mkdir(&mut d, root, "D", T).unwrap();
+        let mut h = fat.create(&mut d, dir, "261020080000.fit", T).unwrap();
+        fat.write_sectors(&mut d, &mut h, 0, &[3; SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut h, 100, T).unwrap();
+        // its three entries (slots 2 to 4 after . and ..) moved to slots 14, 15 and the next sector's 0; the slots
+        // between deleted entries, so the folder does not end before them
+        let s0 = fat.lba(dir.cluster) as usize * SECTOR;
+        let entries: Vec<u8> = d.0[s0 + 2 * 32..s0 + 5 * 32].to_vec();
+        for k in 2..14 {
+            d.0[s0 + k * 32..s0 + (k + 1) * 32].fill(0);
+            d.0[s0 + k * 32] = 0xe5;
+            d.0[s0 + k * 32 + 11] = 0x20;
+        }
+        d.0[s0 + 14 * 32..s0 + 16 * 32].copy_from_slice(&entries[..64]);
+        d.0[s0 + SECTOR..s0 + SECTOR + 32].copy_from_slice(&entries[64..]);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let h = fat.locate(&mut d, dir, "261020080000.fit").unwrap();
+        assert_eq!((h.entry_lba as usize * SECTOR, h.slot), (s0 + SECTOR, 0), "across the edge");
+        let live = d.0.clone();
+        fat.remove(&mut d, &h).unwrap();
+        let removed = d.0.clone();
+        let mut c = Cut(Ram(removed.clone(), 0), 1);
+        let mut f = Fat::mount(&mut c).unwrap();
+        assert_eq!(f.revive(&mut c, dir, "261020080000.fit", h.first, 100), Err(Error::Io), "cut between");
+        let mut d = c.0;
+        assert_eq!(fsck_torn(&d.0), Ok(1), "orphan pieces, the entry still deleted: its chain lost meanwhile");
+        let mut f = Fat::mount(&mut d).unwrap();
+        assert_eq!(f.find(&mut d, dir, "261020080000.fit"), Err(Error::NotFound));
+        assert_eq!(f.revive(&mut d, dir, "261020080000.fit", h.first, 100), Ok(true), "taken up");
+        assert!(d.0 == live, "as before the remove");
+        assert_eq!(fsck(&d.0), Ok(0));
     }
 }
