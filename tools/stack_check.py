@@ -66,8 +66,8 @@ def frames(text):
 
 
 def calls(text):
-    """(direct calls fn -> {callee}, functions with a `blx rN`) from llvm-objdump text; a `b`/`bl` to another function's
-    first instruction (a tail call included) is a call, a branch inside the function is not."""
+    """(direct calls fn -> {callee}, functions with a call through a register: `blx rN`, `bx rN` (not lr), `ldr pc`) from llvm-objdump text; a `b`/`bl` to another function's
+    first instruction (a tail call included) is a call, a branch inside the function is not; so is a conditional tail branch (`bne.w` to another symbol)."""
     out, indirect, fn = {}, set(), None
     for line in text.splitlines():
         m = re.match(r'^[0-9a-f]+ <(.*)>:$', line)
@@ -77,37 +77,55 @@ def calls(text):
             continue
         if not fn:
             continue
-        m = re.search(r'\b(?:bl|b\.w|b)\s+0x[0-9a-f]+ <([^>+]*)>', line)
+        m = re.search(r'\b(?:bl|b(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)?(?:\.[wn])?)\s+0x[0-9a-f]+ <([^>+]*)>', line)
         if m and m.group(1) != fn:
             out[fn].add(m.group(1))
-        elif re.search(r'\bblx\s+r\d+', line):
+        elif re.search(r'\bblx\s+r\d+|\bbx\s+(?!lr\b)r\d+|\bldr(?:\.w)?\s+pc,|\bmov\s+pc,', line):
             indirect.add(fn)
     return out, indirect
 
 
 def chain(fr, graph):
-    """(deepest chain's bytes, its functions, the cycles cut) of the longest path by frame sizes over `graph`
-    (fn -> callees); a callee on the current path closes a cycle: cut there and reported."""
-    best, cycles, path = {}, [], []
+    """(deepest chain's bytes, its functions, the cycles found) of the longest path over `graph` (fn -> callees),
+    computed on the condensation into strongly connected components (Tarjan), so a cycle never poisons a cached
+    result. A component's weight is the SUM of its members' frames: recursion has no static bound, and one pass through
+    every member is the least that can be true, so it stays an honest lower bound without being tuned to an edge
+    order. The cycles are the components of more than one function."""
+    sys.setrecursionlimit(max(10_000, 4 * len(graph)))
+    idx, low, on, stack, comp, comps = {}, {}, set(), [], {}, []
 
-    def walk(f):
-        if f in best:
-            return best[f]
-        path.append(f)
-        sub = (0, [])
-        for c in sorted(graph.get(f, ())):
-            if c in path:
-                cycles.append(' -> '.join(path[path.index(c):] + [c]))
-                continue
-            r = walk(c)
-            if r[0] > sub[0]:
-                sub = r
-        path.pop()
-        best[f] = (fr.get(f, 0) + sub[0], [f] + sub[1])
-        return best[f]
+    def tarjan(v):
+        idx[v] = low[v] = len(idx)
+        stack.append(v)
+        on.add(v)
+        for w in sorted(graph.get(v, ())):
+            if w not in idx:
+                tarjan(w)
+                low[v] = min(low[v], low[w])
+            elif w in on:
+                low[v] = min(low[v], idx[w])
+        if low[v] == idx[v]:
+            c = []
+            while True:
+                w = stack.pop()
+                on.discard(w)
+                comp[w] = len(comps)
+                c.append(w)
+                if w == v:
+                    break
+            comps.append(sorted(c))
 
-    top = max((walk(f) for f in sorted(graph)), key=lambda r: r[0], default=(0, []))
-    return top[0], top[1], sorted(set(cycles))
+    for v in sorted(graph):
+        if v not in idx:
+            tarjan(v)
+    # Tarjan emits a component after all it reaches, so comps is in reverse topological order: callees first
+    best = []
+    for i, c in enumerate(comps):
+        out = {comp[w] for v in c for w in graph.get(v, ()) if w in comp and comp[w] != i}
+        sub = max((best[j] for j in out), key=lambda r: r[0], default=(0, []))
+        best.append((sum(fr.get(v, 0) for v in c) + sub[0], [c[0]] + sub[1]))
+    top = max(best, key=lambda r: r[0], default=(0, []))
+    return top[0], top[1], [' -> '.join(c) for c in comps if len(c) > 1]
 
 
 def symbols(text):
@@ -159,10 +177,15 @@ def selftest():
     # the call graph: main -> a -> b (+ a cycle b -> a); a tail call `b.w` counts; a branch inside a function does not
     g, ind = calls('\n'.join([
         'd0 <main>:', 'd0: bl\t0x20 <a>', 'd2: b\t0x6 <main+0x6>', 'd4: blx\tr3', 'd20 <a>:', 'd20: bl\t0x30 <b>',
-        'd30 <b>:', 'd30: bl\t0x20 <a>', 'd32: b.w\t0x40 <c>', 'd40 <c>:', 'd40: bx lr']))
-    assert g == {'main': {'a'}, 'a': {'b'}, 'b': {'a', 'c'}, 'c': set()} and ind == {'main'}, (g, ind)
-    deep, path, cycles = chain({'main': 10, 'a': 20, 'b': 30, 'c': 5}, g)
-    assert (deep, path) == (65, ['main', 'a', 'b', 'c']) and cycles == ['a -> b -> a'], (deep, path, cycles)
+        'd30 <b>:', 'd30: bl\t0x20 <a>', 'd32: b.w\t0x40 <c>', 'd34: bne.w\t0x50 <e>', 'd36: bx\tr2', 'd38: bx\tlr',
+        'd40 <c>:', 'd40: bx lr', 'd50 <e>:', 'd50: ldr.w\tpc, [r0]']))
+    assert g == {'main': {'a'}, 'a': {'b'}, 'b': {'a', 'c', 'e'}, 'c': set(), 'e': set()} and ind == {'main', 'b', 'e'}, (g, ind)
+    # the cycle a <-> b with a big callee under b, reached by two roots (main, then x): the memo must not lose b -> big
+    g2 = {'main': {'a'}, 'a': {'b'}, 'b': {'a', 'big'}, 'big': set(), 'x': {'b'}}
+    fr2 = {'main': 10, 'a': 20, 'b': 30, 'big': 1000, 'x': 5}
+    deep, path, cycles = chain(fr2, g2)
+    assert deep == 10 + 20 + 30 + 1000 and path[-1] == 'big' and cycles == ['a -> b'], (deep, path, cycles)
+    assert chain(fr2, {k: v for k, v in g2.items() if k != 'main'})[0] == 5 + 50 + 1000
     # a synthetic deep chain fails the check; a shallow one passes
     names = [f'f{i}' for i in range(10)]
     deepg = {n: {m} for n, m in zip(names, names[1:])} | {'f9': set()}

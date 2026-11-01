@@ -103,17 +103,18 @@ strict=1; [ $skipok = 1 ] && strict=0
 
 lane_F() {  # the firmware
     step "cargo clippy --release" cargo clippy --release -- -D warnings
+    # the ride build (EMMC_WRITE=1: the recorder and the card writes) is the one that goes on the unit for a ride. It is
+    # built first, in the same target dir (option_env! is per crate: only the binary crate rebuilds, the library and
+    # the dependencies are shared; measured 35 s against 41 s with a target dir of its own after a lib.rs change),
+    # checked, then the default build goes last so that pack.py and the Renode run see the default ELF.
+    step "cargo build --release (EMMC_WRITE=1)" env EMMC_WRITE=1 cargo build --release
+    step "stack_check (ride build)" python3 -I tools/stack_check.py
+    step "panics.py --max 0 (ride build)" python3 -I tools/panics.py --max 0
     step "cargo build --release" cargo build --release
     step "stack_check" python3 -I tools/stack_check.py
     step "stack_check selftest" python3 -I tools/stack_check.py selftest
     step "panics.py --max 0" python3 -I tools/panics.py --max 0
     step "pack.py" python3 -I tools/pack.py
-    # the ride build (EMMC_WRITE=1: the recorder and the card writes) is the one that goes on the unit for a ride:
-    # its own target dir, so neither build rebuilds the other
-    step "cargo build --release (EMMC_WRITE=1)" env EMMC_WRITE=1 CARGO_TARGET_DIR=target/ride cargo build --release
-    ride=target/ride/thumbv7em-none-eabihf/release/bryton-rustfw
-    step "stack_check (ride build)" python3 -I tools/stack_check.py $ride
-    step "panics.py --max 0 (ride build)" python3 -I tools/panics.py $ride --max 0
 }
 
 lane_H() {  # the host
@@ -123,7 +124,7 @@ lane_H() {  # the host
     # the advisory database is fetched from GitHub: without a network, the cached copy (--offline) is checked instead
     deny() {
         if cargo deny check -s > "$C/deny.out" 2>&1; then cat "$C/deny.out"; return 0; fi
-        if grep -q 'failed to fetch advisory database' "$C/deny.out"; then
+        if [ $strict = 0 ] && grep -q 'failed to fetch advisory database' "$C/deny.out"; then
             skip "cargo-deny advisory database not fetched (no network): checked --offline"
             cargo deny --offline check -s
         else
@@ -138,6 +139,7 @@ lane_H() {  # the host
         PATH="$PATH:/sbin:/usr/sbin"
         if command -v fsck_msdos >/dev/null 2>&1; then fs="fsck_msdos -n"
         elif command -v fsck.vfat >/dev/null 2>&1; then fs="fsck.vfat -n"
+        elif [ $strict = 1 ]; then echo "fsck: no fsck_msdos / fsck.vfat: on main (or --full) an independent FAT checker is required"; return 1
         else skip "fsck (no fsck_msdos / fsck.vfat)"; return 0; fi
         n=0
         for img in target/fat/*.img; do
@@ -228,8 +230,8 @@ if [ -n "$bad" ]; then echo "check.sh: FAILED lane(s):$bad (logs in $C/)"; exit 
 export RENODE="${RENODE:-/Applications/Renode.app/Contents/MacOS/renode}"
 if ! command -v "$RENODE" >/dev/null 2>&1; then
     skip "renode (not installed)"
-elif ! touched_beyond '^(docs/|tools/|test-data/|check\.sh$|\.gitignore$|[A-Za-z_./-]*\.md$|src/sim/|src/.*_tests\.rs$|src/.*/tests\.rs$)'; then
-    skip "renode (the change is limited to docs, tools/, test-data/, tests and the simulator)"
+elif ! touched '^(src/main\.rs|src/lib\.rs|src/app/pass\.rs|src/board/|src/drivers/|src/ui/strip\.rs|src/ui/overview\.rs|link\.x|build\.rs|Cargo\.(toml|lock)|\.cargo/config\.toml|rust-toolchain\.toml|renode/)'; then
+    skip "renode (no change in main.rs, lib.rs, app/pass.rs, board/, drivers/, ui/strip.rs, ui/overview.rs, link.x, build.rs, Cargo.toml/lock, .cargo/config.toml, rust-toolchain.toml, renode/)"
 else
     renode2() {  # the boot (first screen, then the cable in) and the switch-off; in sequence unless RENODE_PARALLEL=1
         if [ "${RENODE_PARALLEL:-0}" = 1 ]; then

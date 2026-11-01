@@ -367,8 +367,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/real.sh`: the `#[ignore]` tests that read the owner's real data (rides, drive, tiles, routes, segments), with
   the variables from the gitignored `tools/real.env`; each panics when its variable is unset (docs/devloop.md).
 - `tools/stack_check.py [ELF]`: the firmware's stack frames against their budgets, the stack's size (from the canary
-  to the top), and the longest static call chain (a depth-first search over the `bl` graph, cycles cut and listed,
-  `blx rN` callers named) against the stack minus 8 KB (check.sh, after the build, on the default and the ride build).
+  to the top), and the longest static call chain (a longest path over the `bl` graph condensed into its strongly connected components,
+  calls through a register named) against the stack minus 8 KB (check.sh, after the build, on the default and the ride build).
 - `tools/panics.py` (`--max N`: exit 1 above N sites; check.sh runs `--max 0`): every panic site of the release ELF (any branch to a panic / `_fail` / unwrap / expect entry; bounds, unwrap, overflow, explicit, other) with its source line (src/ or a
   patched crate's vendor/), per file and folder, and the bounds sites in files that deny `clippy::indexing_slicing`; the
   panic handler's own reset loop (hw.rs, a branch to itself) is left out and counted on their own line (a report, exit 0; `selftest`).

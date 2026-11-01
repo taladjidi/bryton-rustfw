@@ -66,7 +66,7 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
   iterating; `./check.sh` is the gate; `--full` runs everything whatever the diff; `-v` prints every lane's log.
 - **Lanes:** after the guards, lint and fmt, three lanes run in parallel, each in a subshell with its own log in
   `target/check/` (F: firmware clippy, build, stack_check, panics, pack, then the same three checks on the ride build
-  (`EMMC_WRITE=1`, `target/ride/`); H: host clippy, tests, doc, deny, fsck of the volumes the tests wrote
+  (`EMMC_WRITE=1`, built first in the same target dir, the default build last); H: host clippy, tests, doc, deny, fsck of the volumes the tests wrote
   (`target/fat/*.img`: `fsck_msdos -n` or `fsck.vfat -n`), fit_check, walk selftest; P: the Python self-tests and the font regeneration). F and H take different cargo locks
   (`target/thumbv7em-none-eabihf/release` and `target/aarch64-apple-darwin/debug`), so they do not block each other.
   Any failed lane fails the gate and its log is printed. Every step's wall seconds and a total end the output.
@@ -79,9 +79,9 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
   `src/ui/fonts.rs`; Renode only for `src/main.rs`, `src/lib.rs`, `src/app/pass.rs`, `src/board/`, `src/drivers/panel.rs`,
   `src/ui/strip.rs`, `src/ui/overview.rs`, `link.x`, `build.rs`, `Cargo.toml`, `Cargo.lock`, `renode/`. Each skip is
   printed with its reason and repeated in the `SKIPPED:` line. On main, on a detached HEAD and with `--full` nothing is
-  skipped, and a missing fitdecode / garmin-fit-sdk fails the gate instead of skipping.
-  (Renode is the other way round: it is skipped only when the change is limited to docs, `tools/`, `test-data/`, tests
-  and the simulator, so `.cargo/config.toml`, `rust-toolchain.toml`, `src/drivers/` and `src/storage/` run it.)
+  skipped, and a missing fitdecode / garmin-fit-sdk, fsck tool, or a deny database that cannot be fetched fails the gate
+  instead of skipping.
+  (Renode on a branch also runs for `src/drivers/`, `.cargo/config.toml` and `rust-toolchain.toml`, not for `src/storage/`.)
 - **Stale files:** `target/fit`, `target/sim` and `target/fat` are removed at the start, so a test that stops writing a
   file cannot leave an old one to pass fit_check, fsck or Renode.
 - **No network:** when `cargo deny` cannot fetch the advisory database, the gate retries `cargo deny --offline check -s`
