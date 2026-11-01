@@ -125,21 +125,24 @@ fn a_four_hour_ride_never_overflows_the_chip() {
     assert_healthy(&ride(240, POLL_MS, board_wait_us()), 240);
 }
 
-/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (15 against 12 at the 50 ms
-/// pass with the transfers' time charged, 16 before it; `ChipLimits::parse_us` 20 between two reads: inferred, not measured); with the 100 ms pass (below) the
-/// ride's traffic overflows it.
+/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (13 against 12 at the 50 ms
+/// pass with the transfers' time charged; `ChipLimits::parse_us` 20 between two reads: inferred, not measured). Before
+/// the differential test (2026-11-01, `resp_ahead`: events queued before a response go out before it, as the emulated
+/// app does) the model said 15 against 12, and 100 ms with the 20 us wait overflowed it.
 #[test]
 fn the_20_us_wait_leaves_the_queue_higher() {
     let (slow, fast) = (ride(10, POLL_MS, 20), ride(10, POLL_MS, board_wait_us()));
-    assert!(slow.high_water >= fast.high_water + 3, "{} against {}", slow.high_water, fast.high_water);
+    assert!(slow.high_water > fast.high_water, "{} against {}", slow.high_water, fast.high_water);
 }
 
-/// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) is no better. Worst case for a short wait
-/// (ChipLimits): a direction, not the unit's exact numbers.
+/// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) runs the queue far higher than the production
+/// wait does (70 against 12 on 2026-11-01). It no longer overflows the 96 slots in the model: that needed a response to
+/// overtake the queued events, which the emulated app does not do (nrf_diff_tests.rs). A direction, not the unit's
+/// numbers.
 #[test]
-fn a_100_ms_pass_with_the_20_us_wait_hangs_the_chip() {
-    let o = ride(10, 100, 20);
-    assert!(o.hangs > 0, "high-water {}", o.high_water);
+fn a_100_ms_pass_with_the_20_us_wait_runs_the_queue_high() {
+    let (slow, fast) = (ride(10, 100, 20), ride(10, 100, board_wait_us()));
+    assert!(slow.high_water >= fast.high_water + 30, "{} against {}", slow.high_water, fast.high_water);
 }
 
 /// The healthy-wait case for the slower pass: the 100 ms pass is gone from the firmware (2026-11-01); this records

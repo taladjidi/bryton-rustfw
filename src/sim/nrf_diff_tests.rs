@@ -26,6 +26,11 @@ struct Dut {
     hung: bool,
     /// Soak: count frames, keep no log.
     quiet: bool,
+    /// Scripted operations so far: a hang is logged with the one it showed in.
+    step: u32,
+    /// The step the hang was seen in. Printed on a disagreement, not compared: the emulator finds a hang when time runs
+    /// (the `advance` after the bytes), the model when it takes them, so the steps differ by one.
+    hung_step: u32,
     frames: u64,
     ant_frames: u64,
     /// Bytes the chip's side accepted from the host so far.
@@ -41,6 +46,7 @@ impl Dut {
         let mut sim = Sim::new(8, 0, 0);
         if let Some(e) = &emu {
             e.0.borrow_mut().soft = true;
+            e.0.borrow_mut().req(&[b'F', 16, 0], false); // our USART2 RX FIFO: RTS drops when 16 bytes are unread
             sim.nrf_ext = Some(Box::new(e.clone()));
         }
         sim.nordic.expect_hang = Some("");
@@ -53,6 +59,8 @@ impl Dut {
             held: false,
             hung: false,
             quiet: false,
+            step: 0,
+            hung_step: 0,
             frames: 0,
             ant_frames: 0,
             sent: 0,
@@ -77,6 +85,7 @@ impl Dut {
         if h {
             (self.hung, self.reason) = (true, why);
             self.log.push("HUNG".into());
+            self.hung_step = self.step;
         }
     }
 
@@ -94,6 +103,11 @@ impl Dut {
 
     /// Time passes (nothing is read).
     fn advance(&mut self, ms: u32) {
+        self.step += 1;
+        self.tick(ms);
+    }
+
+    fn tick(&mut self, ms: u32) {
         if self.hung && self.emu.is_some() {
             return;
         }
@@ -110,6 +124,7 @@ impl Dut {
 
     /// The host reads what is there, as the ride pass does, and logs the frames.
     fn poll(&mut self) {
+        self.step += 1;
         if self.held || self.hung {
             return;
         }
@@ -146,6 +161,7 @@ impl Dut {
     }
 
     fn ant(&mut self, ch: u8, data: [u8; 8]) {
+        self.step += 1;
         if self.hung {
             return;
         }
@@ -160,6 +176,7 @@ impl Dut {
 
     /// A BLE GATTC notification of `n` data bytes (a phone service or a BLE sensor).
     fn hvx(&mut self, n: u16) {
+        self.step += 1;
         if self.hung {
             return;
         }
@@ -191,7 +208,7 @@ impl Dut {
             self.sent += n;
             rest = &rest[n..];
             if !rest.is_empty() {
-                self.advance(1);
+                self.tick(1);
             }
         }
         self.check_hung();
@@ -200,6 +217,7 @@ impl Dut {
     /// Bytes offered to the chip once, then `ms` of waiting: how many bytes in all left the host (the chip's UART took them, its
     /// 4-byte FIFO included). `nrf_send` takes 16 at most while the chip holds CTS.
     fn offer(&mut self, bytes: &[u8], ms: u32) -> usize {
+        self.step += 1;
         if self.hung {
             return 0;
         }
@@ -218,6 +236,7 @@ impl Dut {
     }
 
     fn command(&mut self, payload: &[u8]) {
+        self.step += 1;
         self.send(&[&(payload.len() as u16).to_le_bytes()[..], payload].concat());
     }
 }
@@ -232,8 +251,8 @@ fn both(name: &str, script: impl Fn(&mut Dut)) {
     if emu.log != fast.log {
         let n = emu.log.iter().zip(&fast.log).take_while(|(a, b)| a == b).count();
         panic!(
-            "{name}: the fast model and the real app disagree at line {n}\n emulated ({}): {:#?}\n fast ({}): {:#?}",
-            emu.reason, &emu.log, fast.reason, &fast.log
+            "{name}: the fast model and the real app disagree at line {n}\n emulated ({}, hang at step {}): {:#?}\n fast ({}, hang at step {}): {:#?}",
+            emu.reason, emu.hung_step, &emu.log, fast.reason, fast.hung_step, &fast.log
         );
     }
     std::println!(
@@ -266,17 +285,29 @@ fn nrf_diff_start_and_version() {
 #[test]
 #[ignore = "needs python3 + unicorn + Bryton's nordic.bin; cargo test-host -- --ignored nrf_diff"]
 fn nrf_diff_ant_four_hz_three_channels() {
-    both("ANT 4 Hz on 3 channels, drained every pass", |d| {
-        for ms in (0..6000).step_by(10) {
-            for ch in 0..3u8 {
-                if ms % 250 == u32::from(ch) * 80 {
-                    d.ant(ch, [ch, 1, 2, 3, 4, 5, 6, (ms / 250) as u8]);
+    // drained every pass, then every 20 passes (a backlog builds, a request each second meets a held CTS)
+    for every in [1, 20] {
+        both(&format!("ANT 4 Hz on 3 channels, drained every {every} passes"), move |d| {
+            for (i, ms) in (0..6000u32).step_by(10).enumerate() {
+                for ch in 0..3u8 {
+                    if ms % 250 == u32::from(ch) * 80 {
+                        d.ant(ch, [ch, 1, 2, 3, 4, 5, 6, (ms / 250) as u8]);
+                    }
+                }
+                if ms % 1000 == 500 {
+                    d.command(&VERSION_GET);
+                }
+                if i % every == every - 1 {
+                    d.poll();
+                }
+                d.advance(10);
+                if ms % 1000 == 990 {
+                    d.checkpoint(&format!("{ms} ms"));
                 }
             }
-            d.pass(10);
-        }
-        d.checkpoint("end");
-    });
+            d.checkpoint("end");
+        });
+    }
 }
 
 fn held_for(ms: u32) -> impl Fn(&mut Dut) {
@@ -430,4 +461,35 @@ fn nrf_soak() {
     assert!(!d.hung, "{}", d.reason);
     assert_eq!(d.frames, injected, "every event and response came out");
     assert_eq!(d.ant_frames, ants, "no broadcast lost");
+}
+
+#[test]
+#[ignore = "needs python3 + unicorn + Bryton's nordic.bin; cargo test-host -- --ignored nrf_diff"]
+fn nrf_diff_stall_by_payload_length() {
+    // A command whose header is read behind a stalled event frame: the chip's UART takes 4 more bytes, so a payload of
+    // 3 lets the next header's first byte in, 4 fills the FIFO exactly, 5 holds one byte of the payload back.
+    for (name, cmd2) in [
+        ("3-byte payload", VERSION_GET.to_vec()),
+        ("4-byte payload", vec![6, 0xda, 0, 10]),
+        ("5-byte payload", vec![6, 0xc4, 0, 0, 0]),
+    ] {
+        both(&format!("a {name} behind a stalled event, then another command"), move |d| {
+            d.hold(true);
+            d.ant(0, [7; 8]);
+            d.advance(5);
+            d.command(&VERSION_GET);
+            d.advance(2);
+            let f2 = [&(cmd2.len() as u16).to_le_bytes()[..], &cmd2].concat();
+            let took = d.offer(&f2, 2);
+            d.log.push(format!("bytes taken in all after the second: {took}"));
+            d.checkpoint("second offered");
+            let f3 = [&5u16.to_le_bytes()[..], &VERSION_GET[..]].concat();
+            let took = d.offer(&f3, 2);
+            d.log.push(format!("bytes taken in all after the third: {took}"));
+            d.checkpoint("third offered");
+            d.hold(false);
+            drain(d);
+            d.checkpoint("released");
+        });
+    }
 }

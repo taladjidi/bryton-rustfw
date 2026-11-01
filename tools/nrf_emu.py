@@ -185,6 +185,7 @@ class Emu:
         self.failed = None  # a Stop raised inside a hook, re-raised by run()
         self.sleep = False
         self._hold = False  # host holds RTS: the chip must not transmit
+        self.fifo_limit = 0  # host RX FIFO depth: RTS drops while `out` holds this many unread bytes (0: unbounded)
         self.in_q = collections.deque()  # bytes from the host, delivered as the chip accepts them
         self.fifo = collections.deque()
         self.rx_on = self.tx_on = self.rx_armed = False
@@ -439,7 +440,7 @@ class Emu:
     def tx_pump(self):
         if not self.tx_on:
             return
-        if self.hold:  # CTS high: wait, no time-out (recheck when the host releases)
+        if self.hold or (self.fifo_limit and len(self.out) >= self.fifo_limit):  # CTS high: wait, no time-out
             self.at(BYTE_US, self.tx_pump)
             return
         b = self.uc.mem_read(self.tx_ptr + self.tx_n, 1)
@@ -802,6 +803,7 @@ def serve(inp=None, out=None):
       'A' ch ev n, n bytes    one ANT event now (n data bytes for ev 0x80), SWI2 pended
       'B' ch ev, 8 bytes, u32 period_us, u16 count   count ANT broadcasts, one per period
       'V' u16 n               one BLE GATTC HVX event carrying n bytes
+      'F' u16 n               the host's RX FIFO holds n bytes: RTS drops while that many are unread (0: unbounded)
       'N'                     bytes of 'W' the chip has not taken yet (not on the wire into it): answer u16 2, u16 n
       'X'                     restart the app (the chip's reset), run to its idle wait
       'Q'                     quit"""
@@ -847,6 +849,8 @@ def serve(inp=None, out=None):
                 x.at(period * (i + 1), lambda ch=ch, ev=ev, data=data: x.inject_ant(ch, ev, data))
         elif c == b"V":
             x.inject_ble(hvx_raw(struct.unpack("<H", inp.read(2))[0]))
+        elif c == b"F":
+            x.fifo_limit = struct.unpack("<H", inp.read(2))[0]
         elif c == b"N":
             payload = struct.pack("<HH", 2, len(x.in_q))
         elif c == b"X":

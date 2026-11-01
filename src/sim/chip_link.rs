@@ -11,6 +11,8 @@
 //! SoftDevice in passes (all pending BLE, then all pending ANT) into 96 slots; a pass bringing more events than free
 //! slots hangs the app; after a put leaves 0 free it stops pulling until more than 48 are free. The SoftDevice's ANT queue
 //! holds 32 (inferred: the newest is lost when it is full; the S332 text was not found). 8 security contexts.
+//! A payload of length 0 is fatal (nordic-app.md): inferred from the reversal, not reproduced by the emulator (which
+//! does not model a MAXCNT of 0); chip_table_tests.rs asserts it.
 //! A hung chip never sends again, takes 2 to 6 more bytes (4 here) and holds CTS.
 //!
 //! Time: the chip's clock `t` (us) follows the simulated ms and runs ahead of it while the host reads or writes bytes
@@ -28,8 +30,10 @@ pub(super) const RESUME_FREE: usize = 48;
 pub(super) const ANT_QUEUE: usize = 32;
 /// Bytes a hung chip still takes.
 const HUNG_TAKES: u8 = 4;
-/// The chip's UARTE FIFO: the bytes it still takes after the header it holds CTS on (found by the differential test
-/// against the emulated app, nrf_diff_tests.rs; nRF52 UARTE, 4 bytes).
+/// The chip's UARTE FIFO: the bytes it still takes after the header it holds CTS on. Inferred: the 4 bytes are the
+/// emulator's model of the nRF52 UARTE receiver (tools/nrf_emu.py rx_ready; the nRF52832 Product Specification's UARTE
+/// chapter was not re-read for the figure), and the fast model agrees with it in nrf_diff_tests.rs (`--ignored nrf_diff`).
+/// The stall outlives the frame on purpose: the FIFO is shared, and the emulated app takes the next header's bytes.
 const UART_FIFO: u8 = 4;
 
 impl Nordic {
@@ -88,14 +92,21 @@ impl Nordic {
         self.suspended = self.events.len() >= slots;
     }
 
-    /// Starts the next frame when the TX buffer is free: a response first, an event unless a command's header has been
-    /// read and its response is not out yet. Chaos damages it here.
+    /// Starts the next frame when the TX buffer is free: the events that were queued before a response go first (the
+    /// emulated app does so: nrf_diff_tests.rs, 4 Hz drained every 20 passes), then the response; an event queued
+    /// after it waits until the response is out, and none starts between a command's header and its response. Chaos
+    /// damages it here.
     fn start_frame(&mut self) -> bool {
-        let frame = if let Some(f) = self.resp.pop_front() {
+        let ahead = self.resp_ahead.front().copied();
+        let frame = if ahead == Some(0)
+            && let Some(f) = self.resp.pop_front()
+        {
+            self.resp_ahead.pop_front();
             f
-        } else if self.frame.len() < 2
+        } else if (self.frame.len() < 2 || ahead.is_some())
             && let Some(f) = self.events.pop_front()
         {
+            self.resp_ahead.iter_mut().for_each(|a| *a = a.saturating_sub(1));
             f
         } else {
             return false;

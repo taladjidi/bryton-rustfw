@@ -212,6 +212,12 @@ specific to it stays in the private notes (`NRF_PRIVATE`, environment only, may 
     0; nordic-app.md says the real app hangs, the model follows that), and a lone-byte HVX comes out with a zero length
     (an artefact of the inferred input struct, so the tests use 3 bytes). The CTS flag is not compared after a hang (the
     emulator stops stepping there).
+    The hang is compared as hang or not by the next checkpoint: both sides log the scripted step it showed in, but the
+    emulator finds it one step later (when time runs, not when the bytes are queued), so the steps are printed on a
+    disagreement and not compared. The harness's `F` request makes its RTS follow a 16-byte host RX FIFO like the
+    model's, which the backlog scenarios need. Found with it: an event queued before a response goes out before it
+    (`resp_ahead`), and the UART's 4 bytes outlive the command's frame (stall by payload length: 3, 4 and 5 bytes
+    agree). The 4 is inferred (the emulator's UARTE model), cross-checked only by `--ignored nrf_diff`.
   - `NRF_SOAK_S=3600 cargo test-host -- --ignored nrf_soak --nocapture`: a ride's radio traffic for that many emulated
     seconds (default 3600) against the real app: three ANT channels at 246 to 252 ms, a BLE trainer at 10 Hz, a phone
     burst of 12 notifications every 30 s, a version request every 10 s, the host's pass every 50 ms and a 200 ms stall

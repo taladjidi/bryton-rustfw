@@ -619,6 +619,8 @@ pub struct Nordic {
     fifo: std::collections::VecDeque<u8>,
     txq: std::collections::VecDeque<u8>,
     resp: std::collections::VecDeque<Vec<u8>>,
+    /// For each response, the events queued before it (they go out first).
+    resp_ahead: std::collections::VecDeque<usize>,
     events: std::collections::VecDeque<Vec<u8>>,
     sd_ble: Vec<Vec<u8>>,
     sd_ant: std::collections::VecDeque<Vec<u8>>,
@@ -981,6 +983,7 @@ impl Nordic {
             [1, ..] => {
                 self.touch();
                 self.resp.push_back(frame);
+                self.resp_ahead.push_back(self.events.len());
             }
             [8, ..] if self.sd_ant.len() >= chip_link::ANT_QUEUE => self.ant_dropped += 1,
             [8, ..] => self.sd_ant.push_back(frame),
@@ -1077,6 +1080,7 @@ impl Nordic {
         self.hung_rx = 0;
         self.events.clear();
         self.resp.clear();
+        self.resp_ahead.clear();
         self.sd_ble.clear();
         self.sd_ant.clear();
         self.out.clear();
