@@ -207,17 +207,31 @@ Renode against Bryton's real nRF52 app, not the simulator's `Nordic` model.
   sent (`R`). A pump is due every 10 us while there is traffic and every 10 ms idle. Modelled: the registers the
   firmware uses (CR1, CR3, ISR RXFNE / TC / TXFNF, RDR, TDR, RQR), 16-byte FIFOs, one byte per 10 us out, the RXFNE
   interrupt (NVIC 38), CTS (the chip's FIFO full holds the TX), RTS (asserted at 12 bytes in the RX FIFO: the chip's
-  transmitter waits), PA6 (low holds the chip, the rising edge boots the app again: harness `X`). Not modelled: BRR and
-  the kernel clock choice (a wrong divider passes), parity and framing errors, overrun.
-- **Run:** `python3 renode/nrf_run.py` (6 s virtual, about 25 s of wall) and `python3 renode/nrf_run.py --hang 3` (70 s
-  virtual, about 3.5 minutes). Not in check.sh. It prints `skip:` and exits 0 without Renode, python `unicorn`, the app
+  transmitter waits), PA6 (low holds the chip, the rising edge boots the app again: harness `X`).
+  Rules from RM0399 (USART): CR1.UE / TE / RE and FIFOEN gate TDR, RDR, TXFNF and RXFNE (the FIFO is one deep without
+  FIFOEN); TC is set one byte time (10 us) after the last byte left; the chip's bytes arrive at most one per 10 us of
+  virtual time, whatever the FIFO holds, and a byte that finds the FIFO full sets ISR.ORE (bit 3, cleared by ICR.ORECF)
+  and is dropped, logged as `nrf overrun`: only RTS (CR3.RTSE, asserted below 12 bytes) keeps the chip from sending.
+  BRR is checked when UE is set: 1 Mbaud within 2 % of the kernel clock, else `nrf baud error`. Renode's RCC does not
+  keep D2CCIP2R (it reads 0, also the reset value, pclk1), so a 0 is taken as unknown and BRR is checked against 64 MHz,
+  the value BOARD.md 11 and the comment in `src/main.rs` give for hsi_ker_ck: a firmware that forgot to select HSI
+  would pass. Not modelled: parity and framing errors.
+- **Harness failure:** a closed pipe or no answer within 5 s of wall time logs `nrf harness gone` once and ends the
+  bridge (the run fails on that line); `Dispose` sends `Q` and kills the child; `nrf_run.py` runs Renode in its own
+  process group and kills the group on a time-out.
+- **Run:** `python3 renode/nrf_run.py` (35 s virtual, about 2 minutes of wall), `python3 renode/nrf_run.py --hang 3`
+  (70 s virtual, about 3.5 minutes: after the last chip reset a status 0 answer to cfg_set or version get is required)
+  and `--no-drain` (a test of the overrun check: a 4-byte FIFO the firmware's reads never empty, RTS ignored; it passes only
+  when `nrf overrun` is logged, the other runs fail on one). Not in check.sh. It prints `skip:` and exits 0 without Renode, python `unicorn`, the app
   binary (`NRF_BIN`) or the release ELF (`cargo build --release` first). Log: `target/renode/nrf.log`; every command
   and every chip frame is one `nrf tx` / `nrf rx` line.
 - **What it showed (2026-11-01):**
   - The radio start is answered by the real app, byte for byte: the two cfg_set, ble enable and version get, each with
     status 0.
-  - Then the firmware's phone-link setup sends GAP_DEVICE_NAME_SET (0x7c), which the harness's SoftDevice stub lacks:
-    the app stops with "unknown SVC 0x7c". That is a gap of the stub (add it in `nrf_emu.py`), not of the firmware.
+  - Then the firmware's phone-link setup (device name, appearance, PPCP, the HID, battery and device information
+    services, the advertising data, 8 vendor UUIDs) runs against the stubbed SoftDevice calls (`nrf_emu.py`: sources in
+    its module doc) and every command is answered with status 0, 30 s of virtual time with no unknown SVC. Advertising
+    and a scan (0x73, 0x8a) are stubbed but not reached by this run (a bond and a menu start them).
   - `--hang 3`: one byte too many between a command's header and its payload (injected by the bridge, once) stops the
     real app (a UART interrupt unable to be taken). The start fails, the firmware's watchdog (`nrf_watch.rs`) resets
     the chip through PA6 about 49 s of emulated time later (a 15 s wait counted in the firmware's own passes), and the

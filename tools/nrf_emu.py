@@ -39,6 +39,17 @@ Sources (cited per block below):
 - SoftDevice information structure: nrf_sdm.h (SOFTDEVICE_INFO_STRUCT_OFFSET 0x2000 above the MBR, whose size is
   MBR_SIZE 0x1000 in nrf_mbr.h): size byte at +0x00, SoftDevice size at +0x08, FWID at +0x0C, ID at +0x10, version
   at +0x14.
+- The BLE calls of the firmware's phone link setup, advertising and scan (src/drivers/ble.rs numbers, established there
+  from the stock image): pc-ble-driver sd_api_v5 (Nordic; include/sd_api_v5/ble_gap.h, ble_gatts.h, ble.h, fetched
+  2026-11-01). The numbers are the order of each SVC enum from its base (BLE_GAP_SVC_BASE 0x6C: ADV_DATA_SET 0x72,
+  ADV_START 0x73, ADV_STOP 0x74, APPEARANCE_SET 0x78, PPCP_SET 0x7A, DEVICE_NAME_SET 0x7C, SCAN_START 0x8A, SCAN_STOP
+  0x8B; BLE_GATTS_SVC_BASE 0xA0: SERVICE_ADD, CHARACTERISTIC_ADD 0xA2, DESCRIPTOR_ADD 0xA3, VALUE_SET 0xA4;
+  BLE_UUID_VS_ADD 0x62), the arguments from the same headers without the host library's leading adapter argument: r0..r3
+  in order. Outputs: sd_ble_gatts_service_add writes a u16 handle through its third argument,
+  characteristic_add a ble_gatts_char_handles_t {u16 value, user_desc, cccd, sccd} through its fourth (cccd only when
+  the characteristic metadata's first byte, the properties, has notify 0x10 or indicate 0x20), descriptor_add a u16 handle
+  through its third, uuid_vs_add a u8 type through its second. The first handle, 0x000C, is inferred (the S132
+  attribute table starts with the GAP and GATT services; the number is not in the headers).
 Time: one instruction is one cycle at 64 MHz (a lower bound: Cortex-M4 averages a little above 1), a stub SVC costs
 nothing (the real SoftDevice costs microseconds), the UART moves a byte every 10 us (1 Mbaud, 8N1).
 
@@ -75,6 +86,10 @@ SVC_ANT_EVENT_GET = 0xC1
 # with every 0xC0+ number accepted): accepted with success and no output written, which is right for the setters
 # (channel assign / id / period / frequency / open, network key, enable: inputs only). Any other ANT number stops.
 ANT_NO_OUTPUT = {0xC2, 0xC4, 0xCC, 0xCD, 0xD1, 0xD3, 0xDA, 0xFA}
+# BLE calls with no output, see the module doc: adv_data_set, adv_start, adv_stop, appearance_set, ppcp_set,
+# device_name_set, scan_start, scan_stop, gatts value_set (it writes back the length it was given: left as is)
+BLE_NO_OUTPUT = {0x72, 0x73, 0x74, 0x78, 0x7A, 0x7C, 0x8A, 0x8B, 0xA4}
+SVC_UUID_VS_ADD, SVC_SERVICE_ADD, SVC_CHAR_ADD, SVC_DESC_ADD = 0x62, 0xA0, 0xA2, 0xA3
 EVENT_RX = 0x80  # ant_parameters.h: the broadcast data event
 NOT_FOUND = 5  # NRF_ERROR_NOT_FOUND
 
@@ -170,6 +185,8 @@ class Emu:
         self.ble_evts = collections.deque()
         self.ant_evts = collections.deque()
         self.svc_log = []
+        self.next_handle = 0x0C  # the first attribute handle of the application's GATT table (inferred)
+        self.vs_uuids = 0
         try:
             self.err_pc = json.loads(Path(PRIVATE).read_text()).get("error_handler") if PRIVATE else None
         except (OSError, ValueError):
@@ -426,8 +443,13 @@ class Emu:
             self.at(BYTE_US, self.tx_pump)
 
     # ---- SoftDevice stubs
+    def alloc_handles(self, k):
+        """The first of k fresh attribute handles."""
+        h, self.next_handle = self.next_handle, self.next_handle + k
+        return h
+
     def svc(self, n):
-        a = [self.reg(x) for x in ("r0", "r1", "r2")]
+        a = [self.reg(x) for x in ("r0", "r1", "r2", "r3")]
         self.svc_log.append(n)
         ret = 0
         if n == SVC_SD_ENABLE:
@@ -458,6 +480,19 @@ class Emu:
                 self.uc.mem_write(a[2], buf)
             else:
                 ret = NOT_FOUND
+        elif n in BLE_NO_OUTPUT:
+            pass
+        elif n == SVC_UUID_VS_ADD:  # sd_ble_uuid_vs_add(ble_uuid128_t const *, uint8_t *type): types start at 2
+            self.vs_uuids += 1
+            self.uc.mem_write(a[1], bytes([1 + self.vs_uuids]))
+        elif n == SVC_SERVICE_ADD:  # sd_ble_gatts_service_add(type, ble_uuid_t const *, uint16_t *handle)
+            self.uc.mem_write(a[2], struct.pack("<H", self.alloc_handles(1)))
+        elif n == SVC_CHAR_ADD:  # sd_ble_gatts_characteristic_add(service, char_md *, attr *, ble_gatts_char_handles_t *)
+            notify = self.uc.mem_read(a[1], 1)[0] & 0x30
+            value = self.alloc_handles(2)  # the declaration, then the value
+            self.uc.mem_write(a[3], struct.pack("<HHHH", value + 1, 0, self.alloc_handles(1) if notify else 0, 0))
+        elif n == SVC_DESC_ADD:  # sd_ble_gatts_descriptor_add(char_handle, attr *, uint16_t *handle)
+            self.uc.mem_write(a[2], struct.pack("<H", self.alloc_handles(1)))
         elif n in ANT_NO_OUTPUT:
             pass
         else:
