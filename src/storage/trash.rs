@@ -27,7 +27,7 @@
 //! ride's (its first sector's CRC: a computer's fsck may have freed it and something taken it). A suffix taken then
 //! is recorded before any entry of that start changes, and a folder removed meanwhile is made again. A move that
 //! cannot be finished (the card full since, every suffix taken) is undone instead: each file named by no entry is
-//! linked back under its old name ([`put_back`]), the record then done, so a pending record never keeps the card
+//! linked back under its old name (`put_back`), the record then done, so a pending record never keeps the card
 //! from a computer for good. The app finishes a pending move at the scan's start and before lending the card to a
 //! computer (app/drive.rs), which would see the ride in neither folder. Tested by cutting the power after every
 //! sector written (below).
@@ -281,7 +281,7 @@ fn finish_on(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Opt
 }
 
 /// [`moves`], then the record done. A move that cannot be finished ([`Error::Refused`]: the card full, every suffix
-/// taken) is put back instead ([`put_back`]). True if moved.
+/// taken) is put back instead (`put_back`). True if moved.
 fn settle(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, t: (u16, u16)) -> Result<bool, Error> {
     let moved = match moves(fat, d, r, rec, t) {
         Ok(()) => true,
