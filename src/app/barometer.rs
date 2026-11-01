@@ -30,8 +30,6 @@ pub const ALT_MENU_OFFSET: i32 = 500;
 pub(crate) struct AltStore {
     /// Read, or known not to be there.
     pub(crate) loaded: bool,
-    /// After a mount that failed (a card not answering), no new try before this `gps.ms`.
-    retry_ms: u32,
     /// The altitude the edit opened at (menu units): a calibration only when it was changed.
     pub(crate) edited_from: u16,
 }
@@ -161,7 +159,7 @@ impl App {
     /// The calibration file: read once, written when the calibration changed, between rides.
     #[inline(never)]
     fn alt_storage(&mut self, b: &mut impl Board) {
-        if self.emmc.lent() || self.gps.ms < ALT_LOAD_MS.max(self.alt_store.retry_ms) {
+        if self.emmc.lent() || self.gps.ms < ALT_LOAD_MS {
             return;
         }
         // the read is allowed while a ride is open (a resumed ride has its calibration back), and by a build that may
@@ -169,18 +167,14 @@ impl App {
         if !self.alt_store.loaded {
             let mut s = [0u8; 512];
             let mut d = emmc::Volume(&mut self.emmc, b);
-            let read = match fat::Fat::mount(&mut d) {
-                Ok(mut fat) => fat.open(&mut d, recorder::DIR).and_then(|dir| {
-                    let f = fat.open_in(&mut d, dir, ALT_FILE)?;
-                    fat.read_at(&mut d, &f, 0, &mut s)
-                }),
-                Err(fat::Error::Io) => {
-                    // a card not answering (yet): tried again later (`load` never replaces a calibration made since)
-                    self.alt_store.retry_ms = self.gps.ms.saturating_add(crate::app::trainer::SENSORS_RETRY_MS);
-                    return;
-                }
-                Err(e) => Err(e),
-            };
+            let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
+                let dir = fat.open(&mut d, recorder::DIR)?;
+                let f = fat.open_in(&mut d, dir, ALT_FILE)?;
+                fat.read_at(&mut d, &f, 0, &mut s)
+            });
+            if read == Err(fat::Error::Io) {
+                return; // a card not answering: asked again at the next pass (the eMMC layer's backoff keeps it cheap)
+            }
             self.alt_store.loaded = true;
             if let Ok(512) = read
                 && let Some(cal) = altitude::Cal::from_sector(&s)

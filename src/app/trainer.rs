@@ -42,16 +42,14 @@ pub const OFF_WAIT_MS: u32 = 330;
 
 /// The sensors file is read this long after the start (the GNSS clock, as the barometer's file).
 pub const SENSORS_LOAD_MS: u32 = 3500;
-/// A pairing file not read for want of a card is tried again this often.
-pub(crate) const SENSORS_RETRY_MS: u32 = 5000;
 
 /// The pairing file's state.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SensorStore {
     /// The file was read (or tried).
     pub(crate) loaded: bool,
-    /// After a mount that failed, no new try before this `gps.ms`.
-    pub(crate) retry_ms: u32,
+    /// The last read met a card that did not answer: the pairing rows wait for it ([`App::sensors_ready`]).
+    pub(crate) io_failed: bool,
     /// The paired trainer was opened after the read.
     pub(crate) applied: bool,
     /// The trainer pairing changed: to be written.
@@ -65,6 +63,19 @@ pub(crate) struct SensorStore {
 }
 
 impl App {
+    /// The trainer's pairing may be changed: its file read, or the card not known to be down (else the late read
+    /// would meet the change). Else why not, said.
+    pub(crate) fn sensors_ready(&mut self, b: &mut impl Board) -> bool {
+        if self.sensors_store.loaded || !self.sensors_store.io_failed {
+            return true;
+        }
+        self.sensors_storage(b);
+        if !self.sensors_store.loaded {
+            self.say(if self.emmc.lent() { "USB DRIVE ON" } else { "SENSORS NOT READ" });
+        }
+        self.sensors_store.loaded
+    }
+
     /// A trainer is paired or searched for, over ANT+ or Bluetooth (its menu row and screen are offered).
     pub(crate) fn trainer_on(&self) -> bool {
         self.radio.sensors.get(Kind::Trainer as usize).is_some_and(|s| *s != Sensor::Off)
@@ -321,39 +332,45 @@ impl App {
     /// earlier build kept in backup register 14 is moved here, and 14 is left to the shifting system.
     #[inline(never)]
     fn sensors_storage(&mut self, b: &mut impl Board) {
-        if self.emmc.lent() || self.gps.ms < SENSORS_LOAD_MS.max(self.sensors_store.retry_ms) {
+        if self.emmc.lent() || self.gps.ms < SENSORS_LOAD_MS {
             return;
         }
         if !self.sensors_store.loaded {
-            if !self.sensors_store.dirty {
-                let mut s = [0u8; 512];
+            let mut s = [0u8; 512];
+            let read = if self.sensors_store.dirty {
+                Err(fat::Error::NotFound) // a pairing made already is the rider's (migration below): the file waits
+            } else {
                 let mut d = emmc::Volume(&mut self.emmc, b);
-                let read = match fat::Fat::mount(&mut d) {
-                    Ok(mut fat) => fat.open(&mut d, recorder::DIR).and_then(|dir| {
-                        let f = fat.open_in(&mut d, dir, sensors::SENSORS_FILE)?;
-                        fat.read_at(&mut d, &f, 0, &mut s)
-                    }),
-                    Err(fat::Error::Io) => {
-                        // a card that has not answered (yet): tried again later, the app goes on (a pairing made
-                        // meanwhile sets `dirty` and is never overwritten by the file); not a card without FAT
-                        self.sensors_store.retry_ms = self.gps.ms.saturating_add(SENSORS_RETRY_MS);
-                        return;
-                    }
-                    Err(e) => Err(e),
-                };
+                fat::Fat::mount(&mut d).and_then(|mut fat| {
+                    let dir = fat.open(&mut d, recorder::DIR)?;
+                    let f = fat.open_in(&mut d, dir, sensors::SENSORS_FILE)?;
+                    fat.read_at(&mut d, &f, 0, &mut s)
+                })
+            };
+            self.sensors_store.io_failed = read == Err(fat::Error::Io);
+            // a card not answering (yet): asked again at the next pass (the eMMC layer's backoff keeps that cheap);
+            // the pairing menu waits for the read, so a late read never meets a change
+            if !self.sensors_store.io_failed {
+                self.sensors_store.loaded = true;
                 if let (Ok(512), Some(t)) = (read, sensors::from_sector(&s)) {
                     let bt = sensors::bt_from_sector(&s);
                     (self.sensors_store.trainer, self.sensors_store.bt) = (t, bt.map(|b| b.0));
                     self.sensors_store.bt_fec = bt.is_some_and(|b| b.1);
                 }
-            }
-            self.sensors_store.loaded = true;
-            if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
-                self.keep_pairing(b, Kind::Trainer, id); // moved to the file below
+                if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
+                    self.keep_pairing(b, Kind::Trainer, id); // moved to the file below
+                }
             }
         }
         // opened once ANT is up (it may come later than the file), unless the rider already did something with it
-        if !self.sensors_store.applied && self.ant {
+        if !self.sensors_store.loaded && self.ant && self.radio.sensors.at(Kind::Trainer) == Sensor::Off {
+            // the card is down: the pairing an earlier build kept in the register is used meanwhile (not kept: the
+            // file's read decides, `applied` stays false)
+            if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
+                self.set_sensor(b, Kind::Trainer, Sensor::Paired(id));
+            }
+        }
+        if self.sensors_store.loaded && !self.sensors_store.applied && self.ant {
             self.sensors_store.applied = true;
             if let Some(id) = self.sensors_store.trainer
                 && self.radio.sensors.at(Kind::Trainer) == Sensor::Off

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::dev::{Effect, Session, Stats, send_layout, send_sector};
-use crate::emmc::{BusError, Card, Emmc, Error, Layout, SECTOR};
+use crate::emmc::{BACKOFF_FIRST_MS, BusError, Card, Emmc, Error, Layout, SECTOR};
 
 /// The FAT32 volume macOS made (fat.rs tests), read through the driver and the card model: files equal the
 /// tiles, and the reads of a file are multi-block (CMD18) where whole sectors go to the buffer.
@@ -191,6 +191,7 @@ fn sector_command_reads_and_survives_a_dead_card() {
     let (mut session, mut pc, mut emmc) = (Session::new(), Pc::default(), Emmc::new());
     let mut serve = |sim: &mut Sim, session: &mut Session, pc: &mut Pc, line: &[u8]| {
         pc.got.clear();
+        emmc.advance(BACKOFF_FIRST_MS); // time passes between commands: the wait after a failed identification runs out
         match session.feed(line, &app, Stats::default(), pc) {
             Effect::Sector(n) => {
                 let mut buf = [0u8; SECTOR];
@@ -238,4 +239,37 @@ fn sector_command_reads_and_survives_a_dead_card() {
     sim.delay_ms(1000);
     app.step(&mut sim);
     assert!(sim.ms > t && sim.visible());
+}
+
+/// A card that stays busy at CMD1: asked every second for 130 s, the app's `Emmc` identifies it once per backoff
+/// period (5, 10, 20, 40 s), not once per ask, and the refusals cost no time.
+#[test]
+fn a_busy_card_is_identified_once_per_backoff_period() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.busy_polls = u32::MAX;
+    let (mut emmc, mut buf) = (Emmc::new(), [0u8; SECTOR]);
+    let (mut spent, mut refused) = (0, 0);
+    for _ in 0..130 {
+        let t0 = sim.ms;
+        match emmc.read(&mut sim, 7, &mut buf) {
+            Err(Error::Backoff) => refused += 1,
+            Err(Error::Busy) => {}
+            other => panic!("{other:?}"),
+        }
+        spent += sim.ms - t0;
+        emmc.advance(1000);
+    }
+    let inits = sim.emmc.cmds.iter().filter(|c| c.0 == 0).count();
+    assert_eq!(inits, 5, "at 0, 5, 15, 35 and 75 s");
+    assert_eq!(refused, 125);
+    assert!(spent <= 5 * 1010, "{spent} ms spent");
+    // the card comes back: identified at the end of the wait
+    sim.emmc.busy_polls = 0;
+    for _ in 0..70 {
+        if emmc.read(&mut sim, 7, &mut buf).is_ok() {
+            break;
+        }
+        emmc.advance(1000);
+    }
+    assert_eq!(buf, emmc_sector(7));
 }

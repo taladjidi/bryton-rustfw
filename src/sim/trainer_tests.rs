@@ -1837,7 +1837,7 @@ fn the_pairing_is_read_after_a_late_card() {
         run(&mut sim2, &mut app2, late_ms);
         assert_eq!(app2.sensors_store.trainer, None, "{late_ms}: the card is down");
         sim2.emmc.dead = false;
-        run(&mut sim2, &mut app2, 15_000);
+        run(&mut sim2, &mut app2, 60_000);
         assert_eq!(app2.sensors_store.trainer, Some(ID), "{late_ms}");
         assert_eq!(app2.radio.sensors.at(Kind::Trainer), Sensor::Paired(ID), "{late_ms}");
     }
@@ -1892,4 +1892,35 @@ fn every_state_file_is_read_after_a_late_card() {
         );
         assert_eq!(got, (77, true, false, true, true, true, true, true), "{late_ms}");
     }
+}
+
+/// Review finding 88, rider changes: while the card is down (and the files unread) the settings, the trainer's
+/// pairing and the phone's settings refuse to change, with a notice; once read they change and are kept.
+#[test]
+fn edits_wait_for_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = sim.emmc.image.clone();
+    sim2.backup = sim.backup;
+    sim2.nordic.sensors.push(trainer_sensor());
+    sim2.emmc.dead = true;
+    let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+    run(&mut sim2, &mut app2, 6000);
+    assert!(!app2.settings_ready(&mut sim2));
+    assert!(app2.notes.text.as_str() == "SETTINGS NOT READ", "{}", app2.notes.text.as_str());
+    assert!(!app2.sensors_ready(&mut sim2));
+    assert!(app2.notes.text.as_str() == "SENSORS NOT READ", "{}", app2.notes.text.as_str());
+    assert!(!app2.phone_ready(&mut sim2));
+    assert!(app2.notes.text.as_str() == "PHONE NOT READ", "{}", app2.notes.text.as_str());
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app2, 70_000);
+    assert!(app2.settings_ready(&mut sim2) && app2.sensors_ready(&mut sim2) && app2.phone_ready(&mut sim2));
+    assert_eq!(app2.sensors_store.trainer, Some(ID), "read, not erased");
+    app2.phone.stored.notify = false;
+    app2.phone_changed();
+    app2.settings.weight_kg = 77;
+    app2.save_misc(&mut sim2);
+    run(&mut sim2, &mut app2, 20_000);
+    assert!(!app2.settings_store.file.dirty);
 }

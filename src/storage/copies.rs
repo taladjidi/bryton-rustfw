@@ -66,9 +66,6 @@ pub fn open(s: &[u8; 512], magic: &[u8; 4], version: u16) -> Option<(usize, u32)
     Some((usize::from(le16(6)?), le32(8)?))
 }
 
-/// After the reads gave up, one more this often, s.
-pub const RETRY_S: u8 = 60;
-
 /// The app's state of one such file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Copies {
@@ -91,10 +88,8 @@ pub struct Copies {
     /// Not on the card whole, and its writer never makes it (bikes.bin, places.bin: a ride's start does, the
     /// recorder's `make_kept`): a change waits until a ride has started.
     pub no_file: bool,
-    /// Seconds since the reads gave up ([`Copies::second`]).
-    pub idle_s: u8,
-    /// The last failed read was an I/O error (a card not answering): only that is read again by `second`, not a
-    /// card without a FAT.
+    /// The last failed read was an I/O error (a card not answering): not counted in `tries`, so the passes go on
+    /// asking (cheap: the eMMC layer refuses a new init during its backoff), and edits of the file wait for it.
     pub io_failed: bool,
 }
 
@@ -109,24 +104,12 @@ impl Copies {
             sync: 0,
             seq: 0,
             no_file: false,
-            idle_s: 0,
             io_failed: false,
         }
     }
 
-    /// Once a second: a file whose reads gave up (`tries` at `max`) is read once more every [`RETRY_S`] s, so a card
-    /// that answers late brings it back without a restart (the passes read it again while `tries` is under `max`).
-    pub fn second(&mut self, max: u8) {
-        if !self.loaded && self.io_failed && self.tries >= max {
-            self.idle_s = self.idle_s.saturating_add(1);
-            if self.idle_s >= RETRY_S {
-                (self.tries, self.idle_s) = (max.saturating_sub(1), 0);
-            }
-        }
-    }
-
     /// A read of the file ended as `read` (its bytes, or why not), the FAT copies `suspect` or not: Some(whole) once
-    /// read or known not there, None when it failed (counted in `tries`, tried again). Any error but NotFound fails,
+    /// read or known not there, None when it failed (counted in `tries` unless it was an I/O error, tried again). Any error but NotFound fails,
     /// or with `only_io` an I/O error only (pages.bin: no volume reads as no file, the registers hold the pages).
     ///
     /// ```
@@ -135,18 +118,25 @@ impl Copies {
     /// assert_eq!(c.read(Err(Error::NotFat32), false, false), None);
     /// assert_eq!((c.loaded, c.tries), (false, 1));
     /// assert_eq!(c.read(Err(Error::NotFat32), true, false), Some(false), "pages.bin: no volume is no file");
+    /// assert_eq!(c.read(Err(Error::Corrupt), false, false), None);
+    /// assert_eq!((c.tries, c.io_failed), (2, false), "a damaged volume counts and is not asked again for ever");
     /// assert_eq!(c.read(Err(Error::Io), true, false), None);
+    /// assert_eq!((c.tries, c.io_failed), (2, true), "an I/O error is not counted: asked again at every pass");
+    /// assert_eq!(c.read(Err(Error::Io), false, false), None);
+    /// assert_eq!(c.tries, 2);
     /// assert_eq!(c.read(Ok(1024), false, false), Some(true));
-    /// assert!(c.loaded && c.sound);
+    /// assert!(c.loaded && c.sound && !c.io_failed, "read: no longer waiting");
     /// ```
     pub fn read(&mut self, read: Result<usize, crate::fat::Error>, only_io: bool, suspect: bool) -> Option<bool> {
         use crate::fat::Error;
         if matches!(read, Err(e) if e != Error::NotFound && (!only_io || e == Error::Io)) {
-            self.tries = self.tries.saturating_add(1);
-            self.io_failed = matches!(read, Err(Error::Io));
+            self.io_failed = read == Err(Error::Io);
+            if !self.io_failed {
+                self.tries = self.tries.saturating_add(1);
+            }
             return None;
         }
-        (self.loaded, self.sound) = (true, read == Ok(1024) && !suspect);
+        (self.loaded, self.io_failed, self.sound) = (true, false, read == Ok(1024) && !suspect);
         Some(read == Ok(1024))
     }
 }

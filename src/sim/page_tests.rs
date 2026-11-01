@@ -815,6 +815,7 @@ fn a_failed_read_is_tried_again() {
     let mut app = App::start(&mut sim2, None);
     run(&mut sim2, &mut app, PAGES_LOAD_MS as u64 + 200);
     sim2.emmc.dead = false;
+    app.emmc.advance(crate::emmc::BACKOFF_FIRST_MS); // the wait after the failed identification is over
     let p = Page::preset(2, [Speed, Ascent, Time, Time, Time, Time, Time, Time]).unwrap();
     app.screen = Screen::Ride(0);
     app.edit_page(&mut sim2, 0, 0);

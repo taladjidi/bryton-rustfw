@@ -166,6 +166,8 @@ pub enum Error {
     Busy,
     /// Command `.0` answered a card status `.1` with error bits.
     Status(u8, u32),
+    /// Not tried: an identification failed lately ([`BACKOFF_FIRST_MS`]).
+    Backoff,
     /// Past the card's last sector, a buffer that is not a whole number of sectors, or a write at or past the FAT
     /// volume's end (sector B).
     Range,
@@ -358,6 +360,12 @@ impl Card {
     }
 }
 
+/// After a failed identification no new one for this long, then twice as long, up to the cap: a card that does not
+/// answer costs one attempt (a few ms, up to 1 s when busy) per period, whoever asks.
+pub const BACKOFF_FIRST_MS: u32 = 5000;
+/// The cap of the wait between identifications.
+pub const BACKOFF_MAX_MS: u32 = 60_000;
+
 /// The card for the dev link: identified on first use (never at boot, so a bad driver cannot affect normal use),
 /// forgotten after an error so the next use starts again from CMD0 and a controller reset.
 #[derive(Default)]
@@ -366,12 +374,26 @@ pub struct Emmc {
     lent: bool,
     /// Lent write protected ([`Emmc::lend_read_only`]).
     read_only: bool,
+    /// No new identification for this many ms after one failed ([`Emmc::advance`] counts it down).
+    wait_ms: u32,
+    /// The wait the next failure sets: [`BACKOFF_FIRST_MS`], doubling to [`BACKOFF_MAX_MS`], back after a success.
+    next_ms: u32,
+    /// The longest wait the next failure may set: [`BACKOFF_FIRST_MS`] while a ride is open or waits to be resumed
+    /// ([`Emmc::urgent`]), else [`BACKOFF_MAX_MS`].
+    cap_ms: u32,
 }
 
 impl Emmc {
     /// Not identified yet.
     pub const fn new() -> Self {
-        Emmc { card: None, lent: false, read_only: false }
+        Emmc {
+            card: None,
+            lent: false,
+            read_only: false,
+            wait_ms: 0,
+            next_ms: BACKOFF_FIRST_MS,
+            cap_ms: BACKOFF_MAX_MS,
+        }
     }
 
     /// Lends the card to the computer (the USB drive, msc.rs), or takes it back. While lent, every use but
@@ -398,6 +420,17 @@ impl Emmc {
         self.lent && self.read_only
     }
 
+    /// `ms` have passed (the app's pass): the wait after a failed identification runs down.
+    pub fn advance(&mut self, ms: u32) {
+        self.wait_ms = self.wait_ms.saturating_sub(ms);
+    }
+
+    /// A ride is open or waits to be resumed: a failed identification is retried within [`BACKOFF_FIRST_MS`] at most
+    /// (a checkpoint should not wait a minute for a card that came back).
+    pub fn urgent(&mut self, on: bool) {
+        self.cap_ms = if on { BACKOFF_FIRST_MS } else { BACKOFF_MAX_MS };
+    }
+
     /// The card (identified if needed): its layout and its reliable write parameters.
     pub fn card(&mut self, b: &mut impl Board) -> Result<Card, Error> {
         if self.lent {
@@ -409,7 +442,19 @@ impl Emmc {
     fn identify(&mut self, b: &mut impl Board) -> Result<Card, Error> {
         let card = match self.card {
             Some(c) => c,
-            None => Card::init(b)?,
+            // the dev link's and the USB drive's use (lent) is the computer's to retry; the app's readers are not
+            None if self.wait_ms > 0 && !self.lent => return Err(Error::Backoff),
+            None => match Card::init(b) {
+                Ok(c) => {
+                    self.next_ms = BACKOFF_FIRST_MS;
+                    c
+                }
+                Err(e) => {
+                    self.wait_ms = self.next_ms.min(self.cap_ms);
+                    self.next_ms = (self.next_ms * 2).min(BACKOFF_MAX_MS);
+                    return Err(e);
+                }
+            },
         };
         self.card = Some(card);
         Ok(card)

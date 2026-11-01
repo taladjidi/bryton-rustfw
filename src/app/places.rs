@@ -134,13 +134,6 @@ impl App {
 
     /// Once a second: stopped at a place with an altitude, the barometer reads it (module doc).
     pub(crate) fn places_second(&mut self) {
-        // a card that answers late: each state file whose reads gave up is read again (copies.rs `second`)
-        self.places.file.second(LOAD_TRIES);
-        self.settings_store.file.second(LOAD_TRIES);
-        self.store.file.second(LOAD_TRIES);
-        if let Some(b) = self.bikes.as_deref_mut() {
-            b.file.second(LOAD_TRIES);
-        }
         let Some(p) = self.gps.pvt.filter(|p| p.good() && p.h_acc_mm <= H_ACC_MM) else { return };
         match self.places.list.nearest_with_alt(p.lat, p.lon) {
             Some((k, d)) if d <= places::NEAR_M => {

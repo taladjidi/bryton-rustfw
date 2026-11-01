@@ -1081,6 +1081,9 @@ impl App {
 
     /// Select on a setting: a number starts or ends its editing, a choice cycles.
     fn activate_setting(&mut self, b: &mut impl Board, s: menu::Setting) {
+        if !self.menu.editing && s != menu::Setting::Altitude && !self.settings_ready(b) {
+            return;
+        }
         if s.number().is_some() {
             self.menu.editing = !self.menu.editing;
             if self.menu.editing && s == menu::Setting::Altitude {
@@ -1119,6 +1122,9 @@ impl App {
     /// Select on an ANT+ sensor: pair, stop, search again, forget.
     fn activate_sensor(&mut self, b: &mut impl Board, menu: Menu, sel: usize, k: usize) {
         let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };
+        if kind == Kind::Trainer && !self.sensors_ready(b) {
+            return;
+        }
         let heard = self.radio.heard(kind);
         match self.radio.sensors.get(k).copied() {
             Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
@@ -1145,6 +1151,9 @@ impl App {
     /// Select on a row of the phone menu.
     fn activate_phone(&mut self, b: &mut impl Board, menu: Menu, sel: usize, r: menu::PhoneRow) {
         use menu::PhoneRow;
+        if matches!(r, PhoneRow::Pair | PhoneRow::Forget | PhoneRow::Notify | PhoneRow::Keys) && !self.phone_ready(b) {
+            return;
+        }
         match r {
             PhoneRow::Status => {}
             PhoneRow::Pair => self.phone_pair(b),

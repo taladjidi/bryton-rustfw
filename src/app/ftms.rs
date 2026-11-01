@@ -337,6 +337,9 @@ impl App {
     /// The trainer `i` of the list paired: kept in the sensors file, the ANT+ trainer forgotten (one trainer), the
     /// scan stopped, the connection made at once.
     pub(crate) fn ftms_pair(&mut self, b: &mut impl Board, i: usize) {
+        if !self.sensors_ready(b) {
+            return;
+        }
         let Some(peer) = self.ftms.found.get(i).filter(|_| i < self.ftms.n_found).map(|d| d.peer) else { return };
         let fec = self.ftms.found.get(i).is_some_and(|d| d.proto == Proto::Fec);
         if self.radio.sensors.at(Kind::Trainer) != Sensor::Off {
@@ -361,6 +364,9 @@ impl App {
 
     /// The Bluetooth trainer forgotten (SENSORS: BT TRAINER, confirmed).
     pub(crate) fn ftms_forget(&mut self, b: &mut impl Board) {
+        if !self.sensors_ready(b) {
+            return;
+        }
         self.sensors_store.dirty |= self.sensors_store.bt.is_some();
         self.sensors_store.bt = None;
         self.ftms_drop(b);
