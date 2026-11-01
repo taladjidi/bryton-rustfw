@@ -1120,7 +1120,7 @@ impl Recorder {
             // not this ride's own record, which a first checkpoint that landed and still failed left (a CRC or busy
             // timeout after programming): resumed from it, the seconds since in the buffer were lost (the review of
             // 2026-11-01, finding 11). The checkpoint is done again below
-            let own = |r: &Rec| self.file.is_some_and(|f| f.first == r.cluster);
+            let own = |r: &Rec| self.file.is_some_and(|f| f.first == r.cluster) && r.name == self.name;
             if let Some(r) = best.filter(|r| r.phase != Phase::Done && !own(r)) {
                 // what the last run left unfinished comes first (the boot did not finish it: its marker was lost, or
                 // the card failed then): one writer, one ride. A ride in progress goes on in place of this one if
@@ -1254,7 +1254,9 @@ impl Recorder {
                     }
                 }
             }
-            Err(Error::NotFound) => {}
+            // a folder entry on cluster 0 (a mkdir torn inside it) names nothing: the ride is not there, and stays
+            // named where it was recorded, never retried forever
+            Err(Error::NotFound | Error::Corrupt) => {}
             Err(e) => return Err(e),
         }
         let dir = fat.open(d, self.kind.rides().1)?;

@@ -564,7 +564,7 @@ fn torn_cuts(prefix: bool, part: u64) {
     let total = full.written;
     let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
     let (mut promised, mut resumed, mut saved_at_boot, mut max_lost, mut torn_root) = (false, 0, 0, 0, 0);
-    let (mut twice_cuts, mut second_cuts, mut let_go, mut torn_entry) = (0, 0, 0, 0);
+    let (mut twice_cuts, mut second_cuts, mut let_go) = (0, 0, 0);
     let cluster = Fat::mount(&mut crate::fat::tests::Ram(img.clone(), 0)).unwrap().cluster_bytes() as usize;
     // the root directory's first cluster (the boot sector's fields: fatgen103)
     let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
@@ -674,19 +674,8 @@ fn torn_cuts(prefix: bool, part: u64) {
         let Some(Outcome::Saved(n)) = ride(&mut Recorder::new(), &mut d, 0) else { panic!("{what}: the next ride") };
         let path = std::format!("Activities/{}.fit", core::str::from_utf8(&n).unwrap());
         assert_eq!(saved(&d.img, &path).map(|s| s.0 == all), Ok(true), "{what}: the next ride");
-        let lost = match fsck_torn(&d.img) {
-            Ok(lost) => lost,
-            // a folder made at the first start, before any record, its entry torn inside it (its name new, its
-            // cluster old: 0): the reader refuses it as Corrupt, never the root, so the root's sectors are as the
-            // cut left them, and the next ride was saved all the same
-            Err(e) if prefix && !promised && e.contains("Corrupt") => {
-                let bytes = root.start as usize * SECTOR..root.end as usize * SECTOR;
-                assert!(d.img[bytes.clone()] == cut_img[bytes], "{what}: the root written");
-                torn_entry += 1;
-                0
-            }
-            Err(e) => panic!("{what}: {e}"),
-        };
+        // (a folder whose entry the first start's cut tore inside it, on cluster 0: made again by the next Start)
+        let lost = fsck_torn(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert_eq!(free_counts(&d.img).0, free_counts(&d.img).1, "{what}: FSInfo's free count");
         if lost > 2 {
             // only a torn sector of the root directory (making \Rustfw or \Activities), or of \Rustfw's while
@@ -700,7 +689,7 @@ fn torn_cuts(prefix: bool, part: u64) {
     std::println!(
         "prefix {prefix}, part {part}: {total} torn cuts: {resumed} resumed, {saved_at_boot} saved at boot; lost \
          clusters at most {max_lost}; {torn_root} in the root directory; {twice_cuts} torn reboots ({let_go} let \
-         go), {second_cuts} second cuts; {torn_entry} folder entries torn inside"
+         go), {second_cuts} second cuts"
     );
     // a prefix tear of the ride's directory sector keeps its entry, old or new: saved at boot is the garbage's
     assert!(resumed > 50 / CUT_PARTS && (prefix || saved_at_boot > 10 / CUT_PARTS), "{resumed}, {saved_at_boot}");
@@ -1223,38 +1212,111 @@ fn a_discarded_ride_is_moved_whole() {
     assert!(!r.discard());
 }
 
-/// The review of 2026-11-01: a folder entry torn inside it (its name new, its cluster old: 0), here
-/// `\Rustfw\Discarded\Full`'s. The reader refuses it (Corrupt), never takes it for the root: a discarded ride's full
-/// copy is kept where it was recorded, its clean copy discarded, and the root directory never written.
+/// Folder `path`'s entry in its parent set to cluster 0, as a mkdir torn inside its entry leaves it (its name new,
+/// its cluster old). Its old chain stays taken (lost).
+fn tear_folder_entry(img: &mut [u8], path: &str) {
+    let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let child = fat.open(&mut ram, path).unwrap().cluster;
+    let parent = match path.rsplit_once('/') {
+        Some((p, _)) => fat.open(&mut ram, p).unwrap().cluster,
+        None => fat.root().cluster,
+    };
+    let dir = fat.lba(parent) as usize * SECTOR;
+    let cluster = |e: &[u8]| u32::from(e[20]) << 16 | u32::from(e[21]) << 24 | u32::from(e[26]) | u32::from(e[27]) << 8;
+    let at = (dir..dir + fat.cluster_bytes() as usize)
+        .step_by(32)
+        .find(|&a| img[a + 11] & 0x10 != 0 && cluster(&img[a..a + 32]) == child && ![b'.', 0xe5].contains(&img[a]))
+        .unwrap();
+    for i in [20, 21, 26, 27] {
+        img[at + i] = 0;
+    }
+    let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+    assert_eq!(fat.open(&mut ram, path).map(|_| ()), Err(Error::Corrupt), "{path}: the reader refuses it");
+}
+
+/// The root directory's first cluster's bytes on `img` (the boot sector's fields: fatgen103).
+fn root_bytes(img: &[u8]) -> Vec<u8> {
+    let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b));
+    let root = (u(14, 2) + u(16, 1) * u(36, 4) + (u(44, 4) - 2) * u(13, 1)) * SECTOR;
+    img[root..root + u(13, 1) * SECTOR].to_vec()
+}
+
+/// The review of 2026-11-01: a folder entry torn inside it (on cluster 0) is refused as Corrupt by the reader,
+/// never taken for the root (".." on cluster 0 still is). `\Rustfw\Discarded\Full`'s: the next Start makes it again
+/// (the torn entry marked deleted), both copies of a discarded ride go there, both records done, the root directory
+/// never written.
 #[test]
 fn a_folder_entry_on_cluster_0_is_never_the_root() {
     let mut d = card(crate::fat::tests::image());
     ride_all(&mut pair(), &mut d, 0).unwrap(); // the folders made
+    tear_folder_entry(&mut d.img, DISCARDED_PATHS[1]);
     let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
     let mut fat = Fat::mount(&mut ram).unwrap();
-    let full = fat.open(&mut ram, DISCARDED_PATHS[1]).unwrap().cluster;
-    let dir = first_lba(&d.img, DISCARDED_PATHS[0]) * SECTOR;
-    let cluster = |e: &[u8]| u32::from(e[20]) << 16 | u32::from(e[21]) << 24 | u32::from(e[26]) | u32::from(e[27]) << 8;
-    let at = (dir..dir + fat.cluster_bytes() as usize)
-        .step_by(32)
-        .find(|&a| d.img[a + 11] & 0x10 != 0 && cluster(&d.img[a..a + 32]) == full && d.img[a] != b'.')
-        .unwrap();
-    for i in [20, 21, 26, 27] {
-        d.img[at + i] = 0;
-    }
-    let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
-    assert_eq!(fat.open(&mut ram, DISCARDED_PATHS[1]).map(|_| ()), Err(Error::Corrupt));
     assert!(fat.open(&mut ram, "Rustfw/..").is_ok_and(|f| f.cluster == fat.root().cluster));
-    let u = |at: usize, n: usize| d.img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b));
-    let root = (u(14, 2) + u(16, 1) * u(36, 4) + (u(44, 4) - 2) * u(13, 1)) * SECTOR;
-    let root = root..root + fat.cluster_bytes() as usize;
-    let before = d.img[root.clone()].to_vec();
-    let out = ride_all_with(&mut pair(), &mut d, 0, true).unwrap();
+    let before = root_bytes(&d.img);
+    let mut rs = pair();
+    let out = ride_all_with(&mut rs, &mut d, 0, true).unwrap();
     let name = *b"261023100001";
-    assert_eq!(out[0], Outcome::Discarded(name));
-    assert!(d.img[root] == before[..], "the root directory written");
-    assert!(saved(&d.img, "Rustfw/Discarded/261023100001.fit").is_ok());
-    assert!(saved(&d.img, "Rustfw/Full/261023100001.fit").is_ok(), "the full copy kept where it was recorded");
+    assert_eq!(out, [Outcome::Discarded(name); 2]);
+    assert_eq!([rs[0].phase(), rs[1].phase()], [Phase::Done; 2], "not stuck");
+    assert!(root_bytes(&d.img) == before, "the root directory written");
+    assert!(saved(&d.img, "Rustfw/Discarded/Full/261023100001.fit").is_ok(), "in the folder made again");
+    assert!(check_clean(&d.img, "the folder made again") <= 1, "its old cluster lost at most");
+}
+
+/// The same, `\Rustfw\Discarded` torn while a ride is recorded (its Start found it whole): the discard keeps the
+/// ride where it was recorded (`Kept`, its record done, never retried forever), the root directory never written,
+/// and the next ride's Start makes the folder again.
+#[test]
+fn a_discard_into_a_folder_on_cluster_0_keeps_the_ride() {
+    let mut d = card(crate::fat::tests::image());
+    let mut r = open_ride(&mut d, 200);
+    tear_folder_entry(&mut d.img, DISCARDED_PATHS[0]);
+    let before = root_bytes(&d.img);
+    r.end(T0 + 200, words(200));
+    assert!(r.discard());
+    assert_eq!(io_all(&mut r, &mut d, 201), [Outcome::Kept(NAME)]);
+    assert_eq!(r.phase(), Phase::Done, "not stuck");
+    kept_in_rides(&d.img, "the discard");
+    assert!(root_bytes(&d.img) == before, "the root directory written");
+    assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "the next ride");
+    assert!(fsck(&d.img).is_ok());
+}
+
+/// The review of 2026-11-01: a folder the recorder needs (`\Rustfw`, `\Rustfw\Rides`, `\Activities`) with its
+/// entry torn inside it (on cluster 0): made again by the next Start (the torn entry marked deleted, never zeroed),
+/// so the ride is recorded and saved; the volume clean, the torn folder's own cluster lost at most. (`\Activities`
+/// is stock's here, its files orphaned by the test's tear: a real one comes from a mkdir, an empty folder.) And
+/// the same at the save of a ride under way: `\Activities` made again, the ride saved there.
+#[test]
+fn a_needed_folder_on_cluster_0_is_made_again() {
+    for path in [DIR, "Rustfw/Rides", ACTIVITIES] {
+        let mut ram = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut fat = Fat::mount(&mut ram).unwrap();
+        let mut dir = fat.root();
+        for name in path.split('/') {
+            dir = fat.ensure_dir(&mut ram, dir, name, (0, 0)).unwrap();
+        }
+        let mut d = card(ram.0);
+        tear_folder_entry(&mut d.img, path);
+        let mut r = Recorder::new();
+        assert_eq!(ride(&mut r, &mut d, 0), Some(Outcome::Saved(NAME)), "{path}");
+        assert_eq!(r.phase(), Phase::Done, "{path}");
+        let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
+        assert_eq!(saved(&d.img, SAVED).map(|s| s.0 == all), Ok(true), "{path}");
+        let lost = check_clean(&d.img, path);
+        assert!(lost <= 1 || path == ACTIVITIES, "{path}: {lost} lost");
+    }
+    let mut d = card(crate::fat::tests::image());
+    let mut r = open_ride(&mut d, 200);
+    tear_folder_entry(&mut d.img, ACTIVITIES);
+    r.end(T0 + 200, words(200));
+    assert_eq!(io_all(&mut r, &mut d, 201), [Outcome::Saved(NAME)]);
+    assert_eq!(r.phase(), Phase::Done);
+    assert_eq!(saved(&d.img, SAVED).map(|s| s.0.len()), Ok(200));
+    assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "the next ride");
+    assert!(fsck(&d.img).is_ok());
 }
 
 /// The golden rule through the discard: the power cut (the sector left whole, or torn) after every sector of a
