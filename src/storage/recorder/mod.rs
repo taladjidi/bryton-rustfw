@@ -31,8 +31,9 @@
 //! valid one wins: never the data length, so a finished ride's record cannot pass for a new ride's), the phase
 //! (done, starting, recording, saving), the file's identity (its name and first cluster: a resume opens only that
 //! file and checks both), the FIT writer's state ([`fit::RECORD_LEN`] bytes, its own CRC) and the app's ride totals
-//! (`ride::Ride::to_words`, their count checked), the current lap's sums ([`fit::Writer::lap_words`]); the sector's
-//! CRC last.
+//! (`ride::Ride::to_words`, their count checked), the current lap's sums ([`fit::Writer::lap_words`]), the totals a
+//! resume goes on from beyond them (`ride::Ride::more_words`: uphill, downhill, max altitude, the power's NP, work,
+//! max and W' balance); the sector's CRC last.
 //!
 //! **The save** (End), each step done again after a reset by [`Recorder::recover`] from the phase in the record:
 //! 1. the end messages and a checkpoint whose record says "saving";
@@ -148,7 +149,7 @@
 use crate::fat::write::{Handle, dos_time};
 use crate::fat::{DiskWrite, Error, Fat, File, SECTOR, SECTOR_U32};
 use crate::fit::{self, Sample, Sink, Writer};
-use crate::ride::RIDE_WORDS;
+use crate::ride::{MORE_WORDS, RIDE_WORDS};
 
 pub(crate) mod rec;
 use rec::{Rec, file_name};
@@ -204,12 +205,16 @@ impl Kind {
     }
 
     /// The saved rides' folder, made if missing: `\Activities` in the root, `\Rustfw\Activities` in [`DIR`].
+    /// A torn entry (on cluster 0) is made again in `\Rustfw` only, never stock's `\Activities` (Corrupt: the ride
+    /// kept where it was recorded).
     fn saved_dir(self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<File, Error> {
-        let parent = match self {
-            Kind::Clean => fat.root(),
-            Kind::Full => fat.ensure_dir(d, fat.root(), DIR, t)?,
-        };
-        fat.ensure_dir(d, parent, ACTIVITIES, t)
+        match self {
+            Kind::Clean => fat.ensure_dir(d, fat.root(), ACTIVITIES, t),
+            Kind::Full => {
+                let dir = fat.ensure_own_dir(d, fat.root(), DIR, t)?;
+                fat.ensure_own_dir(d, dir, ACTIVITIES, t)
+            }
+        }
     }
 
     /// The discarded rides' folder: `\Rustfw\Discarded`, or `Full` in it.
@@ -230,11 +235,11 @@ impl Kind {
 
     /// Made if missing, at [`Recorder::setup`] only.
     fn discarded_dir(self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<File, Error> {
-        let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
-        let dir = fat.ensure_dir(d, mine, DISCARDED, t)?;
+        let mine = fat.ensure_own_dir(d, fat.root(), DIR, t)?;
+        let dir = fat.ensure_own_dir(d, mine, DISCARDED, t)?;
         match self {
             Kind::Clean => Ok(dir),
-            Kind::Full => fat.ensure_dir(d, dir, "Full", t),
+            Kind::Full => fat.ensure_own_dir(d, dir, "Full", t),
         }
     }
 }
@@ -299,9 +304,9 @@ fn make_kept(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(),
             fat.set_size(d, &mut h, size, t)?;
         }
     }
-    let deleted = fat.ensure_dir(d, dir, crate::trash::DELETED, t)?;
-    fat.ensure_dir(d, deleted, "Full", t)?;
-    fat.ensure_dir(d, dir, crate::storage::faultlog::LOG_DIR, t)?;
+    let deleted = fat.ensure_own_dir(d, dir, crate::trash::DELETED, t)?;
+    fat.ensure_own_dir(d, deleted, "Full", t)?;
+    fat.ensure_own_dir(d, dir, crate::storage::faultlog::LOG_DIR, t)?;
     Ok(())
 }
 
@@ -336,7 +341,8 @@ pub const BEATS_QUEUED: usize = 40;
 /// (the record also holds [`RIDE_WORDS`], byte 21, checked). One exception: a new field may go in bytes every
 /// earlier build writes as zero (`to_sector` starts from a zeroed sector, the CRC covers the whole sector and
 /// earlier builds ignore those bytes), provided all zeros reads as "absent" and is harmless: `checked` (bytes 23,
-/// 28..30), the lap sums (192..228, rec.rs `LAP_AT`).
+/// 28..30), the lap sums (192..228, rec.rs `LAP_AT`), the ride's descent (its word 15, bytes 188..192), its other
+/// totals and its power's (228..280, rec.rs `MORE_AT`).
 const TAG: [u8; 4] = *b"RFR2";
 const _: () = assert!(128 + 4 * RIDE_WORDS <= SECTOR - 2 && RIDE_WORDS < 256);
 
@@ -427,6 +433,8 @@ pub struct Recorder {
     ended: bool,
     /// The app's ride totals at the last second; the last record's time.
     ride: [u32; RIDE_WORDS],
+    /// The app's totals beyond the ride words ([`Recorder::set_more`]), kept in the record as they are.
+    more: [u32; MORE_WORDS],
     last_rec: u32,
     /// The full copy, resumed: the seconds up to here are in its file already (its checkpoint may be later than the
     /// clean one's, which the app goes on from), so they are not written twice.
@@ -541,6 +549,7 @@ impl Recorder {
             want: false,
             ended: false,
             ride: [0; RIDE_WORDS],
+            more: [0; MORE_WORDS],
             last_rec: 0,
             skip_to: 0,
             wait: 0,
@@ -786,7 +795,7 @@ impl Recorder {
         }
         let mut dir = fat.root();
         for name in self.kind.rescue_path().split('/') {
-            dir = fat.ensure_dir(d, dir, name, t)?;
+            dir = fat.ensure_own_dir(d, dir, name, t)?;
         }
         let mut buf = [0u8; 16];
         let mut name = self.name;
@@ -910,6 +919,17 @@ impl Recorder {
         self.ride = ride;
         self.put(16, |w, sink| w.pause(sink, time));
         self.want = true;
+    }
+
+    /// The app's totals now beyond the ride words ([`crate::ride::Ride::more_words`]), for the next recovery record.
+    pub fn set_more(&mut self, more: [u32; MORE_WORDS]) {
+        self.more = more;
+    }
+
+    /// The totals of the ride [`Recorder::recover`] reopened (`Resumed`), as its record kept them (all zeros from a
+    /// build before them).
+    pub fn more(&self) -> [u32; MORE_WORDS] {
+        self.more
     }
 
     /// Resumed at `time`.
@@ -1117,7 +1137,11 @@ impl Recorder {
                     self.errors = self.errors.saturating_add(1);
                 }
             }
-            if let Some(r) = best.filter(|r| r.phase != Phase::Done) {
+            // not this ride's own record, which a first checkpoint that landed and still failed left (a CRC or busy
+            // timeout after programming): resumed from it, the seconds since in the buffer were lost (the review of
+            // 2026-11-01, finding 11). The checkpoint is done again below
+            let own = |r: &Rec| self.file.is_some_and(|f| f.first == r.cluster) && r.name == self.name;
+            if let Some(r) = best.filter(|r| r.phase != Phase::Done && !own(r)) {
                 // what the last run left unfinished comes first (the boot did not finish it: its marker was lost, or
                 // the card failed then): one writer, one ride. A ride in progress goes on in place of this one if
                 // the marker said so or it stopped a moment ago; else it is saved as it is
@@ -1162,7 +1186,12 @@ impl Recorder {
             if self.file.is_none() {
                 // a name free in this copy's folder and in both saved and both discarded folders, so that the two
                 // copies keep one name
-                let acts = fat.open(d, ACTIVITIES)?;
+                // stock's folder with a torn entry (on cluster 0): never mended here, its names not looked for
+                let acts = match fat.open(d, ACTIVITIES) {
+                    Ok(f) => Some(f),
+                    Err(Error::Corrupt) => None,
+                    Err(e) => return Err(e),
+                };
                 // missing or damaged: never a reason to stop this one
                 let others = [FULL_PATH, DISCARDED_PATHS[0], DISCARDED_PATHS[1]].map(|p| fat.open(d, p).ok());
                 let mut buf = [0u8; 16];
@@ -1170,7 +1199,7 @@ impl Recorder {
                     let n = file_name(&self.name, &mut buf)?;
                     let free = |r: Result<File, Error>| matches!(r, Err(Error::NotFound));
                     if free(fat.find(d, dir, n))
-                        && free(fat.find(d, acts, n))
+                        && acts.is_none_or(|a| free(fat.find(d, a, n)))
                         && others.iter().all(|o| o.is_none_or(|f| free(fat.find(d, f, n))))
                     {
                         break;
@@ -1250,7 +1279,9 @@ impl Recorder {
                     }
                 }
             }
-            Err(Error::NotFound) => {}
+            // a folder entry on cluster 0 (a mkdir torn inside it) names nothing: the ride is not there, and stays
+            // named where it was recorded, never retried forever
+            Err(Error::NotFound | Error::Corrupt) => {}
             Err(e) => return Err(e),
         }
         let dir = fat.open(d, self.kind.rides().1)?;
@@ -1375,7 +1406,7 @@ impl Recorder {
         if !whole {
             fat.sync_fats(d)?;
         }
-        let dir = fat.ensure_dir(d, root, DIR, t)?;
+        let dir = fat.ensure_own_dir(d, root, DIR, t)?;
         let mut rec = match fat.locate(d, dir, self.kind.rec()) {
             Ok(h) => h,
             Err(Error::NotFound) => fat.create(d, dir, self.kind.rec(), t)?,
@@ -1386,9 +1417,15 @@ impl Recorder {
             fat.set_size(d, &mut rec, REC_SECTORS * SECTOR_U32, t)?;
         }
         self.rec = Some(rec);
-        let rides = fat.ensure_dir(d, dir, self.kind.rides().0, t)?;
-        fat.ensure_dir(d, root, ACTIVITIES, t)?; // both copies' names are looked for in it
-        self.kind.saved_dir(fat, d, t)?;
+        let rides = fat.ensure_own_dir(d, dir, self.kind.rides().0, t)?;
+        // `\Activities` (both copies' names are looked for in it) and the saved folder; stock's with a torn entry (on
+        // cluster 0) is never mended: the ride is recorded all the same, and kept where it was recorded at its save
+        for got in [fat.ensure_dir(d, root, ACTIVITIES, t), self.kind.saved_dir(fat, d, t)] {
+            match got {
+                Ok(_) | Err(Error::Corrupt) => {}
+                Err(e) => return Err(e),
+            }
+        }
         // both discarded folders now, before any record: a discard's save then makes no folder, so it never writes
         // the directory sector `ride.rec`'s entry is in, nor the one its clean copy's entry went to (a cut tearing
         // either there lost the ride, or its clean copy: a_discard_cut_at_every_sector)
@@ -1435,7 +1472,8 @@ impl Recorder {
         let mut rec = self.rec.ok_or(Error::NotFound)?;
         let seq = self.seq.wrapping_add(1);
         let (name, fit, ride, discard) = (self.name, self.writer.to_record(), self.ride, self.discard);
-        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap: self.writer.lap_words() };
+        let (lap, more) = (self.writer.lap_words(), self.more);
+        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap, more };
         let slot = 3 * (seq % 2);
         match copies {
             Some((first, last)) => {
@@ -1734,7 +1772,7 @@ impl Recorder {
         let Some(r) = best.filter(|r| r.phase != Phase::Done) else { return Ok(Outcome::Nothing) };
         // the FATs were synced by the caller: the cut may have been between the two, or torn one
         let writer = Writer::from_record(&r.fit).map(|w| w.with_lap_words(&r.lap));
-        (self.name, self.ride, self.discard) = (r.name, r.ride, r.discard);
+        (self.name, self.ride, self.more, self.discard) = (r.name, r.ride, r.more, r.discard);
         let size = writer.map_or(0, |w| 16 + w.data_len());
         match (r.phase, writer) {
             (Phase::Saving, Some(w)) => {

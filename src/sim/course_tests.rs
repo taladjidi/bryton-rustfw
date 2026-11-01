@@ -663,10 +663,8 @@ fn climb_page_in_the_round() {
     }
 }
 
-/// Climbs ahead without a course: the page is not in the round before the climb's warning, is after it with the
-/// screen unchanged, one Page press reaches it, and it leaves at the top.
-#[test]
-fn climb_page_without_a_course() {
+/// A ride on `ahead_route` with the road ahead's climbs, started and not yet at the warning.
+fn ahead_ride() -> (Sim, App) {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::route::tests::image_with_map();
     sim.gnss.route = Some(ahead_route);
@@ -678,6 +676,21 @@ fn climb_page_without_a_course() {
     sim.gnss.fix = Some(8000);
     run(&mut sim, &mut app, 3000);
     app.press(&mut sim, Press::Short(Key::Start));
+    (sim, app)
+}
+
+/// The CLIMB page of the road ahead's climb just opened (perf_tests `screen_budgets`).
+pub(super) fn riding_the_road_ahead_climb() -> (Sim, App) {
+    let (mut sim, mut app) = ahead_ride();
+    run(&mut sim, &mut app, 113_000);
+    (sim, app)
+}
+
+/// Climbs ahead without a course: the page is not in the round before the climb's warning, is after it with the
+/// screen unchanged, one Page press reaches it, and it leaves at the top.
+#[test]
+fn climb_page_without_a_course() {
+    let (mut sim, mut app) = ahead_ride();
     let t0 = sim.ms;
     while sim.ms - t0 < 98_000 {
         run(&mut sim, &mut app, 1000);

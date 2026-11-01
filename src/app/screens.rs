@@ -177,7 +177,10 @@ impl App {
     }
 
     /// Draws the whole screen below the bar from the state (the panel was cleared, or a screenshot row).
-    pub(crate) fn draw_screen(&self, c: &mut impl Canvas) {
+    pub(crate) fn draw_screen(&self, dc: &mut dyn Canvas) {
+        // one copy of this and what it calls for every canvas (it was two, 30 KB of image: review finding 64)
+        let mut dc = dc;
+        let c = &mut dc;
         match self.screen {
             Screen::Main | Screen::Ride(_) | Screen::Edit(..) | Screen::Status => {
                 let (_, cy, _, ch) = c.clip();
@@ -681,18 +684,15 @@ impl App {
                 (_, Drawn::Map(mut m)) => {
                     let area = map::area(bx);
                     let (zoom, follow) = (self.zoom(), self.page_follow());
-                    let refit = first == Some(i) && {
-                        let route = self.route();
-                        map::refit(area, &self.track, &m, route.as_ref(), zoom, follow)
-                    };
-                    if refit {
+                    let refit = map::refit(area, &self.track, &m, self.route().as_ref(), zoom, follow);
+                    if refit && first == Some(i) {
                         let route = self.route();
                         let view = map::Shown::of(&self.track, area, route.as_ref(), zoom, follow).view;
                         self.render_basemap(b, area, view);
                     }
                     let (base, route) = ((first == Some(i)).then_some(&self.basemap), self.route());
                     let mut p = Panel(b, self.area(), self.look());
-                    map::update(&mut p, area, &self.track, &mut m, base, route.as_ref(), zoom, follow);
+                    map::update_as(&mut p, area, &self.track, &mut m, base, route.as_ref(), zoom, follow, refit);
                     Drawn::Map(m)
                 }
                 (_, Drawn::Graph(g)) => self.update_graph(b, g, bx),

@@ -723,7 +723,9 @@ impl Fat {
         Ok(File { cluster: c, size: 0, dir: true })
     }
 
-    /// Folder `name` in `dir`, made if missing.
+    /// Folder `name` in `dir`, made if missing. An entry of that name naming a folder on cluster 0 (a torn entry)
+    /// is Corrupt: never repaired here, since the folder may be stock's ([`Fat::ensure_own_dir`] is for this
+    /// firmware's own).
     pub fn ensure_dir(
         &mut self,
         d: &mut impl DiskWrite,
@@ -731,12 +733,62 @@ impl Fat {
         name: &str,
         time: (u16, u16),
     ) -> Result<File, Error> {
-        match self.find(d, dir, name) {
-            Ok(f) if f.dir => Ok(f),
-            Ok(_) => Err(Error::Refused), // a file has the name
-            Err(Error::NotFound) => self.mkdir(d, dir, name, time),
-            Err(e) => Err(e),
+        self.ensure_dir_in(d, dir, name, time, false)
+    }
+
+    /// [`Fat::ensure_dir`] for this firmware's own folders (`\Rustfw` and what is in it) only. An entry of that
+    /// name naming a folder on cluster 0 is a mkdir torn inside its entry (its name landed, its cluster did not: an
+    /// empty folder, its cluster lost at worst): marked deleted (0xe5, never zeroed), then the name looked for again
+    /// (a real entry further on is found) and made if missing. A few such entries at most, then Corrupt. Never for
+    /// stock's folders (`\Activities`): its rides would be orphaned there, for a computer's fsck to free.
+    pub fn ensure_own_dir(
+        &mut self,
+        d: &mut impl DiskWrite,
+        dir: File,
+        name: &str,
+        time: (u16, u16),
+    ) -> Result<File, Error> {
+        self.ensure_dir_in(d, dir, name, time, true)
+    }
+
+    fn ensure_dir_in(
+        &mut self,
+        d: &mut impl DiskWrite,
+        dir: File,
+        name: &str,
+        time: (u16, u16),
+        repair: bool,
+    ) -> Result<File, Error> {
+        for _ in 0..4 {
+            match self.find(d, dir, name) {
+                Ok(f) if f.dir => return Ok(f),
+                Ok(_) => return Err(Error::Refused), // a file has the name
+                Err(Error::NotFound) => return self.mkdir(d, dir, name, time),
+                Err(Error::Corrupt) if repair => match self.torn_dir(d, dir, name)? {
+                    Some(h) => self.remove(d, &h)?,
+                    None => return Err(Error::Corrupt),
+                },
+                Err(e) => return Err(e),
+            }
         }
+        Err(Error::Corrupt)
+    }
+
+    /// The first entry called `name` in `dir`, if it names a folder on cluster 0 other than `.` and `..`: its place,
+    /// for [`Fat::remove`].
+    fn torn_dir(&mut self, d: &mut impl Disk, dir: File, name: &str) -> Result<Option<Handle>, Error> {
+        let mut c = self.cursor(dir)?;
+        while let Some((e, long)) = self.next_raw(d, &mut c)? {
+            if (long && lfn_eq(&c.lfn, name)) || short_eq(&e, name) {
+                if e[11] & 0x10 == 0 || e[0] == b'.' || u16_at(&e, 20) != 0 || u16_at(&e, 26) != 0 {
+                    return Ok(None);
+                }
+                let slot = u8::try_from(c.entry.checked_sub(1).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)?;
+                let entry_lba = self.lba(c.cluster) + c.sector;
+                return Ok(Some(Handle { entry_lba, slot, dir: dir.cluster, ..Handle::default() }));
+            }
+        }
+        Ok(None)
     }
 
     /// A new entry `name` in `dir` for the chain of `h` (the second half of a move: [`Fat::remove`] first).

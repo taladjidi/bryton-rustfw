@@ -42,11 +42,6 @@ import tempfile
 import time
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:  # not POSIX: the read-back below then goes through the page cache
-    fcntl = None
-
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('sync', HERE / 'sync.py')
 sync = importlib.util.module_from_spec(spec)
@@ -642,16 +637,7 @@ def own(a, log=print):
 NAME = re.compile(r'^\d+\.seg$')
 
 
-def read_back(path):
-    """The file's bytes as the drive has them: not from the page cache (macOS F_NOCACHE, Linux fadvise DONTNEED).
-    shortcut: elsewhere (no such call) the read may come from the cache, so a cut USB link can go unseen; use a POSIX OS."""
-    fd = os.open(path, os.O_RDONLY)
-    with os.fdopen(fd, 'rb') as f:
-        if fcntl is not None and hasattr(fcntl, 'F_NOCACHE'):
-            fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
-        elif hasattr(os, 'posix_fadvise'):
-            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-        return f.read()
+read_back = sync.read_back  # F_NOCACHE read, as the copy to the drive is checked in sync.py
 
 
 def write(out, volume, log=print, prune=False, init=False):
@@ -684,7 +670,7 @@ def write(out, volume, log=print, prune=False, init=False):
             with open(tmp, 'wb') as f:
                 f.write(data)
                 f.flush()
-                os.fsync(f.fileno())
+                sync.flush(f.fileno())  # F_FULLFSYNC on macOS
             if read_back(tmp) != data:
                 raise OSError(f'{name}: the copy read back differs')
             os.replace(tmp, final)

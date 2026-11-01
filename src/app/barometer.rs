@@ -189,7 +189,7 @@ impl App {
         let mut d = emmc::Volume(&mut self.emmc, b);
         let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
             let t = fat::write::dos_time(local);
-            let dir = fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)?;
+            let dir = fat.ensure_own_dir(&mut d, fat.root(), recorder::DIR, t)?;
             let mut h = match fat.locate(&mut d, dir, ALT_FILE) {
                 Err(fat::Error::NotFound) => fat.create(&mut d, dir, ALT_FILE, t)?,
                 other => other?,

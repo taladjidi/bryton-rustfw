@@ -5152,7 +5152,7 @@ fn recovery_records() {
     use crate::fit::RECORD_LEN;
     use crate::recorder::{Phase, rec::Rec};
     use crate::ride::RIDE_WORDS;
-    let (mut recorder, mut trash) = ([0u32; 4], [0u32; 4]);
+    let (mut recorder, mut trash, mut restored) = ([0u32; 4], [0u32; 4], 0);
     for seed in 1..=64u32 {
         let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9) ^ 0x5ec0_0001);
         for _ in 0..100 {
@@ -5172,8 +5172,31 @@ fn recovery_records() {
                 discard: next().is_multiple_of(2),
                 checked: (next().is_multiple_of(2)).then(|| next() as u16),
                 lap: core::array::from_fn(|_| next()),
+                more: core::array::from_fn(|_| next()),
             };
             recovery_sectors(&mut next, &r, r.to_sector(), Rec::from_sector, &mut recorder);
+            // the totals a resume goes on from (riding.rs `Resumed`), whatever the record holds: read back as written,
+            // then a few seconds of ride on them and every total read, nothing panics
+            let back = Rec::from_sector(&r.to_sector()).map(|b| (b.ride, b.more));
+            assert_eq!(back, Some((ride, r.more)));
+            let mut rd = crate::ride::Ride::resumed(&ride, &r.more);
+            let mut p = crate::power::Power::new();
+            p.resume(&crate::ride::power_words(&r.more));
+            rd.start_pause();
+            for k in 0..3 {
+                let i = crate::ride::Input {
+                    speed_x10: Some(next() as u16 % 600),
+                    power: (k != 1).then(|| next() as u16),
+                    alt_mm: Some(next() as i32 % 9_000_000),
+                    alt_ref: next() as u8 % 2,
+                    ..Default::default()
+                };
+                rd.second(&i);
+                p.second(i.power, &rd, next() as u16, next() as u16);
+            }
+            let _ = (p.np(), p.tss(next() as u16), p.kj(), p.kcal(), p.avg(), p.max(), p.if_x100(next() as u16));
+            let _ = (rd.descent_m(), rd.uphill_m(), rd.downhill_m(), rd.max_alt_m(), rd.more_words(&p));
+            restored += usize::from(p.np().is_some() && p.wbal_j().is_some() && rd.max_alt_m().is_some());
 
             // the trash's move record: each file of the move is there or not, with its CRC or without
             let moved = |next: &mut dyn FnMut() -> u32| {
@@ -5203,6 +5226,7 @@ fn recovery_records() {
             recovery_sectors(&mut next, &expect, sector, crate::trash::Rec::from_sector, &mut trash);
         }
     }
+    assert!(restored > 400, "{restored} resumes with NP, W' balance and max altitude");
     // a 16-bit CRC misses about 2^-16 of the changes: at most 4 accepted per 6400 damaged sectors, all equal
     for c in [recorder, trash] {
         assert!(c[0] > 0 && c[1] > 0 && c[2] > 0, "reached: {c:?} (intact, damaged, random, accepted)");
