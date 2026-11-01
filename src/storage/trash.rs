@@ -296,7 +296,8 @@ fn settle(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, 
 }
 
 /// A move undone ([`settle`]): each file of `r` back in its old folder, under its old name (taken by another file
-/// meanwhile: a copy moved stays moved, a chain named by no entry stays pending), if its chain is still the ride's. A file moved already is
+/// meanwhile: a copy moved stays moved, a chain named by no entry takes `<name>-j.fit`), if its chain is still the
+/// ride's. A file moved already is
 /// linked back, then taken out of its new folder (so neither copy stays half deleted, and it has a name at every
 /// cut, whatever a computer did to its bytes); room is made before anything changes.
 /// When the old folder cannot take a name (the card full, its last slot used), a file named by no entry gets its
@@ -305,7 +306,7 @@ fn settle(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, 
 /// left pending.
 fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Result<(), Error> {
     let mut buf = [0u8; 20];
-    for k in 0..2 {
+    'files: for k in 0..2 {
         let (Some((first, size, crc)), Some(from), Some(to)) =
             (r.files.get(k).copied().flatten(), FROM.get(k), TO.get(k))
         else {
@@ -334,15 +335,20 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
         if !ours || moved.is_none() && first != 0 && kept_by_a_repair(fat, d, first)? {
             continue;
         }
-        // only under its old name, the one both firmwares' histories find: taken by another file meanwhile, a copy
-        // moved stays where it is named, and a chain named by no entry stays pending
-        let name = file_name(&r.name, 0, &mut buf)?;
-        match fat.find(d, src, name) {
-            Err(Error::NotFound) => {}
-            Ok(_) if moved.is_some() => continue,
-            Ok(_) => return Err(Error::Io),
-            Err(e) => return Err(e),
+        // under its old name, the one both firmwares' histories find; taken by another file meanwhile, a copy moved
+        // stays where it is named, and a chain named by no entry takes the first free `<name>-j.fit` (a name anywhere
+        // beats a move pending for good, the drive read only)
+        let mut j = 0;
+        loop {
+            match fat.find(d, src, file_name(&r.name, j, &mut buf)?) {
+                Err(Error::NotFound) => break,
+                Ok(_) if moved.is_some() => continue 'files,
+                Ok(_) if j < SUFFIXES => j += 1,
+                Ok(_) => return Err(Error::Io),
+                Err(e) => return Err(e),
+            }
         }
+        let name = file_name(&r.name, j, &mut buf)?;
         let room = match fat.make_room(d, src, name) {
             Ok(()) => true,
             Err(Error::Refused) => false,
@@ -356,7 +362,7 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
             if let Some(h) = moved {
                 fat.remove(d, &h)?;
             }
-        } else if moved.is_none() && !fat.revive(d, src, name, first, size)? {
+        } else if moved.is_none() && !(j == 0 && fat.revive(d, src, name, first, size)?) {
             return Err(Error::Io);
         }
     }
@@ -401,11 +407,13 @@ fn unlink_old(fat: &mut Fat, d: &mut impl DiskWrite, from: &str, name: &[u8; 12]
     let mut any = false;
     for _ in 0..=SUFFIXES {
         let Some(e) = named_in(fat, d, src, name, first)? else { break };
-        let h = fat.locate(d, src, core::str::from_utf8(e.name()).map_err(|_| Error::Corrupt)?)?;
-        if h.first != first {
-            break; // another entry of that name first: never remove it
+        // a name the listing cannot give back as it is ('?' for what is not ASCII) is not looked up: left
+        let Ok(n) = core::str::from_utf8(e.name()) else { break };
+        match fat.locate(d, src, n) {
+            Ok(h) if h.first == first => fat.remove(d, &h)?,
+            Err(Error::Io) => return Err(Error::Io),
+            _ => break, // not found by that name, or another entry of it first: never remove that
         }
-        fat.remove(d, &h)?;
         any = true;
     }
     Ok(any)
@@ -420,6 +428,9 @@ fn named_in(
     name: &[u8; 12],
     first: u32,
 ) -> Result<Option<crate::fat::Entry>, Error> {
+    if first == 0 {
+        return Ok(None); // an empty file: any empty `<name>.fit` would match
+    }
     let mut c = fat.cursor(dir)?;
     loop {
         match fat.list(d, &mut c) {
@@ -932,6 +943,44 @@ pub(crate) mod tests {
         assert_eq!(file(&d.0, RIDE), Some(Vec::new()), "the other file");
         assert_eq!(fsck(&d.0), Ok(0));
         assert_eq!(finish(&mut d, T), Ok(false), "nothing pending");
+    }
+
+    /// A chain named by no entry whose old name in `\Activities` another file took meanwhile, on a full card: put
+    /// back under the first free `<name>-1.fit` (it stayed pending for good, the drive read only).
+    #[test]
+    fn a_nameless_chain_whose_name_is_taken_gets_a_suffix() {
+        let clean = file(&volume(), RIDE).unwrap();
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+        fat.create(&mut d, acts, "261020080000.fit", T).unwrap();
+        no_room(&mut d.0, true);
+        assert_eq!(finish(&mut d, T), Ok(false));
+        assert!(file(&d.0, "Activities/261020080000-1.fit") == Some(clean), "named");
+        assert_eq!(fsck(&d.0), Ok(0));
+        assert_eq!(finish(&mut d, T), Ok(false), "nothing pending");
+    }
+
+    /// A name on the chain the listing gives with a '?' (a character not ASCII: `261020080000-\u{e9}.fit`, made by a
+    /// computer) cannot be looked up: left as it is, and the move still finishes (every start failed on it).
+    #[test]
+    fn a_name_the_listing_cannot_give_back_does_not_stop_the_move() {
+        let ride = cluster(&volume(), RIDE);
+        let mut d = Ram(moved_then_taken(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+        let h = Handle { first: ride.cluster, size: ride.size, ..Handle::default() };
+        fat.link(&mut d, acts, "261020080000-x.fit", &h, T).unwrap();
+        let full = fat.open(&mut d, TO[1]).unwrap();
+        let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
+        fat.remove(&mut d, &other).unwrap(); // the move can finish
+        // the 'x' (the second piece's first unit: the first holds "261020080000-") made an e acute
+        let x: &[u8] = &[0x78, 0, b'.', 0, b'f', 0, b'i', 0];
+        let at = d.0.windows(x.len()).position(|w| w == x).unwrap();
+        d.0[at] = 0xe9;
+        assert_eq!(finish(&mut d, T), Ok(true), "finished");
+        assert_eq!(finish(&mut d, T), Ok(false), "nothing pending");
+        assert!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit").is_some_and(|f| !f.is_empty()));
     }
 
     /// The re-review of beaa07a: a copy in `\Rustfw\Deleted` a computer made longer, put back: linked with its own
