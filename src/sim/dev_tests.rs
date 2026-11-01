@@ -240,6 +240,26 @@ fn serve_answers_the_card_effects() {
     assert!(app.serve(&mut sim, &mut pc, &s, Effect::Bench(0, 4, 2)));
     assert!(pc.got.starts_with(b"bench "), "{:?}", pc.got);
     pc.got.clear();
+    assert_eq!(s.feed(b"bench step 5\n", &app, Stats::default(), &mut pc), Effect::BenchStep(5));
+    assert_eq!(s.feed(b"bench step 17\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert!(pc.got.starts_with(b"err usage: bench step"));
+    pc.got.clear();
+    let (up, slept) = (app.up_ms, app.prof.clock.sleep);
+    assert!(app.serve(&mut sim, &mut pc, &s, Effect::BenchStep(5)));
+    // 4 of the 5 steps ran with no sleep: far less than the 4 loop sleeps a stale value would count
+    assert!(app.up_ms - up < 4 * crate::POLL_MS, "{} ms", app.up_ms - up);
+    assert_eq!(app.prof.clock.sleep, slept);
+    let line = std::string::String::from_utf8_lossy(&pc.got).into_owned();
+    let w: std::vec::Vec<&str> = line.split_whitespace().collect();
+    assert_eq!((w[0], w[1], w[7]), ("step", "us", "ratio"), "{line}");
+    assert!(w[2..7].iter().all(|n| n.parse::<u32>().is_ok()) && (w[8].contains('.') || w[8] == "n/a"), "{line}");
+    pc.got.clear();
+    crate::dev::send_bench_step(&mut pc, &[300, 0, 0]);
+    assert_eq!(pc.got, b"step us 300 0 0 ratio n/a\n");
+    pc.got.clear();
+    crate::dev::send_bench_step(&mut pc, &[300, 100, 100]);
+    assert_eq!(pc.got, b"step us 300 100 100 ratio 3.0\n");
+    pc.got.clear();
     assert!(app.serve(&mut sim, &mut pc, &s, Effect::BenchMap(4, 0, 0)));
     assert!(pc.got.starts_with(b"err nofix") || pc.got.starts_with(b"map"), "{:?}", pc.got);
     pc.got.clear();
@@ -280,6 +300,7 @@ fn ride_open_refuses_the_risky_commands() {
         "bench 0 4 2",
         "bench scan 4",
         "bench map 4 0 0",
+        "bench step 4",
         "sector 3",
         "poke 0x40013014 1",
     ] {

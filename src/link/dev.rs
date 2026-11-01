@@ -23,6 +23,9 @@
 //!   read> <IGN tiles decoded> <pixels> <zoom>` in hex (`err nofix` without a position): what a re-centre costs.
 //! - `bench scan <kb>`: runs the scan of stock's rides over about `kb` KB ([`Effect::BenchScan`]) and answers
 //!   `bench <microseconds>` (the bytes read are about `kb` KB).
+//! - `bench step <n>` (2 to 16): runs [`App::step`] `n` times back to back, no sleep between ([`Effect::BenchStep`]),
+//!   and answers `step us <first> <next>... ratio <first / mean of the rest>` (decimal): is the pass's fixed cost
+//!   code fetch (a cold first step) or work (all alike).
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
@@ -258,6 +261,8 @@ pub enum Effect {
     /// Time the scan of stock's rides over about this many bytes ([`App::bench_scan`]); answer with
     /// [`send_bench`].
     BenchScan(u32),
+    /// Run [`App::step`] this many times back to back and time each ([`send_bench_step`]).
+    BenchStep(u32),
     /// Time the basemap of the full-page map at zoom level, moved by (dx, dy) m ([`App::bench_map`]).
     BenchMap(u32, i32, i32),
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
@@ -546,6 +551,10 @@ impl Session {
                     _ => h.send(b"err usage: bench map <level> <dx m> <dy m>\n"),
                 }
             }
+            Some(b"bench") if line.starts_with(b"bench step") => match words.nth(1).and_then(parse) {
+                Some(n @ 2..=16) => return Effect::BenchStep(n),
+                _ => h.send(b"err usage: bench step <2..16>\n"),
+            },
             Some(b"bench") if line.starts_with(b"bench scan") => match words.nth(1).and_then(parse) {
                 Some(kb @ 1..=65_536) => return Effect::BenchScan(kb * 1024),
                 _ => h.send(b"err usage: bench scan <kb>\n"),
@@ -615,6 +624,28 @@ fn bench_reads(app: &mut App, b: &mut impl crate::Board, lba: u32, n: u32, count
     Ok(app.prof().clock.us(b).wrapping_sub(t))
 }
 
+/// Runs [`App::step`] `n` times back to back and times each ([`Effect::BenchStep`]). The loop's last sleep is zeroed
+/// before steps 2..n (no sleep happened, so no pass counts one), and the loop's sleep and the profiler's window are
+/// put back after, so the bench does not skew `prof` nor leave the idle timers ahead.
+#[inline(never)]
+fn bench_steps(app: &mut App, b: &mut impl crate::Board, n: usize) -> [u32; 16] {
+    let saved = app.prof.clone();
+    let mut us = [0u32; 16];
+    for (k, slot) in us.iter_mut().take(n).enumerate() {
+        if k > 0 {
+            app.prof.clock.slept(0, 0);
+        }
+        let t = app.prof.clock.us(b);
+        app.step(b);
+        *slot = app.prof.clock.us(b).wrapping_sub(t);
+    }
+    let (mut clock, sleep) = (app.prof.clock, saved.clock.sleep);
+    clock.slept(sleep.0, sleep.1);
+    app.prof = saved;
+    app.prof.clock = clock;
+    us
+}
+
 impl App {
     /// Answers the effect `session` asked for that needs the app and the board (the eMMC, the FAT reader, the
     /// benchmarks, the drive, the profiler), then flushes `h`. True when board work may have slept, which takes over
@@ -642,6 +673,10 @@ impl App {
                 // the bytes it read are about the ones asked (the protocol answers the time only)
                 self.bench_scan(b, bytes);
                 send_bench(h, Ok(self.prof.clock.us(b).wrapping_sub(t)));
+            }
+            Effect::BenchStep(n) => {
+                let us = bench_steps(self, b, n as usize);
+                send_bench_step(h, us.get(..n as usize).unwrap_or_default());
             }
             Effect::BenchMap(level, dx, dy) => {
                 let t = self.prof.clock.us(b);
@@ -821,6 +856,28 @@ pub fn send_bench(h: &mut impl Host, r: Result<u32, emmc::Error>) {
         }
         Err(e) => send_error(h, e),
     }
+}
+
+/// The answer to `bench step`: `step us <first> <next>... ratio <first / mean of the rest, one decimal>`.
+pub fn send_bench_step(h: &mut impl Host, us: &[u32]) {
+    h.send(b"step us");
+    for &v in us {
+        h.send(b" ");
+        h.send(decimal(u64::from(v), &mut [0; 20]));
+    }
+    let rest = us.get(1..).unwrap_or_default();
+    let sum: u64 = rest.iter().map(|&v| u64::from(v)).sum();
+    // tenths of first / (sum / len) = first * len * 10 / sum
+    h.send(b" ratio ");
+    match (u64::from(us.first().copied().unwrap_or(0)) * rest.len() as u64 * 10).checked_div(sum) {
+        Some(t) => {
+            h.send(decimal(t / 10, &mut [0; 20]));
+            h.send(b".");
+            h.send(decimal(t % 10, &mut [0; 20]));
+        }
+        None => h.send(b"n/a"),
+    }
+    h.send(b"\n");
 }
 
 /// The answer to `emmc`: the layout and the reliable write bytes, or why it could not be read.
