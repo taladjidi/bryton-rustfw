@@ -280,7 +280,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
         if w < u32::from(g.advance) * k && g.w > 0 {
             clips::note("draw_clipped", s, right.saturating_sub(x));
         }
-        if w == 0 {
+        if x >= right {
             break;
         }
         blit_glyph(c, (&font, g, k), (x, y, w, style.height()), (0, 0), &palette);

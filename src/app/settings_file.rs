@@ -866,6 +866,16 @@ mod day_night_file_tests {
         assert!(o.zones_lthr && o.female, "the rest kept");
     }
 
+    /// Byte 148 (HEIGHT, retired) holding anything in an older file is skipped: every byte after it reads as written.
+    #[test]
+    fn an_old_height_byte_is_skipped() {
+        let s = Settings { max_hr_age: true, start_reminder: false, ready_check: true, ..Settings::from_word(0) };
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        sec[28 + 148] = 178;
+        recrc(&mut sec);
+        assert_eq!(SettingsCopy::from_sector(&sec).unwrap().settings, s);
+    }
+
     /// A register that changed alone (the light) says ROAD for a GRAVEL file: the file's profile stays.
     #[test]
     fn a_register_change_keeps_a_gravel_profile_from_the_file() {

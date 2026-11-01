@@ -1227,11 +1227,19 @@ impl Settings {
         }
         // the speed limits are kept in km/h: under IMPERIAL they step in the shown mph, so each press changes it
         if self.imperial && matches!(s, Setting::Limit(alerts::LIM_SPEED_HIGH | alerts::LIM_SPEED_LOW)) {
-            let max = s.number().map_or(0, |(r, _)| u32::from(*r.end()));
+            let max = s.number().map_or(0, |(r, _)| *r.end());
+            let mph = |kmh: u16| (u32::from(kmh) * 6214 + 5000) / 10_000;
             if let Some(v) = self.number_mut(s) {
-                let mph = (u32::from(*v) * 6214 + 5000) / 10_000;
-                let mph = if up { mph + 1 } else { mph.saturating_sub(1) };
-                *v = ((mph * 10_000 + 3107) / 6214).min(max) as u16;
+                // the nearest stored km/h that shows another mph (at most 2 away), clamped at the ends like the metric path
+                let next = |k: u16| if up { k.saturating_add(1).min(max) } else { k.saturating_sub(1) };
+                let mut k = *v;
+                for _ in 0..3 {
+                    k = next(k);
+                    if mph(k) != mph(*v) {
+                        break;
+                    }
+                }
+                *v = k;
             }
             return;
         }
@@ -1575,10 +1583,16 @@ mod tests {
             assert_eq!(l.as_str(), want);
             s.step(k, true);
         }
+        let at = |s: &Settings| s.limits[usize::from(alerts::LIM_SPEED_HIGH)];
+        s.limits[usize::from(alerts::LIM_SPEED_HIGH)] = 20;
+        s.step(k, true);
         s.step(k, false);
+        assert_eq!(at(&s), 20, "up then down restores the stored km/h");
+        s.limits[usize::from(alerts::LIM_SPEED_HIGH)] = 100;
+        s.step(k, true);
+        assert_eq!(at(&s), 100, "clamped at the top");
+        s.limits[usize::from(alerts::LIM_SPEED_HIGH)] = 0;
         s.step(k, false);
-        let mut l = Line::<12>::new();
-        s.text(k, &mut l);
-        assert_eq!(l.as_str(), "19");
+        assert_eq!(at(&s), 0, "and at the bottom");
     }
 }
