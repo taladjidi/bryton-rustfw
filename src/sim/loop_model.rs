@@ -35,6 +35,10 @@ pub struct LoopModel {
     keys_was: u8,
     /// The stack was run past its canary.
     overflowed: bool,
+    /// The Nordic chip always has a byte waiting (one that sends faster than the pass can read: review of B4b).
+    pub bytes_always: bool,
+    /// Bytes the chip sends at a time, ms: into its stream once the clock gets there.
+    pub later: Vec<(u64, Vec<u8>)>,
 }
 
 /// What a [`SimLink`] answers and what it was asked, shared with the test (the link itself goes into the loop).
@@ -147,7 +151,11 @@ impl LoopBoard for Sim {
     }
     fn byte_waiting(&mut self) -> bool {
         self.nordic_due();
-        !self.nordic.out.is_empty()
+        let now = self.ms;
+        for (_, bytes) in self.main.later.extract_if(.., |(t, _)| *t <= now) {
+            self.nordic.out.extend(bytes);
+        }
+        self.main.bytes_always || !self.nordic.out.is_empty()
     }
     fn sleep(&mut self) {
         self.delay_ms(1);

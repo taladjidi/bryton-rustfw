@@ -107,6 +107,54 @@ fn nordic_packets() {
     assert!(reached.iter().all(|&n| n > 100), "broadcasts, closed channels, adv reports reached: {reached:?}");
 }
 
+/// The chip's frames read by radio passes (lib app/radio.rs `radio_pass`, a byte waking an idle sleep): the idle app
+/// under `MainLoop::pass`, generated frames (phone and GAP events, ANT broadcasts and channel events, scan time-outs,
+/// stray bytes) sent at random times in each sleep. No panic, every pass ends within its idle length, and the radio
+/// passes are reached.
+#[test]
+fn radio_passes_idle() {
+    use super::{Sim, SimLink};
+    use crate::Board;
+    let mut radio = 0;
+    for seed in 1..=4u32 {
+        let (mut sim, mut app) = super::started();
+        let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+        while app.pass_ms() != crate::IDLE_POLL_MS && sim.ms < 60_000 {
+            main.pass(&mut app, &mut sim);
+        }
+        let mut v = bytes(seed, 1 << 20);
+        let mut r = || v.next().unwrap_or(0);
+        for _ in 0..400 {
+            for _ in 0..r() % 4 {
+                let mut p = Vec::new();
+                match r() % 5 {
+                    // a BLE event: GAP / GATT ids around the phone link's (connected, disconnected, HVX, ...)
+                    0 => p.extend([2, [0x10, 0x11, 0x12, 0x1b, 0x39, 0x3a, r()][usize::from(r() % 7)], 0]),
+                    // an ANT broadcast or acknowledged message on a channel, or a channel event, 44 bytes
+                    1 | 2 => {
+                        p.extend([8, [0x4e, 0x4f, 0x40][usize::from(r() % 3)], r() % 8]);
+                        p.extend((0..39).map(|_| r()));
+                        p.extend([[0x80, 0x07, 0x06, 0x05, 0x01][usize::from(r() % 5)], r() % 8]);
+                    }
+                    3 => p.extend([2, 0x1b, 0, r(), r(), 1]), // the scan's time-out
+                    _ => {}
+                }
+                p.extend((0..r() % 24).map(|_| r())); // a tail (a longer event), or stray bytes alone
+                let mut frame = (p.len() as u16).to_le_bytes().to_vec();
+                frame.extend(p);
+                if r() % 8 == 0 {
+                    frame.truncate(usize::from(r()) % frame.len().max(1)); // cut
+                }
+                let at = sim.ms + 1 + u64::from(r()) % u64::from(crate::IDLE_POLL_MS);
+                sim.main.later.push((at, frame));
+            }
+            radio += main.pass(&mut app, &mut sim);
+            assert!(app.prof().clock.sleep.0 <= crate::IDLE_POLL_MS, "a pass slept {} ms", app.prof().clock.sleep.0);
+        }
+    }
+    assert!(radio > 100, "radio passes reached: {radio}");
+}
+
 /// Random heart-rate broadcasts into the beat decoder, and its intervals and random ones into the HRV: no panic,
 /// every interval in range.
 #[test]

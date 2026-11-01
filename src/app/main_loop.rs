@@ -11,6 +11,11 @@ use crate::ui::UsbDot;
 use crate::usbsnap::UsbSnap;
 use crate::{App, Board, Cable, LoopPolicy, Woke};
 
+/// Radio passes in one pass's sleep at most: past them the sleep ends and the step runs, whatever the chip sends (a
+/// pass must end: the clock, the battery, AUTO OFF and the unplug reset are the step's). A sensor's broadcasts at 4 Hz
+/// make about one a pass.
+pub const MAX_RADIO_PASSES: u32 = 16;
+
 /// What the main loop needs of the board besides [`Board`]: primitives, each one register access or one CPU
 /// instruction's worth (main.rs has them, the simulator a model). Those that end the run on the unit (a reset, a
 /// fault, the staged image) return in the simulator, and the pass returns after them.
@@ -214,7 +219,9 @@ impl<L: UsbLink> MainLoop<L> {
                 }
                 b.sleep();
             };
-            self.policy.slept(if w.timer { slice } else { b.timer_elapsed_ms(slice) });
+            // a byte-ended slice counts 1 ms at least: SysTick counts whole ms, and a chip sending faster than a byte
+            // a ms (BOARD.md 11: 4 us after a full FIFO is read) would keep every slice at 0 and the pass from ending
+            self.policy.slept(if w.timer { slice } else { b.timer_elapsed_ms(slice).max(u32::from(w.bytes)) });
             b.timer_stop();
             // the panel before the early end below: with the USB drive busy, every slice ends early, and touch was
             // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
@@ -242,6 +249,9 @@ impl<L: UsbLink> MainLoop<L> {
                 radio_passes += 1;
                 if !app.radio_up() {
                     break; // the chip went down in it (a failed restart): nothing reads its bytes, as before
+                }
+                if radio_passes >= MAX_RADIO_PASSES {
+                    break; // a chip that never stops sending: the step runs all the same, the pass is bounded
                 }
                 b.wake_on_io(true, wake.bytes);
             }
