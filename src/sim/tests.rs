@@ -1230,10 +1230,10 @@ fn long_pass_loses_no_ride_time() {
     sim.delay_ms(3000); // a 3 s pass
     run(&mut sim, &mut app, 1000);
     assert_eq!(app.ride.timer_s(), t + 4, "the 3 s of the long pass and the next second");
+    sim.gnss.assert_reads(4180, 3); // the 3 s pass; the jump below is a gap of its own, read or not within the 100 ms
     sim.delay_ms(30_000); // the clock jumps (set from the GPS): counted up to MAX_CATCH_UP only
     run(&mut sim, &mut app, 100);
     assert!(app.ride.timer_s() <= t + 4 + u32::from(MAX_CATCH_UP) + 1);
-    sim.gnss.assert_reads(4180, 3);
 }
 
 /// Idle is free, and no pass stalls the loop: on the overview with nothing changing, nearly every pass sends
@@ -1792,12 +1792,12 @@ fn font_smooth_keeps_layouts() {
         shot
     };
     for ride_page in [false, true] {
-        let mut sim = Sim::new(12, 34, 56);
+        let mut sim = Sim::new(12, 34, 6); // away from a minute change: the app clock now keeps real time
         let mut app = App::start(&mut sim, None);
         if ride_page {
             app.press(&mut sim, Press::Short(Key::Page));
         }
-        run(&mut sim, &mut app, 200);
+        run(&mut sim, &mut app, 4000); // past the start-up hints, which end on the app clock
         assert_eq!(app.settings.face, Face::Pixel, "PIXEL by default");
         let pixel = render_all(&app);
         let menu_shot = toggle(&mut sim, &mut app);

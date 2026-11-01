@@ -18,6 +18,10 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel
+  DMA, `delay_ms`) now count in `up_ms`, uptime, the ride timer and the checkpoint cadence. Silent check: read
+  `tools/dev.py info` (uptime) and the RTC time, wait 10 min on a screen that redraws (the main page), read both
+  again; the two differences must agree within a second (before the fix the uptime lagged by the redraw share).
 - **The sensor bus clear (2026-11-01, main.rs `i2c_clear`, BOARD.md 16 "Bus clear"):** nine SCL pulses and a STOP on
   PD12 / PD13, run at start when no chip answers and after 3 failed transfers in a row. Never run on the unit: check it
   with a scope or by holding SDA low from a test fixture, and that a healthy bus is left as `i2c_init` leaves it.

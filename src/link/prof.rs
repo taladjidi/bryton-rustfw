@@ -135,11 +135,14 @@ pub struct Clock {
     /// The last sleep between passes: ms (wall time), and the work in it (USB served while a cable is in), us. The
     /// work is in the awake time too: a held key counts the sleep by its length, not that work again.
     pub sleep: (u32, u32),
+    /// Microseconds of work not yet counted, us: the waits of the last pass's work in WFI (the panel's DMA: the cycle
+    /// counter does not run; the main loop adds them) and the sub-ms rest of the step's own sum. The next step takes it.
+    pub owed_us: u32,
 }
 
 impl Default for Clock {
     fn default() -> Self {
-        Clock { cycles_at: 0, cycles: 0, sleep: (crate::POLL_MS, 0) }
+        Clock { cycles_at: 0, cycles: 0, sleep: (crate::POLL_MS, 0), owed_us: 0 }
     }
 }
 

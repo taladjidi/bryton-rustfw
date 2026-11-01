@@ -85,6 +85,11 @@ pub trait Board {
     fn cycles(&mut self) -> u32 {
         0
     }
+    /// Microseconds the work slept in WFI since the last call (the panel's DMA, `delay_ms`), taken (read, then zero):
+    /// the cycle counter stops in WFI, so the app's clock would miss them. 0 always: nothing waits.
+    fn waited_us(&mut self) -> u32 {
+        0
+    }
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
     /// Nordic chip's reset line PA6 (BOARD.md 11), one edge and no wait: `true` brings USART2 up and pulls the line low,
@@ -639,8 +644,13 @@ impl App {
         // work done during the sleep (USB) is in the sleep's length already (2026-10-25 review: counted twice)
         let now = self.prof.clock.us(b);
         let (sleep_ms, sleep_work_us) = self.prof.clock.sleep;
-        let work_us = now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)).saturating_sub(sleep_work_us);
+        let work_us = now
+            .wrapping_sub(core::mem::replace(&mut self.awake_at, now))
+            .saturating_sub(sleep_work_us)
+            .saturating_add(core::mem::take(&mut self.prof.clock.owed_us))
+            .saturating_add(b.waited_us());
         let pass_ms = (sleep_ms + (work_us / 1000)).min(MAX_PASS_MS);
+        self.prof.clock.owed_us = work_us % 1000; // the sub-ms rest counts in the next pass: no drift
         self.dt_ms = pass_ms;
         self.emmc.advance(pass_ms);
         self.emmc.urgent(!self.ride_settled());

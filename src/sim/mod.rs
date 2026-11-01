@@ -171,6 +171,8 @@ pub struct Sim {
     /// Work done so far, ns. Must not advance by more than 21 s between two Clock reads: the u32 cycle counter wraps
     /// at 21.47 s of work (200 MHz) and Clock catches one wrap only.
     pub awake_ns: u64,
+    /// Time slept in a transfer's wait (the panel's DMA) not yet taken by [`Board::waited_us`], ns.
+    waited_ns: u64,
     /// What each transfer costs in time ([`Cost`]); the sub-millisecond rest of it is in `cost_rem`.
     pub cost: Cost,
     cost_rem: u64,
@@ -1230,6 +1232,8 @@ impl Sim {
         self.paid_ns[what] += ns;
         if cpu {
             self.awake_ns += ns;
+        } else {
+            self.waited_ns += ns;
         }
         self.cost_rem += ns;
         self.ms += self.cost_rem / 1_000_000;
@@ -1308,6 +1312,7 @@ impl Sim {
             worst_gnss_gap: (0, [0; 6]),
             long_gnss_gaps: (0, [0; 6]),
             awake_ns: 0,
+            waited_ns: 0,
             cycles: 0,
             cycles_step: 0,
             adc_calls: [0; 4],
@@ -1662,6 +1667,12 @@ impl Board for Sim {
         // the awake time at the unit's 200 MHz (Board::CPU_HZ): a cycle is 5 ns; cycles_step moves it on a read as well
         self.cycles = self.cycles.wrapping_add(self.cycles_step);
         ((self.awake_ns / 5) as u32).wrapping_add(self.cycles)
+    }
+
+    fn waited_us(&mut self) -> u32 {
+        let us = self.waited_ns / 1000;
+        self.waited_ns %= 1000;
+        us.min(u64::from(u32::MAX)) as u32
     }
 
     fn emmc_writable(&self) -> bool {

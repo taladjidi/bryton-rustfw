@@ -66,7 +66,7 @@ const EXEMPT: &[Exempt] = &[
         row: "ride start",
         setting: "0.2 ms/sector",
         key: Some(1206),
-        gnss: Some(1420),
+        gnss: None,
         lost: None,
         why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
     },
@@ -75,14 +75,14 @@ const EXEMPT: &[Exempt] = &[
         setting: "2 ms/sector",
         key: Some(1955),
         gnss: Some(2059),
-        lost: Some(1),
+        lost: None,
         why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
     },
     Exempt {
         row: "ride start, map page",
         setting: "0.2 ms/sector",
         key: Some(1207),
-        gnss: Some(1589),
+        gnss: None,
         lost: None,
         why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
     },
@@ -91,7 +91,7 @@ const EXEMPT: &[Exempt] = &[
         setting: "2 ms/sector",
         key: Some(1955),
         gnss: Some(2228),
-        lost: Some(1),
+        lost: None,
         why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task)",
     },
     Exempt {
@@ -99,7 +99,7 @@ const EXEMPT: &[Exempt] = &[
         setting: "0.2 ms/sector",
         key: Some(1536),
         gnss: Some(1749),
-        lost: Some(1),
+        lost: None,
         why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task); plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
     },
     Exempt {
@@ -107,7 +107,7 @@ const EXEMPT: &[Exempt] = &[
         setting: "2 ms/sector",
         key: Some(2285),
         gnss: Some(2389),
-        lost: Some(1),
+        lost: None,
         why: "ride start is one pass: about 2 MB read (430 ns a byte) and 378 sectors written. Follow-up: split the start across passes (recorder, a later opus task); plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
     },
     Exempt {
@@ -130,7 +130,7 @@ const EXEMPT: &[Exempt] = &[
         row: "save, 3 h ride",
         setting: "0.2 ms/sector",
         key: Some(554),
-        gnss: Some(1481),
+        gnss: None,
         lost: None,
         why: "the save reads the 3 h file back whole (280 KB, 607 ms at 430 ns a byte) in one pass. Follow-up: read back in slices (recorder, a later opus task)",
     },
@@ -546,4 +546,20 @@ fn a_five_second_blocking_pass_fails_the_nordic_check() {
         row.queue,
         row.hangs
     );
+}
+
+/// The app's clock (`up_ms`: the ride timer, the checkpoint cadence, every time-out) keeps real time even when the
+/// pass waits for the panel's DMA (the cycle counter stops in WFI): an hour of full-screen redraws, 2026-11-01.
+#[test]
+fn the_app_clock_counts_the_waits_of_the_work() {
+    let mut r = Rig::new(crate::fat::tests::image(), settings()[0]);
+    r.press(Press::Short(Key::Start));
+    r.run(5000);
+    let (up0, real0) = (u64::from(r.app.up_ms), r.sim.ms);
+    while r.sim.ms < real0 + 3_600_000 {
+        r.app.show(&mut r.sim); // a full redraw: its pixels go by DMA, the CPU sleeps
+        r.pass();
+    }
+    let (up, real) = (u64::from(r.app.up_ms) - up0, r.sim.ms - real0);
+    assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
 }

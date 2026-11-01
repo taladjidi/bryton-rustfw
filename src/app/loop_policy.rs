@@ -184,12 +184,12 @@ impl LoopPolicy {
     /// (the app's work: step and keys, not the USB polls, which happen only while a cable is in) and the CPU share
     /// (all cycles run: CYCCNT stops in WFI, so the sleep's cycles are the time the CPU ran while it should have
     /// slept), per mille of the window.
-    pub fn account(&mut self, pass_cycles: u32, sleep_cycles: u32) -> u32 {
+    pub fn account(&mut self, pass_cycles: u32, sleep_cycles: u32, waited_us: u32) -> u32 {
         let per_ms = (self.cpu_hz / 1000).max(1); // never 0: no division panic site (the rate is not a constant here)
         let worked = pass_cycles.wrapping_sub(sleep_cycles);
         self.awake = self.awake.saturating_add(worked);
         self.ran = self.ran.saturating_add(worked).saturating_add(sleep_cycles);
-        let pass_ms = worked / per_ms + self.slept;
+        let pass_ms = worked / per_ms + waited_us / 1000 + self.slept;
         self.window_ms = self.window_ms.wrapping_add(pass_ms);
         if self.window_ms >= 1000 {
             let w = u64::from(self.window_ms);
@@ -321,7 +321,7 @@ mod tests {
         for i in 0..20 {
             p.begin_sleep(POLL_MS, false);
             p.slept(49);
-            let pass = p.account(ms + ms / 2, ms / 2);
+            let pass = p.account(ms + ms / 2, ms / 2, 0);
             assert_eq!(pass, 50);
             if i < 19 {
                 assert_eq!(p.stats().awake_permille, 0); // not a second yet
@@ -330,7 +330,7 @@ mod tests {
         assert_eq!(p.stats(), Stats { uptime_ms: 1000, awake_permille: 20, cpu_permille: 30 });
         // the window starts again: a long pass (an eMMC scan, 1.2 s awake) is a window by itself
         p.begin_sleep(POLL_MS, false);
-        let pass = p.account(1200 * ms, 0);
+        let pass = p.account(1200 * ms, 0, 0);
         assert_eq!(pass, 1200);
         assert_eq!(p.stats(), Stats { uptime_ms: 2200, awake_permille: 1000, cpu_permille: 1000 });
     }
@@ -342,7 +342,7 @@ mod tests {
         p.slept(30);
         assert_eq!(p.now_ms(), 30);
         p.slept(20);
-        assert_eq!(p.account(HZ / 1000 * 3, 0), 53);
+        assert_eq!(p.account(HZ / 1000 * 3, 0, 0), 53);
         assert_eq!(p.now_ms(), 53 + 50); // slept is cleared only by the next pass's begin_sleep
         p.begin_sleep(POLL_MS, false);
         assert_eq!(p.now_ms(), 53);

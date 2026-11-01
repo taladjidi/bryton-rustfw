@@ -266,6 +266,11 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   the first wait times out and the CPU path takes over (the pixels still match). **Cache contract:** the D-cache is
   off, so no maintenance; PANELDMA is 4 KB-aligned so one MPU region can make it non-cacheable when the D-cache is
   turned on (or clean it by address before each start: hw.rs).
+  **The app's clock and the DMA wait (2026-11-01):** the app's elapsed time is the loop's SysTick sleep plus the
+  cycle counter's work (DWT CYCCNT stops in WFI), so a WFI inside the work, this DMA wait and `delay_ms`, was not
+  counted: the clock lagged real time by the redraw time (a full-screen fill is 10.5 ms). `dma_wait` now adds what its
+  own SysTick period counted (reload less SYST_CVR, ARMv7-M ARM B3.3; core clock, exact to a cycle) and `delay_ms`
+  its length to a counter that `Board::waited_us` takes each pass. No new peripheral and no wake-up.
 
      PG10 CS    ~~~~\______________________________________________/~~~~
      PG9  D/C   ~~~~\________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
