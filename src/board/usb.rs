@@ -475,6 +475,8 @@ impl Link {
             self.tx.drop_output();
             return;
         }
+        // never more than the buffer holds: a longer length would send empty packets for the missing bytes
+        let len = len.min(self.out.len());
         let mut at = 0;
         'packets: for n in self.tx.write(len) {
             let p = self.out.get(at..at + n).unwrap_or(&[]);
