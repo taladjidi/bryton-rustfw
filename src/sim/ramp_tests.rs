@@ -81,6 +81,7 @@ fn fading_power_ends_the_test_and_start_applies_the_ftp() {
     assert_eq!(o.aet, None, "no strap");
     assert!(o.secs > 4 * 60 && o.secs < 6 * 60, "{}", o.secs);
     sim.save("ramp_result");
+    run(&mut sim, &mut app, 1000); // the result card takes no key at once
     // the cool-down is playing already
     assert_eq!(app.plan.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
     assert!(app.ramp.run.is_none());

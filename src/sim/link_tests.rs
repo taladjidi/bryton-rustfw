@@ -163,7 +163,7 @@ fn a_damaged_stream_is_recovered_from() {
             w.resyncs,
             sim.nordic.channels[0].open
         );
-        sim.gnss.assert_reads(3323, 7);
+        sim.gnss.assert_reads(4072, 11);
         ride_ok(&app, t0, &sim);
     }
     assert!(resyncs > 20, "{resyncs} resyncs reached");

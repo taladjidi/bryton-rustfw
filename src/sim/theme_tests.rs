@@ -640,7 +640,7 @@ fn hash(screen: &[u16]) -> u64 {
 }
 
 /// The built-in themes draw as they did before the metrics: the main menu and a ride page in DARK hash to the values
-/// taken from the same test on the commit before (main, 2026-10-30).
+/// taken from the same test on the commit before (main, 2026-10-30); the menu hash moved on 2026-11-01 when the transfers began to take time (the clock in its strip).
 #[test]
 fn dark_draws_as_before_the_metrics() {
     let (mut sim, mut app) = unit(None);
@@ -652,7 +652,7 @@ fn dark_draws_as_before_the_metrics() {
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 1100);
     let ride = hash(&sim.screen);
-    assert_eq!((menu, ride), (0x61c6_3905_740b_d4e1, 0xa6ce_182a_d71d_10ae));
+    assert_eq!((menu, ride), (0x01b6_af75_b7db_78e1, 0xa6ce_182a_d71d_10ae));
 }
 
 /// `THEME_FILE=<file> cargo test-host -- --ignored theme_preview`: the file, parsed as the card would parse it, drawn on

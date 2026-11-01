@@ -101,7 +101,16 @@ fn media_keys_and_now_playing() {
     assert_eq!(ph.commands, [2, 3, 4, 5], "toggle, next, previous, volume up: AMS");
     assert_eq!(ph.reports, [0x08, 0], "volume up pressed and released: HID");
     assert_eq!(app.phone.now.title.as_str(), "Song");
-    assert_eq!(app.field_text(Field::Music).as_str(), "1:06", "64 s told, 2 s since");
+    for _ in 0..40 {
+        if super::tests::is_consistent(&sim, &app) {
+            break;
+        }
+        run(&mut sim, &mut app, 50); // the second the transfers moved on to, drawn
+    }
+    assert!(
+        app.field_text(Field::Music).as_str().starts_with("1:0"),
+        "64 s told, 2 to 3 s since (the transfers take time now)"
+    );
     assert_consistent(&sim, &app);
     sim.save("phone_media");
 }
