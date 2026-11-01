@@ -45,7 +45,7 @@ fn valset(layers: u8, items: &[(u32, &[u8])]) -> Vec<u8> {
 /// One transfer of `out` (padded to 4 bytes with 0xff) at `now`: what came back.
 fn xfer(g: &mut Gnss, now: u64, out: &[u8]) -> Vec<u8> {
     let mut buf = out.to_vec();
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0xff);
     }
     g.transfer(now, utc(), &mut buf);
@@ -77,7 +77,6 @@ fn verdict(g: &mut Gnss, now: u64, out: &[u8]) -> Vec<(bool, u8, u8)> {
         .collect()
 }
 
-const VALSET: (u8, u8) = (0x06, 0x8a);
 const GPS: u32 = 0x1031_001f;
 const GLO: u32 = 0x1031_0025;
 
@@ -173,7 +172,7 @@ fn time_aiding_off_by_more_than_its_accuracy_degrades_the_receiver() {
     xfer(&mut g, 2100, &gnss::mga_time(late, 2));
     assert!(g.degraded);
     let mut g = on();
-    xfer(&mut g, 2100, &gnss::mga_time(late, 14 * 3600 as u16));
+    xfer(&mut g, 2100, &gnss::mga_time(late, 50_400));
     assert!(!g.degraded, "a wide accuracy covers it");
 }
 
@@ -322,7 +321,8 @@ fn the_start_up_is_taken_whole_and_the_aiding_is_right() {
     for offset in [None, Some(8)] {
         let mut sim = Sim::new(9, 0, 0);
         sim.classic_pages();
-        sim.backup[17..19].copy_from_slice(&gnss::Aid { offset_15min: offset, pos: Some((5_123_000, 4_234_000)) }.to_words());
+        sim.backup[17..19]
+            .copy_from_slice(&gnss::Aid { offset_15min: offset, pos: Some((5_123_000, 4_234_000)) }.to_words());
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 6000);
         assert!(sim.gnss.violations.is_empty() && !sim.gnss.degraded, "{offset:?}");

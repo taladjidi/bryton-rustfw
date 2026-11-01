@@ -7525,7 +7525,7 @@ fn gnss_receiver_input() {
                 *last ^= 1;
                 bad += 1;
             }
-            while f.len() % 4 != 0 {
+            while !f.len().is_multiple_of(4) {
                 f.push(0xff);
             }
             now += u64::from(r()) * 2;

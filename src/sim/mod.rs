@@ -30,6 +30,19 @@ pub fn started() -> (Sim, App) {
     (sim, app)
 }
 
+/// The Nordic chip's UART as something else than the [`Nordic`] model (`nrf_emu_tests.rs`: Bryton's real app in an
+/// emulator). While set on [`Sim::nrf_ext`], the Board's nrf primitives and the clock go to it.
+pub trait NrfExt {
+    /// The chip's reset.
+    fn reset(&mut self);
+    /// Bytes to the chip.
+    fn send(&mut self, data: &[u8]);
+    /// Bytes from the chip, at most `buf.len()`.
+    fn recv(&mut self, buf: &mut [u8]) -> usize;
+    /// Time passes.
+    fn advance_ms(&mut self, ms: u32);
+}
+
 type KeyScript = Box<dyn Fn(u64) -> u8>;
 type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 
@@ -58,6 +71,8 @@ pub struct Sim {
     record: Option<(PathBuf, u32)>,
     dirty: bool,
     pub nordic: Nordic,
+    /// Replaces [`Sim::nordic`] when set.
+    pub nrf_ext: Option<Box<dyn NrfExt>>,
     /// Times the RTC was set.
     pub rtc_sets: u32,
     /// RTC backup registers (they survive an app restart, as on the unit).
@@ -1286,6 +1301,7 @@ impl Sim {
             record: None,
             dirty: false,
             nordic: Nordic::default(),
+            nrf_ext: None,
             rtc_sets: 0,
             backup: core::array::from_fn(|i| if i == 18 { 5 << 28 | 1 << 22 } else { 0 }), // AUTO OFF off: tests idle long
             battery_mv: Some(3900),
@@ -1475,6 +1491,9 @@ impl Board for Sim {
 
     fn delay_ms(&mut self, ms: u32) {
         self.ms += u64::from(ms);
+        if let Some(x) = &mut self.nrf_ext {
+            x.advance_ms(ms);
+        }
         if let Some((dir, n)) = &mut self.record
             && self.dirty
         {
@@ -1489,6 +1508,10 @@ impl Board for Sim {
     }
 
     fn nrf_reset(&mut self) {
+        if let Some(x) = &mut self.nrf_ext {
+            x.reset();
+            return;
+        }
         let sensors = std::mem::take(&mut self.nordic.sensors);
         let mut phone = self.nordic.phone.take();
         if let Some(p) = &mut phone {
@@ -1533,6 +1556,10 @@ impl Board for Sim {
     }
 
     fn nrf_send(&mut self, data: &[u8]) {
+        if let Some(x) = &mut self.nrf_ext {
+            x.send(data);
+            return;
+        }
         let (n, now) = (&mut self.nordic, self.ms);
         assert!(n.reset, "bytes to the Nordic chip before its reset");
         if n.hung {
@@ -1646,6 +1673,9 @@ impl Board for Sim {
     }
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
+        if let Some(x) = &mut self.nrf_ext {
+            return x.recv(buf);
+        }
         self.nordic_due();
         if let Some(l) = self.nordic.limits {
             return self.nordic.read_limited(buf, l, self.ms);
@@ -1674,17 +1704,19 @@ mod chip_table;
 #[cfg(test)]
 mod chip_table_tests;
 #[cfg(test)]
-mod gnss_model_tests;
-#[cfg(test)]
 mod course_tests;
 #[cfg(test)]
 mod curve_tests;
+#[cfg(test)]
+mod gnss_model_tests;
 #[cfg(test)]
 mod laps_tests;
 #[cfg(test)]
 mod map_tests;
 #[cfg(test)]
 mod menu_tests;
+#[cfg(test)]
+mod nrf_emu_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
