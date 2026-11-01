@@ -205,12 +205,16 @@ impl Kind {
     }
 
     /// The saved rides' folder, made if missing: `\Activities` in the root, `\Rustfw\Activities` in [`DIR`].
+    /// A torn entry (on cluster 0) is made again in `\Rustfw` only, never stock's `\Activities` (Corrupt: the ride
+    /// kept where it was recorded).
     fn saved_dir(self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<File, Error> {
-        let parent = match self {
-            Kind::Clean => fat.root(),
-            Kind::Full => fat.ensure_dir(d, fat.root(), DIR, t)?,
-        };
-        fat.ensure_dir(d, parent, ACTIVITIES, t)
+        match self {
+            Kind::Clean => fat.ensure_dir(d, fat.root(), ACTIVITIES, t),
+            Kind::Full => {
+                let dir = fat.ensure_own_dir(d, fat.root(), DIR, t)?;
+                fat.ensure_own_dir(d, dir, ACTIVITIES, t)
+            }
+        }
     }
 
     /// The discarded rides' folder: `\Rustfw\Discarded`, or `Full` in it.
@@ -231,11 +235,11 @@ impl Kind {
 
     /// Made if missing, at [`Recorder::setup`] only.
     fn discarded_dir(self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<File, Error> {
-        let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
-        let dir = fat.ensure_dir(d, mine, DISCARDED, t)?;
+        let mine = fat.ensure_own_dir(d, fat.root(), DIR, t)?;
+        let dir = fat.ensure_own_dir(d, mine, DISCARDED, t)?;
         match self {
             Kind::Clean => Ok(dir),
-            Kind::Full => fat.ensure_dir(d, dir, "Full", t),
+            Kind::Full => fat.ensure_own_dir(d, dir, "Full", t),
         }
     }
 }
@@ -300,9 +304,9 @@ fn make_kept(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(),
             fat.set_size(d, &mut h, size, t)?;
         }
     }
-    let deleted = fat.ensure_dir(d, dir, crate::trash::DELETED, t)?;
-    fat.ensure_dir(d, deleted, "Full", t)?;
-    fat.ensure_dir(d, dir, crate::storage::faultlog::LOG_DIR, t)?;
+    let deleted = fat.ensure_own_dir(d, dir, crate::trash::DELETED, t)?;
+    fat.ensure_own_dir(d, deleted, "Full", t)?;
+    fat.ensure_own_dir(d, dir, crate::storage::faultlog::LOG_DIR, t)?;
     Ok(())
 }
 
@@ -791,7 +795,7 @@ impl Recorder {
         }
         let mut dir = fat.root();
         for name in self.kind.rescue_path().split('/') {
-            dir = fat.ensure_dir(d, dir, name, t)?;
+            dir = fat.ensure_own_dir(d, dir, name, t)?;
         }
         let mut buf = [0u8; 16];
         let mut name = self.name;
@@ -1133,7 +1137,11 @@ impl Recorder {
                     self.errors = self.errors.saturating_add(1);
                 }
             }
-            if let Some(r) = best.filter(|r| r.phase != Phase::Done) {
+            // not this ride's own record, which a first checkpoint that landed and still failed left (a CRC or busy
+            // timeout after programming): resumed from it, the seconds since in the buffer were lost (the review of
+            // 2026-11-01, finding 11). The checkpoint is done again below
+            let own = |r: &Rec| self.file.is_some_and(|f| f.first == r.cluster) && r.name == self.name;
+            if let Some(r) = best.filter(|r| r.phase != Phase::Done && !own(r)) {
                 // what the last run left unfinished comes first (the boot did not finish it: its marker was lost, or
                 // the card failed then): one writer, one ride. A ride in progress goes on in place of this one if
                 // the marker said so or it stopped a moment ago; else it is saved as it is
@@ -1178,7 +1186,12 @@ impl Recorder {
             if self.file.is_none() {
                 // a name free in this copy's folder and in both saved and both discarded folders, so that the two
                 // copies keep one name
-                let acts = fat.open(d, ACTIVITIES)?;
+                // stock's folder with a torn entry (on cluster 0): never mended here, its names not looked for
+                let acts = match fat.open(d, ACTIVITIES) {
+                    Ok(f) => Some(f),
+                    Err(Error::Corrupt) => None,
+                    Err(e) => return Err(e),
+                };
                 // missing or damaged: never a reason to stop this one
                 let others = [FULL_PATH, DISCARDED_PATHS[0], DISCARDED_PATHS[1]].map(|p| fat.open(d, p).ok());
                 let mut buf = [0u8; 16];
@@ -1186,7 +1199,7 @@ impl Recorder {
                     let n = file_name(&self.name, &mut buf)?;
                     let free = |r: Result<File, Error>| matches!(r, Err(Error::NotFound));
                     if free(fat.find(d, dir, n))
-                        && free(fat.find(d, acts, n))
+                        && acts.is_none_or(|a| free(fat.find(d, a, n)))
                         && others.iter().all(|o| o.is_none_or(|f| free(fat.find(d, f, n))))
                     {
                         break;
@@ -1266,7 +1279,9 @@ impl Recorder {
                     }
                 }
             }
-            Err(Error::NotFound) => {}
+            // a folder entry on cluster 0 (a mkdir torn inside it) names nothing: the ride is not there, and stays
+            // named where it was recorded, never retried forever
+            Err(Error::NotFound | Error::Corrupt) => {}
             Err(e) => return Err(e),
         }
         let dir = fat.open(d, self.kind.rides().1)?;
@@ -1391,7 +1406,7 @@ impl Recorder {
         if !whole {
             fat.sync_fats(d)?;
         }
-        let dir = fat.ensure_dir(d, root, DIR, t)?;
+        let dir = fat.ensure_own_dir(d, root, DIR, t)?;
         let mut rec = match fat.locate(d, dir, self.kind.rec()) {
             Ok(h) => h,
             Err(Error::NotFound) => fat.create(d, dir, self.kind.rec(), t)?,
@@ -1402,9 +1417,15 @@ impl Recorder {
             fat.set_size(d, &mut rec, REC_SECTORS * SECTOR_U32, t)?;
         }
         self.rec = Some(rec);
-        let rides = fat.ensure_dir(d, dir, self.kind.rides().0, t)?;
-        fat.ensure_dir(d, root, ACTIVITIES, t)?; // both copies' names are looked for in it
-        self.kind.saved_dir(fat, d, t)?;
+        let rides = fat.ensure_own_dir(d, dir, self.kind.rides().0, t)?;
+        // `\Activities` (both copies' names are looked for in it) and the saved folder; stock's with a torn entry (on
+        // cluster 0) is never mended: the ride is recorded all the same, and kept where it was recorded at its save
+        for got in [fat.ensure_dir(d, root, ACTIVITIES, t), self.kind.saved_dir(fat, d, t)] {
+            match got {
+                Ok(_) | Err(Error::Corrupt) => {}
+                Err(e) => return Err(e),
+            }
+        }
         // both discarded folders now, before any record: a discard's save then makes no folder, so it never writes
         // the directory sector `ride.rec`'s entry is in, nor the one its clean copy's entry went to (a cut tearing
         // either there lost the ride, or its clean copy: a_discard_cut_at_every_sector)
