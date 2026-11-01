@@ -181,16 +181,17 @@ fn ready(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, room: bool, t: (u16
         }
     }
     'next: for k in from..=last {
-        for (dir, f) in dirs.iter().zip(r.files) {
+        let mut new = [None; 2]; // the folders a name goes into (not those the file is in already)
+        for ((dir, f), new) in dirs.iter().zip(r.files).zip(new.iter_mut()) {
             let (Some(dir), Some((first, _, _))) = (dir, f) else { continue };
             match fat.find(d, *dir, file_name(&r.name, k, &mut buf)?) {
                 Ok(f) if f.cluster == first => {}
                 Ok(_) => continue 'next,
-                Err(Error::NotFound) => {}
+                Err(Error::NotFound) => *new = Some(*dir),
                 Err(e) => return Err(e),
             }
         }
-        for dir in dirs.iter().flatten().filter(|_| room) {
+        for dir in new.iter().flatten().filter(|_| room) {
             fat.make_room(d, *dir, file_name(&r.name, k, &mut buf)?)?;
         }
         r.suffix = k;
@@ -363,6 +364,7 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
         if room {
             // a copy moved: linked back first, its name in \Rustfw\Deleted removed after, so it has a name at every
             // cut (two for a moment, the record pending: the next start removes the second)
+            let size = moved.map_or(size, |h| h.size); // a copy a computer made longer: all of it
             fat.link(d, src, name, &Handle { first, size, ..Handle::default() }, t)?;
             if let Some(h) = moved {
                 fat.remove(d, &h)?;
@@ -388,14 +390,40 @@ fn kept_by_a_repair(fat: &mut Fat, d: &mut impl DiskWrite, first: u32) -> Result
         }
         if e.file.dir && found {
             let mut c = fat.cursor(e.file)?;
-            while let Some(f) = fat.list(d, &mut c)? {
-                if !f.file.dir && f.file.cluster == first {
-                    return Ok(true);
+            loop {
+                match fat.list(d, &mut c) {
+                    Ok(Some(f)) if !f.file.dir && f.file.cluster == first => return Ok(true),
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(Error::Corrupt) => break, // a damaged repair folder names nothing we can trust
+                    Err(e) => return Err(e),
                 }
             }
         }
     }
     Ok(false)
+}
+
+/// Every entry of folder `from` on the chain `first` under the ride's name, any suffix ([`put_back`] may have
+/// given one), marked deleted; true if there was one. A folder or entry that cannot be read: none there.
+fn unlink_old(fat: &mut Fat, d: &mut impl DiskWrite, from: &str, name: &[u8; 12], first: u32) -> Result<bool, Error> {
+    let src = match fat.open(d, from) {
+        Ok(src) => src,
+        Err(Error::NotFound | Error::Corrupt | Error::Refused) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let (mut buf, mut any) = ([0u8; 20], false);
+    for j in 0..=SUFFIXES {
+        match fat.locate(d, src, file_name(name, j, &mut buf)?) {
+            Ok(h) if h.first == first => {
+                fat.remove(d, &h)?;
+                any = true;
+            }
+            Ok(_) | Err(Error::Corrupt | Error::Refused) => {}
+            Err(Error::NotFound) => break, // names are given in order: none after a free one
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(any)
 }
 
 /// The chain from `first` is still the ride's: whole for `size`, and, if it is named by no entry (`gone`: a
@@ -433,19 +461,15 @@ fn moves(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, t
         let (Some((first, size, crc)), Some(from)) = (r.files.get(k).copied().flatten(), FROM.get(k)) else { continue };
         let dst = to_dir(fat, d, k, t)?;
         match fat.find(d, dst, file_name(&r.name, r.suffix, &mut buf)?) {
-            Ok(f) if f.cluster == first => continue, // moved already
-            Ok(_) => return Err(Error::Refused),     // free in `ready`, and nothing wrote since
+            Ok(f) if f.cluster == first => {
+                unlink_old(fat, d, from, &r.name, first)?; // a name a cut put back left there: one name only
+                continue; // moved already
+            }
+            Ok(_) => return Err(Error::Refused), // free in `ready`, and nothing wrote since
             Err(Error::NotFound) => {}
             Err(e) => return Err(e),
         }
-        let gone = match fat.open(d, from).and_then(|src| fat.locate(d, src, file_name(&r.name, 0, &mut buf)?)) {
-            Ok(h) if h.first == first => {
-                fat.remove(d, &h)?;
-                false
-            }
-            Ok(_) | Err(Error::NotFound | Error::Corrupt | Error::Refused) => true, // gone already
-            Err(e) => return Err(e),
-        };
+        let gone = !unlink_old(fat, d, from, &r.name, first)?;
         if first == 0 || still_ours(fat, d, first, size, crc, gone)? && !(gone && kept_by_a_repair(fat, d, first)?) {
             fat.link(d, dst, file_name(&r.name, r.suffix, &mut buf)?, &Handle { first, size, ..Handle::default() }, t)?;
         }
@@ -829,6 +853,72 @@ pub(crate) mod tests {
             assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some(), "{at}: still named");
             assert_eq!(finish(&mut d, T), Ok(false), "{at}: nothing pending");
         }
+    }
+
+    /// The re-review of beaa07a: a put back cut between its link back and the removal of the copy's name in
+    /// `\Rustfw\Deleted`, then room for the move at the next start: the move finishes and the name put back goes,
+    /// so the chain keeps one name (it kept both, the record done: a delete of either freed it under the other).
+    #[test]
+    fn a_cut_put_back_then_a_move_leaves_one_name() {
+        let mut img = moved_then_taken();
+        no_room(&mut img, true);
+        let two = |d: &Cut| file(&d.0, RIDE).is_some() && file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some();
+        let mut d = (0..20)
+            .map(|budget| {
+                let mut d = Cut(img.clone(), budget);
+                let _ = finish(&mut d, T);
+                d
+            })
+            .find(two)
+            .expect("a cut after the link back, before the removal");
+        d.1 = u64::MAX;
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let full = fat.open(&mut d, TO[1]).unwrap();
+        let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
+        fat.remove(&mut d, &other).unwrap(); // the name in the way gone: the move can finish
+        assert_eq!(finish(&mut d, T), Ok(true));
+        assert_eq!(fsck(&d.0), Ok(1), "one name on the chain (lost: the cluster of the file removed by hand)");
+        assert!(file(&d.0, RIDE).is_none() && file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some());
+        assert!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit").is_some_and(|f| !f.is_empty()));
+    }
+
+    /// The re-review of beaa07a: a copy in `\Rustfw\Deleted` a computer made longer, put back: linked with its own
+    /// size, not the record's (its last bytes cut off).
+    #[test]
+    fn a_longer_copy_is_put_back_whole() {
+        let mut img = moved_then_taken();
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let del = fat.open(&mut d, TO[0]).unwrap();
+        let mut h = fat.locate(&mut d, del, "261020080000.fit").unwrap();
+        let longer = h.size + 10;
+        assert!(fat.clusters_for(longer) <= h.clusters, "within its chain");
+        fat.set_size(&mut d, &mut h, longer, T).unwrap();
+        img = d.0;
+        no_room(&mut img, true);
+        let mut d = Ram(img, 0);
+        assert_eq!(finish(&mut d, T), Ok(false));
+        assert_eq!(file(&d.0, RIDE).map(|f| f.len()), Some(longer as usize));
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// The re-review of beaa07a: an unrelated `\FOUND.000` whose chain loops (damaged) names nothing: the move
+    /// a cut left still finishes (the error kept it pending at every start, then the card was lent).
+    #[test]
+    fn a_damaged_found_folder_does_not_stop_the_move() {
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let found = fat.mkdir(&mut d, fat.root(), "FOUND.000", T).unwrap();
+        let u = |img: &[u8], at: usize, n: usize| {
+            img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b))
+        };
+        let (fat0, fat_len) = (u(&d.0, 14, 2) * SECTOR, u(&d.0, 36, 4) * SECTOR);
+        for copy in [0, fat_len] {
+            let at = fat0 + copy + found.cluster as usize * 4;
+            d.0[at..at + 4].copy_from_slice(&found.cluster.to_le_bytes()); // its chain loops on itself
+        }
+        assert_eq!(finish(&mut d, T), Ok(true));
+        assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some(), "moved");
     }
 
     /// The review of 2026-11-01 (revive, 3): a chain the cut left nameless that a computer's repair named meanwhile
