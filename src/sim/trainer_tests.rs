@@ -1816,3 +1816,29 @@ fn power_totals_go_on_after_a_reset() {
         assert!(np.is_some_and(|w| if late { w < 180 } else { (178..=180).contains(&w) }), "{late}: NP {np:?}");
     }
 }
+
+/// Finding 88 (review 2026-11-01): the card dead at the boot and answering only later: the pairing file is read then
+/// (before, one failed read ended it for the boot and the trainer stayed unpaired).
+#[test]
+fn the_pairing_is_read_after_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(sensors_file(&sim), Some(Some(ID)), "kept in the file, the register emptied");
+    for late_ms in [5000, 20_000] {
+        let (mut sim2, mut app2) = {
+            let mut sim2 = Sim::new(9, 5, 0);
+            sim2.emmc.image = sim.emmc.image.clone();
+            sim2.backup = sim.backup;
+            sim2.nordic.sensors.push(trainer_sensor());
+            sim2.emmc.dead = true;
+            let app = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+            (sim2, app)
+        };
+        run(&mut sim2, &mut app2, late_ms);
+        assert_eq!(app2.sensors_store.trainer, None, "{late_ms}: the card is down");
+        sim2.emmc.dead = false;
+        run(&mut sim2, &mut app2, 15_000);
+        assert_eq!(app2.sensors_store.trainer, Some(ID), "{late_ms}");
+        assert_eq!(app2.radio.sensors.at(Kind::Trainer), Sensor::Paired(ID), "{late_ms}");
+    }
+}

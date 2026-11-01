@@ -42,12 +42,16 @@ pub const OFF_WAIT_MS: u32 = 330;
 
 /// The sensors file is read this long after the start (the GNSS clock, as the barometer's file).
 pub const SENSORS_LOAD_MS: u32 = 3500;
+/// A pairing file not read for want of a card is tried again this often.
+const SENSORS_RETRY_MS: u32 = 5000;
 
 /// The pairing file's state.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SensorStore {
     /// The file was read (or tried).
     pub(crate) loaded: bool,
+    /// After a mount that failed, no new try before this `gps.ms`.
+    pub(crate) retry_ms: u32,
     /// The paired trainer was opened after the read.
     pub(crate) applied: bool,
     /// The trainer pairing changed: to be written.
@@ -317,25 +321,33 @@ impl App {
     /// earlier build kept in backup register 14 is moved here, and 14 is left to the shifting system.
     #[inline(never)]
     fn sensors_storage(&mut self, b: &mut impl Board) {
-        if self.emmc.lent() || self.gps.ms < SENSORS_LOAD_MS {
+        if self.emmc.lent() || self.gps.ms < SENSORS_LOAD_MS.max(self.sensors_store.retry_ms) {
             return;
         }
         if !self.sensors_store.loaded {
-            self.sensors_store.loaded = true;
             if !self.sensors_store.dirty {
                 let mut s = [0u8; 512];
                 let mut d = emmc::Volume(&mut self.emmc, b);
-                let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
-                    let dir = fat.open(&mut d, recorder::DIR)?;
-                    let f = fat.open_in(&mut d, dir, sensors::SENSORS_FILE)?;
-                    fat.read_at(&mut d, &f, 0, &mut s)
-                });
+                let read = match fat::Fat::mount(&mut d) {
+                    Ok(mut fat) => fat.open(&mut d, recorder::DIR).and_then(|dir| {
+                        let f = fat.open_in(&mut d, dir, sensors::SENSORS_FILE)?;
+                        fat.read_at(&mut d, &f, 0, &mut s)
+                    }),
+                    Err(fat::Error::Io) => {
+                        // a card that has not answered (yet): tried again later, the app goes on (a pairing made
+                        // meanwhile sets `dirty` and is never overwritten by the file); not a card without FAT
+                        self.sensors_store.retry_ms = self.gps.ms.saturating_add(SENSORS_RETRY_MS);
+                        return;
+                    }
+                    Err(e) => Err(e),
+                };
                 if let (Ok(512), Some(t)) = (read, sensors::from_sector(&s)) {
                     let bt = sensors::bt_from_sector(&s);
                     (self.sensors_store.trainer, self.sensors_store.bt) = (t, bt.map(|b| b.0));
                     self.sensors_store.bt_fec = bt.is_some_and(|b| b.1);
                 }
             }
+            self.sensors_store.loaded = true;
             if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
                 self.keep_pairing(b, Kind::Trainer, id); // moved to the file below
             }
