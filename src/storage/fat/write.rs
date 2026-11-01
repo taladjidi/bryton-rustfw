@@ -1365,6 +1365,23 @@ pub(crate) mod tests {
         v
     }
 
+    /// A write on a card with 3 clusters left is refused; the volume stays valid for an independent checker
+    /// (check.sh runs fsck_msdos on target/fat/full_refused.img).
+    #[test]
+    fn a_full_card_refuses_and_stays_valid() {
+        let mut img = image();
+        fill(&mut img, 3, true);
+        let mut d = Ram(img, 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let mut h = fat.create(&mut d, fat.root(), "FULL.BIN", T).unwrap();
+        let big = std::vec![7u8; 40 * fat.spc as usize * SECTOR];
+        assert!(fat.write_sectors(&mut d, &mut h, 0, &big).is_err());
+        // as the recorder does: the size is what fit (the 3 clusters taken)
+        fat.set_size(&mut d, &mut h, 3 * fat.spc * SECTOR as u32, T).unwrap();
+        assert_eq!(fsck(&d.0), Ok(0));
+        super::super::tests::dump("full_refused", &d.0);
+    }
+
     /// Create, write, size, move: the reader sees it, fsck finds nothing, FSInfo stays exact.
     #[test]
     fn create_write_move() {
@@ -1398,6 +1415,7 @@ pub(crate) mod tests {
         fat.link(&mut d, acts, "261024134531.fit", &h, T).unwrap();
         assert_eq!(read_all(&mut fat, &mut d, "Activities/261024134531.fit"), data);
         assert_eq!(fsck(&d.0), Ok(0));
+        super::super::tests::dump("created_and_moved", &d.0);
         let (free, info) = free_counts(&d.0);
         assert_eq!(free0 - free, 7 + 2 - u32::from(had), "seven clusters of data, the folders made");
         assert_eq!(info0 - info, free0 - free, "FSInfo follows");

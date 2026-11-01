@@ -548,6 +548,7 @@ pub(crate) mod tests {
         assert_eq!(file(&d.0, "Rustfw/Deleted/261020080000.fit").as_ref(), Some(&clean));
         assert_eq!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit").as_ref(), Some(&full));
         assert_eq!(fsck(&d.0), Ok(0));
+        crate::fat::tests::dump("history_deleted", &d.0);
         // the clean copy moved back by hand, another file put under its name in \Rustfw\Deleted, deleted again
         let mut fat = Fat::mount(&mut d).unwrap();
         let del = fat.open(&mut d, "Rustfw/Deleted").unwrap();
