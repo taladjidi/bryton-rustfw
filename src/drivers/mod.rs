@@ -13,6 +13,7 @@ pub mod gnss;
 pub mod mga;
 pub mod nrf;
 pub mod panel;
+pub mod periph;
 pub mod powercal;
 pub mod sensors;
 pub mod touch;

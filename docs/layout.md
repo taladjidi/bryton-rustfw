@@ -92,7 +92,11 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     (`smooth_fonts_share_the_pixel_cells`). `Canvas::smooth` carries the choice to every draw (`Panel`'s third field, filled from
     the settings; screenshot rows carry it in `Row`), so the screenshot equals the panel.
   - To change a glyph, edit `tools/pixel_font.py` and run `python3 tools/font.py` (needs PIL; `-o PATH` writes elsewhere; check.sh compares its output with this file).
-- `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
+- `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off), the
+  split of a RAMWR into SPI transfers and the panel DMA's double-buffer bookkeeping (`Stream`, `dma_fill`, `dma_blit`:
+  what the CPU sends after a DMA failure), tested against a fake stream that fails at each step.
+- `src/drivers/periph.rs`: the register values main.rs writes, computed and tested here: TIM1's clock and a tone's
+  PSC / ARR / CCR3, the backlight's LPTIM CMP, the RTC_TR / RTC_DR bits.
 - `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only), the GNSS SYSTEMS keys.
 - `src/drivers/mga.rs`: AssistNow Offline: the reader of `\Rustfw\mga.ubx` that picks today's UBX-MGA-ANO messages a sector at a time.
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
@@ -197,7 +201,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK), the full copy's
   developer fields included.
 - `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol: identification, EXT_CSD SEC_COUNT, block reads and writes
-  (writes refused at or past sector B, stock's reserved area), stock's layout; against the `Board` primitives
+  (writes refused at or past sector B, stock's reserved area), stock's layout, the controller's data-path arithmetic
+  main.rs uses (`data_error`: the SDMMC_STA flags' priority, `data_limit_ms`, `clkcr`); against the `Board` primitives
   `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `src/sim/mod.rs` has a model of the card
   (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
   basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at the first main loop pass, for the scan's cache of

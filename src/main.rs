@@ -547,9 +547,9 @@ impl Run<'_> {
     }
 }
 
-/// RAMWR then `count` pixels, two per 32-bit FIFO write, in transfers of at most 0x7ffe pixels (TSIZE is 16 bits,
-/// 2 bytes a pixel). A transfer long enough goes by DMA when `dma` is there; a DMA failure finishes the transfer by
-/// the CPU and drops the DMA for good.
+/// RAMWR then `count` pixels, two per 32-bit FIFO write, in transfers of at most lib panel.rs `TRANSFER_MAX` pixels.
+/// A transfer long enough goes by DMA when `dma` is there; a DMA failure finishes the transfer by the CPU and drops
+/// the DMA for good.
 fn lcd_ram(count: u32, dma: &mut Option<hw::PanelDma>, mut run: Run<'_>) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
@@ -558,10 +558,7 @@ fn lcd_ram(count: u32, dma: &mut Option<hw::PanelDma>, mut run: Run<'_>) {
     spi_end();
     pin_set(LCD_DC.0, LCD_DC.1, true);
     let min = if matches!(run, Run::Fill(_)) { DMA_MIN_FILL } else { DMA_MIN_BLIT };
-    let mut left = count;
-    while left > 0 {
-        let n = left.min(0x7ffe);
-        left -= n;
+    for n in bryton_rustfw::panel::transfers(count) {
         spi_setup(2 * n);
         let mut words = (n / 2) as usize;
         let by_dma = n >= min && dma.is_some();
@@ -609,62 +606,36 @@ fn dma_go(d: &mut hw::PanelDma, i: usize, n: usize, repeat: bool) -> bool {
     started
 }
 
-/// `words` words of a transfer set up (spi_setup) sent by DMA: a fill as one repeat of its word, a blit
-/// double-buffered (the CPU fills one buffer while the stream sends the other). On a failure, whatever the stream
-/// had not sent of the words taken from `run` goes by the CPU, and Err gives the words of `run` still to send; Err(None)
-/// when the stream will not stop: nothing more may be written to TXDR (the transfer is left short, so SPI1 times out
-/// at its end and is taken as dead: spi_wait).
-fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<(), Option<usize>> {
-    if let Run::Fill(_) = run {
-        let Some(b) = d.buf(0) else { return Err(Some(words)) };
-        b[0] = run.pair();
-        if !dma_go(d, 0, words, true) {
-            return Err(Some(words));
-        }
-        return if dma_wait() { Ok(()) } else { Err(d.stop().map(|rest| rest.min(words))) }; // the same word, by the CPU
+/// The panel's DMA stream as lib panel.rs drives it (`Stream`): hw.rs `PanelDma` with the SPI's side of a start
+/// ([`dma_go`]) and the wait ([`dma_wait`]).
+struct PanelStream<'a>(&'a mut hw::PanelDma);
+
+impl bryton_rustfw::panel::Stream for PanelStream<'_> {
+    const WORDS: usize = hw::DMA_WORDS;
+    fn buf(&mut self, i: usize) -> Option<&mut [u32]> {
+        self.0.buf(i).map(|b| b.as_mut_slice())
     }
-    let mut left = words;
-    let mut flight: Option<(usize, usize)> = None; // buffer, words in it
-    let mut cur = 0;
-    loop {
-        // the next buffer, filled while the stream sends the one in flight
-        let k = left.min(hw::DMA_WORDS);
-        let ready = match d.buf(cur) {
-            Some(b) if k > 0 => {
-                for w in b.iter_mut().take(k) {
-                    *w = run.pair();
-                }
-                left -= k;
-                Some((cur, k))
-            }
-            _ => None,
-        };
-        if let Some((i, n)) = flight
-            && !dma_wait()
-        {
-            let Some(rest) = d.stop().map(|rest| rest.min(n)) else { return Err(None) };
-            if let Some(b) = d.buf(i) {
-                b.get(n - rest..n).unwrap_or(&[]).iter().for_each(|&w| spi_word(w));
-            }
-            if let Some((j, m)) = ready
-                && let Some(b) = d.buf(j)
-            {
-                b.iter().take(m).for_each(|&w| spi_word(w));
-            }
-            return Err(Some(left));
-        }
-        let Some((i, n)) = ready else {
-            return if left == 0 { Ok(()) } else { Err(Some(left)) };
-        };
-        if !dma_go(d, i, n, false) {
-            // not started (the stream is idle here, so not expected): these words by the CPU, and the rest
-            if let Some(b) = d.buf(i) {
-                b.iter().take(n).for_each(|&w| spi_word(w));
-            }
-            return Err(Some(left));
-        }
-        flight = Some((i, n));
-        cur ^= 1;
+    fn go(&mut self, i: usize, n: usize, repeat: bool) -> bool {
+        dma_go(self.0, i, n, repeat)
+    }
+    fn wait(&mut self) -> bool {
+        dma_wait()
+    }
+    fn stop(&mut self) -> Option<usize> {
+        self.0.stop()
+    }
+}
+
+/// `words` words of a transfer set up (spi_setup) sent by DMA (lib panel.rs `dma_fill`, `dma_blit`: a fill as one
+/// repeat of its word, a blit double-buffered); on a failure what the stream did not send goes by the CPU. Err(None):
+/// nothing more may be written to TXDR (the transfer is left short, so SPI1 times out at its end and is taken as dead:
+/// spi_wait).
+fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<(), Option<usize>> {
+    use bryton_rustfw::panel::{dma_blit, dma_fill};
+    let mut s = PanelStream(d);
+    match run {
+        Run::Fill(_) => dma_fill(&mut s, words, run.pair()), // the same word, by the CPU, for what it did not send
+        Run::Blit(_) => dma_blit(&mut s, words, &mut || run.pair(), &mut spi_word),
     }
 }
 
@@ -702,8 +673,8 @@ fn rtc_set(tr: u32, dr: u32) {
     let t0 = cycles();
     while rd(RTC_ICSR) & (1 << 6) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {}
     if rd(RTC_ICSR) & (1 << 6) != 0 {
-        wr(RTC_TR, tr & 0x007f_7f7f);
-        wr(RTC_DR, dr & 0x00ff_ff3f);
+        wr(RTC_TR, tr & bryton_rustfw::periph::RTC_TR_BITS);
+        wr(RTC_DR, dr & bryton_rustfw::periph::RTC_DR_BITS);
     }
     modify(RTC_ICSR, (1 << 7) | (1 << 5), 0);
     wr(RTC_WPR, 0xff);
@@ -999,15 +970,13 @@ fn backlight_init() {
 
 /// Backlight at `level` % (0: off, the pin a plain low output).
 fn backlight(level: u8) {
-    if level == 0 {
+    let Some(cmp) = bryton_rustfw::periph::backlight_cmp(level) else {
         pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
         gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
         return;
-    }
+    };
     wr(LPTIM_ICR, 1 << 3);
-    // CMP below ARR (99): RM0399's LPTIM wants ARR greater than CMP (inferred from its register notes; Renode's model
-    // refuses CMP = ARR and warned at every tick), so 100 % is 99 %: a step no eye sees
-    wr(LPTIM_CMP, u32::from(level.min(99)) - 1);
+    wr(LPTIM_CMP, cmp); // below ARR (99): lib periph.rs
     let _ = wait_us(1000, || rd(LPTIM_ISR) & (1 << 3) != 0); // CMPOK
     gpio(BACKLIGHT.0, BACKLIGHT.1, AF, 1); // LPTIM1_OUT
 }
@@ -1021,13 +990,9 @@ const BUZZER_AMP: (Port, u32) = (Port::H, 2);
 const RCC_D1CFGR: u32 = RCC + 0x018;
 const RCC_D2CFGR: u32 = RCC + 0x01c;
 
-/// TIM1's input clock: the core clock through the AHB (D1CFGR.HPRE) and APB2 (D2CFGR.D2PPRE2) prescalers, doubled
-/// when APB2 is divided (RM0399, timer clocks), read from the registers the bootloader left rather than assumed.
+/// TIM1's input clock (lib periph.rs `tim_clock_hz`), from the prescalers the bootloader left rather than assumed.
 fn tim1_hz() -> u32 {
-    let hpre = rd(RCC_D1CFGR) & 0xf;
-    let ahb = if hpre < 8 { CPU_HZ } else { CPU_HZ >> (hpre - 7).min(9) };
-    let ppre2 = (rd(RCC_D2CFGR) >> 8) & 7;
-    if ppre2 < 4 { ahb } else { (ahb >> (ppre2 - 3)) * 2 }
+    bryton_rustfw::periph::tim_clock_hz(CPU_HZ, rd(RCC_D1CFGR), rd(RCC_D2CFGR))
 }
 
 fn buzzer_init() {
@@ -1046,13 +1011,11 @@ fn beep(hz: u32) {
         pin_set(BUZZER_AMP.0, BUZZER_AMP.1, false);
         return;
     }
-    let clk = tim1_hz();
-    let psc = clk.checked_div(hz * 65_536).unwrap_or(0); // smallest prescaler that keeps the period in 16 bits
-    let arr = (clk / (psc + 1) / hz).clamp(2, 65_536) - 1;
+    let (psc, arr, ccr) = bryton_rustfw::periph::tone(tim1_hz(), hz);
     wr(TIM1, 0);
     wr(TIM1 + 0x28, psc); // PSC
     wr(TIM1 + 0x2c, arr); // ARR
-    wr(TIM1 + 0x3c, arr.div_ceil(2)); // CCR3: half the period of arr + 1 ticks
+    wr(TIM1 + 0x3c, ccr); // CCR3: half the period of arr + 1 ticks
     wr(TIM1 + 0x1c, (6 << 4) | (1 << 3)); // CCMR2: OC3M = PWM mode 1, preload
     wr(TIM1 + 0x20, 1 << 8); // CCER: CC3E
     wr(TIM1 + 0x44, 1 << 15); // BDTR: MOE (an advanced timer's outputs stay off without it)
@@ -1201,27 +1164,13 @@ const SD_ICR: u32 = SDMMC1 + 0x38;
 const SD_FIFO: u32 = SDMMC1 + 0x80;
 const RCC_AHB3RSTR: u32 = RCC + 0x07c;
 const RCC_AHB3ENR: u32 = RCC + 0x0d4;
-// STA flags (RM0399)
+// STA flags (RM0399); the data path's are lib emmc.rs `sta`
 const STA_CCRCFAIL: u32 = 1 << 0;
-const STA_DCRCFAIL: u32 = 1 << 1;
 const STA_CTIMEOUT: u32 = 1 << 2;
-const STA_DTIMEOUT: u32 = 1 << 3;
-const STA_TXUNDERR: u32 = 1 << 4;
-const STA_RXOVERR: u32 = 1 << 5;
 const STA_CMDREND: u32 = 1 << 6;
 const STA_CMDSENT: u32 = 1 << 7;
-const STA_DATAEND: u32 = 1 << 8;
-const STA_TXFIFOF: u32 = 1 << 16;
-const STA_RXFIFOE: u32 = 1 << 19;
 /// Every static flag (stock's clear value).
 const ICR_ALL: u32 = 0x1fe0_0fff;
-
-fn emmc_clkcr(fast: bool, wide: bool) -> u32 {
-    let div = if fast { 2 } else { 125 };
-    // PWRSAV (clock only while the bus is busy) at 25 MHz only: the card needs a running clock to identify
-    let pwrsav = if fast { 1 << 12 } else { 0 };
-    div | pwrsav | (u32::from(wide) << 14) | (1 << 16) | (1 << 17) // WIDBUS, NEGEDGE, HWFC_EN
-}
 
 fn emmc_power_on() {
     modify(RCC_D1CCIPR, 1 << 16, 0); // SDMMCSEL = pll1_q_ck, as stock
@@ -1233,7 +1182,7 @@ fn emmc_power_on() {
         gpio(Port::C, pin, AF, 12); // D0..D3, CK
     }
     gpio(Port::D, 2, AF, 12); // CMD
-    wr(SD_CLKCR, emmc_clkcr(false, false));
+    wr(SD_CLKCR, bryton_rustfw::emmc::clkcr(false, false));
     wr(SD_POWER, 3); // PWRCTRL: on
     delay_ms(2); // the card wants 1 ms and 74 clocks (185 us at 400 kHz) before CMD0 (JEDEC)
 }
@@ -1265,15 +1214,30 @@ fn emmc_cmd(index: u8, arg: u32, resp: bryton_rustfw::emmc::Resp, data: bool) ->
     Ok([rd(SD_RESP1), rd(SD_RESP1 + 4), rd(SD_RESP1 + 8), rd(SD_RESP1 + 12)])
 }
 
-fn emmc_read(index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
-    let len = buf.len() as u32;
-    if len == 0 || !len.is_multiple_of(512) || len >= 1 << 25 {
+/// A data transfer of `len` bytes, CMD17 / CMD18 reading (`to_card` false) or CMD24 / CMD25 writing: the data path set
+/// (DCTRL: 512-byte blocks, block mode, DTDIR card to host when reading), the command with CMDTRANS, then `fifo`
+/// given SDMMC_STA after each read of it: it moves one word when the FIFO lets it (Some(true)), or not (Some(false)),
+/// or None once every word is moved, which ends the transfer at DATAEND. Stops on the first error flag (lib emmc.rs
+/// `data_error`) or the time limit (`data_limit_ms`). RM0399 SDMMC data path; ST's HAL_MMC_ReadBlocks / WriteBlocks
+/// feed the FIFO the same way and stop on the same flags. Hardware flow control holds the bus clock while the FIFO
+/// waits, so a slow loop cannot overrun or underrun. Writing, the card's programming busy after DATAEND is emmc.rs's
+/// (CMD13). **Writes not yet seen on the unit** (docs/status.md).
+fn emmc_data(
+    index: u8,
+    arg: u32,
+    len: usize,
+    to_card: bool,
+    mut fifo: impl FnMut(u32) -> Option<bool>,
+) -> Result<u32, BusError> {
+    use bryton_rustfw::emmc::{data_error, data_limit_ms, sta};
+    let Some(limit_ms) = data_limit_ms(len) else {
         return Err(BusError::Overrun); // not whole blocks (emmc.rs never asks that)
-    }
+    };
     wr(SD_DCTRL, 0);
-    wr(SD_DTIMER, 2_500_000); // 100 ms at 25 MHz for each block to start
-    wr(SD_DLEN, len);
-    wr(SD_DCTRL, (9 << 4) | (1 << 1)); // 512-byte blocks, card to host, block mode; CMDTRANS starts it
+    // 100 ms at 25 MHz: for each block to start reading, for the card's CRC status and busy between blocks writing
+    wr(SD_DTIMER, 2_500_000);
+    wr(SD_DLEN, len as u32);
+    wr(SD_DCTRL, (9 << 4) | (u32::from(!to_card) << 1)); // CMDTRANS starts it
     let r1 = match emmc_cmd(index, arg, bryton_rustfw::emmc::Resp::R1, true) {
         Ok(r) => r[0],
         Err(e) => {
@@ -1281,28 +1245,17 @@ fn emmc_read(index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
             return Err(e);
         }
     };
-    let limit = (100 + len / 512).min(10_000) * (CPU_HZ / 1000); // 100 ms + 1 ms a block
+    let limit = limit_ms * (CPU_HZ / 1000);
     let t0 = cycles();
-    let mut words = buf.chunks_exact_mut(4);
-    let mut next = words.next();
     let result = loop {
-        let sta = rd(SD_STA);
-        if sta & STA_DCRCFAIL != 0 {
-            break Err(BusError::Crc);
-        } else if sta & STA_DTIMEOUT != 0 {
-            break Err(BusError::Timeout);
-        } else if sta & STA_RXOVERR != 0 {
-            break Err(BusError::Overrun);
+        let status = rd(SD_STA);
+        if let Some(e) = data_error(status, to_card) {
+            break Err(e);
         }
-        if sta & STA_RXFIFOE == 0
-            && let Some(w) = next
-        {
-            w.copy_from_slice(&rd(SD_FIFO).to_le_bytes()); // the first byte received is the word's lowest
-            next = words.next();
-            continue;
-        }
-        if sta & STA_DATAEND != 0 && next.is_none() {
-            break Ok(r1);
+        match fifo(status) {
+            Some(true) => continue,
+            None if status & sta::DATAEND != 0 => break Ok(r1),
+            _ => {}
         }
         if cycles().wrapping_sub(t0) > limit {
             break Err(BusError::Timeout);
@@ -1313,58 +1266,34 @@ fn emmc_read(index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
     result
 }
 
-/// A write (CMD24 / CMD25), mirroring [`emmc_read`]: the data path set card-bound (DCTRL DTDIR 0), the command
-/// with CMDTRANS, then the FIFO fed a word at a time while TXFIFOF is clear until every word is in and DATAEND
-/// (RM0399 SDMMC data path; ST's HAL_MMC_WriteBlocks feeds it on TXFIFOHE and stops on TXUNDERR, DCRCFAIL, DTIMEOUT
-/// or DATAEND, the same flags). Hardware flow control holds the bus clock while the FIFO is empty, so a slow loop
-/// cannot underrun. DCRCFAIL here is the card's CRC status token saying the block came in damaged. The card's
-/// programming busy after DATAEND is emmc.rs's (CMD13). **Not yet seen on the unit** (docs/status.md).
-fn emmc_write(index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
-    let len = buf.len() as u32;
-    if len == 0 || !len.is_multiple_of(512) || len >= 1 << 25 {
-        return Err(BusError::Overrun); // not whole blocks (emmc.rs never asks that)
-    }
-    wr(SD_DCTRL, 0);
-    wr(SD_DTIMER, 2_500_000); // 100 ms at 25 MHz: the card's CRC status and busy between blocks
-    wr(SD_DLEN, len);
-    wr(SD_DCTRL, 9 << 4); // 512-byte blocks, host to card, block mode; CMDTRANS starts it
-    let r1 = match emmc_cmd(index, arg, bryton_rustfw::emmc::Resp::R1, true) {
-        Ok(r) => r[0],
-        Err(e) => {
-            wr(SD_DCTRL, 0);
-            return Err(e);
+fn emmc_read(index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
+    let len = buf.len();
+    let mut words = buf.chunks_exact_mut(4);
+    let mut next = words.next();
+    emmc_data(index, arg, len, false, |status| {
+        let w = next.take()?;
+        if status & bryton_rustfw::emmc::sta::RXFIFOE != 0 {
+            next = Some(w);
+            return Some(false);
         }
-    };
-    let limit = (100 + len / 512).min(10_000) * (CPU_HZ / 1000); // 100 ms + 1 ms a block
-    let t0 = cycles();
+        w.copy_from_slice(&rd(SD_FIFO).to_le_bytes()); // the first byte received is the word's lowest
+        next = words.next();
+        Some(true)
+    })
+}
+
+fn emmc_write(index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
     let mut words = buf.as_chunks::<4>().0.iter();
     let mut next = words.next();
-    let result = loop {
-        let sta = rd(SD_STA);
-        if sta & STA_DCRCFAIL != 0 {
-            break Err(BusError::Crc);
-        } else if sta & STA_DTIMEOUT != 0 {
-            break Err(BusError::Timeout);
-        } else if sta & STA_TXUNDERR != 0 {
-            break Err(BusError::Overrun);
+    emmc_data(index, arg, buf.len(), true, |status| {
+        let w = next?;
+        if status & bryton_rustfw::emmc::sta::TXFIFOF != 0 {
+            return Some(false);
         }
-        if sta & STA_TXFIFOF == 0
-            && let Some(w) = next
-        {
-            wr(SD_FIFO, u32::from_le_bytes(*w)); // the word's lowest byte goes out first
-            next = words.next();
-            continue;
-        }
-        if sta & STA_DATAEND != 0 && next.is_none() {
-            break Ok(r1);
-        }
-        if cycles().wrapping_sub(t0) > limit {
-            break Err(BusError::Timeout);
-        }
-    };
-    wr(SD_DCTRL, 0);
-    wr(SD_ICR, ICR_ALL);
-    result
+        wr(SD_FIFO, u32::from_le_bytes(*w)); // the word's lowest byte goes out first
+        next = words.next();
+        Some(true)
+    })
 }
 
 // Sensor bus: I2C4 (0x58001c00, D3 domain; BOARD.md 16), PD12 SCL / PD13 SDA, AF4, open drain, no pull (the bus has
@@ -1659,7 +1588,7 @@ impl Board for S510 {
         emmc_power_on();
     }
     fn emmc_bus(&mut self, fast: bool, wide: bool) {
-        wr(SD_CLKCR, emmc_clkcr(fast, wide));
+        wr(SD_CLKCR, bryton_rustfw::emmc::clkcr(fast, wide));
     }
     fn emmc_cmd(&mut self, index: u8, arg: u32, resp: bryton_rustfw::emmc::Resp) -> Result<[u32; 4], BusError> {
         emmc_cmd(index, arg, resp, false)
