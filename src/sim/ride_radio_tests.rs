@@ -77,12 +77,18 @@ pub(super) fn radio_unit(
 /// A ride of `minutes` with the three sensors paired, the phone linked and 12 notifications every 20 s, the main loop
 /// passing every `pass_ms` and the receive waiting `wait_us`.
 fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
-    ride_with(minutes, pass_ms, wait_us, |_| {})
+    ride_with(minutes, pass_ms, wait_us, |_| {}, |_| {})
 }
 
 /// [`ride`], with `burst` run on the simulator every 30 s: the events it queues reach the chip in one SoftDevice pass.
-fn ride_with(minutes: u64, pass_ms: u32, wait_us: u32, burst: impl Fn(&mut Sim)) -> Outcome {
-    let (mut sim, mut app) = radio_unit(minutes, wait_us, crate::fat::tests::image(), false, |_| {});
+fn ride_with(
+    minutes: u64,
+    pass_ms: u32,
+    wait_us: u32,
+    burst: impl Fn(&mut Sim),
+    prep: impl FnOnce(&mut Sim),
+) -> Outcome {
+    let (mut sim, mut app) = radio_unit(minutes, wait_us, crate::fat::tests::image(), false, prep);
     app.press(&mut sim, Press::Short(Key::Start)); // the ride
     let (start, resets0, heard0) = (sim.ms, sim.nordic.resets.len(), app.radio_counts().1);
     let mut next_burst = start + 30_000;
@@ -193,6 +199,30 @@ fn ant_resume(sim: &mut Sim) {
     }
 }
 
+/// An iPhone that connects with `n` notifications already on it: ANCS sends a Notification Source notification for every
+/// one when the unit subscribes (Apple ANCS spec), at the phone's connection interval. Inferred (not measured): 5 per
+/// 20 ms interval (the interval is 7.5 to 30 ms, 4 to 6 notifications fit one). The app fetches the attributes of each
+/// as it does for any notification (the phone model answers). Production configuration.
+#[test]
+fn a_phone_connecting_with_many_notifications_never_hangs_the_chip() {
+    for n in [32u32, 64, 128] {
+        let o = ride_with(
+            3,
+            POLL_MS,
+            board_wait_us(),
+            |_| {},
+            |sim| {
+                let script = (0..n).map(|i| (5_000 + u64::from(i / 5) * 20, Act::Notify(4, i, "Bob", "Lunch at 1?")));
+                if let Some(p) = &mut sim.nordic.phone {
+                    p.script = script.collect();
+                }
+            },
+        );
+        std::eprintln!("phone connecting with {n} notifications: high-water {}, hangs {}", o.high_water, o.hangs);
+        assert_eq!(o.hangs, 0, "{n} existing notifications hung the chip");
+    }
+}
+
 /// The 2026-11-01 ride, honestly: the old configuration (100 ms pass, 20 us wait) with the bursts a ride really has, and
 /// the production configuration under the same. Each burst arrives every 30 s on top of the ride's traffic. Which of
 /// them hang the old configuration is printed; the production one must never hang and keep 36 of the 96 slots free.
@@ -205,8 +235,8 @@ fn the_bursts_of_a_ride_against_the_old_and_the_production_configuration() {
     ];
     let (mut old_hangs, mut worst) = (std::vec::Vec::new(), 0);
     for (name, burst) in bursts {
-        let old = ride_with(5, 100, 20, burst);
-        let prod = ride_with(5, POLL_MS, board_wait_us(), burst);
+        let old = ride_with(5, 100, 20, burst, |_| {});
+        let prod = ride_with(5, POLL_MS, board_wait_us(), burst, |_| {});
         std::eprintln!(
             "{name}: old config hangs {} (high-water {}), production hangs {} (high-water {})",
             old.hangs,
