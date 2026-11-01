@@ -2,6 +2,9 @@
 # Variables set by the caller: $elf
 mach create "s510"
 machine LoadPlatformDescription @renode/s510.repl
+# SysTick (CLKSOURCE = core) counts at nvic.Frequency, 64 MHz by default (`systickFrequency` in Renode's platform is not
+# that clock): the firmware's 200 MHz core clock (src/main.rs CPU_HZ) makes 1 s of SysTick 1 s of virtual time.
+nvic Frequency 200000000
 # Renode's STM32 ADC model throws on the first conversion of channel 19 (VREFINT): without it the battery reads
 # unknown, the path the firmware takes when ADC3 does not come up.
 sysbus Unregister sysbus.adc3

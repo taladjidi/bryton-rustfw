@@ -9,7 +9,7 @@
 //! - `Q`: write the summary and exit. After a model panic the pipe is closed.
 //!
 //! `GNSS_LOG` (a path): a line `ev <ms> acks= naks= valsets= pvt= lost= viol=` whenever one of the counts changes, and
-//! `summary` at the end. `GNSS_FAULT`: `record` (violations logged, not fatal), `nak` (the first CFG-VALSET is refused) or `stall` (nothing answered from 15 s to
+//! `summary` at the end. `GNSS_FAULT`: `record` (violations logged, not fatal; gnss_run's default), `nak` (the first CFG-VALSET is refused) or `stall` (nothing answered from 15 s to
 //! 17 s: the stream time-out of rule G2 is then expected, not a failure).
 
 use super::*;
@@ -49,6 +49,7 @@ fn serve() {
     o.flush().unwrap();
     let (mut ins, mut outs, mut at) = (Vec::new(), Vec::new(), (0, 0));
     let (mut valsets, mut pvt, mut last, mut stalled, mut ms) = (0, 0, String::new(), false, 0);
+    let mut powered_once = false;
     let mut note = |g: &Gnss, ms: u64, valsets: u32, pvt: u32, tag: &str| {
         let counts = format!(
             "acks={} naks={} valsets={valsets} pvt={pvt} lost={} viol={} gap={}",
@@ -80,7 +81,8 @@ fn serve() {
             b'P' => {
                 i.read_exact(&mut u[..1]).unwrap();
                 g.power(u[0] != 0, ms);
-                g.nak_next = u[0] != 0 && fault == "nak";
+                g.nak_next = u[0] != 0 && !powered_once && fault == "nak"; // only the first power-on refuses
+                powered_once |= u[0] != 0;
             }
             b'C' => {
                 stalled = fault == "stall" && STALL_MS.contains(&ms);
@@ -104,6 +106,10 @@ fn serve() {
                 }
                 valsets += count(&ins, &mut at.0, [0xb5, 0x62, 0x06, 0x8a]);
                 pvt += count(&outs, &mut at.1, [0xb5, 0x62, 0x01, 0x07]);
+                // keep only the 3 bytes a pattern could straddle
+                ins.drain(..at.0);
+                outs.drain(..at.1);
+                at = (0, 0);
                 note(&g, ms, valsets, pvt, "ev");
             }
         }

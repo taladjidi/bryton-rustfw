@@ -353,8 +353,8 @@ fn a_long_pass_loses_the_epochs_after_the_timeout_and_the_app_recovers() {
 }
 
 /// Idle, with a fix: the firmware reads at least every 0.8 s (GNSS_PVT_WAIT_MS), inside the stream time-out (G2),
-/// before and after the start-up traffic ends (Renode's GNSS run, from 17 s, showed 2.5 s: its virtual time runs
-/// 3.1 times the firmware's timer, docs/devloop.md).
+/// before and after the start-up traffic ends. Renode's GNSS run once showed 2.5 s reads from 17 s: that was its SysTick
+/// at 64 MHz (3.1 times too slow), fixed in renode/s510.resc; docs/devloop.md, "Renode with the GNSS model".
 #[test]
 fn an_idle_minute_is_read_at_least_every_800_ms() {
     let mut sim = Sim::new(9, 0, 0);

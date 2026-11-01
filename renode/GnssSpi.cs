@@ -19,8 +19,11 @@ namespace Antmicro.Renode.Peripherals.SPI
         public GnssSpi(IMachine machine, string exe, string args)
         {
             this.machine = machine;
-            var psi = new ProcessStartInfo(exe, args) { RedirectStandardInput = true, RedirectStandardOutput = true, UseShellExecute = false };
+            var psi = new ProcessStartInfo(exe, args) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
             proc = Process.Start(psi);
+            // a model panic's message goes to Renode's log (gnss.log)
+            proc.ErrorDataReceived += (o, e) => { if(e.Data != null) this.Log(LogLevel.Warning, "gnss model: {0}", e.Data); };
+            proc.BeginErrorReadLine();
             to = proc.StandardInput.BaseStream;
             from = proc.StandardOutput.BaseStream;
             // libtest prints its own header first; the model says GNSS-READY when it serves
@@ -37,35 +40,94 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         public void Reset() { }
 
-        // SR (RM0399): RXP bit 0, TXP bit 1, TXC bit 12. Nothing is held in a transmit FIFO, so TXP and TXC are always set.
+        // Register model, RM0399 "SPI" (STM32H7): CR1 0x00 (SPE 0, CSTART 9, SSI 12), CR2 0x04 (TSIZE 15:0), CFG1 0x08, CFG2 0x0C
+        // (SSM 26, MASTER 22), SR 0x14 (RXP 0, TXP 1, EOT 3, OVR 6, MODF 9, TXC 12, CTSIZE 31:16), IFCR 0x18 (EOTC 3, OVRC 6,
+        // MODFC 9), TXDR 0x20, RXDR 0x30. CFG1, CFG2 and CR2 take writes only while SPE = 0 (RM0399, inferred for CR2).
+        // The data path needs SPE, CSTART and MASTER. A mode fault (SSM with SSI = 0 and MASTER set) sets MODF and clears
+        // MASTER and SPE: the SPI1 incident of 2026-10-23 (BOARD.md 6). Nothing is held in a transmit FIFO, so TXP and TXC
+        // follow the data path being on. Not modelled: SPI clock timing, the FIFO threshold, CRC, the other flags.
+        private bool On => (cr1 & 1) != 0 && (cr1 & CSTART) != 0 && (cfg2 & MASTER) != 0;
+
         public uint ReadDoubleWord(long offset)
         {
             switch(offset)
             {
             case 0x00: return cr1;
-            case 0x14: return (rxReady ? 1u : 0) | 2 | (1u << 12);
-            case 0x30: rxReady = false; return rxWord; // RXDR
+            case 0x04: return cr2;
+            case 0x08: return cfg1;
+            case 0x0c: return cfg2;
+            case 0x14:
+                return (rxReady ? 1u : 0) | (On ? 2u | (1u << 12) : 0) | (eot ? 8u : 0) | (ovr ? 1u << 6 : 0)
+                    | (modf ? 1u << 9 : 0) | ((uint)(framesLeft & 0xffff) << 16);
+            case 0x30: // RXDR
+                if(!rxReady)
+                {
+                    this.Log(LogLevel.Warning, "gnss spi: RXDR read without RXP (0xffffffff)");
+                    return 0xffffffff;
+                }
+                rxReady = false;
+                return rxWord;
             default: return 0;
             }
         }
 
         public void WriteDoubleWord(long offset, uint value)
         {
+            var spe = (cr1 & 1) != 0;
             switch(offset)
             {
-            case 0x00: cr1 = value; break;
+            case 0x00:
+                if(spe && (value & 1) == 0) { rxReady = false; eot = false; value &= ~CSTART; framesLeft = 0; } // disabled
+                cr1 = value & ~(modf ? 1u : 0);
+                if((value & CSTART) != 0 && On) framesLeft = (int)(cr2 & 0xffff);
+                Fault();
+                break;
+            case 0x04: if(!spe) cr2 = value; break;
+            case 0x08: if(!spe) cfg1 = value; break;
+            case 0x0c: if(!spe) { cfg2 = value; Fault(); } break;
+            case 0x18: // IFCR
+                if((value & 8) != 0) eot = false;
+                if((value & (1u << 6)) != 0) ovr = false;
+                if((value & (1u << 9)) != 0) modf = false;
+                break;
             case 0x20: // TXDR: four 8-bit frames, the first in the low byte
+                if(!On) { this.Log(LogLevel.Warning, "gnss spi: TXDR written with SPE/CSTART/MASTER not all set: dropped"); break; }
+                if(rxReady) { ovr = true; this.Log(LogLevel.Warning, "gnss spi: TXDR written while RXP is set: OVR"); break; }
+                if((cr2 & 0xffff) != 0 && framesLeft < 4) break; // TSIZE frames done: EOT already set
                 var m = Req((byte)'W', 4);
                 for(var i = 0; i < 4; i++) m[9 + i] = (byte)(value >> (8 * i));
                 rxWord = 0xffffffff;
-                if(!gone && cs)
+                try
                 {
-                    Send(m);
-                    var r = Rd(4);
-                    rxWord = (uint)(r[0] | r[1] << 8 | r[2] << 16 | r[3] << 24);
+                    if(!gone && cs)
+                    {
+                        Send(m);
+                        var r = Rd(4);
+                        rxWord = (uint)(r[0] | r[1] << 8 | r[2] << 16 | r[3] << 24);
+                    }
+                }
+                catch(Exception e)
+                {
+                    gone = true;
+                    this.Log(LogLevel.Error, "gnss harness gone: {0}", e.Message);
                 }
                 rxReady = true;
+                if((cr2 & 0xffff) != 0)
+                {
+                    framesLeft -= 4;
+                    if(framesLeft < 4) { eot = true; cr1 &= ~CSTART; }
+                }
                 break;
+            }
+        }
+
+        // MODF: SSM = 1, SSI = 0 and MASTER = 1 (internal NSS low while master): MASTER and SPE are cleared by hardware.
+        private void Fault()
+        {
+            if((cfg2 & (1u << 26)) != 0 && (cr1 & (1u << 12)) == 0 && (cfg2 & MASTER) != 0)
+            {
+                modf = true; cfg2 &= ~MASTER; cr1 &= ~1u;
+                this.Log(LogLevel.Warning, "gnss spi: mode fault (MASTER set while SSI = 0): MASTER and SPE cleared");
             }
         }
 
@@ -122,7 +184,9 @@ namespace Antmicro.Renode.Peripherals.SPI
         private readonly IMachine machine;
         private readonly Process proc;
         private readonly Stream to, from;
-        private uint cr1, rxWord;
-        private bool rxReady, cs, gone;
+        private const uint CSTART = 1u << 9, MASTER = 1u << 22;
+        private uint cr1, cr2, cfg1, cfg2, rxWord;
+        private int framesLeft;
+        private bool rxReady, cs, gone, modf, ovr, eot;
     }
 }
