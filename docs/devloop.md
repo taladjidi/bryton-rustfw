@@ -197,6 +197,54 @@ specific to it stays in the private notes (`NRF_PRIVATE`, environment only, may 
   first byte on the wire, 18 us. The simulator's `frame_gap_us: 80` is pessimistic by about four times, before the
   real SoftDevice's own call time.
 
+### Renode with the radio chip's real app (`renode/nrf_run.py`, a spike, 2026-11-01)
+
+The firmware's own board code (`src/main.rs`: the USART2 setup, `nrf_reset` with PA6, `nrf_send`, `nrf_recv`) runs on
+Renode against Bryton's real nRF52 app, not the simulator's `Nordic` model.
+- **How:** `renode/NrfUsart.cs` (compiled by Renode at load time) replaces Renode's `usart2`. It starts
+  `tools/nrf_emu.py --serve` as a child and talks its pipe protocol, in lockstep: every pump sends the bytes that left
+  the TX FIFO (`W`), advances the chip by the virtual microseconds since the last pump (`T`) and reads what the chip
+  sent (`R`). A pump is due every 10 us while there is traffic and every 10 ms idle. Modelled: the registers the
+  firmware uses (CR1, CR3, ISR RXFNE / TC / TXFNF, RDR, TDR, RQR), 16-byte FIFOs, one byte per 10 us out, the RXFNE
+  interrupt (NVIC 38), CTS (the chip's FIFO full holds the TX), RTS (asserted at 12 bytes in the RX FIFO: the chip's
+  transmitter waits), PA6 (low holds the chip, the rising edge boots the app again: harness `X`). Not modelled: BRR and
+  the kernel clock choice (a wrong divider passes), parity and framing errors, overrun.
+- **Run:** `python3 renode/nrf_run.py` (6 s virtual, about 25 s of wall) and `python3 renode/nrf_run.py --hang 3` (70 s
+  virtual, about 3.5 minutes). Not in check.sh. It prints `skip:` and exits 0 without Renode, python `unicorn`, the app
+  binary (`NRF_BIN`) or the release ELF (`cargo build --release` first). Log: `target/renode/nrf.log`; every command
+  and every chip frame is one `nrf tx` / `nrf rx` line.
+- **What it showed (2026-11-01):**
+  - The radio start is answered by the real app, byte for byte: the two cfg_set, ble enable and version get, each with
+    status 0.
+  - Then the firmware's phone-link setup sends GAP_DEVICE_NAME_SET (0x7c), which the harness's SoftDevice stub lacks:
+    the app stops with "unknown SVC 0x7c". That is a gap of the stub (add it in `nrf_emu.py`), not of the firmware.
+  - `--hang 3`: one byte too many between a command's header and its payload (injected by the bridge, once) stops the
+    real app (a UART interrupt unable to be taken). The start fails, the firmware's watchdog (`nrf_watch.rs`) resets
+    the chip through PA6 about 49 s of emulated time later (a 15 s wait counted in the firmware's own passes), and the
+    start succeeds again.
+  - No ANT key is in this build, so `ant_start` is not exercised.
+- **Limits:** those of Renode above (no MPU, caches, real WFI wake, SPI or ULPI timing), and its CPU runs about one
+  instruction per cycle with no flash or SDRAM wait states, so the firmware looks faster than on the unit.
+
+#### Assessment: next steps, and whether Renode's USART timing can test the drain rate
+
+- **Drain rate (the 2026-11-01 failure class: the firmware not emptying the chip's bytes fast enough):** Renode proves
+  the wiring and the register protocol here (FIFO full, CTS, RTS release, the interrupt) and catches a gross stall (a
+  loop that never reads). It cannot size the margin: instruction timing is ideal, SysTick runs at 400 MHz, and the
+  UART model is ours. The margin (bytes per frame gap, a 16-byte FIFO against the firmware's worst pass) stays the host
+  simulator's job (`frame_gap_us`, the cost model), or the unit's.
+- **GNSS on SPI4:** Renode has the SPI4 controller; the slave is a C# `ISPIPeripheral` bridging to the GNSS model. The
+  model is Rust (src/sim), so either a small Rust binary with the same pipe protocol or a Python port: 1 to 2 days. No
+  real receiver firmware exists, so it is a model on both sides.
+- **I2C slaves (touch, LTR-308, LPS22HH, LIS2DH12):** C# `II2CPeripheral`s from tables (register map, reset values,
+  the auto-increment and ID rules): about half a day for the shape, then a few hours per chip. Only as right as the
+  tables.
+- **eMMC:** the most valuable (the recorder and the save) and the most work: Renode's SDMMC model targets SD cards, not
+  eMMC commands (CMD1, EXT_CSD, switch), so 3 to 5 days for a card model and its timing, with the host simulator's
+  `Emmc` as the oracle.
+- **Cost of running it:** about 3 s of wall per virtual second with the bridge (a pipe round trip per pump): fine for a
+  nightly or branch run, not for check.sh.
+
 ## Testing strategy
 
 Modelled on the patch repo's layers (bryton-S510-mods `docs/validation.md`: build checks, Ghidra instruction
@@ -207,7 +255,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 |-------|------|---------|--------|
 | 1. Build checks | fmt, clippy `-D warnings`, `forbid(unsafe_code)`, `tools/pack.py` | undocumented `unsafe`, an image the updater or the bootloader would refuse | behaviour |
 | 2. Host tests | unit, simulator (`Sim`, panel model), doc tests, `dev_tests` | logic, the panel protocol bytes, the dev protocol | everything below `Board` |
-| 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator, a switched-off core that still runs (`--off`: a pending interrupt waking the standby's WFI, 2026-10-25) | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image whose SPI1 lost master mode to a mode fault on the unit |
+| 3. Emulation | Renode (`renode/run.py`; `renode/nrf_run.py` with the radio chip's real app) | start-up order, faults Renode models, pixels equal to the simulator, a switched-off core that still runs (`--off`: a pending interrupt waking the standby's WFI, 2026-10-25) | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image whose SPI1 lost master mode to a mode fault on the unit |
 | 4. Fuzzing | `src/sim/fuzz.rs`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, CBWs and command blocks into the USB drive (`msc.rs`), BLE events into the phone link (`ble::event`, `App::phone_event` on the Sim, and the ANCS / AMS / CTS formats) and into the trainer's (FTMS data, status and responses, FE-C over BLE frames, connections mixed), and a damaged volume under the ride scan, random page edits, random and damaged `pages.bin` and `settings.bin` copies and keys and taps in the page editor and on the end-ride screen; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | first the dev link (`tools/dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
