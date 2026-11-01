@@ -295,6 +295,34 @@ pub fn mga_pos(lat: i32, lon: i32, acc_m: u32) -> [u8; 32] {
     frame(0x13, 0x40, &p)
 }
 
+/// What the receiver answered to a message of ours (u-blox M10 SPG 5.10 interface description UBX-21035062, 3.9
+/// UBX-ACK and 3.13.1 UBX-MGA-ACK): a CFG message taken or refused (class, id), or an assistance message used or not.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ack {
+    /// UBX-ACK-ACK of this class and id.
+    Ack(u8, u8),
+    /// UBX-ACK-NAK of this class and id: nothing was applied.
+    Nak(u8, u8),
+    /// UBX-MGA-ACK (only with CFG-NAVSPG-ACKAIDING on): used, and the info code (0: accepted).
+    Mga(bool, u8),
+}
+
+/// A UBX-ACK-ACK, UBX-ACK-NAK or UBX-MGA-ACK frame; None for anything else or a wrong length.
+///
+/// ```
+/// use bryton_rustfw::gnss::{Ack, ack};
+/// assert_eq!(ack(0x05, 0x00, &[0x06, 0x8a]), Some(Ack::Nak(0x06, 0x8a)));
+/// assert_eq!(ack(0x05, 0x01, &[0x06]), None);
+/// ```
+pub fn ack(class: u8, id: u8, p: &[u8]) -> Option<Ack> {
+    match (class, id, p) {
+        (0x05, 0x01, &[c, i]) => Some(Ack::Ack(c, i)),
+        (0x05, 0x00, &[c, i]) => Some(Ack::Nak(c, i)),
+        (0x13, 0x60, &[t, _, info, _, _, _, _, _]) => Some(Ack::Mga(t == 1, info)),
+        _ => None,
+    }
+}
+
 /// The last position and the RTC's offset from UTC, as kept in two RTC backup registers between power-offs:
 /// a tag, the offset in 15-minute steps (7 bits, signed) and latitude in 1e-4 degrees (21 bits, signed); a tag
 /// and longitude in 1e-4 degrees (22 bits, signed). 1e-4 degrees is about 11 m, plenty for aiding.

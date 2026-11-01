@@ -3241,6 +3241,7 @@ fn random_pass_lengths() {
     static MELODY: [(u32, u32); 2] = [(1000, 300), (2000, 300)];
     for seed in 1..=6u32 {
         let mut sim = super::Sim::new(9, 0, 0);
+        sim.gnss.expect = Some("stream time-out"); // passes of random length: the receiver's stream stops after 1.5 s
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
         app.settings.light_level = 2;
@@ -7454,4 +7455,125 @@ fn nordic_command_table() {
     }
     assert!(valid > thr(900), "valid packets accepted: {valid} of {frames} streams");
     assert!(kinds.iter().all(|&n| n > 0), "every hang kind reached: {kinds:?}");
+}
+
+/// A UBX frame for the receiver fuzz.
+fn ubx_frame(class: u8, id: u8, p: &[u8]) -> Vec<u8> {
+    let mut f = std::vec![0xb5, 0x62, class, id, p.len() as u8, (p.len() >> 8) as u8];
+    f.extend(p);
+    let (mut a, mut b) = (0u8, 0u8);
+    for &x in &f[2..] {
+        a = a.wrapping_add(x);
+        b = b.wrapping_add(a);
+    }
+    f.extend([a, b]);
+    f
+}
+
+/// The strict receiver model (`gnss_model.rs`) is fed frames built from its own table: CFG-VALSET with known and
+/// unknown keys, any layers and version, up to 70 pairs, items cut short; MGA messages of right and wrong length and
+/// type; runs of 0xff; bad checksums. Its answers go through the firmware's parser (`gnss::ack`). Every kind of answer
+/// must be reached (counts over the seeds), and the model says what is wrong instead of panicking (`expect`).
+#[test]
+fn gnss_receiver_input() {
+    use crate::gnss::{Ack, Parser, ack};
+    let (mut acks, mut naks, mut mga_ok, mut mga_no, mut bad, mut cut) = (0, 0, 0, 0, 0, 0);
+    for seed in 1..=8u32 {
+        let mut v = bytes(seed + 300, 1 << 20);
+        let mut r = || v.next().unwrap_or(0);
+        let mut g = super::Gnss::default();
+        g.power(true, 2000);
+        g.expect = Some("");
+        let mut now = 2000;
+        // the acknowledgements of assistance messages on, through the table's own key
+        let mut on = ubx_frame(0x06, 0x8a, &[0, 1, 0, 0, 0x25, 0x00, 0x11, 0x10, 1]);
+        on.resize(12, 0xff);
+        g.transfer(now, 1_800_000_000, &mut on);
+        for _ in 0..1500 {
+            let mut f = match r() % 5 {
+                0..=2 => {
+                    let n = if r() % 8 == 0 { 60 + usize::from(r() % 11) } else { usize::from(r() % 6) };
+                    let mut p = std::vec![r() % 4 / 3, r() % 8, 0, 0];
+                    for _ in 0..n {
+                        let key = match r() % 5 {
+                            0 => u32::from_le_bytes([r(), r(), r(), r()]),
+                            _ => super::gnss_model::KEYS[usize::from(r()) % super::gnss_model::KEYS.len()].0,
+                        };
+                        p.extend(key.to_le_bytes());
+                        p.extend((0..[1, 1, 1, 2, 4, 8][(key >> 28 & 7).min(5) as usize]).map(|_| r() & 1));
+                    }
+                    if r() % 9 == 0 {
+                        p.pop();
+                        cut += 1;
+                    }
+                    ubx_frame(0x06, 0x8a, &p)
+                }
+                3 => {
+                    let id = if r() % 3 == 0 { 0x20 } else { 0x40 };
+                    let len = [76, 24, 20, usize::from(r() % 80)][usize::from(r() % 4)];
+                    let mut p: Vec<u8> = (0..len).map(|_| r()).collect();
+                    if let Some(b) = p.first_mut() {
+                        *b = [0x10, 0x01, 0x33][usize::from(r() % 3)];
+                    }
+                    ubx_frame(0x13, id, &p)
+                }
+                _ => (0..r() % 70).map(|_| 0xff).collect(),
+            };
+            if r() % 12 == 0
+                && let Some(last) = f.last_mut()
+            {
+                *last ^= 1;
+                bad += 1;
+            }
+            while f.len() % 4 != 0 {
+                f.push(0xff);
+            }
+            now += u64::from(r()) * 2;
+            g.transfer(now, 1_800_000_000, &mut f);
+            let mut out = std::vec![0xff; 512];
+            g.transfer(now, 1_800_000_000, &mut out);
+            let mut parser = Parser::new();
+            for b in out {
+                match parser.push(b).and_then(|(c, i, p)| ack(c, i, p)) {
+                    Some(Ack::Ack(..)) => acks += 1,
+                    Some(Ack::Nak(..)) => naks += 1,
+                    Some(Ack::Mga(true, _)) => mga_ok += 1,
+                    Some(Ack::Mga(false, _)) => mga_no += 1,
+                    None => {}
+                }
+            }
+        }
+    }
+    assert!(acks > 100 && naks > 200 && mga_ok > 20 && mga_no > 20, "answers: {acks} {naks} {mga_ok} {mga_no}");
+    assert!(bad > 100 && cut > 100, "{bad} bad checksums, {cut} items cut");
+}
+
+/// The app against a receiver that refuses at random: CFG-VALSET refused now and then, and for stretches. Whatever
+/// the refusals, nothing panics, the fixes go on, and the configuration is sent at most once more per power-up of the
+/// receiver (`gps.answers`): a refusal that never ends cannot make a loop.
+#[test]
+fn gnss_refusals_at_random() {
+    let (mut taken, mut refused, mut given_up) = (0, 0, 0);
+    for seed in 1..=6u32 {
+        let mut v = bytes(seed + 700, 1 << 12);
+        let mut sim = super::Sim::new(9, 0, 0);
+        sim.classic_pages();
+        sim.gnss.fix = Some(5000);
+        let mut app = crate::App::start(&mut sim, None);
+        let mut r = || v.next().unwrap_or(0);
+        for _ in 0..30 {
+            sim.gnss.nak_next = r() % 3 == 0;
+            sim.gnss.nak_all = r() % 8 == 0;
+            if r() % 5 == 0 {
+                app.gps.reconfig = true; // as a change of GPS POWER does
+            }
+            super::tests::run(&mut sim, &mut app, 1000);
+            assert!(app.gps.answers[1] <= 1, "one retry per power-up: {:?}", app.gps.answers);
+        }
+        let [a, n, g, _] = app.gps.answers;
+        (taken, refused, given_up) = (taken + u32::from(a), refused + u32::from(n), given_up + u32::from(g));
+        assert!(sim.gnss.violations.is_empty(), "{:?}", sim.gnss.violations);
+        assert!(app.gps.pvt.is_some(), "the fixes go on");
+    }
+    assert!(taken > 10 && refused >= 4 && given_up >= 2, "{taken} taken, {refused} retried, {given_up} given up");
 }

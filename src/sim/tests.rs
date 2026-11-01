@@ -1219,6 +1219,7 @@ fn off_during_a_ride_asks_twice() {
 #[test]
 fn long_pass_loses_no_ride_time() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the test holds the pass for seconds on purpose: the receiver's stream stops after 1.5 s
     sim.gnss.route = Some(ride_route);
     sim.gnss.fix = Some(8000);
     let mut app = App::start(&mut sim, None);
@@ -1956,6 +1957,7 @@ fn nordic_link_at_the_idle_rate() {
 #[test]
 fn idle_loop_ignores_bytes_from_a_chip_not_started() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the test holds the pass for seconds on purpose: the receiver's stream stops after 1.5 s
     sim.nordic.dead = true;
     let mut app = App::start(&mut sim, Some(KEY));
     run_loop(&mut sim, &mut app, 40_000);

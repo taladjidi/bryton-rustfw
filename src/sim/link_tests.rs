@@ -57,6 +57,7 @@ fn a_stray_byte_is_resynced() {
 #[test]
 fn a_hung_chip_is_reset() {
     let (mut sim, mut app) = riding();
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
     let t0 = sim.ms - 5000;
     sim.nordic.hung = true;
     run(&mut sim, &mut app, 20_000);
@@ -76,6 +77,7 @@ fn a_hung_chip_is_reset() {
 #[test]
 fn the_phone_comes_back_after_a_reset() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
     sim.emmc.image = crate::fat::tests::image();
     let mut p = PhoneSim::new(true);
     p.connect_at = 1000;
@@ -111,6 +113,7 @@ fn a_quiet_healthy_link_is_left_alone() {
 #[test]
 fn repeated_failures_back_off() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
     sim.nordic.dead = true;
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 9 * 60 * 1000);
@@ -134,6 +137,7 @@ fn a_damaged_stream_is_recovered_from() {
     let (mut resyncs, mut resets) = (0, 0);
     for (seed, per_mille) in [(1u32, 1), (2, 2), (3, 5), (4, 20), (5, 100)] {
         let (mut sim, mut app) = riding();
+        sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
         let t0 = sim.ms - 5000;
         sim.nordic.chaos = Some((0x9e37_79b9 ^ seed.wrapping_mul(2_654_435_761), per_mille));
         run(&mut sim, &mut app, 40 * 60 * 1000);
@@ -177,6 +181,7 @@ fn ant_refused_is_not_a_broken_link() {
 #[test]
 fn a_refusal_at_a_restart_is_not_retried_by_reset() {
     let (mut sim, mut app) = riding();
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
     sim.nordic.dead = true; // a real fault: one reset
     run(&mut sim, &mut app, 40_000);
     sim.nordic.dead = false;
@@ -231,6 +236,7 @@ fn a_silent_probe_keeps_the_last_failure() {
 #[test]
 fn a_reset_during_pairing_goes_on_pairing() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 4000);

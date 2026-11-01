@@ -106,7 +106,14 @@ impl App {
                 break; // nothing waiting in the receiver
             }
             for &byte in &buf {
-                if let Some(pvt) = self.gps.parser.push(byte).and_then(|(c, i, p)| gnss::pvt(c, i, p)) {
+                let (pvt, ack) = match self.gps.parser.push(byte) {
+                    Some((c, i, p)) => (gnss::pvt(c, i, p), gnss::ack(c, i, p)),
+                    None => (None, None),
+                };
+                if let Some(a) = ack {
+                    self.note_ack(a);
+                }
+                if let Some(pvt) = pvt {
                     self.gps.pvt = Some(pvt);
                     self.gps.pvt_ms = 0;
                     pvt_read = true;
@@ -136,6 +143,27 @@ impl App {
         }
     }
 
+    /// The receiver's answer to a message ([`gnss::Ack`]) counted in `gps.answers` (taken, refused, given up, assistance
+    /// not used). A refused configuration (UBX-ACK-NAK of CFG-VALSET) is sent once more, then given up: the receiver
+    /// keeps its previous settings, which only cost power or the systems chosen, and the ride is not touched. One retry
+    /// per power-up of the receiver (`gps.retried`), so a message that is always refused cannot make a loop.
+    fn note_ack(&mut self, a: gnss::Ack) {
+        let n = match a {
+            gnss::Ack::Ack(..) => 0,
+            gnss::Ack::Nak(0x06, 0x8a) if !self.gps.retried => {
+                (self.gps.retried, self.gps.reconfig, self.gps.resys) = (true, true, true); // resys waits for no ride
+                1
+            }
+            gnss::Ack::Nak(0x06, 0x8a) => 2,
+            gnss::Ack::Nak(..) => 1,
+            gnss::Ack::Mga(true, _) => return,
+            gnss::Ack::Mga(false, _) => 3,
+        };
+        if let Some(c) = self.gps.answers.get_mut(n) {
+            *c = c.saturating_add(1);
+        }
+    }
+
     /// Switches the receiver off for an indoor ride (a ride running with the INDOOR profile: its speed is the
     /// trainer's, no track is kept), between rides while BIKE > PROFILE is fixed to INDOOR, and between rides once
     /// idle ([`App::gnss_idle`]), and back on for anything else, saving about 12 mA. Returns true while off.
@@ -161,7 +189,7 @@ impl App {
         } else if !want_off && self.gps.off {
             self.gps.off = false;
             self.gps.ms = 0; // powered again at GNSS_ON_MS, then configured and aided as at boot
-            self.gps.sent = 0;
+            (self.gps.sent, self.gps.retried) = (0, false);
             self.gps.auto = gnss::Adaptive::default(); // continuous tracking first
             (self.gps.quiet_ms, self.gps.fixed) = (0, false);
         }
