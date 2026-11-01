@@ -74,13 +74,14 @@ const LTI: usize = 11;
 const NOTIFYING: [&[(usize, usize)]; 3] =
     [&[(NS, NS_CCCD), (DS, DS_CCCD)], &[(RC, RC_CCCD), (EU, EU_CCCD)], &[(CT, CT_CCCD)]];
 
+/// The link's ATT MTU: the default, never raised (a larger one is suspected of the radio chip's silences, 2026-11-01).
+const ATT_MTU: usize = 23;
+
 /// The client's progress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Disc {
     /// Nothing yet (not encrypted).
     Idle,
-    /// The Exchange MTU Request sent, its response awaited.
-    Mtu,
     /// Looking for service `n`.
     Service(u8),
     /// Its characteristics, from a handle on.
@@ -102,7 +103,6 @@ impl Disc {
     /// tried, its bit being set).
     fn skipped(self) -> Disc {
         match self {
-            Disc::Mtu => Disc::Service(0),
             Disc::Service(n) => Disc::Service(n + 1),
             Disc::Chars(n, _) => Disc::Descs(n),
             Disc::Subscribe(i) => Disc::Subscribe(i + 1),
@@ -177,8 +177,6 @@ pub struct Phone {
     /// The app being asked about (queued or out), and whether its request is the write awaiting an answer.
     asking: Option<Line<24>>,
     app_out: bool,
-    /// The ATT MTU of the link: 23 until the exchange.
-    pub(crate) mtu: u16,
     /// An incoming call: its id and who calls.
     pub(crate) call: Option<(u32, Line<24>)>,
     /// The call's overlay is up (its caller known): buttons and banner over the bottom of the screen.
@@ -233,7 +231,6 @@ impl Default for Phone {
             held: None,
             asking: None,
             app_out: false,
-            mtu: 23,
             ds: ph::DataSource::default(),
             call: None,
             ringing: false,
@@ -343,7 +340,7 @@ impl Phone {
     fn unlink(&mut self) {
         (self.conn, self.secure, self.disc, self.busy, self.n_ops) = (None, false, Disc::Idle, false, 0);
         (self.h, self.tried, self.call, self.release) = ([0; 12], 0, None, false);
-        (self.held, self.mtu) = (None, 23);
+        self.held = None;
         (self.asking, self.app_out) = (None, false);
         self.battery_sent = None;
         (self.link_ms, self.now) = (0, ph::NowPlaying::default()); // what played is not known without the phone
@@ -585,13 +582,6 @@ impl App {
         if !matches!(self.phone.disc, Disc::Idle | Disc::Done) {
             self.phone.disc_ms = self.phone.disc_ms.saturating_add(self.dt_ms);
             if self.phone.disc_ms >= DISC_MS {
-                if self.phone.disc == Disc::Mtu {
-                    // no answer: the stack's MTU procedure stays pending and refuses later GATTC calls (BUSY), so the
-                    // link is dropped; the phone connects again, as after any lost link
-                    self.phone.disc = Disc::Idle;
-                    let _ = ble::disconnect(b, &mut self.rx, conn);
-                    return;
-                }
                 // the discovery's answer never came: on with the next step (a late one is taken for its answer, or
                 // not the one awaited, and the deadline moves it on again)
                 (self.phone.disc, self.phone.disc_ms) = (self.phone.disc.skipped(), 0);
@@ -756,7 +746,7 @@ impl App {
                         ble::sys_attr_set(b, rx, conn, Some(d.attrs.get(..usize::from(d.attrs_len)).unwrap_or(&[])));
                 }
                 if self.phone.disc == Disc::Idle {
-                    self.phone.disc = Disc::Mtu;
+                    self.phone.disc = Disc::Service(0);
                     self.discover(b, conn);
                 }
             }
@@ -784,7 +774,7 @@ impl App {
                 }
             }
             Event::MtuRequest { conn } => {
-                let _ = ble::exchange_mtu_reply(b, rx, conn, self.ble.map_or(23, |v| v.mtu));
+                let _ = ble::exchange_mtu_reply(b, rx, conn);
             }
             Event::ParamRequest { conn, id } => {
                 let _ = match id {
@@ -813,8 +803,7 @@ impl App {
             Event::Hvx { conn, handle, kind, data } if Some(conn) == self.phone.conn => {
                 self.phone_hvx(b, handle, kind, data)
             }
-            Event::MtuRsp { conn, .. }
-            | Event::Services { conn, .. }
+            Event::Services { conn, .. }
             | Event::Chars { conn, .. }
             | Event::Descs { conn, .. }
             | Event::Read { conn, .. }
@@ -831,11 +820,6 @@ impl App {
     fn client_answer(&mut self, b: &mut impl Board, conn: u16, e: Event) {
         let p = &mut self.phone;
         match (p.disc, e) {
-            (Disc::Mtu, Event::MtuRsp { status, mtu, .. }) => {
-                // the link uses the smaller of the two Rx MTUs (Core spec Vol 3 Part F 3.4.2.2); a refusal stays 23
-                p.mtu = if status == 0 { mtu.min(self.ble.map_or(23, |v| v.mtu)).max(23) } else { 23 };
-                p.disc = Disc::Service(0);
-            }
             (Disc::Service(n), Event::Services { status: 0, list, .. }) => {
                 match ble::services(list).find(|(u, ..)| *u == p.service(n)) {
                     Some((_, start, end)) => {
@@ -897,12 +881,10 @@ impl App {
 
     /// Sends the discovery's next request (skipping what is not there), or ends it.
     fn discover(&mut self, b: &mut impl Board, conn: u16) {
-        let mtu = self.ble.map_or(23, |v| v.mtu);
         for _ in 0..32 {
             let rx = &mut self.rx;
             let p = &mut self.phone;
             let sent = match p.disc {
-                Disc::Mtu => mtu > 23 && ble::exchange_mtu_request(b, rx, conn, mtu).is_ok(),
                 Disc::Service(n) if n < 3 => {
                     let uuid = p.service(n);
                     uuid.1 != 0 && ble::discover_service(b, rx, conn, uuid).is_ok()
@@ -978,7 +960,7 @@ impl App {
             // one already out
             let known = id.is_empty()
                 || id.len() >= 24
-                || id.len() + 3 > usize::from(self.phone.mtu) - 3
+                || id.len() + 3 > ATT_MTU - 3
                 || self.phone.apps.get(id).is_some()
                 || self.phone.asking == Some(a.app);
             if !known && self.phone.queue(Op::App(a.app)) {

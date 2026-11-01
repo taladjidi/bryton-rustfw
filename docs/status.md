@@ -48,11 +48,10 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   with the same profile and sub_sport; the profile kept in settings.bin across a restart.
 - **RIDE A COURSE** (WORKOUTS): sim only. On the D900: pick a course, the ride starts indoors, the trainer follows the grades, the profile's rider moves with the trainer's distance, DONE at the length. Known limit: a reset mid course resumes the ride, not the course.
 
-- **Phone link: the ATT MTU and the notification's app**: sim only. Still to see with an iPhone: the chip starts with
-  the MTU configuration (`sd_ble_cfg_set` 0x23, `nrf::ATT_MTU` 103; if it answers NO_MEM the start drops to the two
-  links alone, `Version::mtu` 23), the Exchange MTU Request (GATTC 0x9e, response event 0x3a: 0x9e, 0x3a and 0x23 inferred
-  from enum adjacency in ble_gattc.h / ble.h (the unit's SoftDevice bases differ from SDK 17.1's: 0x94 verified), not seen on the unit) is answered with 103 or less, and a message from WhatsApp, Messages
-  or Mail shows "WHATSAPP: sender: text" in the banner and the list (Get App Attributes on the Control Point).
+- **Phone link: the notification's app**: sim only. The ATT MTU stays 23 (the raise to 103 was removed on 2026-11-01,
+  suspected of the radio chip's silences on that day's ride; not proven). Still to see with an iPhone: a message from
+  WhatsApp, Messages or Mail shows "WHATSAPP: sender: text" in the banner and the list (Get App Attributes on the
+  Control Point, answered in notifications of 20 bytes).
 - **Descents and STEEP DESCENT (nav/course, app/descents.rs)**: sim only. Still to see: the banner and beep 300 m before a steep
   drop on a followed course and on the road ahead (the max grade over 50 m from the map's elevation, smoothed, may read
   differently from the road), the DESCENT AHEAD field.

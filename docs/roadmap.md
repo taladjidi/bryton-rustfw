@@ -120,8 +120,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: ~~completed climbs listed with their
   times~~ done, sim (features.md, ride menu CLIMBS DONE), ~~detection on or off per profile~~ done (CX and COMMUTE off), ~~descents~~ done, sim (features.md: STEEP DESCENT alert, DESCENT AHEAD field);
 - trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); ~~a virtual course as a workout from the workout list~~ done, sim (features.md, RIDE A COURSE);
-- the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~a larger ATT MTU,
-  the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md);
+- the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md); a larger ATT MTU is open again (tried 2026-10-31, removed 2026-11-01: suspected of the radio chip's silences on the road ride);
 - ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); ~~a battery saver mode~~ done, sim (SYSTEM > BATT SAVER, features.md; per profile and the measured gain are open); ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
   computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); ~~altitude calibration at saved places; favourite places~~ done, sim (PLACES, `\Rustfw\places.bin`,
   features.md; not seen on the unit, status.md); a place named after the nearest named point, routing to a place.
@@ -324,8 +323,8 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
   - iOS now playing (title, artist, elapsed) and its remote commands through AMS;
   - the clock and the time zone from the phone's Current Time Service.
   - Next: LE Secure Connections (pairing is legacy Just Works now), a whitelist of the bonded phone (its IRK is
-    distributed but not kept). Done in the simulator (2026-10-31): the ATT MTU raised to 103 (`sd_ble_cfg_set`, then
-    the unit's own Exchange MTU Request) and the notification's app shown (ANCS Get App Attributes, cached).
+    distributed but not kept). Done in the simulator (2026-10-31): the notification's app shown (ANCS Get App Attributes, cached). A larger ATT MTU (103) was tried and
+    removed on 2026-11-01, suspected of the radio chip's silences on that day's ride; retry only with a way to prove it safe.
 - With a companion app only: Android notifications and track info, find my phone, live tracking, automatic upload; a
   computer tool over USB can upload rides.
 - The phone app: section 9.

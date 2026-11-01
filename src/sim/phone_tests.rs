@@ -27,10 +27,6 @@ fn unit(phone: PhoneSim) -> (Sim, App) {
     super::tests::unit_with(None, |sim| sim.nordic.phone = Some(phone))
 }
 
-fn ph_mtu(sim: &Sim) -> u16 {
-    sim.nordic.phone.as_ref().unwrap().mtu
-}
-
 /// Not paired: nothing advertised (the radio stays quiet) until PAIR; the phone then pairs (Just Works), the bond
 /// goes on the card with the HID report's CCCD, the phone's services are found and subscribed, and the clock is set
 /// from its time.
@@ -57,8 +53,6 @@ fn pairing_from_the_menu() {
     assert_eq!(sim.rtc_sets, 1, "the clock set from the phone");
     assert_eq!(rtc_date_from_dr(sim.rtc().1), (2026, 10, 25));
     assert_eq!(app.gps.aid.offset_15min, Some(4), "UTC + 1 h from Local Time Information");
-    assert_eq!(ph_mtu(&sim), crate::nrf::ATT_MTU, "the smaller of the two MTUs");
-    assert_eq!(app.phone.mtu, crate::nrf::ATT_MTU);
 
     let s = stored(&sim).expect("the bond on the card");
     let bond = s.bond.unwrap();
@@ -585,43 +579,22 @@ fn a_lost_discovery_answer_does_not_stop_it() {
     assert_eq!(sim.rtc_sets, 1, "the clock set from the phone");
 }
 
-/// The unit asks for the MTU it was configured for ([`nrf::ATT_MTU`]) and the phone's answer is the smaller of the
-/// two; a phone that refuses (23) or never answers leaves 23, the discovery going on after its deadline.
+/// The link stays at ATT MTU 23 (a larger one is suspected of the 2026-11-01 ride's radio silences): across the chip
+/// start and a phone connection the chip gets no `sd_ble_cfg_set` 0x23 and no GATTC 0x9e, and the phone's own MTU
+/// request is answered with 23.
 #[test]
-fn the_mtu_is_exchanged_and_a_refusal_stays_at_23() {
-    for (max, want, secs) in [(185, crate::nrf::ATT_MTU, 4000), (23, 23, 4000), (0, 23, 12_000)] {
-        let mut phone = iphone(Vec::new());
-        phone.max_mtu = max;
-        let (mut sim, mut app) = unit(phone);
-        app.activate(&mut sim, Menu::Phone, 1);
-        run(&mut sim, &mut app, secs);
-        assert_eq!(app.phone.mtu, want, "phone max {max}");
-        let ph = sim.nordic.phone.as_ref().unwrap();
-        assert_eq!(ph.mtu, want.min(if max == 0 { 23 } else { max }));
-        if max == 0 {
-            // the stack's MTU procedure stays pending (BUSY for the rest): the link is dropped
-            assert!(sim.nordic.got.iter().any(|p| p[..2] == [0, 0x76]), "disconnected");
-            assert!(!ph.mtu_pending, "the pending procedure went with the link");
-        } else {
-            assert!(ph.subscribed.contains(&0x33), "the discovery went on: {:?}", ph.subscribed);
-        }
-    }
-}
-
-/// A chip that cannot hold the larger MTU keeps the two links at 23.
-#[test]
-fn a_chip_short_of_ram_for_the_mtu_keeps_the_links() {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    sim.nordic.no_mem_mtu = true;
-    sim.nordic.phone = Some(iphone(Vec::new()));
-    let mut app = App::start(&mut sim, None);
-    assert_eq!(sim.nordic.resets.len(), 2);
-    assert!(app.ble.is_some_and(|v| v.central && v.mtu == 23));
+fn the_link_never_asks_for_a_larger_mtu() {
+    let (mut sim, mut app) = unit(iphone(Vec::new()));
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 4000);
-    assert_eq!(app.phone.mtu, 23, "no exchange asked for");
-    assert!(sim.nordic.phone.as_ref().unwrap().subscribed.contains(&0x33));
+    let conn = app.phone.conn.expect("connected");
+    let [c0, c1] = conn.to_le_bytes();
+    app.phone_event(&mut sim, &[2, 0x55, 0, c0, c1]);
+    let got = &sim.nordic.got;
+    assert!(!got.iter().any(|p| p[..2] == [0, 0x69] && p[2] == 0x23), "no GATT configuration");
+    assert!(!got.iter().any(|p| p[..2] == [0, 0x9e]), "no Exchange MTU Request");
+    assert!(got.iter().any(|p| p[..] == [0, 0xad, c0, c1, 23, 0]), "the phone's request answered with 23");
+    assert!(sim.nordic.phone.as_ref().unwrap().subscribed.contains(&0x33), "the discovery ran");
 }
 
 /// The notification shows its app's display name; each app is asked about once, the cache keeps eight, an app the
@@ -661,7 +634,7 @@ fn an_unnamed_app_and_a_call_do_not_wait() {
 #[test]
 fn a_long_bundle_id_is_not_asked_at_mtu_23() {
     let mut phone = iphone(std::vec![(4000, Act::Notify(4, 7, "Bob", "hi"))]);
-    (phone.max_mtu, phone.app_id) = (23, "net.whatsapp.WhatsApp");
+    phone.app_id = "net.whatsapp.WhatsApp";
     let (mut sim, mut app) = unit(phone);
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 6000);

@@ -1119,9 +1119,9 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
 - **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "APP: sender: text" (as much as
   two banner lines hold; accents folded to plain letters). The app is its display name in capitals ("WHATSAPP"),
   asked of the phone once per app (ANCS Get App Attributes; the last eight apps are remembered), and the bundle id's
-  last part when the phone gives none; the same name heads the notification in the list. The ATT MTU is raised to
-  103 at each connection (the unit sends the Exchange MTU Request itself, an iPhone never does), so an answer comes
-  in two notifications instead of ten; a phone that refuses stays at 23, as does a chip whose RAM cannot hold it. Those already on the phone when it connects are not shown. NOTIFY
+  last part when the phone gives none; the same name heads the notification in the list. The link stays at the ATT MTU 23
+  since 2026-11-01 (a raise to 103 was suspected of the ride's radio dropouts and taken out), so an answer comes in
+  ten notifications. Those already on the phone when it connects are not shown. NOTIFY
   OFF stops them.
 - **Calls:** over every screen (a page, a menu, the media remote, MORE): "INCOMING CALL" and the caller in the banner at the top, a red decline and a green answer button
   at the bottom, each with a handset and its key's name (BACK, START); the page between keeps going. Start or the
