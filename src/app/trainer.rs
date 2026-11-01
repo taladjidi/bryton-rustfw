@@ -43,7 +43,7 @@ pub const OFF_WAIT_MS: u32 = 330;
 /// The sensors file is read this long after the start (the GNSS clock, as the barometer's file).
 pub const SENSORS_LOAD_MS: u32 = 3500;
 /// A pairing file not read for want of a card is tried again this often.
-const SENSORS_RETRY_MS: u32 = 5000;
+pub(crate) const SENSORS_RETRY_MS: u32 = 5000;
 
 /// The pairing file's state.
 #[derive(Clone, Copy, Debug, Default)]

@@ -132,6 +132,8 @@ pub struct Phone {
     pub(crate) stored: Stored,
     /// `ble.bin` read (or tried); to be written.
     loaded: bool,
+    /// After a mount that failed (a card not answering), no new try before this `gps.ms`.
+    retry_ms: u32,
     save: bool,
     /// The GATT server was set up.
     ready: bool,
@@ -202,6 +204,7 @@ impl Default for Phone {
         Phone {
             stored: Stored::default(),
             loaded: false,
+            retry_ms: 0,
             save: false,
             ready: false,
             adv: Adv::Off,
@@ -507,17 +510,22 @@ impl App {
     /// only (the recorder is the card's one writer while a ride is open). A build that may not write the card
     /// ([`Board::emmc_writable`]) reads it but never writes it: a bond made there lasts until the unit is switched off.
     fn phone_storage(&mut self, b: &mut impl Board) {
-        if self.emmc.lent() || !self.phone.ready || self.gps.ms < BOND_LOAD_MS {
+        if self.emmc.lent() || !self.phone.ready || self.gps.ms < BOND_LOAD_MS.max(self.phone.retry_ms) {
             return;
         }
         if !self.phone.loaded {
-            self.phone.loaded = true;
             let mut d = emmc::Volume(&mut self.emmc, b);
             let mut s = [0u8; 512];
-            let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
-                let f = fat.open(&mut d, "Rustfw/ble.bin")?;
-                fat.read_at(&mut d, &f, 0, &mut s)
-            });
+            let read = match fat::Fat::mount(&mut d) {
+                Ok(mut fat) => fat.open(&mut d, "Rustfw/ble.bin").and_then(|f| fat.read_at(&mut d, &f, 0, &mut s)),
+                Err(fat::Error::Io) => {
+                    // a card not answering (yet): tried again later (a phone paired meanwhile is `save`, kept)
+                    self.phone.retry_ms = self.gps.ms.saturating_add(crate::app::trainer::SENSORS_RETRY_MS);
+                    return;
+                }
+                Err(e) => Err(e),
+            };
+            self.phone.loaded = true;
             // a phone paired before the read (its bond not written yet) is the one kept
             if let Ok(512) = read
                 && let Some(stored) = Stored::from_sector(&s)

@@ -1842,3 +1842,51 @@ fn the_pairing_is_read_after_a_late_card() {
         assert_eq!(app2.radio.sensors.at(Kind::Trainer), Sensor::Paired(ID), "{late_ms}");
     }
 }
+
+/// Review finding 88, the other state files: a card dead at the boot and answering 5 s or 20 s later gives every
+/// file back (the rider's changes first saved by an earlier session on the same card).
+#[test]
+fn every_state_file_is_read_after_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    app.press(&mut sim, Press::Short(Key::Start)); // a ride's start makes bikes.bin and places.bin
+    run(&mut sim, &mut app, 3000);
+    for _ in 0..3 {
+        if app.ride.state() != ride::State::Idle {
+            save_ride(&mut sim, &mut app);
+            run(&mut sim, &mut app, 3000);
+        }
+    }
+    app.settings.weight_kg = 77;
+    app.save_misc(&mut sim); // the registers too, as a menu change does
+    app.settings_store.file.dirty = true;
+    app.places.list.add(1000, 2000, Some(123_000));
+    app.places.file.dirty = true;
+    app.phone.stored.notify = false;
+    app.phone_changed();
+    let now = app.now_s();
+    app.alt.calibrate(321_000, now);
+    run(&mut sim, &mut app, 20_000);
+    for late_ms in [0, 5000, 20_000] {
+        let mut sim2 = Sim::new(9, 5, 0);
+        sim2.emmc.image = sim.emmc.image.clone();
+        sim2.backup = sim.backup;
+        sim2.nordic.sensors.push(trainer_sensor());
+        sim2.emmc.dead = late_ms > 0; // 0: the control, no late card
+        let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+        run(&mut sim2, &mut app2, late_ms);
+        sim2.emmc.dead = false;
+        run(&mut sim2, &mut app2, 80_000); // the copies' minute between tries
+        let a = &app2;
+        let got = (
+            a.settings.weight_kg,
+            a.places.list.get(0).is_some(),
+            a.phone.stored.notify,
+            a.alt.cal().is_some(),
+            a.settings_store.file.loaded,
+            a.store.file.loaded,
+            a.places.file.loaded,
+        );
+        assert_eq!(got, (77, true, false, true, true, true, true), "{late_ms}");
+    }
+}

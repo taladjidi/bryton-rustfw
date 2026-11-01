@@ -66,6 +66,9 @@ pub fn open(s: &[u8; 512], magic: &[u8; 4], version: u16) -> Option<(usize, u32)
     Some((usize::from(le16(6)?), le32(8)?))
 }
 
+/// After the reads gave up, one more this often, s.
+pub const RETRY_S: u8 = 60;
+
 /// The app's state of one such file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Copies {
@@ -88,12 +91,38 @@ pub struct Copies {
     /// Not on the card whole, and its writer never makes it (bikes.bin, places.bin: a ride's start does, the
     /// recorder's `make_kept`): a change waits until a ride has started.
     pub no_file: bool,
+    /// Seconds since the reads gave up ([`Copies::second`]).
+    pub idle_s: u8,
+    /// The last failed read was an I/O error (a card not answering): only that is read again by `second`, not a
+    /// card without a FAT.
+    pub io_failed: bool,
 }
 
 impl Copies {
     /// Nothing read.
     pub const fn new() -> Self {
-        Copies { loaded: false, tries: 0, dirty: false, sound: false, sync: 0, seq: 0, no_file: false }
+        Copies {
+            loaded: false,
+            tries: 0,
+            dirty: false,
+            sound: false,
+            sync: 0,
+            seq: 0,
+            no_file: false,
+            idle_s: 0,
+            io_failed: false,
+        }
+    }
+
+    /// Once a second: a file whose reads gave up (`tries` at `max`) is read once more every [`RETRY_S`] s, so a card
+    /// that answers late brings it back without a restart (the passes read it again while `tries` is under `max`).
+    pub fn second(&mut self, max: u8) {
+        if !self.loaded && self.io_failed && self.tries >= max {
+            self.idle_s = self.idle_s.saturating_add(1);
+            if self.idle_s >= RETRY_S {
+                (self.tries, self.idle_s) = (max.saturating_sub(1), 0);
+            }
+        }
     }
 
     /// A read of the file ended as `read` (its bytes, or why not), the FAT copies `suspect` or not: Some(whole) once
@@ -114,6 +143,7 @@ impl Copies {
         use crate::fat::Error;
         if matches!(read, Err(e) if e != Error::NotFound && (!only_io || e == Error::Io)) {
             self.tries = self.tries.saturating_add(1);
+            self.io_failed = matches!(read, Err(Error::Io));
             return None;
         }
         (self.loaded, self.sound) = (true, read == Ok(1024) && !suspect);
