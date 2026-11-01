@@ -182,7 +182,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up) | 11 |
 | PD7 | SPI1 MOSI (panel), AF5 | 6 |
 | PD11 | accelerometer INT1 (EXTI rising in stock; unused here) | 16 |
-| PD12 PD13 | I2C4 SCL, SDA: the sensor bus (AF4, open drain, no pull) | 16 |
+| PD12 PD13 | I2C4 SCL, SDA: the sensor bus (AF4, open drain, no pull; plain GPIO for the bus clear, 16) | 16 |
 | PE2 PE4 PE5 PE6 | SPI4 SCK (pull-down), chip select, MISO, MOSI to the GNSS (AF5; PE4 by hand here) | 13 |
 | PE3 | key 0x08 page, active low | 5 |
 | PF6 | charger status input (not traced) | 12 |
@@ -888,6 +888,19 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
   barometer at CTRL_REG1 0x02 (so stock's power-down value is 0x02: output rate 0, BDU) and CTRL_REG2 0x12, the
   accelerometer off (CTRL_REG1 0x07). Indoors, dim: a light reading of 3 (0.1 lux); the barometer 994.5 hPa,
   25.5 C.
+- **Bus clear (this firmware, `i2c_clear` in main.rs; inferred, not yet run on the unit):** a chip that was mid-read
+  when the MCU reset can hold SDA low, and clearing PE does not free it. NXP UM10204 3.1.16 ("bus clear") and RM0399
+  (I2C, GPIO) give the sequence, done with the pins as plain GPIO (PE off; SCL open drain output, SDA released):
+
+```
+          |<- up to 9 times, 5 us half period ->|              |<- STOP ->|
+SCL   ~~~~~|_____|~~~~~|_____|~~~~~|_____|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+SDA   _____(slave holds it low) ..... ~ (read high after a pulse: stop pulsing)
+SDA out                                                     ________|~~~~  (low while SCL high, then released)
+```
+
+  Then PD12 / PD13 go back to AF4 open drain and I2C4 is enabled as at start. It runs when no chip answers at start and
+  after 3 sensor transfers fail in a row (`App::sensor_ok`). Pins: PD12 SCL, PD13 SDA (section 4).
 - **Altitude calibration in stock** (ghidra notes agent_a2.md: Cfg_DevDataReadAltitudeCalib 0xd01867c2,
   Cfg_DevDataApplySettingById id 0x1d, Sensor_CalibrateAltitudeFromGps 0xd0193dc0, Baro_CheckAltCalibrationAtLocation
   0xd026aaac): `\System\DeviceData.ini` `[DeviceSys]` keeps `calAltitude_km` (default 200: metres), `calAltitude_mi` (default

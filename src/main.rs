@@ -1426,6 +1426,36 @@ fn i2c_init() {
     i2c_enable(I2C1);
 }
 
+/// Bus clear (NXP UM10204 3.1.16, BOARD.md 16): a slave that was mid-read when the MCU reset may hold SDA low, and
+/// toggling PE does not free it. PE off, then up to nine SCL pulses (about 100 kHz) until SDA reads high, then a STOP
+/// (SDA low to high while SCL is high), then the pins and the peripheral as `i2c_init` left them. Both lines are open
+/// drain (`i2c_pins`), so "high" is released and the pull-ups do the rest.
+fn i2c_clear(i2c: u32, port: Port, scl: u32, sda: u32) {
+    let half = || {
+        let _ = wait_us(5, || false); // a timed wait on purpose: half a clock period
+    };
+    wr(i2c + I2C_CR1, 0);
+    pin_set(port, scl, true);
+    pin_set(port, sda, true);
+    modify(gpio_base(port), 3 << (2 * scl), OUT << (2 * scl));
+    for _ in 0..9 {
+        pin_set(port, scl, false);
+        half();
+        pin_set(port, scl, true);
+        half();
+        if rd(gpio_base(port) + 0x10) & (1 << sda) != 0 {
+            break; // IDR: the slave let go
+        }
+    }
+    modify(gpio_base(port), 3 << (2 * sda), OUT << (2 * sda));
+    pin_set(port, sda, false);
+    half();
+    pin_set(port, sda, true);
+    half();
+    i2c_pins(port, [scl, sda]);
+    i2c_enable(i2c);
+}
+
 /// Waits for `flag` in I2C_ISR; false on a NACK, a bus error or 1 ms (a byte takes 45 us). A failed transfer leaves
 /// the peripheral off and on again (PE cleared resets its state machine, RM0399), so the next one starts clean.
 fn i2c_wait(i2c: u32, flag: u32) -> bool {
@@ -1594,6 +1624,9 @@ impl Board for S510 {
         // a build without EMMC_WRITE=1 never gets here: emmc::Card::write refuses first (emmc_writable)
         self.io.2 = self.io.2.wrapping_add((buf.len() / bryton_rustfw::emmc::SECTOR) as u32);
         emmc_write(index, arg, buf)
+    }
+    fn i2c_recover(&mut self) {
+        i2c_clear(I2C4, Port::D, 12, 13);
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
         i2c_read(I2C4, addr, reg, buf)

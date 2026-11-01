@@ -134,6 +134,9 @@ pub trait Board {
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool;
     /// Writes `data` to register `reg` on, of the chip at `addr`; false if it did not answer.
     fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool;
+    /// Frees the sensor bus when a chip holds SDA low (a reset in the middle of a read): nine clock pulses with SDA
+    /// released, then a STOP (RM0399 I2C, NXP UM10204 3.1.16 "bus clear"). The library asks after repeated failures.
+    fn i2c_recover(&mut self) {}
     /// Reads `buf.len()` bytes from register `reg` on, of the touch controller (I2C1 address 0x55, BOARD.md 17);
     /// false if it did not answer.
     fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool;

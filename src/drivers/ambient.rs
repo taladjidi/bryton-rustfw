@@ -60,6 +60,15 @@ fn reg(b: &mut impl Board, addr: u8, r: u8) -> Option<u8> {
 /// every 100 ms at gain 6, the barometer powered down with block data update (one-shot conversions
 /// only), the accelerometer powered down (CTRL_REG1 0x07: output rate 0, axes enabled, as stock's "off").
 pub fn init(b: &mut impl Board) -> Chips {
+    let c = probe(b);
+    if c.light || c.baro {
+        return c;
+    }
+    b.i2c_recover(); // nothing answered: a chip may hold SDA low after a reset in the middle of a read
+    probe(b)
+}
+
+fn probe(b: &mut impl Board) -> Chips {
     let _ = b.i2c_write(ACCEL_ADDR, 0x20, &[0x07]);
     let light = reg(b, LIGHT_ADDR, PART_ID) == Some(LIGHT_ID)
         && b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[0])
