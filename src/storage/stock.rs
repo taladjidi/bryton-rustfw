@@ -439,7 +439,7 @@ impl Cache {
         if !self.whole && !synced {
             fat.sync_fats(d)?;
         }
-        let dir = fat.ensure_dir(d, fat.root(), CACHE_DIR, time)?;
+        let dir = fat.ensure_own_dir(d, fat.root(), CACHE_DIR, time)?;
         self.whole = false; // until it is written whole
         let mut h = match fat.locate(d, dir, CACHE_NAME) {
             Err(fat::Error::NotFound) => fat.create(d, dir, CACHE_NAME, time)?,

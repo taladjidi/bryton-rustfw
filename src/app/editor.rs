@@ -380,8 +380,11 @@ impl App {
         let t = fat::write::dos_time(self.rec_time().0);
         let mut d = emmc::Volume(&mut self.emmc, b);
         let mut fat = fat::Fat::mount(&mut d).ok()?;
-        let dir =
-            if make { fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t) } else { fat.open(&mut d, recorder::DIR) };
+        let dir = if make {
+            fat.ensure_own_dir(&mut d, fat.root(), recorder::DIR, t)
+        } else {
+            fat.open(&mut d, recorder::DIR)
+        };
         Some(dir.and_then(|dir| {
             if !make && fat.locate(&mut d, dir, name)?.size != 1024 {
                 return Err(fat::Error::NotFound);

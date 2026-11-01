@@ -1284,14 +1284,12 @@ fn a_discard_into_a_folder_on_cluster_0_keeps_the_ride() {
     assert!(fsck(&d.img).is_ok());
 }
 
-/// The review of 2026-11-01: a folder the recorder needs (`\Rustfw`, `\Rustfw\Rides`, `\Activities`) with its
-/// entry torn inside it (on cluster 0): made again by the next Start (the torn entry marked deleted, never zeroed),
-/// so the ride is recorded and saved; the volume clean, the torn folder's own cluster lost at most. (`\Activities`
-/// is stock's here, its files orphaned by the test's tear: a real one comes from a mkdir, an empty folder.) And
-/// the same at the save of a ride under way: `\Activities` made again, the ride saved there.
+/// The review of 2026-11-01: a folder of this firmware's that the recorder needs (`\Rustfw`, `\Rustfw\Rides`) with
+/// its entry torn inside it (on cluster 0): made again by the next Start (the torn entry marked deleted, never
+/// zeroed), so the ride is recorded and saved; the volume clean, the torn folder's own cluster lost at most.
 #[test]
 fn a_needed_folder_on_cluster_0_is_made_again() {
-    for path in [DIR, "Rustfw/Rides", ACTIVITIES] {
+    for path in [DIR, "Rustfw/Rides"] {
         let mut ram = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
         let mut fat = Fat::mount(&mut ram).unwrap();
         let mut dir = fat.root();
@@ -1306,17 +1304,30 @@ fn a_needed_folder_on_cluster_0_is_made_again() {
         let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
         assert_eq!(saved(&d.img, SAVED).map(|s| s.0 == all), Ok(true), "{path}");
         let lost = check_clean(&d.img, path);
-        assert!(lost <= 1 || path == ACTIVITIES, "{path}: {lost} lost");
+        assert!(lost <= 1, "{path}: {lost} lost");
     }
+}
+
+/// Stock's `\Activities` with its entry torn inside it (on cluster 0) is never mended (it would orphan stock's
+/// rides): at the save of a ride under way the ride is kept where it was recorded (`Kept`, its record done, never
+/// retried forever), the root directory and that entry untouched; the next ride is recorded, and kept the same way.
+#[test]
+fn stocks_activities_on_cluster_0_is_never_mended() {
     let mut d = card(crate::fat::tests::image());
     let mut r = open_ride(&mut d, 200);
     tear_folder_entry(&mut d.img, ACTIVITIES);
+    let before = root_bytes(&d.img);
     r.end(T0 + 200, words(200));
-    assert_eq!(io_all(&mut r, &mut d, 201), [Outcome::Saved(NAME)]);
+    assert_eq!(io_all(&mut r, &mut d, 201), [Outcome::Kept(NAME)]);
+    assert_eq!(r.phase(), Phase::Done, "not stuck");
+    kept_in_rides(&d.img, "kept");
+    assert!(root_bytes(&d.img) == before, "the root directory written");
+    let mut r = Recorder::new();
+    assert_eq!(ride(&mut r, &mut d, 0), Some(Outcome::Kept(*b"261023100001")), "the next ride");
     assert_eq!(r.phase(), Phase::Done);
-    assert_eq!(saved(&d.img, SAVED).map(|s| s.0.len()), Ok(200));
-    assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "the next ride");
-    assert!(fsck(&d.img).is_ok());
+    let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
+    assert_eq!(saved(&d.img, "Rustfw/Rides/261023100001.fit").map(|s| s.0 == all), Ok(true));
+    assert!(root_bytes(&d.img) == before, "the root directory written");
 }
 
 /// The golden rule through the discard: the power cut (the sector left whole, or torn) after every sector of a
