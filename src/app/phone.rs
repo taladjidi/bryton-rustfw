@@ -677,9 +677,13 @@ impl App {
             Op::Act(uid, yes) => (p.h[CP], &ph::action(uid, yes)),
             Op::Ams(cmd) => (p.h[RC], &[cmd]),
         };
-        p.busy = handle != 0 && ble::write(b, &mut self.rx, conn, handle, data).is_ok();
+        let sent = handle != 0 && ble::write(b, &mut self.rx, conn, handle, data).is_ok();
+        p.busy = sent;
         (p.busy_ms, p.fetching) = (0, p.busy && matches!(op, Op::Fetch(_) | Op::App(_)));
         p.app_out = p.busy && matches!(op, Op::App(_));
+        if !sent && matches!(op, Op::App(_)) {
+            self.app_unknown(b); // refused: cached nameless, as a time-out is, so it is not asked again
+        }
     }
 
     /// The connection configuration tag links use: [`ble::TAG`] when the chip took the two links' configuration, else
@@ -957,7 +961,7 @@ impl App {
             // one already out
             let known = id.is_empty()
                 || id.len() >= 24
-                || id.len() + 3 > usize::from(ble::ATT_MTU) - 3
+                || id.len() + 3 > ble::WRITE_MAX
                 || self.phone.apps.get(id).is_some()
                 || self.phone.asking == Some(a.app);
             if !known && self.phone.queue(Op::App(a.app)) {
@@ -1126,5 +1130,29 @@ impl App {
         let mut shown = self.phone.shown;
         ui::media::update(&mut Panel(b, self.area(), self.look()), &self.media_now(), &mut shown, false);
         self.phone.shown = shown;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A write the chip's buffer refuses (a 24 byte identifier is a 27 byte request) caches the app nameless, as a
+    /// time-out does: it is not asked again, and nothing waits for it.
+    #[test]
+    fn a_refused_app_write_caches_the_app_nameless() {
+        let mut sim = crate::sim::Sim::new(8, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        let mut id = Line::<24>::new();
+        id.push_str("com.example.longer.name");
+        app.phone.conn = Some(1);
+        app.phone.disc = Disc::Done;
+        app.phone.h[CP] = 1;
+        app.phone.asking = Some(id);
+        assert!(app.phone.queue(Op::App(id)));
+        app.next_op(&mut sim, 1);
+        assert_eq!(app.phone.apps.get(id.as_str()), Some(Line::new()), "cached, nameless");
+        assert_eq!(app.phone.asking, None);
+        assert!(!app.phone.busy);
     }
 }

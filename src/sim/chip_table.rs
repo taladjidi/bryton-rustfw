@@ -14,7 +14,7 @@
 //! `common/cond_field_serialization.c` (`cond_field_dec`: a presence byte, 0 or 1, anything else is an error) and
 //! the macros of `common/ble_serialization.h` (`SER_REQ_DEC_END`: the parsed length must equal the packet length).
 //! Bryton's nRF app, reversed: the opcode set, the 384 byte packet limit, the decoders' exact-length rule (checked
-//! for 0x9E and 0x69) and the GATT client write's 20 byte value buffer (the SDK default, ATT MTU 23 minus 3).
+//! for 0x69) and the GATT client write's 20 byte value buffer (the SDK default, ATT MTU 23 minus 3).
 //! Opcodes the chip has and rustfw never sends are listed as present with the layout "not modelled".
 
 extern crate std;
@@ -48,8 +48,9 @@ pub enum L {
     Len16(usize),
     /// `len8data`: u8 length, presence byte, then the bytes when present, at most this many.
     Len8(usize),
-    /// `uint8_vector_dec` after a u8 size: the size, then that many bytes, at most this many (inferred bound).
-    Sized(usize),
+    /// `uint8_vector_dec` after a u8 size: the size, then that many bytes. The SDK checks only the remaining length;
+    /// the bound of 9 (an ANT message) is inferred and not enforced.
+    Sized,
     /// `ble_gatts_hvx_params_t_dec`'s tail: a presence byte and a u16 length, then (if present) a presence byte and
     /// that many bytes.
     Hvx,
@@ -264,14 +265,6 @@ pub const CMDS: &[Cmd] = &[
     ),
     cmd!(
         0,
-        0x9e,
-        "sd_ble_gattc_exchange_mtu_request",
-        &[L::U16, L::U16],
-        Fixed(0),
-        "ble_gattc_conn.c: ble_gattc_exchange_mtu_request_req_dec"
-    ),
-    cmd!(
-        0,
         0xa0,
         "sd_ble_gatts_service_add",
         &[L::U8, L::Cond(UUID), PTR],
@@ -398,11 +391,12 @@ pub const CMDS: &[Cmd] = &[
         Fixed(0),
         "ant_channel_open_with_offset.c: ant_channel_open_with_offset_req_dec"
     ),
+    // the size byte is bounded by the ANT message (9, inferred); the SDK checks only the bytes left
     cmd!(
         6,
         0xc8,
         "sd_ant_acknowledge_message_tx",
-        &[L::U8, L::Sized(9)],
+        &[L::U8, L::Sized],
         Fixed(0),
         "ant_acknowledge_message_tx.c: ant_acknowledge_message_tx_req_dec"
     ),
@@ -516,11 +510,8 @@ fn walk(items: &[L], p: &[u8], at: &mut usize) -> Result<(), &'static str> {
                 let n = usize::from(u8_at(p, at)?);
                 buf(p, at, n, max)?;
             }
-            L::Sized(max) => {
+            L::Sized => {
                 let n = usize::from(u8_at(p, at)?);
-                if n > max {
-                    return Err("size over the chip's buffer");
-                }
                 skip(p, at, n)?;
             }
             L::Hvx => match u8_at(p, at)? {
@@ -533,7 +524,7 @@ fn walk(items: &[L], p: &[u8], at: &mut usize) -> Result<(), &'static str> {
             },
             L::Cfg => {
                 skip(p, at, 4)?;
-                let id = u32::from_le_bytes([p[*at - 4], p[*at - 3], p[*at - 2], p[*at - 1]]);
+                let id = u32::from_le_bytes(p.get(*at - 4..*at).and_then(|b| b.try_into().ok()).ok_or("cut short")?);
                 match u8_at(p, at)? {
                     0 => {}
                     1 => {
@@ -808,9 +799,8 @@ mod tests {
         assert!(matches!(hang(&[0, 0x6c]), Hang::NotModelled(0, 0x6c)), "present, layout not modelled");
         assert!(matches!(hang(&[5, 0]), Hang::NotModelled(5, 0)));
         // exact length: one byte more, one byte less
-        assert!(check(&[0, 0x9e, 1, 0, 23, 0]).is_ok());
-        assert!(matches!(hang(&[0, 0x9e, 1, 0, 23, 0, 0]), Hang::Layout(_, "bytes left over", _)));
-        assert!(matches!(hang(&[0, 0x9e, 1, 0, 23]), Hang::Layout(_, "cut short", _)));
+        // the MTU request is present in the chip, its layout not modelled (rustfw never sends it)
+        assert!(matches!(hang(&[0, 0x9e, 1, 0, 23, 0]), Hang::NotModelled(0, 0x9e)));
         // a presence byte of 2
         assert!(matches!(hang(&[0, 0x65, 2]), Hang::Layout(_, "presence byte not 0 or 1", _)));
         // the write's value over 20 bytes
@@ -821,10 +811,9 @@ mod tests {
         w[11] = 20;
         assert!(check(&w).is_ok());
         // the sec_params_reply of the 9-slot kind is the model's, not this table's: the table only checks layouts
-        // an ANT acknowledged message of 10 bytes
-        let mut a = std::vec![6, 0xc8, 0, 10];
-        a.extend([0; 10]);
-        assert!(matches!(hang(&a), Hang::Layout(_, "size over the chip's buffer", _)));
+        // an ANT acknowledged message: the size byte is the bytes left (the SDK's bound is not enforced)
+        assert!(check(&[6, 0xc8, 0, 3, 1, 2, 3]).is_ok());
+        assert!(matches!(hang(&[6, 0xc8, 0, 3, 1, 2]), Hang::Layout(_, "cut short", _)));
         // an unknown cfg id
         assert!(matches!(hang(&[0, 0x69, 0x77, 0, 0, 0, 1, 0]), Hang::Layout(_, "cfg id not modelled", _)));
     }

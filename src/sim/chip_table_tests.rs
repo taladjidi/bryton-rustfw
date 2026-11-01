@@ -94,46 +94,42 @@ fn every_command_rustfw_builds_decodes_on_the_chip() {
     let _ = ble::descriptor_add(b, rx, 2, 0x2908, &[0, 1], ble::ENCRYPTED);
     let _ = ble::value_set(b, rx, 3, &[7; 100]);
     nrf::system_off(b);
-    // every row but the MTU request (rustfw never asks the peer for one) was exercised
+    // every modelled row was exercised
     let sent: Vec<(u8, u8)> = b.nordic.got.iter().map(|p| (p[0], p[1])).collect();
     let missing: Vec<&str> = CMDS.iter().filter(|c| !sent.contains(&(c.kind, c.op))).map(|c| c.name).collect();
-    assert_eq!(missing, ["sd_ble_gattc_exchange_mtu_request"]);
+    assert!(missing.is_empty(), "rows never sent: {missing:?}");
     assert!(b.nordic.hang_reason.is_none());
 }
 
-/// A chip that expects to hang, sent `payload` framed.
-fn hangs_on(payload: &[u8]) -> std::string::String {
+/// A chip that expects a hang whose reason contains `want`, sent `payload` framed (the simulator panics otherwise).
+fn hangs_on(payload: &[u8], want: &'static str) {
     let mut s = Sim::new(8, 0, 0);
-    s.nordic.expect_hang = true;
+    s.nordic.expect_hang = Some(want);
     s.nrf_reset();
     nrf::send(&mut s, payload);
     assert!(s.nordic.hung, "{payload:02x?} did not hang the chip");
-    s.nordic.hang_reason.clone().unwrap_or_default()
 }
 
 #[test]
 fn the_simulated_chip_hangs_as_the_real_one_does() {
-    assert!(hangs_on(&[0, 0x61]).contains("UnknownOpcode(0, 97)"));
-    assert!(hangs_on(&[2, 0x60]).contains("Type(2)"));
-    assert!(hangs_on(&[0]).contains("TypeOnly"));
-    assert!(hangs_on(&[0, 0x6c]).contains("NotModelled"));
-    assert!(hangs_on(&[0, 0x60, 0]).contains("bytes left over"), "one byte too many");
-    assert!(hangs_on(&[0, 0x78, 1]).contains("cut short"), "one byte too few");
-    assert!(hangs_on(&[0, 0x9e, 0, 0, 1, 0, 0]).contains("bytes left over"));
+    hangs_on(&[0, 0x61], "UnknownOpcode(0, 97)");
+    hangs_on(&[2, 0x60], "Type(2)");
+    hangs_on(&[0], "TypeOnly");
+    hangs_on(&[0, 0x6c], "NotModelled");
+    hangs_on(&[0, 0x60, 0], "bytes left over"); // one byte too many
+    hangs_on(&[0, 0x78, 1], "cut short"); // one byte too few
+    hangs_on(&[0, 0x9e, 0, 0, 1, 0, 0], "NotModelled"); // present, not modelled
     let mut long = vec![0, 0x9c, 0, 0, 1, 1, 0, 0x0d, 0, 0, 0, 21, 0, 1];
     long.extend([0; 21]);
-    assert!(hangs_on(&long).contains("buffer longer than the chip's"), "a write over 20 bytes");
-    let mut ant = vec![6, 0xc8, 0, 10];
-    ant.extend([0; 10]);
-    assert!(hangs_on(&ant).contains("size over"));
+    hangs_on(&long, "buffer longer than the chip's"); // a write over 20 bytes
     // a packet of 0 or over 384 bytes: the length header alone
     let mut s = Sim::new(8, 0, 0);
-    s.nordic.expect_hang = true;
+    s.nordic.expect_hang = Some("Length(0)");
     s.nrf_reset();
     s.nrf_send(&[0, 0]);
     assert_eq!(s.nordic.hang_reason.as_deref(), Some("Length(0) on []"));
     let mut s = Sim::new(8, 0, 0);
-    s.nordic.expect_hang = true;
+    s.nordic.expect_hang = Some("Length(385)");
     s.nrf_reset();
     s.nrf_send(&385u16.to_le_bytes());
     assert!(s.nordic.hung);

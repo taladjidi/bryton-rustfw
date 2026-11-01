@@ -288,9 +288,10 @@ pub struct Attributes {
 }
 
 /// Get App Attributes for the app `id` (command 1, the app identifier NUL-terminated, attribute 0 DisplayName): the
-/// request's length in `out`. An identifier of up to 24 bytes (what [`Attributes::app`] keeps) always fits the buffer; but the chip's GATT write
-/// takes 20 bytes at most ([`crate::ble::WRITE_MAX`]), so the request of an identifier over 17 bytes is refused by
-/// `ble::write`, not sent.
+/// request's length in `out`. An identifier of up to 24 bytes (what [`Attributes::app`] keeps) always fits the buffer.
+/// The chip's GATT write takes 20 bytes at most ([`crate::ble::WRITE_MAX`]), so `ble::write` refuses the request of an
+/// identifier over 17 bytes. The app never sends one (the phone's guard skips those ids), so such apps show no display
+/// name, as before.
 pub fn get_app(id: &str, out: &mut [u8; 28]) -> usize {
     let n = id.len().min(24);
     if let Some((cmd, tail)) = out.split_first_mut() {

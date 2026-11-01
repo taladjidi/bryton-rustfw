@@ -2,6 +2,9 @@
 //! from outside (the Nordic chip, the GNSS receiver). A panic there would freeze the unit.
 
 extern crate std;
+use super::Sim;
+use super::chip_table::{self, CMDS, Hang, L};
+use crate::Board;
 use std::vec::Vec;
 
 /// The fuzz scale: `FUZZ_SCALE` in the environment (default 1: every seed; `./check.sh --quick` sets 0.25).
@@ -7267,4 +7270,188 @@ fn chip_events_built_from_the_table_decode_and_cut_ones_do_not() {
     assert_eq!(reached.len(), EVENTS.len() + 1);
     assert!(reached.values().all(|&n| n >= want), "{reached:?}");
     assert!(cuts > 10_000 && flips > 1000, "{cuts} {flips}");
+}
+
+/// The hang kinds of `chip_table::Hang`, in the order `kinds` counts them.
+const HANG_KINDS: [&str; 6] = ["Length", "Type", "TypeOnly", "UnknownOpcode", "NotModelled", "Layout"];
+
+/// The kind of a hang, by its variant name.
+fn hang_kind(h: &Hang) -> &'static str {
+    match h {
+        Hang::Length(_) => "Length",
+        Hang::Type(_) => "Type",
+        Hang::TypeOnly(_) => "TypeOnly",
+        Hang::UnknownOpcode(..) => "UnknownOpcode",
+        Hang::NotModelled(..) => "NotModelled",
+        Hang::Layout(..) => "Layout",
+    }
+}
+
+/// Random arguments laid out as the chip decodes them (within the bounds the table's inferred or known sizes allow),
+/// so a packet built from a row's layout is valid. Presence bytes and the length of each field are drawn.
+fn fill_args(items: &[L], rnd: &mut dyn FnMut() -> u32, out: &mut Vec<u8>) {
+    for it in items {
+        match *it {
+            L::U8 => out.push(rnd() as u8),
+            L::U16 => out.extend((rnd() as u16).to_le_bytes()),
+            L::U32 => out.extend(rnd().to_le_bytes()),
+            L::Raw(n) => out.extend((0..n).map(|_| rnd() as u8)),
+            L::Cond(sub) => {
+                let on = rnd() % 2 == 1;
+                out.push(u8::from(on));
+                if on {
+                    fill_args(sub, rnd, out);
+                }
+            }
+            L::Absent => out.push(0),
+            L::Len16(max) => {
+                // kept short: a packet is at most 384 bytes
+                let n = rnd() as usize % (max.min(64) + 1);
+                out.extend((n as u16).to_le_bytes());
+                out.push(1);
+                out.extend((0..n).map(|_| rnd() as u8));
+            }
+            L::Len8(max) => {
+                let n = rnd() as usize % (max.min(64) + 1);
+                out.push(n as u8);
+                out.push(1);
+                out.extend((0..n).map(|_| rnd() as u8));
+            }
+            L::Sized => {
+                let n = rnd() as usize % 10;
+                out.push(n as u8);
+                out.extend((0..n).map(|_| rnd() as u8));
+            }
+            L::Hvx => {
+                let on = rnd() % 2 == 1;
+                out.push(u8::from(on));
+                if on {
+                    let n = rnd() as usize % 32;
+                    out.extend((n as u16).to_le_bytes());
+                    out.push(1);
+                    out.extend((0..n).map(|_| rnd() as u8));
+                }
+            }
+            L::Cfg => {
+                let id = [0x20u32, 0x23, 0x40][rnd() as usize % 3];
+                out.extend(id.to_le_bytes());
+                let on = rnd() % 2 == 1;
+                out.push(u8::from(on));
+                if on {
+                    if (0x20..=0x23).contains(&id) {
+                        out.push(rnd() as u8); // the connection tag
+                    }
+                    let body: &[L] = match id {
+                        0x20 => &[L::U8, L::U16],
+                        0x23 => &[L::U16],
+                        _ => &[L::U8, L::U8, L::U8],
+                    };
+                    fill_args(body, rnd, out);
+                }
+            }
+        }
+    }
+}
+
+/// A packet framed as the host sends it: the 2 byte length, then the payload.
+fn frame(n: usize, body: &[u8]) -> Vec<u8> {
+    let mut v = (n as u16).to_le_bytes().to_vec();
+    v.extend_from_slice(body);
+    v
+}
+
+/// Mutation `k` of a packet `body` (`[kind][op][args]`), as the host's stream: 0 the packet as built, 1 the length
+/// off by one, 2 cut short (the header says the cut length), 3 an extra byte, 4 one to three bit flips.
+fn mutate(body: &[u8], k: u32, rnd: &mut dyn FnMut() -> u32) -> Vec<u8> {
+    let n = body.len();
+    match k {
+        1 => frame(if rnd().is_multiple_of(2) { n + 1 } else { n - 1 }, body),
+        2 => {
+            let cut = rnd() as usize % n;
+            frame(cut, &body[..cut])
+        }
+        3 => {
+            let mut q = body.to_vec();
+            q.push(rnd() as u8);
+            frame(n + 1, &q)
+        }
+        4 => {
+            let mut q = body.to_vec();
+            for _ in 0..=rnd() % 3 {
+                let i = rnd() as usize % n;
+                q[i] ^= 1 << (rnd() % 8);
+            }
+            frame(n, &q)
+        }
+        _ => frame(n, body),
+    }
+}
+
+/// What the chip must do with a whole stream: `None` while it waits for more bytes, `Some(Ok(()))` for a packet the
+/// table decodes, `Some(Err(kind))` for a hang of that kind (chip_table::check, and the length rule of the framing).
+fn expected(stream: &[u8]) -> Option<Result<(), &'static str>> {
+    let [l0, l1, body @ ..] = stream else { return None };
+    let n = usize::from(u16::from_le_bytes([*l0, *l1]));
+    if n == 0 || n > chip_table::MAX_PAYLOAD {
+        return Some(Err("Length"));
+    }
+    let packet = body.get(..n)?;
+    Some(chip_table::check(packet).map(|_| ()).map_err(|h| hang_kind(&h)))
+}
+
+/// The table, fuzzed as the chip meets it: a packet built from each row's layout (valid: the table and the chip take
+/// it) and its mutations, each sent to a fresh chip in pieces cut at random points (the bytes arrive in several
+/// `feed` calls). The chip must agree with `chip_table::check` on every stream: a hang only where the table has one,
+/// never a panic. Reach: the valid packets accepted over the seeds, and every hang kind hit at least once.
+#[test]
+fn nordic_command_table() {
+    let (mut valid, mut frames) = (0u32, 0u32);
+    let mut kinds = [0u32; 6];
+    for seed in 1..=scaled(20) {
+        let mut rnd = xorshift(seed);
+        for row in CMDS {
+            let mut body = std::vec![row.kind, row.op];
+            fill_args(row.args, &mut rnd, &mut body);
+            if body.len() > chip_table::MAX_PAYLOAD {
+                continue; // a valid packet that does not fit the chip's 384 bytes is not built
+            }
+            assert!(
+                chip_table::check(&body).is_ok(),
+                "{}: a packet built from its layout is refused: {body:02x?}",
+                row.name
+            );
+            let streams: Vec<Vec<u8>> = (0..5).map(|k| mutate(&body, k, &mut rnd)).collect();
+            for (k, stream) in streams.iter().enumerate() {
+                frames += 1;
+                let mut s = Sim::new(8, 0, 0);
+                s.nordic.table_only = true;
+                s.nordic.expect_hang = Some("");
+                s.nrf_reset();
+                // two cuts at random points: the stream arrives in three pieces
+                let (a, b) = (rnd() as usize % (stream.len() + 1), rnd() as usize % (stream.len() + 1));
+                let (lo, hi) = (a.min(b), a.max(b));
+                for part in [&stream[..lo], &stream[lo..hi], &stream[hi..]] {
+                    s.nrf_send(part);
+                }
+                let got = s.nordic.got.len();
+                match expected(stream) {
+                    None => assert!(!s.nordic.hung && got == 0, "{}: {stream:02x?} waits for bytes", row.name),
+                    Some(Ok(())) => {
+                        assert!(!s.nordic.hung && got == 1, "{}: {stream:02x?} refused by the chip", row.name);
+                        valid += u32::from(k == 0);
+                    }
+                    Some(Err(kind)) => {
+                        let reason = s.nordic.hang_reason.clone().unwrap_or_default();
+                        assert!(s.nordic.hung && got == 0, "{}: {stream:02x?} did not hang", row.name);
+                        assert_eq!(reason.split('(').next(), Some(kind), "{}: {stream:02x?}", row.name);
+                        if let Some(i) = HANG_KINDS.iter().position(|&x| x == kind) {
+                            kinds[i] += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(valid > thr(900), "valid packets accepted: {valid} of {frames} streams");
+    assert!(kinds.iter().all(|&n| n > 0), "every hang kind reached: {kinds:?}");
 }

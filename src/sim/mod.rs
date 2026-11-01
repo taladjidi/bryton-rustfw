@@ -758,9 +758,10 @@ pub struct Nordic {
     /// The host's bytes of the frame being received, and the (type, opcode) of the command being answered.
     frame: Vec<u8>,
     cur: Option<u8>,
-    /// Why the chip hung on a command (chip_table.rs), and whether the test expects one: else the simulator panics.
+    /// Why the chip hung on a command (chip_table.rs), and the part of the reason a test expects (`Some("")`: any hang):
+    /// else the simulator panics. It survives a reset.
     pub hang_reason: Option<std::string::String>,
-    pub expect_hang: bool,
+    pub expect_hang: Option<&'static str>,
     /// Answer every valid command with an empty success (no model behind it): for the test of the command builders.
     pub table_only: bool,
     out: std::collections::VecDeque<u8>,
@@ -1201,8 +1202,11 @@ impl Nordic {
 
     fn hang_on(&mut self, h: &chip_table::Hang, p: &[u8]) {
         let why = format!("{h:?} on {p:02x?}");
-        assert!(self.expect_hang, "the Nordic chip hangs on a command it cannot decode: {why}");
-        (self.hung, self.hang_reason) = (true, Some(why));
+        match self.expect_hang {
+            Some(want) if why.contains(want) => {}
+            _ => panic!("the Nordic chip hangs on a command it cannot decode (expected {:?}): {why}", self.expect_hang),
+        }
+        (self.hung, self.hangs, self.hang_reason) = (true, self.hangs + 1, Some(why));
         self.events.clear();
         self.out.clear();
     }
