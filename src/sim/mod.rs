@@ -770,8 +770,12 @@ pub struct Nordic {
 /// The Nordic app's limits (bryton-S510-mods ghidra/nordic-app.md, "Model parameters for the simulator"): it queues
 /// events in `slots` slots and hangs for ever when one more arrives with none free. It sends one frame at a time and
 /// only while the host reads (RTS holds it otherwise; the RX FIFO's 16 bytes just refill as the host reads, so
-/// bytes are produced at read time), and needs `frame_gap_us` between two frames (inferred: the unit shows
-/// a freed FIFO refilled within 4 us, not a new frame).
+/// bytes are produced at read time), and needs `frame_gap_us` between two frames (80 us, inferred: BOARD.md observed
+/// gaps between bytes up to 76 us; the unit shows a freed FIFO refilled within 4 us, not a new frame).
+///
+/// Worst case for a short wait: a call at the very ms the last frame ended gets no next frame (`read_limited`), so a
+/// 20 us wait always reads one frame. The real `poll_nrf` spends tens to hundreds of us parsing between `nrf_recv`
+/// calls, so the chip's next frame may be ready by the next call; the model is pessimistic there.
 #[derive(Clone, Copy)]
 pub struct ChipLimits {
     /// Event queue depth.
@@ -782,9 +786,15 @@ pub struct ChipLimits {
     pub wait_us: u32,
 }
 
+/// The board's receive wait, us: `nrf_wait_cycles` at the simulated clock, so the ride tests follow a change of it.
+pub(crate) fn board_wait_us() -> u32 {
+    let hz = <Sim as Board>::CPU_HZ;
+    nrf_wait_cycles(hz) / (hz / 1_000_000)
+}
+
 impl Default for ChipLimits {
     fn default() -> Self {
-        Self { slots: 96, frame_gap_us: 50, wait_us: 200 }
+        Self { slots: 96, frame_gap_us: 80, wait_us: board_wait_us() }
     }
 }
 

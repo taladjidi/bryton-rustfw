@@ -7,7 +7,7 @@ use crate::*;
 use phone::Media;
 
 /// How long the receive (main.rs `nrf_recv`) waits for a burst's next byte, in cycles at `cpu_hz`: 200 us after every
-/// byte, so a pass drains every frame the chip has ready. The chip needs more than two byte times (20 us, the wait
+/// byte, so a pass drains every frame the chip has ready. The chip needs more than two byte times (inferred; 20 us, the wait
 /// of 2026-10-31 to 2026-11-01, review finding 8) to pull and encode its next event, so that wait ended each read
 /// after one frame; the drain then fell behind the ride's events and the chip's 96-slot queue overflowed and hung it
 /// (sim/ride_radio_tests.rs).

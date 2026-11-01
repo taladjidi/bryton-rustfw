@@ -60,6 +60,11 @@ fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
     }
     let heard = app.radio_counts().1;
     let d = |k: Kind| heard[k as usize] - heard0[k as usize];
+    std::eprintln!(
+        "ride {minutes} min, pass {pass_ms} ms, wait {wait_us} us: high-water {}, hangs {}",
+        sim.nordic.high_water,
+        sim.nordic.hangs
+    );
     Outcome {
         hangs: sim.nordic.hangs,
         high_water: sim.nordic.high_water,
@@ -79,27 +84,38 @@ fn assert_healthy(o: &Outcome, minutes: u64) {
 /// Three sensors at 4 Hz and a phone's notifications, ten minutes: the chip never hangs, its queue stays under 48.
 #[test]
 fn a_ride_with_three_sensors_never_overflows_the_chip() {
-    assert_healthy(&ride(10, POLL_MS, 200), 10);
+    assert_healthy(&ride(10, POLL_MS, board_wait_us()), 10);
 }
 
 /// Four hours (run with `--ignored`).
 #[test]
 #[ignore = "soak: four simulated hours"]
 fn a_four_hour_ride_never_overflows_the_chip() {
-    assert_healthy(&ride(240, POLL_MS, 200), 240);
+    assert_healthy(&ride(240, POLL_MS, board_wait_us()), 240);
 }
 
 /// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (21 against 12 at the 50 ms
-/// pass); with the 100 ms pass (below) the ride's traffic overflows it.
+/// pass); with the 100 ms pass (below) the ride's traffic overflows it. The model is worst case for a short wait
+/// (ChipLimits), so these numbers are a direction, not the unit's.
 #[test]
 fn the_20_us_wait_leaves_the_queue_higher() {
-    let (slow, fast) = (ride(10, POLL_MS, 20), ride(10, POLL_MS, 200));
+    let (slow, fast) = (ride(10, POLL_MS, 20), ride(10, POLL_MS, board_wait_us()));
     assert!(slow.high_water > fast.high_water + 4, "{} against {}", slow.high_water, fast.high_water);
 }
 
-/// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) is no better.
+/// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) is no better. Worst case for a short wait
+/// (ChipLimits): a direction, not the unit's exact numbers.
 #[test]
 fn a_100_ms_pass_with_the_20_us_wait_hangs_the_chip() {
     let o = ride(10, 100, 20);
     assert!(o.hangs > 0, "high-water {}", o.high_water);
+}
+
+/// The healthy-wait case for the slower pass: the 100 ms pass is gone from the firmware (2026-11-01); this records
+/// the margin the model gives it with the production wait.
+#[test]
+fn a_100_ms_pass_with_the_200_us_wait() {
+    let o = ride(10, 100, board_wait_us());
+    assert_eq!(o.hangs, 0, "high-water {}", o.high_water);
+    std::eprintln!("100 ms pass, production wait: high-water {}", o.high_water);
 }

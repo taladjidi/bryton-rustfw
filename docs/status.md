@@ -19,7 +19,7 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 ## Not yet seen on the unit
 
 - **The radio receive's wait (main.rs `nrf_recv`): the short wait of finding 8 (2026-10-31) was taken out on 2026-11-01**,
-  back to 200 us after every byte. The chip's app needs more than 20 us to pull and encode its next event, so the
+  back to 200 us after every byte. The chip's app needs more than 20 us (inferred) to pull and encode its next event, so the
   20 us wait ended each read after one frame; the drain fell behind a ride's events and the chip's 96-slot queue
   overflowed, which hangs it for ever (the ride's silence about 30 s after every reset). The sim now models that queue
   (`ChipLimits`, `src/sim/ride_radio_tests.rs`). To see on the unit: a ride with the owner's sensors, `tools/dev.py info`
