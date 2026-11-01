@@ -103,11 +103,15 @@ if [ $quick = 1 ]; then
     filters=ALL
     if [ $skipok = 1 ] && [ -n "$changed" ]; then filters=$(printf '%s\n' "$changed" | python3 -I tools/test_select.py | paste -s -d ' ' -); fi
     echo "quick tests: FUZZ_SCALE=0.25, filters: $filters"
-    export FUZZ_SCALE="${FUZZ_SCALE:-0.25}"
     case $filters in
-        ALL) step "cargo test-host" cargo test-host ;;
+        ALL) step "cargo test-host" env FUZZ_SCALE="${FUZZ_SCALE:-0.25}" cargo test-host ;;
         NONE) skip "host tests (no Rust, test or build file changed)" ;;
-        *) step "cargo test-host (selected)" cargo test-host --lib -- $filters ;;
+        *)  # a filter that matches no test would pass with 0 tests run: refuse it
+            for f in $filters; do
+                [ "$(cargo test-host --lib -q -- --list "$f" 2>/dev/null | grep -c ': test$')" -gt 0 ] \
+                    || { echo "quick: filter '$f' selects 0 tests (tools/test_select.py is stale)"; exit 1; }
+            done
+            step "cargo test-host (selected)" env FUZZ_SCALE="${FUZZ_SCALE:-0.25}" cargo test-host --lib -- $filters ;;
     esac
     echo "QUICK TIER: guards, lint, fmt, firmware and host clippy and host tests only (a quarter of the fuzz seeds; the tests the diff can reach). This is NOT the gate: run ./check.sh before a commit."
     exit 0

@@ -70,7 +70,10 @@ impl Walk {
     /// no longer shows in the strip's clock and the GPS UTC, so a menu row added or removed changes the hashes of
     /// its own menu only (the golden list moved 28 later screens when the HEIGHT row went, 2026-11-01).
     fn shot_at(&mut self, sim: &mut Sim, app: &mut App) {
-        sim.start_s = SHOT_CLOCK_S - (sim.ms + SHOT_SETTLE_MS) / 1000;
+        // saturating: a walk past 12.5 h of simulated time would leave the clock moving, not panic (it lasts minutes).
+        // The strip clock's own formatting (midnight, date change, 12/24 h) is covered by `ticks_through_midnight`
+        // (sim/tests.rs) and the strip's tests, since the walk shows one fixed time now.
+        sim.start_s = SHOT_CLOCK_S.saturating_sub((sim.ms + SHOT_SETTLE_MS) / 1000);
         run(sim, app, SHOT_SETTLE_MS);
         self.shot(sim);
     }

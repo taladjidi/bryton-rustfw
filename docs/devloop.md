@@ -66,12 +66,15 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
 `./check.sh` (AGENTS.md "Before every commit" lists what it checks):
 - **Tiers:** `./check.sh --quick` (guards, lint, fmt, firmware clippy, host clippy, host tests; prints that it is not the gate) for
   iterating: it runs a quarter of the fuzz seeds (`FUZZ_SCALE=0.25`, set by the script) and, on a branch, only the tests
-  the diff can reach (`tools/test_select.py`: `src/storage/**` gives `storage::` and the simulator's recorder, drive, storage
-  and fuzz tests, `src/ui/**` gives `ui::` and `sim::`, a `src/sim/x_tests.rs` gives itself, docs and tools give none;
-  `src/lib.rs`, `src/sim/mod.rs`, `Cargo.*`, `check.sh`, a new folder or anything unmapped gives all; the filters are
-  printed, doc tests are skipped when filtered). `FUZZ_SCALE=0.5 cargo test-host` by hand runs the fuzz tests that read
-  it (fit structure, history, page editor) on that fraction of their seeds, with their reach thresholds scaled; the
-  menu tree's 36 seeds are never cut (the rare menus need them). The gate runs everything at scale 1; `./check.sh` is the gate; `--full` runs everything whatever the diff; `-v` prints every lane's log.
+  the diff can reach (`tools/test_select.py`: `src/nav`, `training`, `link`, `ui`, `drivers` and `app` give their own unit
+  tests plus `sim::` and `app::`, a `src/sim/x_tests.rs` or `fuzz.rs` gives itself, Markdown in docs/, tools/ and renode/
+  gives none; anything else is ALL: `src/storage` (the FAT test image is used everywhere), `src/lib.rs`, `src/sim/mod.rs`
+  and the simulator's non-test files, `test-data/`, `docs/features.md`, `Cargo.*`, `check.sh`, a new folder; its selftest
+  fails if a file a test reads maps to none. The filters are printed, a filter that selects 0 tests fails the tier, doc
+  tests are skipped when filtered). `FUZZ_SCALE=0.5 cargo test-host` by hand runs the fuzz tests that read it (fit
+  structure, history, page editor; each prints the scale) on that fraction of their seeds, thresholds scaled (never
+  below 1); the menu tree's 36 seeds are never cut. check.sh sets it only for its quick test step, unsets it in the
+  gate, and tools/review.py drops it. `./check.sh` is the gate; `--full` runs everything whatever the diff; `-v` prints every lane's log.
 - **Lanes:** after the guards, lint and fmt, three lanes run in parallel, each in a subshell with its own log in
   `target/check/` (F: firmware clippy, build, stack_check, panics, pack, then the same three checks on the ride build
   (`EMMC_WRITE=1`, built first in the same target dir, the default build last); H: host clippy, tests, doc, deny, fsck of the volumes the tests wrote
@@ -83,8 +86,9 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
   "renode: timed out; retrying"), and fails with "timed out twice"; Renode hangs now and then on a loaded machine.
 - **Test speed:** `cargo test-host` is as slow as its slowest test while the cores are free, so the long ones are split:
   the recorder's cut tests run in 8 parts (`_part_N`, cut `c` in part `c % 8`; the cut tests assert which part owns the
-  few rare cuts), `menu_tree_by_chance` in 4 chunks of 9 seeds (the "every menu reached" checks run in the part that
-  finishes last, over the four, so run them together). `cargo-nextest` (process per test, per-test times) was measured
+  few rare cuts, computed from the uncut run), `menu_tree_by_chance` in 4 chunks of 9 seeds (each part asserts its own
+  share: `MENU_TREE_OWNED` names the part that reaches each rare menu; re-measure from the printed counts when the walk
+  changes). `cargo-nextest` (process per test, per-test times) was measured
   and not adopted: see the commit message of the change that added this; per-test times: `cargo nextest run --target
   aarch64-apple-darwin` with a `[profile.default.junit]` config if you have it installed.
 - **Skips by diff, on a branch only:** the changed files are the diff against the merge base with

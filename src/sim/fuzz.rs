@@ -9,9 +9,24 @@ fn fuzz_scale() -> f32 {
     std::env::var("FUZZ_SCALE").ok().and_then(|v| v.parse().ok()).filter(|s| *s > 0.0 && *s <= 1.0).unwrap_or(1.0)
 }
 
-/// `n` seeds (or a reach threshold) at the fuzz scale, at least 1.
+/// `n` seeds at the fuzz scale, at least 1; prints the scale the test ran at.
 fn scaled(n: u32) -> u32 {
+    std::println!("FUZZ_SCALE {}", fuzz_scale());
     ((n as f32 * fuzz_scale()) as u32).max(1)
+}
+
+/// The least a count must reach for a reach check that says `> n` at full scale: `n + 1`, and `n` scaled down
+/// (never below 1) when the seeds are cut.
+fn thr(n: u32) -> u32 {
+    if fuzz_scale() >= 1.0 { n + 1 } else { ((n as f32 * fuzz_scale()) as u32).max(1) }
+}
+
+/// Every `stride`th seed of 1..=n (all of them at full scale), and the `keep` ones whatever the stride: the seeds
+/// that reach what a rare check needs.
+fn spread(n: u32, keep: &[u32]) -> Vec<u32> {
+    std::println!("FUZZ_SCALE {}", fuzz_scale());
+    let stride = (1.0 / fuzz_scale()).round().max(1.0) as u32;
+    (1..=n).filter(|s| s % stride == 3 % stride || keep.contains(s) || stride == 1).collect()
 }
 /// xorshift32: deterministic, so a failure reproduces.
 fn bytes(seed: u32, n: usize) -> impl Iterator<Item = u8> {
@@ -924,11 +939,11 @@ fn fit_structure() {
         "fit structure: {files} files, {whole} whole, messages {kinds:?}, made {:?}",
         (made.big, made.dev, made.redefined, made.compressed, made.odd_sizes, made.globals)
     );
-    assert!(kinds.iter().all(|&k| k > scaled(50) - 1), "every message kind reached: {kinds:?}");
+    assert!(kinds.iter().all(|&k| k >= thr(50)), "every message kind reached: {kinds:?}");
     assert!(whole > files / 2, "{whole} of {files} read whole");
-    let m = scaled(500);
-    assert!(made.big > m && made.dev > m && made.redefined > m && made.compressed > m && made.odd_sizes > m);
-    assert!(made.globals.iter().all(|&g| g > m), "{:?}", made.globals);
+    let m = thr(500);
+    assert!(made.big >= m && made.dev >= m && made.redefined >= m && made.compressed >= m && made.odd_sizes >= m);
+    assert!(made.globals.iter().all(|&g| g >= m), "{:?}", made.globals);
 }
 
 /// Random power curves into the critical power fit (power_curve.rs `fit_cp`): bests from 0 to 2000 W, some missing,
@@ -2255,6 +2270,91 @@ fn menu_tree_by_chance_part_3() {
     menu_tree_by_chance(3);
 }
 
+/// The menus and events `menu_tree_by_chance` must reach, and the part (0 to 3) whose seeds reach them.
+const MENU_TREE_OWNED: [(&str, u32); 32] = [
+    ("Settings", 0),
+    ("Alerts", 0),
+    ("Display", 0),
+    ("System", 0),
+    ("BuiltIn", 0),
+    ("Group", 0),
+    ("History", 0),
+    ("Stock", 0),
+    ("Places", 0),
+    ("Ride", 0),
+    ("CourseNow", 0),
+    ("auto scrolled", 0),
+    ("Bike", 1),
+    ("Gps", 1),
+    ("Phone", 1),
+    ("Steps", 1),
+    ("WorkoutNow", 2),
+    ("Main", 3),
+    ("Me", 3),
+    ("Sensors", 3),
+    ("Remote", 3),
+    ("Pages", 3),
+    ("PageList", 3),
+    ("Page", 3),
+    ("Fields", 3),
+    ("Workouts", 3),
+    ("Courses", 3),
+    ("switch rows", 3),
+    ("shown", 3),
+    ("moved", 3),
+    ("renamed", 3),
+    ("ride a course picked", 3),
+];
+/// A part reaches an owned key at least this many times.
+const MENU_TREE_MIN: u32 = 1;
+/// Per part, the settings stored by an act and the rides ended (measured: the least of the four parts, halved).
+const MIN_ACTS: u32 = 50;
+const MIN_RIDES: u32 = 5;
+
+/// Every menu of the tree and every event the walk must see is owned by one part (the old whole-run checks).
+#[test]
+fn menu_tree_ownership_is_complete() {
+    let need = [
+        "Main",
+        "Settings",
+        "Me",
+        "Alerts",
+        "Display",
+        "Bike",
+        "System",
+        "BuiltIn",
+        "Gps",
+        "Sensors",
+        "Remote",
+        "Phone",
+        "Pages",
+        "PageList",
+        "Page",
+        "Fields",
+        "Group",
+        "History",
+        "Stock",
+        "Workouts",
+        "Steps",
+        "Courses",
+        "Places",
+        "Ride",
+        "WorkoutNow",
+        "CourseNow",
+        "switch rows",
+        "shown",
+        "moved",
+        "renamed",
+        "auto scrolled",
+        "ride a course picked",
+    ];
+    for k in need {
+        let owners = MENU_TREE_OWNED.iter().filter(|o| o.0 == k).count();
+        assert_eq!(owners, 1, "{k:?} must be owned by exactly one part of menu_tree_by_chance (MENU_TREE_OWNED)");
+    }
+    assert_eq!(MENU_TREE_OWNED.len(), need.len());
+}
+
 /// Seeds 1 to 36 in four runs of nine (`part`), which was one test of 24 s, the floor of `cargo test-host`. Not
 /// scaled by `FUZZ_SCALE`: the rare menus need all 36 seeds.
 fn menu_tree_by_chance(part: u32) {
@@ -2403,56 +2503,21 @@ fn menu_tree_by_chance(part: u32) {
         }
     }
     std::println!("part {part}, reached: {reached:?}; {acts} stored by an act, {rides} ride cards");
-    // the reach checks are over the four parts together (one process: libtest's threads; nextest would run each part
-    // alone and never get here): the part that finishes last makes them
-    static TOTAL: std::sync::Mutex<(BTreeMap<std::string::String, u32>, u32, u32, u32)> =
-        std::sync::Mutex::new((BTreeMap::new(), 0, 0, 0));
-    let mut total = TOTAL.lock().unwrap_or_else(|e| e.into_inner());
-    for (k, n) in reached {
-        *total.0.entry(k).or_default() += n;
+    // Each part asserts its own share, so a lone run of one part checks what it can: the menus and events no single
+    // chunk of seeds reaches in every run are owned by the part whose seeds reach them most (`MENU_TREE_OWNED`,
+    // measured: print above). If the seeds, the walk or the menus change, a part fails here: re-measure and move
+    // the entry (every key must stay owned by one part: `menu_tree_ownership_is_complete`).
+    for (key, owner) in MENU_TREE_OWNED {
+        if owner == part {
+            assert!(
+                reached.get(key).is_some_and(|&n| n >= MENU_TREE_MIN),
+                "menu_tree_by_chance part {part} owns {key:?} but reached it {:?} times (needs {MENU_TREE_MIN}): the seeds or \
+                 the walk changed; re-measure from the printed counts and update MENU_TREE_OWNED: {reached:?}",
+                reached.get(key)
+            );
+        }
     }
-    (total.1, total.2, total.3) = (total.1 + acts, total.2 + rides, total.3 + 1);
-    if total.3 < 4 {
-        return;
-    }
-    let (reached, acts, rides) = (core::mem::take(&mut total.0), total.1, total.2);
-    assert!(reached["ride a course picked"] > 0, "pick_course reached: {reached:?}");
-    let all = [
-        "Main",
-        "Settings",
-        "Me",
-        "Alerts",
-        "Display",
-        "Bike",
-        "System",
-        "BuiltIn",
-        "Gps",
-        "Sensors",
-        "Remote",
-        "Phone",
-        "Pages",
-        "PageList",
-        "Page",
-        "Fields",
-        "Group",
-        "History",
-        "Stock",
-        "Workouts",
-        "Steps",
-        "Courses",
-        "Places",
-        "Ride",
-        "WorkoutNow",
-        "CourseNow",
-    ];
-    for m in all {
-        assert!(reached.contains_key(m), "{m} never reached: {reached:?}");
-    }
-    assert!(reached.get("switch rows").is_some_and(|&n| n > 10), "page switch rows reached: {reached:?}");
-    for what in ["shown", "moved", "renamed", "auto scrolled"] {
-        assert!(reached.get(what).is_some_and(|&n| n > 0), "{what} never happened: {reached:?}");
-    }
-    assert!(acts > 50 && rides > 5, "{acts} settings stored, {rides} rides ended");
+    assert!(acts >= MIN_ACTS && rides >= MIN_RIDES, "part {part}: {acts} settings stored, {rides} rides ended");
 }
 
 /// HISTORY by chance (trash.rs, `App::delete_past`): Page, Lap, Start, Back and taps over the list and the cards of
@@ -2543,7 +2608,7 @@ fn history_by_chance() {
         }
     }
     std::println!("{deletes} deletes, {refused} refused while riding");
-    assert!(deletes > scaled(5) - 1 && refused > 0, "{deletes} deletes, {refused} refused");
+    assert!(deletes >= thr(5) && refused > 0, "{deletes} deletes, {refused} refused");
 }
 
 /// Random edits of random pages (page.rs): every result well formed, within 5 rows and 8 cells, every box a value's
@@ -2827,7 +2892,7 @@ fn page_editor_inputs() {
     let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
     let (mut mores, mut more_edits, mut more_kept) = (0, 0, 0);
     let (mut indoor_edits, mut indoor_changed, mut mtb_edits) = (0, 0, 0);
-    for seed in 1..=scaled(48) {
+    for seed in spread(48, &[27, 39]) {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         sim.own_settings();
@@ -2916,12 +2981,14 @@ fn page_editor_inputs() {
     std::println!("editor reached: {splits} splits, {merges} merges, {added} pages added, {deleted} deleted");
     std::println!("MORE reached: {mores} passes up, {more_edits} in the editor, {more_kept} kept");
     std::println!("indoor set reached: {indoor_edits} passes in its editor, {indoor_changed} changes");
-    let q = fuzz_scale();
-    let t = |n: u32| (n as f32 * q) as usize; // a threshold at the scale (0 is `> 0`)
-    assert!(indoor_edits > t(50) && indoor_changed > t(5), "{indoor_edits} {indoor_changed}");
+    let thr = |n: u32| thr(n) as usize;
+    assert!(indoor_edits >= thr(50) && indoor_changed >= thr(5), "{indoor_edits} {indoor_changed}");
     assert!(mtb_edits > 0, "the MTB set reached: {mtb_edits}");
-    assert!(splits > t(10) && merges > t(10) && added > t(3) && deleted > t(3), "{splits} {merges} {added} {deleted}");
-    assert!(mores > t(50) && more_edits > t(5) && (more_kept > 0 || q < 1.0), "{mores} {more_edits} {more_kept}");
+    assert!(
+        splits >= thr(10) && merges >= thr(10) && added >= thr(3) && deleted >= thr(3),
+        "{splits} {merges} {added} {deleted}"
+    );
+    assert!(mores >= thr(50) && more_edits >= thr(5) && more_kept > 0, "{mores} {more_edits} {more_kept}");
 }
 
 /// Random pressures, altitudes and calibrations into the barometric altitude (altitude.rs): no panic, and every

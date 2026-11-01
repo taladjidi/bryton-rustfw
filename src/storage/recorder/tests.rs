@@ -574,8 +574,13 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool, part: u64) {
     assert!(resumed > 50 / CUT_PARTS as usize);
     // the cuts after the last checkpoint, whose save the boot finishes (found by printing them, as AT_BOOT_CUTS): the
     // part that owns each must meet it, so the whole run asserts what the single test did (`saved_at_boot > 0`)
-    let owned = BOOT_SAVED_CUTS.iter().filter(|&&c| c % CUT_PARTS == part).count();
-    assert_eq!(saved_at_boot, owned, "saved at boot: cuts {BOOT_SAVED_CUTS:?} of {total}");
+    // they are the ride's last three writes, from the uncut run's count: a change of the writes that moves them fails here
+    let owned = (total.saturating_sub(3)..total).filter(|c| c % CUT_PARTS == part).count();
+    assert_eq!(
+        saved_at_boot, owned,
+        "part {part}: {saved_at_boot} cuts saved at boot, the last three of {total} writes expected to ({owned} here): \
+         did the recorder's write count or its save order change?"
+    );
     assert!(mid_lap > 5 / CUT_PARTS as usize, "{mid_lap} resumes in the second lap");
     assert!(max_lost <= 2);
 }
@@ -1160,8 +1165,6 @@ cut_part!(two_copies_power_cut_at_every_sector_part_7, two_copies_cut(7));
 /// The cuts are shared among this many tests (cut `c` belongs to part `c % CUT_PARTS`), so each sees the whole
 /// ride's range of cut points, and the four run in parallel.
 const CUT_PARTS: u64 = 8;
-/// The cuts of `power_cut_at_every_sector` whose reboot saves the finished ride (the same for every profile).
-const BOOT_SAVED_CUTS: [u64; 3] = [506, 507, 508];
 
 fn two_copies_cut_torn(torn: bool, part: u64) {
     let img = crate::fat::tests::image();
