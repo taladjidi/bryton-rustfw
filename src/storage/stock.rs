@@ -395,7 +395,9 @@ impl Cache {
         ok
     }
 
-    /// Reads it from the volume, whole or not at all; false when there is none or it does not check out.
+    /// Reads it from the volume, whole or not at all; false when there is none or it does not check out. Trade-off
+    /// (review 2026-11-01): one CRC over the file, so one flipped bit drops every entry and the rides are read
+    /// again in full; accepted, a per-entry CRC would cost bytes in every entry for a failure that is rare.
     pub fn read(&mut self, d: &mut impl Disk) -> bool {
         let mut fat = match Fat::mount(d) {
             Ok(f) => f,
@@ -485,6 +487,8 @@ pub struct Scan {
     /// (`second`), on top of the cache's entries, so `out` is no longer the cache's alone.
     over: bool,
     second: bool,
+    /// The file being read was read again once after a Corrupt chain (a FAT sector kept while a computer wrote).
+    retried: bool,
     /// Files listed so far (shown as progress).
     pub listed: u16,
     /// Rides read (not found in the cache) since the scan started.
@@ -528,6 +532,7 @@ impl Scan {
             shown: false,
             over: false,
             second: false,
+            retried: false,
             listed: 0,
             read: 0,
             out: Summary {
@@ -741,6 +746,7 @@ impl Scan {
                             }
                         }
                         self.file = Some((e.file, 0, day, start));
+                        self.retried = false;
                         (self.reader, self.acc, self.seek) = (Reader::new(), Acc::new(), Seek::new());
                         self.rolling.reset();
                     }
@@ -751,15 +757,22 @@ impl Scan {
         let mut io = [0u8; IO]; // on the stack for this call only: the scan stays small between passes
         let n = match fat.read_from(d, &file, offset, &mut io, &mut self.seek) {
             Ok(n) => n,
-            Err(_) if self.cache.is_some() => {
-                // the card or the FAT failed (a read error, a chain changed under a FAT sector kept): not kept as
+            Err(fat::Error::Io) if self.cache.is_some() => {
+                // the card failed (Corrupt is permanent: it ends the file below, or it would be read at every start)
+                // or the FAT failed (a read error, a chain changed under a FAT sector kept): not kept as
                 // not a ride, or it would stay out for good; read again at the next start (2026-10-25 review). In
                 // the second pass, `out` now lacks a ride the cache does not hold either: a new day scans again
                 self.file = None;
                 self.over |= self.second;
                 return Ok(());
             }
-            Err(_) => {
+            Err(e) => {
+                if e == fat::Error::Corrupt && !self.retried {
+                    // a chain changed under a FAT sector kept (a computer writing over USB): once more, from a cold FAT
+                    (self.retried, self.seek) = (true, Seek::new());
+                    self.forget_fat();
+                    return Ok(());
+                }
                 self.end_file(false); // one bad file: skipped, the scan goes on
                 return Ok(());
             }
@@ -861,7 +874,9 @@ impl Scan {
         let mut fat = Fat::mount(d)?;
         let mut imp = Imported::default();
         let read = |fat: &mut Fat, d: &mut _, path: &str, io: &mut [u8; IO]| -> usize {
-            fat.open(d, path).and_then(|f| fat.read_at(d, &f, 0, io)).unwrap_or(0)
+            let n = fat.open(d, path).and_then(|f| fat.read_at(d, &f, 0, io)).unwrap_or(0);
+            // a file that fills the buffer was cut: its last, unterminated line is dropped, not half read
+            if n == IO { io.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1) } else { n }
         };
         let n = read(&mut fat, d, "System/DeviceData.ini", &mut io);
         let bike = imp.device(io.get(..n).unwrap_or(&[]));
@@ -1224,6 +1239,53 @@ pub(crate) mod tests {
         fat.set_size(d, &mut h, ride.len() as u32, (0, 0)).unwrap();
     }
 
+    /// A ride whose chain is shorter than its size is a permanent error: skipped, not read again at every start.
+    #[test]
+    fn a_corrupt_ride_is_skipped_for_good() {
+        let mut d = Ram(with_rides(0), 0);
+        add_ride(&mut d, "261010000000.fit");
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Activities").unwrap();
+        let h = fat.locate(&mut d, dir, "261010000000.fit").unwrap();
+        assert!(h.size > fat.cluster_bytes(), "more than one cluster");
+        for k in 0..2u32 {
+            let at = (32 + k * fat.fat_sectors()) as usize * fat::SECTOR + h.first as usize * 4;
+            d.0[at..at + 4].copy_from_slice(&0x0fff_ffffu32.to_le_bytes()); // the chain ends after one cluster
+        }
+        let (s, _) = scan(&mut d, Some(cache()), 4096);
+        assert_eq!(s.out.skipped, 3, "the bad CRC, the cut file and this one");
+    }
+
+    /// A Corrupt read once (a FAT sector kept while a computer wrote) is read again from a cold FAT: the ride counts.
+    #[test]
+    fn a_corrupt_read_once_is_retried() {
+        let base = image();
+        let (good, _) = scan(&mut Ram(base.clone(), 0), None, 1 << 20);
+        let mut d = Ram(base, 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, "Activities/261020080000.fit").unwrap();
+        let mut fl = Flaky(d, fat.lba(f.cluster), true, fat::Error::Corrupt);
+        let (s, _) = scan(&mut fl, Some(cache()), 1 << 20);
+        assert!(!fl.2, "the error happened");
+        assert_eq!(s.out.all, good.out.all, "read again, counted");
+    }
+
+    /// A stock .ini longer than the buffer is cut at a line end: no sensor id read from half a line.
+    #[test]
+    fn a_long_sensor_ini_loses_its_last_line_whole() {
+        let mut d = Ram(image(), 0);
+        let tail = b"[HRSensor1]\nHWType=0\nactive=1\nID=123456\n";
+        let mut ini = std::vec![b'\n'; IO - (tail.len() - 5)];
+        ini.extend_from_slice(tail);
+        crate::fat::tests::put_file(&mut d, "System", "Sensor.ini", &ini);
+        let imp = Scan::new().import(&mut d).unwrap();
+        assert_eq!(imp.sensors[0], None, "not ID=12");
+        let mut ok = std::vec![b'\n'; 100];
+        ok.extend_from_slice(tail);
+        crate::fat::tests::put_file(&mut d, "System", "Sensor.ini", &ok);
+        assert!(Scan::new().import(&mut d).unwrap().sensors[0].is_some());
+    }
+
     /// What a scan costs on a volume of 70 rides (the owner's count): bytes, disk reads, passes, host time;
     /// printed. With a cache that was written, no ride is read.
     #[test]
@@ -1547,14 +1609,15 @@ pub(crate) mod tests {
         }
     }
 
-    /// A ride the card or the FAT failed to give once (a read error, a chain changed under a FAT sector kept:
-    /// Corrupt) is not kept in the cache as not a ride: the next start reads it again and counts it (2026-10-25
+    /// A ride the card failed to give once (a read error; a Corrupt chain is permanent: it is skipped, see
+    /// `a_corrupt_ride_is_skipped_for_good`) is not kept in the cache as not a ride: the next start reads it again and counts it (2026-10-25
     /// review: it stayed out for good).
     #[test]
     fn a_read_error_is_not_kept() {
         let base = image();
         let (good, _) = scan(&mut Ram(base.clone(), 0), None, 1 << 20);
-        for e in [fat::Error::Io, fat::Error::Corrupt] {
+        {
+            let e = fat::Error::Io;
             let mut d = Ram(base.clone(), 0);
             let mut fat = Fat::mount(&mut d).unwrap();
             let f = fat.open(&mut d, "Activities/261020080000.fit").unwrap();
