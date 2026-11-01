@@ -1689,6 +1689,8 @@ pub struct Pc {
     pub staged: Vec<u8>,
     /// Registers poked, read back by peek (0 if never written).
     pub regs: std::collections::BTreeMap<u32, u32>,
+    /// Addresses peeked, in order (the fuzz checks each is aligned and in range).
+    pub peeked: Vec<u32>,
 }
 
 impl crate::dev::Host for Pc {
@@ -1700,6 +1702,7 @@ impl crate::dev::Host for Pc {
         self.staged.extend_from_slice(data);
     }
     fn peek(&mut self, addr: u32) -> u32 {
+        self.peeked.push(addr);
         self.regs.get(&addr).copied().unwrap_or(0)
     }
     fn poke(&mut self, addr: u32, value: u32) {

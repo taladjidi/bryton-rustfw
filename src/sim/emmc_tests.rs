@@ -222,6 +222,9 @@ fn sector_command_reads_and_survives_a_dead_card() {
     assert_eq!(sim.emmc.cmds.iter().filter(|c| matches!(c.0, 24 | 25)).count(), 2, "written twice");
     serve(&mut sim, &mut session, &mut pc, b"wtest 0x03a2bfe6\n");
     assert_eq!(pc.got, b"err write\n");
+    pc.got.clear();
+    assert_eq!(session.feed(b"sector\nsector 1 2\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert_eq!(pc.got, b"err usage: sector <n>\nerr usage: sector <n>\n");
     // never while a ride is open: the recorder is the card's only writer then
     app.press(&mut sim, Press::Short(Key::Start));
     pc.got.clear();
@@ -230,9 +233,6 @@ fn sector_command_reads_and_survives_a_dead_card() {
     assert_eq!(pc.got, b"err ride open\n");
     app.press(&mut sim, Press::Short(Key::Start));
     save_ride(&mut sim, &mut app);
-    pc.got.clear();
-    assert_eq!(session.feed(b"sector\nsector 1 2\n", &app, Stats::default(), &mut pc), Effect::None);
-    assert_eq!(pc.got, b"err usage: sector <n>\nerr usage: sector <n>\n");
     let t = sim.ms;
     app.step(&mut sim); // the app goes on
     sim.delay_ms(1000);
