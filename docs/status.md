@@ -31,6 +31,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   back on the short pass with the chip's wake as before 18e270e; the awake cost is back to about the pre-18e270e figure
   (1.62 % riding, against 1.05 % with the 100 ms pass, as measured then). Finding 10's gating stays. To see: a ride
   with the owner's sensors, the `ant` counts per kind over 60 s, `resyncs` and `radio resets` unchanged.
+- **Long app identifiers (2026-11-01, found by the chip's command table, src/sim/chip_table.rs)**: the Get App Attributes
+  request for an app of 18 bytes or more ("com.apple.MobileSMS" is 19) is a GATT write of 21 to 27 bytes, and the chip's
+  write buffer holds 20: its decoder refuses it and the chip hangs (Bryton's nRF app, reversed). `ble::write` now
+  refuses a value over `WRITE_MAX` (20) and nothing is sent, so those apps show no display name. Sim only. To see: a
+  notification from a long-named app on the unit, the link watchdog's `radio resets` unchanged. A longer name could
+  come from a prepared write (not done).
 - **A card that answers late at boot (2026-10-31, app/riding.rs `step_recorder`)**: sim only. Still to see: a ride
   recording over a checkpoint, the unit restarted (four buttons) with the card failing at the boot (no way to force
   that on the unit yet: a RAM run whose first eMMC commands fail, `tools/dev.py poke` on the card's clock, or a dev

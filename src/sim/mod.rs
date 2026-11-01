@@ -755,7 +755,14 @@ pub struct Nordic {
     pub param_updates: Vec<Vec<u8>>,
     /// Every payload received, in order.
     pub got: Vec<Vec<u8>>,
-    rx: crate::nrf::Rx,
+    /// The host's bytes of the frame being received, and the (type, opcode) of the command being answered.
+    frame: Vec<u8>,
+    cur: Option<u8>,
+    /// Why the chip hung on a command (chip_table.rs), and whether the test expects one: else the simulator panics.
+    pub hang_reason: Option<std::string::String>,
+    pub expect_hang: bool,
+    /// Answer every valid command with an empty success (no model behind it): for the test of the command builders.
+    pub table_only: bool,
     out: std::collections::VecDeque<u8>,
     /// The chip's real limits (None: events are sent as they come, the model every other test uses).
     pub limits: Option<ChipLimits>,
@@ -1089,12 +1096,21 @@ impl Nordic {
         if self.dead || self.hung {
             return;
         }
+        if let Some(kind) = self.cur.filter(|_| payload.first() == Some(&1)) {
+            chip_table::response_ok(kind, payload)
+                .unwrap_or_else(|e| panic!("the simulated chip answers off the table: {e}"));
+        } else if payload.first() != Some(&1)
+            && let Err(e) = chip_table::event_ok(payload)
+        {
+            panic!("the simulated chip sends an event off the table: {e}");
+        }
         let frame = [&(payload.len() as u16).to_le_bytes()[..], payload].concat();
         if let Some(l) = self.limits
             && payload.first() != Some(&1)
         {
             if self.events.len() >= l.slots {
                 (self.hung, self.hangs) = (true, self.hangs + 1);
+                self.hang_reason = Some("event queue overflow".into());
                 self.events.clear();
                 self.out.clear();
                 return;
@@ -1147,6 +1163,48 @@ impl Nordic {
     /// A stray byte in the stream, between frames.
     pub fn stray(&mut self, byte: u8) {
         self.out.push_back(byte);
+    }
+
+    /// One byte from the host: a 2 byte length, then the payload; the chip hangs on what its decoder refuses.
+    fn feed(&mut self, b: u8, now: u64) {
+        self.frame.push(b);
+        let [l0, l1, ..] = self.frame[..] else { return };
+        let len = usize::from(u16::from_le_bytes([l0, l1]));
+        let verdict = if len == 0 || len > chip_table::MAX_PAYLOAD {
+            Err(chip_table::Hang::Length(len))
+        } else if self.frame.len() < 2 + len {
+            return;
+        } else {
+            chip_table::check(&self.frame[2..])
+        };
+        let p = self.frame.split_off(2);
+        self.frame.clear();
+        match verdict {
+            Ok(c) if self.table_only => {
+                self.got.push(p.clone());
+                if c.out != chip_table::Out::None {
+                    let mut r = vec![1, c.op, 0, 0, 0, 0];
+                    if let chip_table::Out::Fixed(n) = c.out {
+                        r.resize(6 + n, 0);
+                    }
+                    self.cur = Some(c.kind);
+                    self.queue(&r);
+                }
+            }
+            Ok(_) => {
+                self.cur = Some(p[0]);
+                self.take(&p, now);
+            }
+            Err(h) => self.hang_on(&h, &p),
+        }
+    }
+
+    fn hang_on(&mut self, h: &chip_table::Hang, p: &[u8]) {
+        let why = format!("{h:?} on {p:02x?}");
+        assert!(self.expect_hang, "the Nordic chip hangs on a command it cannot decode: {why}");
+        (self.hung, self.hang_reason) = (true, Some(why));
+        self.events.clear();
+        self.out.clear();
     }
 
     fn take(&mut self, p: &[u8], now: u64) {
@@ -1545,6 +1603,7 @@ impl Board for Sim {
         let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
         let (limits, hangs, high_water) = (self.nordic.limits, self.nordic.hangs, self.nordic.high_water);
+        let (expect_hang, table_only) = (self.nordic.expect_hang, self.nordic.table_only);
         resets.push(self.ms);
         self.nordic = Nordic {
             dead,
@@ -1564,6 +1623,8 @@ impl Board for Sim {
             limits,
             hangs,
             high_water,
+            expect_hang,
+            table_only,
             ..Nordic::default()
         };
         self.ms += 950;
@@ -1576,10 +1637,7 @@ impl Board for Sim {
             return;
         }
         for &b in data {
-            if let Some(p) = n.rx.push(b) {
-                let p = p.to_vec();
-                n.take(&p, now);
-            }
+            n.feed(b, now);
         }
     }
 
@@ -1730,6 +1788,10 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 
 #[cfg(test)]
 mod assist_tests;
+#[cfg(test)]
+mod chip_table;
+#[cfg(test)]
+mod chip_table_tests;
 #[cfg(test)]
 mod course_tests;
 #[cfg(test)]

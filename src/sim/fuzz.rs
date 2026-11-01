@@ -7216,3 +7216,55 @@ fn cue_words() {
     }
     assert!(turns > 10_000 && rounds > 100 && none > 10, "{turns} {rounds} {none}");
 }
+
+/// The Nordic chip's events built from the table's layouts (chip_table.rs: sizes, counts and lengths consistent with
+/// their bytes), not random bytes: each must decode to its own kind, every cut of it must not panic, and the chip's
+/// size limits hold. The reach counts say every layout was generated and parsed.
+#[test]
+fn chip_events_built_from_the_table_decode_and_cut_ones_do_not() {
+    use super::chip_table::{ANT_EVENT_LEN, EVENTS, build_event, event_ok};
+    use crate::ble::{Event, event};
+    let mut reached = std::collections::BTreeMap::<u16, u32>::new();
+    let (mut cuts, mut flips) = (0u32, 0u32);
+    for seed in 1..=scaled(300) {
+        let mut r = xorshift(seed);
+        for e in EVENTS {
+            let p = build_event(e, &mut r);
+            assert!(event_ok(&p).is_ok(), "seed {seed}: {}", e.name);
+            let parsed = if e.id == 0x1d {
+                crate::nrf::adv_report(&p).is_some()
+            } else {
+                matches!(event(&p), Some(ev) if ev != Event::Other)
+            };
+            assert!(parsed, "seed {seed}: {} {p:02x?}", e.name);
+            *reached.entry(e.id).or_default() += 1;
+            for n in 0..p.len() {
+                let _ = event(&p[..n]);
+                let _ = crate::nrf::adv_report(&p[..n]);
+                cuts += 1;
+            }
+            let mut q = p.clone();
+            let i = r() as usize % q.len();
+            q[i] ^= 1 << (r() % 8);
+            let _ = event(&q);
+            let _ = crate::nrf::adv_report(&q);
+            flips += 1;
+        }
+        // the ANT event: 44 bytes, a broadcast (0x4e or 0x4f) or a channel event code at the end
+        let mut a = [0u8; ANT_EVENT_LEN];
+        a.iter_mut().for_each(|b| *b = (r() >> 8) as u8);
+        (a[0], a[2]) = (8, [0x4e, 0x4f][r() as usize % 2]);
+        assert!(crate::nrf::ant_broadcast(&a).is_some(), "seed {seed}");
+        (a[42], a[43]) = ([5, 6, 7][r() as usize % 3], (r() % 8) as u8);
+        let hits = [crate::nrf::ant_tx_completed(&a), crate::nrf::ant_tx_failed(&a), crate::nrf::ant_closed(&a)];
+        assert!(hits.iter().flatten().count() >= 1, "seed {seed}: the event code is read");
+        for n in 0..ANT_EVENT_LEN {
+            assert!(crate::nrf::ant_broadcast(&a[..n]).is_none(), "seed {seed}: cut at {n}");
+        }
+        *reached.entry(0x100).or_default() += 1;
+    }
+    let want = thr(299);
+    assert_eq!(reached.len(), EVENTS.len() + 1);
+    assert!(reached.values().all(|&n| n >= want), "{reached:?}");
+    assert!(cuts > 10_000 && flips > 1000, "{cuts} {flips}");
+}

@@ -477,8 +477,15 @@ pub fn read(b: &mut impl Board, rx: &mut Rx, conn: u16, handle: u16) -> Result<(
     Cmd::new(GATTC_READ).u16(conn).u16(handle).u16(0).run(b, rx)
 }
 
+/// The longest value the chip's GATT client write takes: its buffer is the ATT MTU 23 minus 3. A longer one does not
+/// decode and the chip hangs for ever (Bryton's nRF app, reversed; BOARD.md 11).
+pub const WRITE_MAX: usize = 20;
+
 /// Writes `value` to the peer's attribute `handle`, with a response ([`Event::Written`]).
 pub fn write(b: &mut impl Board, rx: &mut Rx, conn: u16, handle: u16, value: &[u8]) -> Result<(), Error> {
+    if value.len() > WRITE_MAX {
+        return Err(Error::Code(12)); // NRF_ERROR_DATA_SIZE: sent, the chip would hang
+    }
     Cmd::new(GATTC_WRITE).u16(conn).u8(1).u8(1).u8(0).u16(handle).u16(0).data16(value).run(b, rx)
 }
 

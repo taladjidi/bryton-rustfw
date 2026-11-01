@@ -519,6 +519,25 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     (1 peripheral, 5 central), ATT MTU 153, 11 vendor UUIDs, attribute table 0x580, no service changed.
   - Stock's sensor search keeps reports at RSSI >= -75 dBm listing 0x180d (heart rate) or 0x1816 (speed and
     cadence); it has no BLE power client (power is ANT+ only on stock).
+- **The chip's command table (Bryton's nRF app, reversed; layouts from Nordic's open nRF5 SDK 14.2.0 serialization):**
+  the app accepts a packet of 1 to 384 payload bytes of type 00 (BLE or SoC), 03 (DTM), 05 (reset) or 06 (ANT), and
+  nothing else. It has 120 distinct opcodes: SoC 0x32, 0x43, 0x49; common 0x60 and 0x62 to 0x69; GAP 0x6C to 0x90;
+  GATT client 0x94 to 0x9E; GATT server 0xA0 to 0xAD; L2CAP 0xB0 to 0xB4; ANT 0xC0, 0xC2 to 0xC8, 0xCC to 0xDB, 0xDD to
+  0xE1, 0xE7, 0xE9 to 0xEC, 0xF2 to 0xF5, 0xF8 to 0xFA. **The chip hangs for ever** (no response, no event, until PA6)
+  on: a payload of 0 or over 384 bytes; another type; a type with no opcode; an opcode outside that set; and any
+  command whose arguments the opcode's decoder does not consume to exactly the packet's length (the SDK's
+  `SER_REQ_DEC_END`), or whose field it refuses (a presence byte other than 0 or 1, `cond_field_dec`; a buffer longer
+  than the chip's own: `buf_dec`). A SoftDevice error (NO_MEM, INVALID_PARAM) is a response, not a hang. The GATT client
+  write's value buffer is 20 bytes (ATT MTU 23 minus 3, `BLE_GATTC_WRITE_P_VALUE_LEN_MAX`; seen in the app's handler),
+  so a longer `sd_ble_gattc_write` hangs the chip (`ble::WRITE_MAX`; it took out a Get App Attributes request for an
+  identifier over 17 bytes, 2026-11-01). Layouts are the connectivity side's `*_req_dec` in
+  `components/serialization/connectivity/codecs/{ble,ant}/serializers/` and the `*_dec` struct codecs in
+  `components/serialization/common/struct_ser/`; `src/sim/chip_table.rs` lists, for each of the 49 commands rustfw sends,
+  the decoder it follows (file and function), its arguments and the response's output length; the other opcodes are
+  present with layout "not modelled", and the simulated chip hangs on them. Events: the 23 BLE events rustfw parses
+  (GAP 0x10 to 0x23, GATT client 0x30 to 0x3B, GATT server 0x50 to 0x56, common 0x01) with their encoders
+  (`ble_*_evt_conn.c`), at most 262 bytes before encoding, and the 44-byte ANT event; `src/sim/chip_table_tests.rs`
+  builds every command rustfw has and `fuzz.rs` builds every event from these layouts.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.
 - **SoftDevice API version 5** (S132 / S332 v5.x, nRF5 SDK 14): stock's GATTS request encoders use 0xa0 service add,
