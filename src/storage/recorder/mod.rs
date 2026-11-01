@@ -478,6 +478,9 @@ pub struct Recorder {
     begun: u32,
     /// `make_kept` tried since boot: once, so one that keeps failing costs no FAT sync at every start.
     kept_tried: bool,
+    /// `setup` synced the FATs since boot with the saved rides' folder torn (stock's `\Activities` on cluster 0,
+    /// never mended): once, as `kept_tried`.
+    torn_synced: bool,
 }
 
 /// The buffer as the FIT writer's [`Sink`]: no card access (a checkpoint's flush is [`Recorder::flush`]).
@@ -571,6 +574,7 @@ impl Recorder {
             hold: false,
             begun: 0,
             kept_tried: false,
+            torn_synced: false,
         }
     }
 
@@ -1279,9 +1283,9 @@ impl Recorder {
                     }
                 }
             }
-            // a folder entry on cluster 0 (a mkdir torn inside it) names nothing: the ride is not there, and stays
-            // named where it was recorded, never retried forever
-            Err(Error::NotFound | Error::Corrupt) => {}
+            // a folder entry on cluster 0 (a mkdir torn inside it), or a file of the folder's name, names nothing:
+            // the ride is not there, and stays named where it was recorded, never retried forever
+            Err(Error::NotFound | Error::Corrupt | Error::Refused) => {}
             Err(e) => return Err(e),
         }
         let dir = fat.open(d, self.kind.rides().1)?;
@@ -1399,12 +1403,17 @@ impl Recorder {
             Ok(f) => (fat.locate(d, f, self.kind.rec()).ok(), fat.find(d, f, self.kind.rides().0).is_ok()),
             Err(_) => (None, false),
         };
+        // stock's `\Activities` torn (on cluster 0) is never mended, so never whole: synced once a boot for it, not
+        // at every Start (both FATs read whole)
+        let saved = fat.open(d, self.kind.saved());
+        let torn = saved == Err(Error::Corrupt);
         let whole = rides
             && rec.is_some_and(|r| r.size >= REC_SECTORS * SECTOR_U32)
-            && fat.open(d, self.kind.saved()).is_ok()
+            && (saved.is_ok() || torn && self.torn_synced)
             && fat.open(d, DISCARDED_PATHS[1]).is_ok();
         if !whole {
             fat.sync_fats(d)?;
+            self.torn_synced |= torn;
         }
         let dir = fat.ensure_own_dir(d, root, DIR, t)?;
         let mut rec = match fat.locate(d, dir, self.kind.rec()) {
@@ -1419,10 +1428,11 @@ impl Recorder {
         self.rec = Some(rec);
         let rides = fat.ensure_own_dir(d, dir, self.kind.rides().0, t)?;
         // `\Activities` (both copies' names are looked for in it) and the saved folder; stock's with a torn entry (on
-        // cluster 0) is never mended: the ride is recorded all the same, and kept where it was recorded at its save
+        // cluster 0) is never mended, nor a file of that name (Refused) removed: the ride is recorded all the same,
+        // and kept where it was recorded at its save
         for got in [fat.ensure_dir(d, root, ACTIVITIES, t), self.kind.saved_dir(fat, d, t)] {
             match got {
-                Ok(_) | Err(Error::Corrupt) => {}
+                Ok(_) | Err(Error::Corrupt | Error::Refused) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -1441,7 +1451,9 @@ impl Recorder {
     fn read_records(&mut self, fat: &mut Fat, d: &mut impl DiskWrite) -> Result<Option<Rec>, Error> {
         let rec = self.rec.ok_or(Error::NotFound)?;
         let mut best: Option<Rec> = None;
-        for k in 0..2 {
+        // a ride.rec made and cut before its sectors and size were written (no cluster yet: `Fat::create`; or an
+        // older build's, on a cluster whose stale sectors may hold another ride.rec's records): no record
+        for k in 0..if rec.size < REC_SECTORS * SECTOR_U32 { 0 } else { 2 } {
             let mut s = [0u8; SECTOR];
             fat.read_sector(d, &rec, 3 * k + 2, &mut s)?;
             if let Some(r) = Rec::from_sector(&s)

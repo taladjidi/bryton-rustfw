@@ -26,8 +26,10 @@
 //! in a folder of its own so its growing entry is never in `\Rustfw`'s directory sectors, which hold `ride.rec`'s
 //! and the ride folders' entries (storage/recorder/mod.rs, "The app's files in `\Rustfw`"). An append rewrites the
 //! file's last sector with the line added, then its size ([`Fat::set_size`]): a cut between leaves the file as it
-//! was. A line that would take it past [`CAP`] starts it again (the old lines dropped): the size set to 0 first, so a
-//! cut leaves the old log, an empty one or the new line alone.
+//! was. A line that would take it past [`CAP`] starts it again (the old lines dropped): the line written at its start,
+//! then the size, which frees the rest. Never emptied first: a cut then left an empty file on a cluster, which
+//! fsck_msdos rejects (B1b-2's review). A cut leaves the old log, the new line alone, or (between the line and the
+//! size) the new line then the old log from the next sector on.
 
 use crate::fat::{DiskWrite, Error, Fat};
 use crate::text::Line;
@@ -206,11 +208,10 @@ pub fn append(
     };
     // a size its chain cannot hold (a damaged entry) starts it again, rather than refusing every line to come
     let held = u64::from(h.clusters) * u64::from(fat.cluster_bytes());
+    // started again (at 0): never emptied first, which left an empty file on a cluster at a cut (fsck_msdos: "too
+    // many clusters allocated", B1b-2's review); the line written over the start, then the size cuts the rest. A cut
+    // between leaves the old size: the new line first, then the old log from that sector on
     let at = if u64::from(h.size) > held { 0 } else { start(h.size, len) };
-    if at == 0 && h.size > 0 && h.clusters > 0 {
-        // started again: emptied first, so a cut leaves the old log, an empty one or the new line, never a mix
-        fat.set_size(d, &mut h, 0, t)?;
-    }
     let (first, keep) = (at / 512, (at % 512) as usize);
     // the line crosses one sector boundary at most: two sectors
     let mut buf = [0u8; 1024];
@@ -252,5 +253,66 @@ mod tests {
         // the longest line fits its buffer, the newline kept
         let long = line(marker(0, Kind::Cpu, 0x1fff), (2026, 12, 31, 23, 59, 59), &"x".repeat(300));
         assert!(long.as_str().ends_with('\n'), "{}", long.as_str());
+    }
+
+    /// B1b-2's review (3): the log started again (full to [`CAP`]) cut after every sector, then the boot's FAT sync:
+    /// never an empty log on a cluster (fsck_msdos: "too many clusters allocated"), the volume as fsck says (a chain
+    /// past its size only between the size and its trim), the log the old one, the new line alone, or the new line
+    /// then the old log from the next sector; and the next line makes it whole. The cut between the line and the
+    /// size is in target/fat (check.sh runs fsck_msdos on it).
+    #[test]
+    fn a_restart_cut_at_every_sector() {
+        use crate::fat::tests::{Ram, read_all};
+        use crate::fat::write::tests::{Cut, fsck, fsck_cut};
+        const T: (u16, u16) = (0, 0);
+        let mut d = Ram(crate::fat::tests::image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let top = fat.ensure_dir(&mut d, fat.root(), crate::recorder::DIR, T).unwrap();
+        let dir = fat.ensure_dir(&mut d, top, LOG_DIR, T).unwrap();
+        // lines of 29 bytes up to 30 bytes short of the cap
+        let old: std::vec::Vec<u8> = (0..(CAP as usize - 30) / 29)
+            .flat_map(|i| std::format!("old line {i:04} padded to 32 b\n").into_bytes())
+            .collect();
+        let mut h = fat.create(&mut d, dir, FILE, T).unwrap();
+        let mut padded = old.clone();
+        padded.resize(old.len().div_ceil(512) * 512, 0);
+        fat.write_sectors(&mut d, &mut h, 0, &padded).unwrap();
+        fat.set_size(&mut d, &mut h, old.len() as u32, T).unwrap();
+        let (img, new, next) = (d.0, [b'n'; 59].iter().chain(b"\n").copied().collect::<std::vec::Vec<u8>>(), b"next\n");
+        assert_eq!(start(old.len() as u32, new.len() as u32), 0, "started again");
+        let mut whole = Cut(Ram(img.clone(), 0), u32::MAX);
+        let mut fat = Fat::mount(&mut whole).unwrap();
+        append(&mut fat, &mut whole, top, &new, T).unwrap();
+        let writes = u32::MAX - whole.1;
+        let mut mixed = 0;
+        for k in 0..writes {
+            let what = std::format!("cut after {k} of {writes}");
+            let mut c = Cut(Ram(img.clone(), 0), k);
+            let mut fat = Fat::mount(&mut c).unwrap();
+            assert!(append(&mut fat, &mut c, top, &new, T).is_err(), "{what}");
+            let mut m = c.0;
+            let mut fat = Fat::mount(&mut m).unwrap();
+            fat.sync_fats(&mut m).unwrap();
+            let f = fat.open(&mut m, "Rustfw/Log/faults.log").unwrap();
+            assert!(f.size > 0, "{what}: never emptied");
+            let scan = fsck_cut(&m.0).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert!(scan.past.iter().all(|p| p.0 == f.cluster), "{what}: {:?}", scan.past);
+            let got = read_all(&mut fat, &mut m, "Rustfw/Log/faults.log").unwrap();
+            let rest =
+                |g: &[u8]| g.len() == old.len() && g[new.len()..512].iter().all(|&b| b == 0) && g[512..] == old[512..];
+            let is_mixed = got.starts_with(&new) && rest(&got);
+            assert!(got == old || got == new || is_mixed, "{what}: the log");
+            if is_mixed && mixed == 0 {
+                assert_eq!(fsck(&m.0), Ok(0), "{what}: between the line and the size, the volume clean");
+                crate::fat::tests::dump("faultlog_restart_cut", &m.0);
+            }
+            mixed += usize::from(is_mixed);
+            // the power back: the next line, at the end of what the cut left
+            append(&mut fat, &mut m, top, next, T).unwrap();
+            let then = read_all(&mut fat, &mut m, "Rustfw/Log/faults.log").unwrap();
+            assert!(then == [&got[..], next].concat(), "{what}: then");
+            assert!(fsck(&m.0).is_ok(), "{what}: then {:?}", fsck(&m.0));
+        }
+        assert!(mixed == 1 && writes >= 3, "{mixed} mixed of {writes} writes");
     }
 }
