@@ -14,7 +14,7 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 - The USB core (OTG, PHY, VBUS timing): the dev link runs against a fake computer (`Pc`), not the cable.
 - DBP (the backup domain write enable, PWR_CR1): the simulated backup registers are always writable.
 - The MPU, the caches and the memory attributes: no protection and no cache lines.
-- The eMMC: the card is a model (`EmmcCard`) with fixed timing; the responses of the commands in `expected_resp` are checked and an unlisted command fails the test; the data commands (8, 17, 18, 24, 25) go through `emmc_read` / `emmc_write`, which do not check a response type.
+- The eMMC: the card is a model (`EmmcCard`, src/sim/emmc_model.rs) with inferred timing and stalls; the responses of the commands in `expected_resp` are checked and an unlisted command fails the test; the data commands (8, 17, 18, 24, 25) go through `emmc_read` / `emmc_write`, which do not check a response type.
 
 ## Not yet seen on the unit
 
@@ -33,6 +33,11 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   `prof`). The gate's named exemptions (`EXEMPT` in src/sim/budget_tests.rs, the owner's performance worklist) are the
   passes that break a limit with these costs: ride start (about 1.1 s of keys unread at 0.2 ms a sector, 1.8 s at 2 ms),
   the checkpoint under a card stall, the save's read-back of a 3 h file, the screenshot's write.
+- **The card model's rules (2026-11-02, src/sim/emmc_model.rs E1 to E6):** the stall is now the card's busy (CMD13
+  answers programming until it ends; over the driver's 1 s it gives `Busy`, the ride goes on), R1's error bits are
+  sourced from Linux's mmc.h; the stall's length and period, and whether the unit's card raises URGENT_BKOPS
+  (EXCEPTION_EVENT, R1 bit 6) at all, are *inferred*. To see on the unit, with the write bench above: the longest
+  CMD13 busy over a few thousand sector writes, and R1 bit 6 in `tools/dev.py emmc`'s status.
 - **Review 3 of the chip's reset (2026-11-01):** nothing is sent while PA6 is low or the chip boots (the TX FIFO is flushed
   at the hold: USART_RQR TXFRQ, main.rs `nrf_hold`; to see: no `resyncs` after forcing a reset mid-command), the rider's
   sensor choice and the PAIR window during a reset are applied after it, the switch-off during a reset ends with the chip

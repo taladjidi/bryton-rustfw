@@ -309,3 +309,111 @@ fn a_card_that_worked_and_then_fails_is_identified_six_times_in_130_s() {
     }
     assert_eq!(sim.emmc.cmds.iter().filter(|c| c.0 == 0).count(), 6);
 }
+
+/// The card model's rules (emmc_model.rs) trigger: an illegal command is not answered and the next answer says
+/// ILLEGAL_COMMAND, once (E2); a write to a protected sector lands nothing and the next answer says WP_VIOLATION
+/// (E2); a read past the card is OUT_OF_RANGE; a BKOPS stall answers CMD13 programming with EXCEPTION_EVENT, refuses
+/// a read meanwhile and ends on time (E1, E4); a CMD0 does not end the busy (CMD1 waits it out).
+#[test]
+fn the_card_models_rules_trigger() {
+    use super::emmc_model::{EXCEPTION_EVENT, ILLEGAL_COMMAND, OUT_OF_RANGE, WP_VIOLATION};
+    use crate::Board;
+    use crate::emmc::Resp::R1;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = vec![0; 64 * SECTOR];
+    let card = Card::init(&mut sim).unwrap();
+    let status = |sim: &mut Sim| sim.emmc_cmd(13, 1 << 16, R1).unwrap()[0];
+    assert_eq!(sim.emmc_cmd(12, 0, R1), Err(BusError::Timeout), "CMD12 in tran: not answered");
+    assert_eq!(status(&mut sim) & ILLEGAL_COMMAND, ILLEGAL_COMMAND, "said in the next answer");
+    assert_eq!(status(&mut sim) & ILLEGAL_COMMAND, 0, "and cleared by it");
+    sim.emmc.wp.push(5..6);
+    assert_eq!(sim.emmc_write(24, 5, &[3; SECTOR]).map(|s| s & WP_VIOLATION), Ok(0), "the command's answer is clean");
+    assert!(sim.emmc.image[5 * SECTOR..6 * SECTOR].iter().all(|&b| b == 0), "nothing landed");
+    assert_eq!(status(&mut sim) & WP_VIOLATION, WP_VIOLATION);
+    assert_eq!(status(&mut sim) & WP_VIOLATION, 0, "clear by read");
+    let mut buf = [0u8; SECTOR];
+    assert_eq!(sim.emmc_read(17, EMMC_SECTORS, &mut buf), Err(BusError::Timeout));
+    assert_eq!(status(&mut sim) & OUT_OF_RANGE, OUT_OF_RANGE);
+    sim.emmc.bkops(sim.ms, 40);
+    let s = status(&mut sim);
+    assert_eq!((s >> 9 & 0xf, s & 1 << 8, s & EXCEPTION_EVENT), (7, 0, EXCEPTION_EVENT), "{s:#x}");
+    assert_eq!(sim.emmc_read(17, 3, &mut buf), Err(BusError::Timeout), "a read while programming: illegal");
+    let t0 = sim.ms;
+    assert_eq!(card.read(&mut sim, 3, &mut buf), Ok(()), "the driver waits the stall out first");
+    assert!((40..60).contains(&(sim.ms - t0 + 1)), "{} ms", sim.ms - t0);
+    sim.emmc.bkops(sim.ms, 30);
+    let t0 = sim.ms;
+    assert!(Card::init(&mut sim).is_ok());
+    assert!(sim.ms - t0 >= 30, "CMD1 busy until the programming is over: {} ms", sim.ms - t0);
+}
+
+/// Every R1 error bit (emmc_model.rs `R1_ERRORS`) fails the write wherever the card reports it: in the first
+/// CMD13 after a write, in a CMD13 while still programming (the bits are clear by read: a poll that drops them loses
+/// them, Linux's `mmc_blk_busy_cb` accumulates them), and in CMD12's answer after an open-ended CMD25 (Linux checks
+/// `brq->stop.resp[0]`), plain or reliable. EXCEPTION_EVENT alone is not an error.
+#[test]
+fn every_r1_error_bit_fails_the_write() {
+    for (bit, name) in super::emmc_model::R1_ERRORS {
+        for (rel, polls, sectors) in [(0, 0, 1), (0, 3, 1), (0, 0, 4), (0, 3, 4), (crate::emmc::EN_REL_WR, 3, 4)] {
+            let mut sim = Sim::new(9, 0, 0);
+            sim.emmc.image = vec![0; 64 * SECTOR];
+            sim.emmc.rel_param = rel;
+            let card = Card::init(&mut sim).unwrap();
+            (sim.emmc.prog_polls, sim.emmc.prog_error) = (polls, bit);
+            let got = card.write(&mut sim, 8, &vec![1; sectors * SECTOR]);
+            assert!(
+                matches!(got, Err(Error::Status(_, s)) if s & bit == bit),
+                "{name}: {got:?} (reliable {rel}, {polls} polls, {sectors} sectors)"
+            );
+        }
+    }
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = vec![0; 64 * SECTOR];
+    let card = Card::init(&mut sim).unwrap();
+    sim.emmc.bkops(sim.ms, 20);
+    assert_eq!(card.write(&mut sim, 8, &[1; 2 * SECTOR]), Ok(()), "URGENT_BKOPS raised: a status, not an error");
+}
+
+/// A protected sector: the write lands nothing and the driver says so, a single sector or four, on a plain card
+/// (where the violation comes in CMD12's answer) or a reliable one.
+#[test]
+fn a_write_protect_violation_is_an_error() {
+    for (rel, sectors) in [(0, 1), (0, 4), (crate::emmc::EN_REL_WR, 4)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = vec![0; 64 * SECTOR];
+        sim.emmc.rel_param = rel;
+        let card = Card::init(&mut sim).unwrap();
+        sim.emmc.wp.push(8..9);
+        let got = card.write(&mut sim, 8, &vec![1; sectors * SECTOR]);
+        assert!(
+            matches!(got, Err(Error::Status(_, s)) if s & super::emmc_model::WP_VIOLATION != 0),
+            "{got:?} (reliable {rel}, {sectors} sectors)"
+        );
+        assert!(sim.emmc.image.iter().all(|&b| b == 0), "nothing landed");
+    }
+}
+
+/// The card's stall (emmc_model.rs E1) under the driver's 1 s bound is waited out (asleep: the clock moves, the CPU
+/// does not work through it); over it, the driver gives up (`Busy`) with the data on the card, and the next use
+/// identifies the card again once the stall is over.
+#[test]
+fn a_card_stall_is_waited_out_up_to_the_drivers_second() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = vec![0; 64 * SECTOR];
+    let mut emmc = Emmc::new();
+    emmc.write(&mut sim, 2, &[1; SECTOR]).unwrap();
+    (sim.cost.stall_every, sim.cost.stall_ms) = (1, 900);
+    let (t0, awake) = (sim.ms, sim.awake_ns);
+    assert_eq!(emmc.write(&mut sim, 3, &[2; SECTOR]), Ok(()));
+    assert!(sim.ms - t0 >= 900, "{} ms", sim.ms - t0);
+    assert!(sim.awake_ns - awake < 10_000_000, "asleep through the stall: {} ns awake", sim.awake_ns - awake);
+    sim.cost.stall_ms = 1200;
+    let t0 = sim.ms;
+    assert_eq!(emmc.write(&mut sim, 4, &[3; SECTOR]), Err(Error::Busy));
+    assert!((1000..1100).contains(&(sim.ms - t0)), "{} ms", sim.ms - t0);
+    assert!(sim.emmc.image[4 * SECTOR..5 * SECTOR].iter().all(|&b| b == 3), "the sector landed");
+    sim.cost.stall_every = 0;
+    emmc.retry_now();
+    assert_eq!(emmc.write(&mut sim, 5, &[4; SECTOR]), Ok(()), "identified again after the stall");
+    assert!(sim.emmc.cmds.iter().rev().any(|c| c.0 == 0), "from CMD0");
+}

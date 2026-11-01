@@ -95,7 +95,7 @@ fn a_read_only_build_leaves_the_open_ride_marker() {
 }
 
 /// The record times of the ride file at `path` on the volume `img`.
-fn record_times(img: &[u8], path: &str) -> Vec<u32> {
+pub(super) fn record_times(img: &[u8], path: &str) -> Vec<u32> {
     let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
     let f = fat.open(&mut d, path).unwrap();
@@ -399,45 +399,57 @@ fn a_late_card_with_no_ride_settles() {
 
 /// Reliable write (emmc.rs) on a card that offers it: every write is CMD23 with bit 31 then CMD25, never a plain
 /// one. So a cut tears nothing: at every sector of a ride's first 75 s, the reboot finds a clean volume and the
-/// ride at its last checkpoint (the root directory's sector included, which a plain write could lose).
+/// ride at its last checkpoint (the root directory's sector included, which a plain write could lose). With the
+/// card's stalls (emmc_model.rs E1) too: none in these 75 s, 400 ms every 11 sectors (waited out), 1.2 s every 37
+/// (past the driver's bound: `Busy`, the write retried).
 #[test]
 fn every_write_is_reliable_when_the_card_offers_it() {
-    let start = |cut: Option<u64>| {
+    let start = |cut: Option<u64>, (every, ms): (u64, u64)| {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         (sim.emmc.rel_param, sim.emmc.tear, sim.emmc.cut_after) = (crate::emmc::EN_REL_WR, true, cut);
+        (sim.cost.stall_every, sim.cost.stall_ms) = (every, ms);
+        sim.gnss.expect = Some("stream time-out"); // a stall past the driver's bound holds the pass over 1.5 s
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 1000);
         app.press(&mut sim, Press::Short(Key::Start));
         run(&mut sim, &mut app, 75_000);
         (sim, app)
     };
-    let (sim, _) = start(None);
-    let cmds = &sim.emmc.cmds;
-    assert!(!cmds.iter().any(|c| c.0 == 24), "a plain single-sector write");
-    for (k, _) in cmds.iter().enumerate().filter(|c| c.1.0 == 25) {
-        assert!(k > 0 && cmds[k - 1].0 == 23 && cmds[k - 1].1 & 1 << 31 != 0, "CMD25 without a reliable CMD23");
-    }
-    let total = sim.emmc.sectors_written;
-    let (mut resumed, mut first) = (0, None);
-    for cut in 0..total {
-        let (mut sim, _) = start(Some(cut));
-        let (mut sim, mut app) = reboot(&mut sim, 2);
-        run(&mut sim, &mut app, 1000);
-        let back = app.notes.list[0].as_str().ends_with("RIDE RESUMED");
-        resumed += usize::from(back);
-        // once the ride's first checkpoint is on the card, every later cut resumes it: a cut that does not is a
-        // ride lost (a cut before it finds no ride to resume, which is right: nothing was saved yet)
-        match (first, back) {
-            (None, true) => first = Some(cut),
-            (Some(f), false) => panic!("cut {cut}: the ride not resumed, though cut {f} resumed it"),
-            _ => {}
+    for stall in [(1024, 300), (11, 400), (37, 1200)] {
+        let (sim, app) = start(None, stall);
+        let cmds = &sim.emmc.cmds;
+        assert!(!cmds.iter().any(|c| c.0 == 24), "a plain single-sector write");
+        for (k, _) in cmds.iter().enumerate().filter(|c| c.1.0 == 25) {
+            assert!(k > 0 && cmds[k - 1].0 == 23 && cmds[k - 1].1 & 1 << 31 != 0, "CMD25 without a reliable CMD23");
         }
-        let lost = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
-        assert!(lost <= 2, "cut {cut}: {lost} clusters lost");
+        assert_eq!(app.rec.clean.errors > 0, stall.1 > 1000, "{stall:?}: writes given up past the bound only");
+        // a ride start given up (`Busy`) is made again in new clusters, the last try's left lost: the uncut run's
+        // count (4 with the 1.2 s stalls, 2026-11-02), space only, never a record
+        let leaked = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+        assert!(leaked <= 4, "{stall:?}: {leaked} clusters leaked by the retries");
+        let total = sim.emmc.sectors_written;
+        let (mut resumed, mut first) = (0, None);
+        for cut in 0..total {
+            let (mut sim, _) = start(Some(cut), stall);
+            let (mut sim, mut app) = reboot(&mut sim, 2);
+            run(&mut sim, &mut app, 1000);
+            let back = app.notes.list[0].as_str().ends_with("RIDE RESUMED");
+            resumed += usize::from(back);
+            // once the ride's first checkpoint is on the card, every later cut resumes it: a cut that does not is a
+            // ride lost (a cut before it finds no ride to resume, which is right: nothing was saved yet)
+            match (first, back) {
+                (None, true) => first = Some(cut),
+                (Some(f), false) => panic!("{stall:?} cut {cut}: the ride not resumed, though cut {f} resumed it"),
+                _ => {}
+            }
+            let lost =
+                crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("{stall:?} cut {cut}: {e}"));
+            assert!(lost <= 2 + leaked, "{stall:?} cut {cut}: {lost} clusters lost");
+        }
+        std::println!("{stall:?}: {total} cuts, {resumed} resumed from cut {first:?}");
+        assert!(resumed > 0, "{stall:?}");
     }
-    std::println!("{total} cuts, {resumed} resumed from cut {first:?}");
-    assert!(resumed > 0);
 }
 
 /// A card without reliable write whose cut leaves the torn sector's first k bytes new and the rest old (the review
@@ -1310,4 +1322,69 @@ fn a_resumed_gravel_ride_without_its_settings_file_resumes_as_road() {
     run(&mut sim2, &mut app, 1000);
     assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
     assert_eq!(app.ride_profile(), crate::ride::Profile::Road);
+}
+
+/// A power loss that takes the backup domain too ([`Sim::power_loss`]: RAM and the backup registers, `RIDE_BKP`
+/// with them), the card left whole or with a checkpoint torn mid-write: the boot has no marker, so it does not look
+/// for the ride, and the unit, idle, switches off holding it (the gap: `a_power_loss_ride_keeps_the_unit_on`); at
+/// the next start Start finds it (journal 2026-10-31, the Start-triggered path: stopped less than `RESUME_S` ago,
+/// resumed in its place), and the saved ride has every second up to its last checkpoint, in order, then the new ones.
+#[test]
+fn a_ride_survives_a_power_loss_that_clears_the_backup_registers() {
+    for torn in [false, true] {
+        let (mut sim, app) = power_lost_ride(torn);
+        let name = std::string::String::from(core::str::from_utf8(&app.rec.clean.name()).unwrap());
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 10_000);
+        assert!(!app.rec.resume_pending, "{torn}: no marker, no resume at the boot");
+        app.settings.auto_off = 1; // 5 min, the default (the file read from the card may say off)
+        run(&mut sim, &mut app, 400_000);
+        assert!(sim.standby, "{torn}: the gap closed? then assert the unit stays on here");
+        let (mut sim, mut app) = reboot(&mut sim, 12);
+        run(&mut sim, &mut app, 3000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 3000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{torn}: {}", app.notes.list[0].as_str());
+        // back paused at its last checkpoint: nothing lost before it
+        assert!(app.ride.state() == crate::ride::State::Paused && app.ride.timer_s() >= 60, "{torn}: resumed");
+        app.press(&mut sim, Press::Short(Key::Start)); // on
+        run(&mut sim, &mut app, 70_000);
+        app.press(&mut sim, Press::Short(Key::Start)); // pause
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 5000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{torn}: {}", app.notes.list[0].as_str());
+        let times = record_times(&sim.emmc.image, &std::format!("Activities/{name}.fit"));
+        assert!(times.windows(2).all(|p| p[0] < p[1]), "{torn}: times in order");
+        assert!(times.len() >= 60 + 60, "{torn}: {} records: the first minute and the new one", times.len());
+        assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "{torn}");
+    }
+}
+
+/// A ride of 125 s, its checkpoints on the card, the power lost with the backup domain at 125 s or, `torn`,
+/// in the middle of its second checkpoint's first write: the unit after it, and the app that recorded it.
+fn power_lost_ride(torn: bool) -> (Sim, App) {
+    let (mut sim, mut app, _, _) = ride_70s();
+    if torn {
+        (sim.emmc.tear, sim.emmc.cut_after) = (true, Some(sim.emmc.sectors_written + 1));
+    }
+    run(&mut sim, &mut app, 55_000); // past the second checkpoint (120 s), cut in it if torn
+    assert_eq!(sim.emmc.dead, torn);
+    (sim.power_loss(9, 5), app)
+}
+
+/// AUTO OFF's own rule (app/device.rs: never off while the recorder holds anything): the unit must not switch off
+/// as idle while the card holds a ride not recovered. After a power loss that cleared the backup
+/// registers it does: the boot has no marker and does not read the card for the ride, so nothing holds the unit on.
+/// No ride is lost (it stays in `\Rustfw\Rides` and Start resumes or saves it: the test above), but it is out of
+/// `\Activities` meanwhile. Follow-up (recorder, its own opus review and unit check): look for the ride at a boot
+/// whose backup registers are empty.
+#[test]
+#[ignore = "known gap 2026-11-02: a power loss that clears RIDE_BKP lets the unit switch off holding the ride"]
+fn a_power_loss_ride_keeps_the_unit_on() {
+    let (mut sim, _) = power_lost_ride(false);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 10_000);
+    app.settings.auto_off = 1;
+    run(&mut sim, &mut app, 400_000);
+    assert!(!sim.standby, "switched off as idle with a ride left on the card");
 }

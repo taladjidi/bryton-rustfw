@@ -208,7 +208,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol: identification, EXT_CSD SEC_COUNT, block reads and writes
   (writes refused at or past sector B, stock's reserved area), stock's layout, the controller's data-path arithmetic
   main.rs uses (`data_error`: the SDMMC_STA flags' priority, `data_limit_ms`, `clkcr`); against the `Board` primitives
-  `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `src/sim/mod.rs` has a model of the card
+  `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `src/sim/emmc_model.rs` has a model of the card
   (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
   basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at the first main loop pass, for the scan's cache of
   stock's rides; at boot at the first start, for stock's settings, or when a ride is open).
@@ -340,6 +340,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `gnss_model.rs` (the GNSS receiver, strict like the Nordic table: its rules G1 to G10 with their sources, ACK / NAK and
   MGA-ACK answers, the 1.5 s stream time-out, MAXFF, the 4 kB buffer; a test that provokes a rule sets `gnss.expect`) and
   `gnss_model_tests.rs` (each rule, every frame `gnss.rs` builds against the table, the retry of a refused configuration).
+  `emmc_model.rs` (the eMMC, `EmmcCard`: rules E1 to E6 with sources, the stall as the card's busy, R1 error bits
+  ILLEGAL_COMMAND, WP_VIOLATION and any a test injects, clear by read, URGENT_BKOPS, the power cut and its torn sector;
+  its tests in `emmc_tests.rs`).
   `panel_model.rs` (the ST7789V's settle and sleep rules P1 to P3 with sources, strict: a command inside the window fails)
   and `panel_model_tests.rs` (each rule, the firmware's init and off against them, the sim's SPI time against
   `periph::panel_fill_us`, the pure fill time the DMA time-out in `periph::dma_timeout_ms` uses).

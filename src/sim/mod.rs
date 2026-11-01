@@ -208,90 +208,9 @@ pub use touch_model::TouchChip;
 /// SEC_COUNT of the simulated eMMC: about 31 GB, as the unit's.
 pub const EMMC_SECTORS: u32 = 0x03a3_e000;
 
-/// The eMMC as SDMMC1 sees it: the JEDEC states (idle 0, ready 1, ident 2, stby 3, tran 4, data 5), CMD1 busy for a
-/// few polls, an EXT_CSD with [`EMMC_SECTORS`], sector `n` filled with [`emmc_sector`]. It starts as the bootloader
-/// leaves it: selected, in the transfer state, on a 4-bit bus. Driver mistakes that a real card would punish with
-/// garbage fail the test (identification at 25 MHz, any write or erase command); illegal commands are not answered.
-pub struct EmmcCard {
-    /// Never answers (missing or dead card).
-    pub dead: bool,
-    /// CMD1 answers busy this many times after a CMD0 (u32::MAX: forever).
-    pub busy_polls: u32,
-    /// Every command, in order: (index, argument).
-    pub cmds: Vec<(u8, u32)>,
-    /// What the card holds from sector 0 on, zeros after it; empty: [`emmc_sector`] everywhere.
-    pub image: Vec<u8>,
-    /// Sectors written so far; the power goes after this many (the card then never answers again).
-    pub sectors_written: u64,
-    pub cut_after: Option<u64>,
-    /// Writes touching these sectors fail (a CRC error), nothing of them landing: a card failing in one place.
-    pub bad: Vec<core::ops::Range<u32>>,
-    /// Some(n): only the next `n` writes touching [`EmmcCard::bad`] fail (a card failing once there).
-    pub bad_left: Option<u32>,
-    /// Reads touching these sectors fail (a read error), the card otherwise as it is: a file that cannot be read yet.
-    pub unreadable: Vec<core::ops::Range<u32>>,
-    /// Bytes of sectors read so far (the cost of a pass: [`crate::App::SCAN_IDLE`]).
-    pub bytes_read: u64,
-    /// A cut tears the sector being written (garbage in it, as JEDEC allows for a plain write); a reliable write's
-    /// sector keeps its old data.
-    pub tear: bool,
-    /// With [`EmmcCard::tear`]: the torn sector keeps its first k bytes new and the rest old instead, a sector a
-    /// reader may accept (the review of 2026-11-01, finding 3; inferred model).
-    pub tear_prefix: Option<usize>,
-    /// CMD13 answers "programming" (state 7, not ready for data) this many times after each write, so the driver's
-    /// 1 ms retry runs; [`crate::emmc::TRIES`] or more: the driver gives up (`Busy`) though the write landed.
-    pub prog_polls: u32,
-    /// Writes touching [`EmmcCard::bad`] land their sectors before the first bad one, then fail: a multi-sector
-    /// write cut short, instead of one that lands nothing.
-    pub bad_partial: bool,
-    /// Writes to these sectors are dropped and still answered as done: a card that lies.
-    pub lie: Option<core::ops::Range<u32>>,
-    /// The "programming" answers left (see `prog_polls`).
-    prog_left: u32,
-    /// EXT_CSD WR_REL_PARAM and REL_WR_SEC_C (emmc.rs): the reliable write offered; none by default.
-    pub rel_param: u8,
-    pub rel_sectors: u8,
-    /// CMD23's block count and reliable bit, for the CMD25 that follows.
-    count: Option<(u32, bool)>,
-    state: u32,
-    busy_left: u32,
-    card_wide: bool,
-    host_wide: bool,
-    host_fast: bool,
-    powered: bool,
-}
-
-impl Default for EmmcCard {
-    fn default() -> Self {
-        EmmcCard {
-            dead: false,
-            busy_polls: 3,
-            cmds: Vec::new(),
-            image: Vec::new(),
-            sectors_written: 0,
-            cut_after: None,
-            bad: Vec::new(),
-            bad_left: None,
-            unreadable: Vec::new(),
-            bytes_read: 0,
-            tear: false,
-            tear_prefix: None,
-            prog_polls: 0,
-            bad_partial: false,
-            lie: None,
-            prog_left: 0,
-            rel_param: 0,
-            rel_sectors: 0,
-            count: None,
-            state: 4,
-            busy_left: 0,
-            card_wide: true,
-            host_wide: false,
-            host_fast: false,
-            powered: false,
-        }
-    }
-}
+mod emmc_model;
+pub use emmc_model::EmmcCard;
+use emmc_model::expected_resp;
 
 /// Start held on a paused ride, then SAVE on the end-ride screen (selected when it opens: Start): the end and save.
 pub(crate) fn save_ride(sim: &mut Sim, app: &mut App) {
@@ -307,225 +226,6 @@ pub fn emmc_sector(lba: u32) -> [u8; 512] {
     }
     s[..4].copy_from_slice(&lba.to_le_bytes());
     s
-}
-
-/// The response each command the driver sends with `emmc_cmd` takes. Source: the MMC command set (JESD84-B51, not
-/// public; the names and response types as Linux's include/linux/mmc/mmc.h and the driver's own notes, inferred).
-/// R1b (busy after the response) is R1 here, as [`crate::emmc::Resp`] says. A command not listed panics: the test
-/// fails until its response type is added here.
-fn expected_resp(index: u8) -> crate::emmc::Resp {
-    use crate::emmc::Resp;
-    match index {
-        0 | 4 | 15 => Resp::None,
-        1 => Resp::R3,
-        2 | 9 | 10 => Resp::R2,
-        3 | 6 | 7 | 8 | 12 | 13 | 16 | 17 | 18 | 23 | 24 | 25 => Resp::R1,
-        _ => panic!("unlisted eMMC command {index}: add it to expected_resp"),
-    }
-}
-
-impl EmmcCard {
-    /// Card status as R1 carries it: the state, ready for data.
-    fn status(&self) -> u32 {
-        self.state << 9 | 1 << 8
-    }
-
-    fn cmd(&mut self, index: u8, arg: u32) -> Result<[u32; 4], crate::emmc::BusError> {
-        use crate::emmc::BusError::Timeout;
-        assert!(self.powered, "eMMC command {index} before the controller was powered");
-        self.cmds.push((index, arg));
-        assert!(
-            ![20, 26, 27, 28, 29, 35, 36, 38, 42, 49].contains(&index),
-            "erase, protect, lock or CSD / CID command {index} to the eMMC"
-        );
-        assert!(index != 6 || arg == crate::emmc::SWITCH_BUS_4BIT, "CMD6 other than the bus width: {arg:#x}");
-        if [1, 2, 3].contains(&index) {
-            assert!(!self.host_fast, "identification command {index} at 25 MHz");
-        }
-        if self.dead {
-            // CMD0 has no response: the controller only knows it went out
-            return if index == 0 { Ok([0; 4]) } else { Err(Timeout) };
-        }
-        let before = self.status();
-        let r1 = |s| Ok([s, 0, 0, 0]);
-        match (index, self.state) {
-            (0, _) => {
-                (self.state, self.card_wide, self.busy_left) = (0, false, self.busy_polls);
-                Ok([0; 4])
-            }
-            (1, 0 | 1) => {
-                self.state = 1;
-                if self.busy_left > 0 {
-                    self.busy_left -= 1;
-                    return Ok([0x00ff_8080, 0, 0, 0]);
-                }
-                Ok([0xc0ff_8080, 0, 0, 0]) // ready, sector addressing
-            }
-            (2, 1) => {
-                self.state = 2;
-                Ok([0x1501_0044, 0x4a52_3341, 0x0000_0000, 0x0000_0001]) // a CID
-            }
-            (3, 2) => {
-                assert_eq!(arg, 1 << 16, "RCA");
-                self.state = 3;
-                r1(before)
-            }
-            (7, 3) if arg == 1 << 16 => {
-                self.state = 4;
-                r1(before)
-            }
-            (13, 4) if arg == 1 << 16 && self.prog_left > 0 => {
-                self.prog_left -= 1;
-                r1(7 << 9) // programming, not ready for data
-            }
-            (13, _) if arg == 1 << 16 && self.state >= 3 => r1(before),
-            (16, 4) => {
-                assert_eq!(arg, 512, "block length");
-                r1(before)
-            }
-            (6, 4) => {
-                self.card_wide = true;
-                r1(before)
-            }
-            (23, 4) => {
-                let (n, rel) = (arg & 0xffff, arg & 1 << 31 != 0);
-                assert!(n > 0, "CMD23 of no block");
-                if rel {
-                    assert!(
-                        self.rel_param & 4 != 0 || self.rel_sectors != 0,
-                        "a reliable write the card does not offer"
-                    );
-                    assert!(self.rel_param & 4 != 0 || n == 1, "a legacy reliable write of {n} sectors");
-                }
-                self.count = Some((n, rel));
-                r1(before)
-            }
-            (12, 5 | 6) => {
-                self.state = 4;
-                r1(before)
-            }
-            _ => Err(Timeout), // illegal in this state: no answer
-        }
-    }
-
-    fn read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
-        use crate::emmc::BusError::{Crc, Timeout};
-        assert!(buf.len().is_multiple_of(512) && !buf.is_empty(), "eMMC read of {} bytes", buf.len());
-        let s = self.cmd_data(index, arg)?;
-        let end = u64::from(arg) + (buf.len() / 512) as u64;
-        if self.unreadable.iter().any(|b| u64::from(b.start) < end && u64::from(arg) < u64::from(b.end)) {
-            return Err(Crc);
-        }
-        if self.host_wide != self.card_wide {
-            return Err(Crc); // the bus widths differ: the data comes out as garbage
-        }
-        if index == 8 {
-            buf.fill(0);
-            buf[212..216].copy_from_slice(&EMMC_SECTORS.to_le_bytes());
-            buf[183] = u8::from(self.card_wide);
-            buf[192] = 8; // EXT_CSD_REV
-            (buf[166], buf[222]) = (self.rel_param, self.rel_sectors);
-            return Ok(s);
-        }
-        if arg.saturating_add((buf.len() / 512) as u32) > EMMC_SECTORS {
-            return Err(Timeout); // out of range: no data
-        }
-        for (i, chunk) in buf.chunks_exact_mut(512).enumerate() {
-            let lba = arg + i as u32;
-            match self.image.len() {
-                0 => chunk.copy_from_slice(&emmc_sector(lba)),
-                len => {
-                    let at = (lba as usize * 512).min(len);
-                    let have = &self.image[at..(at + 512).min(len)];
-                    chunk[..have.len()].copy_from_slice(have);
-                    chunk[have.len()..].fill(0);
-                }
-            }
-        }
-        if index == 18 {
-            self.state = 5; // sending until CMD12
-        }
-        self.bytes_read += buf.len() as u64;
-        Ok(s)
-    }
-
-    /// CMD24 / CMD25: the sectors land one by one, until the power cut if one is set.
-    fn write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {
-        use crate::emmc::BusError::Timeout;
-        assert!(self.powered, "eMMC write before the controller was powered");
-        assert!(buf.len().is_multiple_of(512) && !buf.is_empty(), "eMMC write of {} bytes", buf.len());
-        assert!([24, 25].contains(&index), "eMMC write command {index}");
-        let count = self.count.take();
-        let blocks = (buf.len() / 512) as u32;
-        match count {
-            Some((n, _)) => assert!(index == 25 && n == blocks, "CMD23 for {n} blocks, then CMD{index} of {blocks}"),
-            None => assert_eq!(index == 24, blocks == 1, "CMD24 is one block, CMD25 more"),
-        }
-        let reliable = count.is_some_and(|c| c.1);
-        self.cmds.push((index, arg));
-        if self.dead || self.state != 4 {
-            return Err(Timeout);
-        }
-        let end = u64::from(arg) + (buf.len() / 512) as u64;
-        assert!(end <= u64::from(EMMC_SECTORS - crate::emmc::RESERVED), "a write at or past B: {arg:#x}");
-        let bad = self.bad.iter().filter(|b| u64::from(b.start) < end && arg < b.end).map(|b| b.start.max(arg)).min();
-        let bad = bad.filter(|_| self.bad_left != Some(0));
-        if bad.is_some() {
-            self.bad_left = self.bad_left.map(|n| n - 1);
-        }
-        // the sectors that land: all, or with `bad_partial` those before the first bad one
-        let lands = match bad {
-            Some(b) if self.bad_partial => (b - arg) as usize,
-            Some(_) => return Err(crate::emmc::BusError::Crc),
-            None => buf.len() / 512,
-        };
-        assert!(!self.image.is_empty(), "a write to the card without an image");
-        let s = self.status();
-        for (i, chunk) in buf.chunks_exact(512).enumerate().take(lands) {
-            let at = (arg as usize + i) * 512;
-            if self.image.len() < at + 512 {
-                self.image.resize(at + 512, 0);
-            }
-            if self.cut_after.is_some_and(|c| self.sectors_written >= c) {
-                self.dead = true; // the power is gone: this sector and the rest never land
-                if self.tear && !reliable {
-                    let s = &mut self.image[at..at + 512];
-                    match self.tear_prefix {
-                        // a prefix new, the rest old
-                        Some(k) => s[..k].copy_from_slice(&chunk[..k]),
-                        // half old, half new, the rest garbage (inferred model)
-                        None => {
-                            s[..128].copy_from_slice(&chunk[..128]);
-                            s[256..].iter_mut().enumerate().for_each(|(k, b)| *b = (k as u8).wrapping_mul(97) ^ 0x5a);
-                        }
-                    }
-                }
-                return Err(Timeout);
-            }
-            if !self.lie.as_ref().is_some_and(|l| l.contains(&(arg + i as u32))) {
-                self.image[at..at + 512].copy_from_slice(chunk);
-            }
-            self.sectors_written += 1;
-        }
-        if bad.is_some() {
-            return Err(crate::emmc::BusError::Crc);
-        }
-        self.prog_left = self.prog_polls;
-        if index == 25 && count.is_none() {
-            self.state = 6; // receiving until CMD12 (with CMD23 first, the count ends it)
-        }
-        Ok(s)
-    }
-
-    fn cmd_data(&mut self, index: u8, arg: u32) -> Result<u32, crate::emmc::BusError> {
-        assert!(self.powered, "eMMC command {index} before the controller was powered");
-        self.cmds.push((index, arg));
-        assert!([8, 17, 18].contains(&index), "eMMC data command {index}");
-        if self.dead || self.state != 4 {
-            return Err(crate::emmc::BusError::Timeout);
-        }
-        Ok(self.status())
-    }
 }
 
 mod sensor_model;
@@ -1317,6 +1017,18 @@ impl Sim {
         }
     }
 
+    /// The power lost with the backup domain (a battery run flat): a unit whose RTC reads `h:m:00`, with this card as
+    /// it is (torn or whole) and its reliable-write parameters; RAM and the backup registers all zero (`RIDE_BKP`
+    /// too, and AUTO OFF back to its default). shortcut: the RTC keeps the time given, a real loss resets it too
+    /// (the sim's calendar starts on 2026-10-23): model it once the app checks the RTC's validity.
+    pub fn power_loss(&mut self, h: u64, m: u64) -> Sim {
+        let mut sim = Sim::new(h, m, 0);
+        sim.emmc.image = core::mem::take(&mut self.emmc.image);
+        (sim.emmc.rel_param, sim.emmc.rel_sectors) = (self.emmc.rel_param, self.emmc.rel_sectors);
+        sim.backup = [0; 32];
+        sim
+    }
+
     /// The finger on the touch panel as a function of the simulated time in ms (None: lifted).
     pub fn finger(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
         self.touch.set_finger(f);
@@ -1650,11 +1362,13 @@ impl Board for Sim {
             want == resp,
             "eMMC command {index}: the driver waits for {resp:?}, the command's response is {want:?}"
         );
+        self.emmc.now = self.ms;
         self.emmc.cmd(index, arg)
     }
 
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
         self.pay(P_READ, buf.len() as u64 * self.work_ns_per_byte, true); // the work takes time as well
+        self.emmc.now = self.ms;
         self.emmc.read(index, arg, buf)
     }
 
@@ -1673,11 +1387,16 @@ impl Board for Sim {
         self.pay(P_WRITE, self.cost.write_cmd_ns + sectors * self.cost.write_sector_ns, true);
         let before = self.sectors_written;
         self.sectors_written += sectors;
+        self.emmc.now = self.ms;
+        let r = self.emmc.write(index, arg, buf);
         let c = self.cost;
         if c.stall_every > 0 && self.sectors_written / c.stall_every > before / c.stall_every {
-            self.pay(P_STALL, c.stall_ms * 1_000_000, true);
+            // the card busy after this write (emmc_model.rs E1): the driver's CMD13 polls wait it out on the clock,
+            // asleep between them (delay_ms); counted here as the stall's time
+            self.emmc.busy_until = self.emmc.busy_until.max(self.ms + c.stall_ms);
+            self.paid_ns[P_STALL] += c.stall_ms * 1_000_000;
         }
-        self.emmc.write(index, arg, buf)
+        r
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
         self.pay(P_I2C, (3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns, true);

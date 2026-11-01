@@ -130,7 +130,7 @@ const EXEMPT: &[Exempt] = &[
         row: "save, 3 h ride",
         setting: "0.2 ms/sector",
         key: Some(554),
-        gnss: Some(1481),
+        gnss: None, // 894 ms measured 2026-11-02, with the card's stall as its busy (emmc_model.rs E1)
         lost: None,
         why: "the save reads the 3 h file back whole (280 KB, 607 ms at 430 ns a byte) in one pass. Follow-up: read back in slices (recorder, a later opus task)",
     },
@@ -546,4 +546,48 @@ fn a_five_second_blocking_pass_fails_the_nordic_check() {
         row.queue,
         row.hangs
     );
+}
+
+/// The card stalls inside a checkpoint (emmc_model.rs E1) while a ride with the sensors' mix and the phone's traffic
+/// runs: 900 ms, under the driver's 1 s bound, and 1.2 s, over it (the driver gives up: `Busy`, the checkpoint is
+/// retried). Either way the Nordic queue stays under its limit and never hangs, and the ride is saved with its
+/// seconds (none lost but those the wait dropped).
+#[test]
+fn a_card_stall_inside_a_checkpoint_keeps_the_radio_drained_and_the_ride() {
+    for stall in [900, 1200] {
+        let mut r = Rig::new(crate::fat::tests::image(), settings()[0]);
+        r.sim.gnss.expect = Some("stream time-out"); // past the bound the pass holds over 1.5 s on purpose
+        r.start_ride("ride start");
+        r.run(1000);
+        let name = String::from(core::str::from_utf8(&r.app.rec.clean.name()).unwrap());
+        (r.sim.cost.stall_ms, r.sim.sectors_written) = (stall, r.sim.sectors_written.next_multiple_of(1024) - 1);
+        let errors = r.app.rec.clean.errors;
+        r.reset();
+        r.run(130_000);
+        let row = r.row("checkpoint, long card stall");
+        table(std::slice::from_ref(&row));
+        assert!(row.paid[5] >= stall, "{stall} ms: the stall fired inside a checkpoint");
+        assert!(
+            row.hangs == 0 && row.queue < QUEUE_MAX,
+            "{stall} ms: Nordic queue {} slots, {} hangs",
+            row.queue,
+            row.hangs
+        );
+        assert_eq!(r.app.rec.clean.errors > errors, stall > 1000, "{stall} ms: the write given up past the bound only");
+        let timer = r.app.ride.timer_s();
+        r.press(Press::Short(Key::Start));
+        r.run(1000);
+        r.press(Press::Long(Key::Start));
+        r.press(Press::Short(Key::Start)); // SAVE is the default
+        r.run(5000);
+        assert!(r.app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{stall} ms: {}", r.app.notes.list[0].as_str());
+        let times = super::recorder_tests::record_times(&r.sim.emmc.image, &std::format!("Activities/{name}.fit"));
+        let dropped = r.app.rec.clean.dropped;
+        assert!(
+            times.len() as u32 + dropped + 2 >= timer,
+            "{stall} ms: {} records, {dropped} dropped, of {timer} s",
+            times.len()
+        );
+        assert_eq!(crate::fat::write::tests::fsck(&r.sim.emmc.image), Ok(0), "{stall} ms");
+    }
 }
