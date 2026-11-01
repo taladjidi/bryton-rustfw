@@ -1916,6 +1916,7 @@ fn phone_link_events() {
                 p[3..].iter_mut().take(2).for_each(|b| *b = 0); // connection 0, as the chip's first link
             }
             let _ = crate::ble::event(&p);
+            sim.nordic.frees_context(&p); // the real chip's event frees the context it held
             app.phone_event(&mut sim, &p);
         }
         let mut ds = crate::phone::DataSource::default();
@@ -3699,6 +3700,7 @@ fn ftms_link_events() {
                     reached[n] += usize::from(n > 0);
                 }
             }
+            sim.nordic.frees_context(&p); // the real chip's event frees the context it held
             app.phone_event(&mut sim, &p);
             assert!(app.live.get(crate::sensors::Metric::Power).is_none_or(|p| p <= crate::trainer::MAX_W));
             if app.ftms.conn.is_none() {
@@ -3810,6 +3812,7 @@ fn fecble_link_events() {
                 p.extend(u16::from(c[2] % 3).to_le_bytes());
                 p.extend(&c[3..3 + usize::from(c[4]) % 20]);
             }
+            sim.nordic.frees_context(&p); // the real chip's event frees the context it held
             app.phone_event(&mut sim, &p);
             seen |= app.trainer.reading.seen;
             if app.ftms.conn.is_none() {
@@ -7432,7 +7435,9 @@ fn nordic_command_table() {
                 let (a, b) = (rnd() as usize % (stream.len() + 1), rnd() as usize % (stream.len() + 1));
                 let (lo, hi) = (a.min(b), a.max(b));
                 for part in [&stream[..lo], &stream[lo..hi], &stream[hi..]] {
-                    s.nrf_send(part);
+                    // nothing is queued, so CTS is free: the TX FIFO takes the whole part unless the chip hung on it
+                    let took = s.nrf_send(part);
+                    assert!(took == part.len() || s.nordic.hung, "{}: took {took} of {}", row.name, part.len());
                 }
                 let got = s.nordic.got.len();
                 match expected(stream) {

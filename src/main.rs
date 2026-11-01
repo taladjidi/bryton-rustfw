@@ -875,8 +875,9 @@ fn pull_up(p: Port, pin: u32) {
     modify(gpio_base(p) + 0x0c, 3 << (2 * pin), 1 << (2 * pin)); // PUPDR: pull-up
 }
 
-/// Stock's sequence (BOARD.md 11): application mode, reset held while the UART comes up, release, 800 ms.
-fn nrf_reset() {
+/// Stock's sequence (BOARD.md 11), first half: application mode, reset held while the UART comes up. The library
+/// waits 150 ms, releases ([`nrf_release`]) and waits 800 ms (nrf::RESET_HOLD_MS, BOOT_MS).
+fn nrf_hold() {
     modify(RCC_D2CCIP2R, 7, 3); // USART234578SEL = hsi_ker_ck (HSI is on: spi_init)
     modify(RCC_APB1LENR, 0, 1 << 17); // USART2EN
     for pin in 3..=6 {
@@ -894,25 +895,27 @@ fn nrf_reset() {
     wr(U_CR3, (1 << 9) | (1 << 8)); // CTSE, RTSE
     // FIFOEN, RXFNEIE (a byte pends IRQ 38, enabled in the NVIC only for an idle sleep: wake_on_io), TE, RE, UE
     wr(U_CR1, (1 << 29) | (1 << 5) | (1 << 3) | (1 << 2) | 1);
-    delay_ms(150);
-    pin_set(NRF_RESET.0, NRF_RESET.1, true);
-    delay_ms(800);
-    while rd(U_ISR) & ISR_RXFNE != 0 {
-        let _ = rd(U_RDR); // a glitch byte at the release (seen on the unit)
-    }
-    wr(U_ICR, 0xf); // PE, FE, NE, ORE
 }
 
-fn nrf_send(data: &[u8]) {
+/// The second half: PA6 released. (A glitch byte at the release is dropped by `nrf::flush`, and `nrf_recv` clears the
+/// error flags.)
+fn nrf_release() {
+    pin_set(NRF_RESET.0, NRF_RESET.1, true);
+}
+
+/// Puts bytes in the TX FIFO as far as it has room, and returns how many, at once: when the chip holds CTS the FIFO
+/// does not drain, and the caller (lib `nrf::send`) reads the receive side, sleeps and offers the rest again. No
+/// spinning here (AGENTS.md "Never spin"); a frame is never cut short because the caller goes on until it is whole.
+fn nrf_send(data: &[u8]) -> usize {
+    let mut n = 0;
     for &b in data {
-        let t0 = cycles();
-        while rd(U_ISR) & ISR_TXFNF == 0 {
-            if cycles().wrapping_sub(t0) > CPU_HZ / 100 {
-                return; // 10 ms: the chip holds CTS (not running); the command will time out
-            }
+        if rd(U_ISR) & ISR_TXFNF == 0 {
+            break;
         }
         wr(U_TDR, u32::from(b));
+        n += 1;
     }
+    n
 }
 
 /// Reads what has arrived, and while bytes keep coming waits for the next one as long as
@@ -1536,11 +1539,15 @@ impl Board for S510 {
     fn standby(&mut self) {
         standby();
     }
-    fn nrf_reset(&mut self) {
-        nrf_reset();
+    fn nrf_hold(&mut self, held: bool) {
+        if held {
+            nrf_hold();
+        } else {
+            nrf_release();
+        }
     }
-    fn nrf_send(&mut self, data: &[u8]) {
-        nrf_send(data);
+    fn nrf_send(&mut self, data: &[u8]) -> usize {
+        nrf_send(data)
     }
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         nrf_recv(buf)
