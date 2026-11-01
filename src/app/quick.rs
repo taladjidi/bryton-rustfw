@@ -346,6 +346,17 @@ impl App {
     /// What the panel shows has been drawn: the fingerprints and the shape to compare with.
     pub(crate) fn quick_drawn(&mut self) {
         (self.quick.shown, self.quick.shape) = (self.quick_prints(), self.quick_shape());
+        self.quick_vals();
+    }
+
+    /// Remembers each sensor line's value as drawn.
+    fn quick_vals(&mut self) {
+        let vals = {
+            let mut it = self.quick_kinds();
+            let kinds: [Option<Kind>; q::ROWS] = core::array::from_fn(|_| it.next());
+            kinds.map(|k| k.map_or((Line::new(), 0), |k| self.quick_value(k)))
+        };
+        self.quick.vals = vals;
     }
 
     /// Redraws the boxes that changed since they were drawn, each in its own place; the whole panel when the lines
@@ -361,12 +372,30 @@ impl App {
             if track == self.quick.scroll.0 { (track, self.quick.scroll.1.wrapping_add(1)) } else { (track, 0) };
         let now = self.quick_prints();
         let mut p = Panel(b, self.area(), self.look());
+        let mut whole = None; // the value line drawn whole this pass: its 20 px cell wiped the top of the next line's
         for (i, (&a, &s)) in now.iter().zip(&self.quick.shown).enumerate() {
-            if a != s && a != 0 {
-                self.quick_draw_box(&mut p, i);
+            if a == s || a == 0 {
+                continue;
             }
+            // a sensor value that kept its colour: only its changed characters, unless the line above was drawn whole
+            let value = i.checked_sub(B_ROWS).filter(|j| j % 3 == 1).map(|j| j / 3);
+            let diff = value
+                .zip(value.and_then(|k| self.quick_kinds().nth(k)))
+                .filter(|&(k, kind)| kind != Kind::Power && k.checked_sub(1).is_none_or(|u| whole != Some(u)));
+            if let Some((k, kind)) = diff {
+                let ((was, was_color), (v, color)) =
+                    (self.quick.vals.get(k).copied().unwrap_or_default(), self.quick_value(kind));
+                if let Some(&(x, w)) = q::SENSOR_BOXES.get(1).filter(|_| was_color == color && !was.as_str().is_empty())
+                {
+                    q::redraw_text(&mut p, (x, q::SENSORS_Y + k as u32 * q::ROW, w), color, was.as_str(), v.as_str());
+                    continue;
+                }
+            }
+            whole = value.or(whole);
+            self.quick_draw_box(&mut p, i);
         }
         self.quick.shown = now;
+        self.quick_vals();
     }
 
     /// An input on the panel: Back or a swipe up closes it, a tap acts on the button under it.

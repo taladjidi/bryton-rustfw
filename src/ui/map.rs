@@ -395,7 +395,21 @@ impl View {
         let (c, s) = rot_cs(self.rot);
         let (dx, dy) = (i64::from(p.0) - i64::from(self.cx), i64::from(p.1) - i64::from(self.cy));
         let (c, s) = (i64::from(c), i64::from(s));
-        let px = |m256: i64| (m256 * 16).checked_div_euclid(self.mpp16 * 256).unwrap_or(0) as i32;
+        // floor(m256 * 16 / (mpp16 * 256)) = floor(m256 / d): mpp16 is 16 or 24 times a power of two, so d is a shift and
+        // a divide by 1 or 3, which fits 32 bits (hardware divide) except far off screen
+        let d = self.mpp16 * 16;
+        let sh = d.max(1).trailing_zeros();
+        let odd = d >> sh;
+        let px = |m256: i64| {
+            if odd <= 0 {
+                return 0;
+            }
+            let q = m256 >> sh;
+            match i32::try_from(q).ok().zip(i32::try_from(odd).ok()) {
+                Some((q, odd)) => q.div_euclid(odd),
+                None => q.div_euclid(odd) as i32,
+            }
+        };
         (area.0 + area.2 / 2 + px(dx * c - dy * s), area.1 + area.3 / 2 - px(dx * s + dy * c))
     }
 
@@ -833,19 +847,26 @@ pub fn draw(
             // the chunk's points and the first of the next (the segment between them)
             let from = i * Route::CHUNK;
             let pts = r.pts.get(from..(from + Route::CHUNK + 1).min(r.pts.len())).unwrap_or(&[]);
+            let mut at = None; // the last point's pixel: the next segment starts there
             for (j, w) in pts.windows(2).enumerate() {
-                if let [a, b] = *w
-                    && !crate::course::is_gap(r.gaps, from + j + 1)
-                {
-                    let (a, b) = ((a.0 + o.0, a.1 + o.1), (b.0 + o.0, b.1 + o.1));
-                    segment(&mut c, k, v.px(area, a), v.px(area, b), COURSE);
+                if let [a, b] = *w {
+                    let a = at.unwrap_or_else(|| v.px(area, (a.0 + o.0, a.1 + o.1)));
+                    let b = v.px(area, (b.0 + o.0, b.1 + o.1));
+                    at = Some(b);
+                    if !crate::course::is_gap(r.gaps, from + j + 1) {
+                        segment(&mut c, k, a, b, COURSE);
+                    }
                 }
             }
         }
     }
+    let mut at = None;
     for w in track.points().windows(2) {
         if let [a, b] = *w {
-            segment(&mut c, k, v.px(area, a), v.px(area, b), ui::ACCENT);
+            let a = at.unwrap_or_else(|| v.px(area, a));
+            let b = v.px(area, b);
+            at = Some(b);
+            segment(&mut c, k, a, b, ui::ACCENT);
         }
     }
     scale_bar(&mut c, k, area, &v);
@@ -954,9 +975,12 @@ pub fn update(
         return;
     };
     let mut dirty = None;
+    let mut at = None;
     for w in track.points().get(shown.points.saturating_sub(1)..).unwrap_or(&[]).windows(2) {
         let [a, b] = *w else { continue };
-        let (a, b) = (v.px(area, a), v.px(area, b));
+        let a = at.unwrap_or_else(|| v.px(area, a));
+        let b = v.px(area, b);
+        at = Some(b);
         let seg = (a.0.min(b.0), a.1.min(b.1), (a.0 - b.0).abs() + 2, (a.1 - b.1).abs() + 2);
         dirty = Some(union(dirty, seg));
     }
@@ -996,6 +1020,25 @@ mod tests {
             (MIN_LEVEL..MIN_LEVEL + 6).map(said).collect::<std::vec::Vec<_>>(),
             ["75 M", "100 M", "150 M", "200 M", "300 M", "400 M"]
         );
+    }
+
+    /// The shift-and-small-divide projection equals the plain 64-bit one at every level and rotation.
+    #[test]
+    fn px_matches_the_plain_division() {
+        let area = (0, 24, 240, 296);
+        for level in MIN_LEVEL..=MAX_LEVEL {
+            for rot in 0..16u8 {
+                let v = View { cx: 1234, cy: -5678, mpp16: mpp16(level), rot };
+                for p in [(0, 0), (-90_000, 70_000), (3_000_000, -2_000_000), (-7, 11), (1_234, -5_678)] {
+                    let (c, s) = rot_cs(rot);
+                    let (dx, dy) = (i64::from(p.0 - v.cx), i64::from(p.1 - v.cy));
+                    let m = |m256: i64| (m256 * 16).div_euclid(v.mpp16 * 256) as i32;
+                    let (c, s) = (i64::from(c), i64::from(s));
+                    let want = (area.0 + area.2 / 2 + m(dx * c - dy * s), area.1 + area.3 / 2 - m(dx * s + dy * c));
+                    assert_eq!(v.px(area, p), want, "level {level} rot {rot} {p:?}");
+                }
+            }
+        }
     }
 
     #[test]

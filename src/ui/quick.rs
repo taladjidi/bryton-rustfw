@@ -154,6 +154,23 @@ pub fn draw_text(c: &mut impl Canvas, (x, y, w): (u32, u32, u32), align: Align, 
     text::draw_in(c, &Style { fg, ..LABEL }, x, y, w, align, LABEL.fit(s, w));
 }
 
+/// [`draw_text`] again after the text went from `old` to `new` in the same box and colour: only the characters that
+/// differ, each in its own cell (a monospaced font, so character i is at x + 12 i). Anything but plain ASCII is drawn
+/// whole.
+pub fn redraw_text(c: &mut impl Canvas, (x, y, w): (u32, u32, u32), fg: u16, old: &str, new: &str) {
+    let (old, new) = (LABEL.fit(old, w), LABEL.fit(new, w));
+    if !old.is_ascii() || !new.is_ascii() {
+        return draw_text(c, (x, y, w), Align::Left, fg, new);
+    }
+    // padded with blanks to the old length, so what the old text had beyond the new one is cleared
+    let mut padded = text::Line::<16>::new();
+    padded.push_str(new);
+    for _ in new.len()..old.len() {
+        padded.push_str(" ");
+    }
+    super::fields::draw_cells(c, &Style { fg, ..LABEL }, x, y, x + w, padded.as_str(), Some(old));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
