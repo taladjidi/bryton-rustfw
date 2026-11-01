@@ -4,7 +4,9 @@
 //! and the next days'. Stock's other copies (`calendar_temp\tempN`, `saved_temp`, `Workout_temp`) are left alone.
 //!
 //! A workout file is small (a few hundred bytes to a few KB), so it is read whole ([`FILE_MAX`]) and decoded from
-//! the buffer: the streaming reader (fitread.rs) keeps numbers only, and a workout has a name.
+//! the buffer: the streaming reader (fitread.rs) keeps numbers only, and a workout has a name. So the framing is
+//! decoded here a second time, not shared (fitread picks a fixed table of numeric fields; this reads strings and
+//! any message); a test runs both over every cut and flipped byte of a file and they must agree.
 //!
 //! Format (FIT profile 21.218, `garmin_fit_sdk/profile.py` of github.com/garmin/fit-python-sdk, and the FIT SDK's
 //! workout cookbook, github.com/garmin/fit-csharp-sdk `Cookbook/WorkoutEncode/Program.cs`, both read 2026-10-24):
@@ -664,6 +666,38 @@ pub(crate) mod tests {
     /// A FIT workout file as an app would write it: file_id (type `kind`), workout (`name`), the steps.
     pub fn file(kind: u8, name: &str, steps: &[S]) -> Vec<u8> {
         file_with(kind, name, steps, &[])
+    }
+
+    /// This file's FIT framing and fitread.rs's agree (two decoders of the same container, review 2026-11-01): a
+    /// file one reads whole the other reads whole, and a framing error of this one is not a good file there. Run over
+    /// every cut and every single byte flipped of a real workout file.
+    #[test]
+    fn the_framing_agrees_with_the_streaming_reader() {
+        let good = file(5, "Over unders", &[(0, 60_000, 4, 0, 100_100, 100_200, 5), (1, 500, 2, 0, 0, 0, 1)]);
+        let framing = |b: &[u8]| {
+            let mut r = crate::fitread::Reader::new();
+            r.push_slice(b, |_| {});
+            r.result()
+        };
+        assert_eq!((parse(&good).is_ok(), framing(&good)), (true, Some(Ok(()))));
+        let mut cases: Vec<Vec<u8>> = (0..good.len()).map(|n| good[..n].to_vec()).collect();
+        for i in 0..good.len() {
+            for x in [0x01u8, 0x80, 0xff] {
+                let mut b = good.clone();
+                b[i] ^= x;
+                cases.push(b);
+            }
+        }
+        for b in &cases {
+            let (w, r) = (parse(b), framing(b));
+            if w.is_ok() {
+                assert_eq!(r, Some(Ok(())), "{b:?}");
+            }
+            if r == Some(Ok(())) {
+                assert!(!matches!(w, Err(Error::Header | Error::Truncated | Error::Crc)), "{w:?}: {b:?}");
+            }
+        }
+        assert!(cases.len() > 100);
     }
 
     /// A secondary target for [`file_with`]: type, value, low and high (fields 19 to 22).

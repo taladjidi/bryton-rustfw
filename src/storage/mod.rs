@@ -64,6 +64,35 @@ pub(crate) fn take<const N: usize>(b: &[u8], i: usize) -> [u8; N] {
     i.checked_add(N).and_then(|end| b.get(i..end)).and_then(|s| s.try_into().ok()).unwrap_or([0; N])
 }
 
+/// The pack holding tile (`z`, `x`, `y`) of a pack family (ign.rs, osm.rs): `<prefix><z>_<x / block>_<y / block>.PAK`.
+pub(crate) fn pack_name(prefix: &str, block: u32, z: u8, x: u32, y: u32) -> crate::text::Line<32> {
+    let mut l = crate::text::Line::new();
+    l.push_str(prefix);
+    l.push_u32(u32::from(z));
+    l.push_str("_");
+    l.push_u32(x / block);
+    l.push_str("_");
+    l.push_u32(y / block);
+    l.push_str(".PAK");
+    l
+}
+
+/// A pack's 16-byte header is a version 1 pack of `magic` for tile (`z`, `x`, `y`)'s block of `block` tiles a side.
+pub(crate) fn pack_header_ok(h: &[u8; 16], magic: &[u8; 4], block: u32, z: u8, x: u32, y: u32) -> bool {
+    let u32_at = |i: usize| u32::from_le_bytes(take(h, i));
+    h[..4] == *magic
+        && h[4..6] == [1, 0]
+        && h[6] == z
+        && u32::from(h[7]) == block
+        && u32_at(8) == x / block * block
+        && u32_at(12) == y / block * block
+}
+
+/// Where tile (`x`, `y`)'s index entry of `size` bytes is in its pack, after the 16-byte header.
+pub(crate) fn pack_entry_at(size: u32, block: u32, x: u32, y: u32) -> u32 {
+    16 + size * ((y % block) * block + x % block)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

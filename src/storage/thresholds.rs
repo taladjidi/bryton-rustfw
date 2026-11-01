@@ -116,7 +116,10 @@ impl Scan {
             }
             return fat::SECTOR as u32 / 16; // a 32-byte entry
         };
-        let n = fat.read_from(d, file, *offset, io, seek).unwrap_or(0);
+        let Ok(n) = fat.read_from(d, file, *offset, io, seek) else {
+            self.file = None; // a read error: the ride is dropped, not counted as the part that was read
+            return 1;
+        };
         *offset = offset.saturating_add(n as u32);
         let ride = &mut self.ride;
         self.reader.push_slice(io.get(..n).unwrap_or(&[]), |m| {
