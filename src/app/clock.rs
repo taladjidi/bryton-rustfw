@@ -321,16 +321,31 @@ mod tests {
     #[test]
     fn cached_clock_equals_a_fresh_one() {
         use crate::sim::Sim;
-        for (day, h, m) in [(0, 10, 0), (0, 23, 59), (2, 0, 59)] {
+        // (days after the sim's 2026-10-23, h, m, TIME ZONE, rule); the zone number is (minutes + 720) / 15 + 1: 53 is
+        // Paris, 85 Tokyo. Day 156 is the spring change, 2027-03-28; a zone and rule are edited at pass 180
+        let cases = [
+            (0, 10, 0, 53, Dst::Eu),
+            (0, 23, 59, 53, Dst::Eu),
+            (2, 0, 59, 53, Dst::Eu),
+            (156, 0, 59, 53, Dst::Eu),
+            (0, 10, 0, 85, Dst::Off),
+        ];
+        for (day, h, m, tz, dst) in cases {
             let mut sim = Sim::new(h, m, 30);
             sim.ms += day * 86_400_000;
             let mut app = App::start(&mut sim, None);
-            app.settings.tz = 53; // UTC + 1 h
-            app.settings.dst = Dst::Eu;
+            (app.settings.tz, app.settings.dst) = (tz, dst);
             app.gps.aid.offset_15min = Some(0);
-            for _ in 0..360 {
+            for i in 0..360 {
                 sim.ms += 250;
+                let before = app.clock_delta_s;
+                if i == 180 {
+                    (app.settings.tz, app.settings.dst) = if tz == 85 { (53, Dst::Eu) } else { (85, Dst::Off) };
+                }
                 let s = app.read_clock(&mut sim);
+                if i == 180 {
+                    assert_ne!(app.clock_delta_s, before, "the edit shows at once");
+                }
                 let kept = (app.date, app.strip.time, app.clock_delta_s);
                 app.clock_key = None;
                 assert_eq!(app.read_clock(&mut sim), s);

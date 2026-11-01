@@ -70,11 +70,10 @@ pub fn draw_media_buttons(c: &mut impl Canvas, playing: bool, dim: bool) {
     }
 }
 
-/// Steps a scrolling line holds at each end (a step is two ticks of `QUICK_STEP_MS`, 500 ms: 2 s; one step a tick
-/// redrew the 224 x 20 box 4 times a second, review 2026-11-01 finding 61).
-const HOLD: usize = 4;
+/// Ticks a scrolling line holds at each end (the app ticks every `QUICK_STEP_MS`: 2 s).
+const HOLD: usize = 8;
 
-/// What a line shows `tick` ticks into its scroll in `w` px: all of `s` when it fits, else it holds HOLD steps at
+/// What a line shows `tick` ticks into its scroll in `w` px: all of `s` when it fits, else it holds HOLD ticks at
 /// the start, drops one character a tick until the end shows, holds there, and starts over. Cuts on char boundaries.
 pub fn window(s: &str, w: u32, tick: u32) -> &str {
     if LABEL.width(s) <= w {

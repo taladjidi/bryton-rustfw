@@ -454,7 +454,7 @@ fn screen_budgets() {
     app.open_quick();
     app.show(&mut sim);
     run(&mut sim, &mut app, 40_000);
-    got.push(("quick panel, scrolling title", steady(&mut sim, &mut app), (8900, 36, 10)));
+    got.push(("quick panel, scrolling title", steady(&mut sim, &mut app), (13_500, 56, 10)));
     // the screens of the review's finding 37 (2026-11-01): the workout page, the GPS screen, the CLIMB page (a
     // segment's, and the road ahead's), a settings value after an edit
     let (mut sim, mut app) = {

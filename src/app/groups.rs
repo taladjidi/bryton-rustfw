@@ -157,8 +157,11 @@ pub(crate) struct Gps {
     pub(crate) slept: bool,
     /// Whether the screen shown holds a map, with the screen and MORE page it was worked out for (a page's boxes
     /// are built to find out: once per screen, not each pass).
-    pub(crate) map_on: Option<((Screen, Option<usize>), bool)>,
+    pub(crate) map_on: Option<(MapKey, bool)>,
 }
+
+/// What `gps.map_on` was worked out for: the screen, the MORE page, the page set, the ride's state, the page count.
+pub(crate) type MapKey = (Screen, Option<usize>, ride::Profile, ride::State, usize);
 
 impl Gps {
     /// Nothing heard yet, with the aid read from the backup registers.

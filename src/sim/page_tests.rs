@@ -1482,3 +1482,26 @@ fn gauge_fields_round_trip_in_pages_bin() {
     assert_eq!(page.fields[..3], [PowerRing, CadBar, HrRing]);
     assert_eq!(Field::from_index(Field::Tsb as u32 + 1), PowerRing, "appended after the training load");
 }
+
+/// The GPS stays on for a map page and sleeps otherwise (`gnss_idle`): the test of the page on screen follows the
+/// page set (a trainer heard or lost, here BIKE > PROFILE), a page edited and the ride's state, not only the screen.
+#[test]
+fn the_map_test_follows_the_set_and_the_pages() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let map: Page = PageCfg { layout: 1, fields: [Map, Time, Time, Time, Time, Time] }.into();
+    let plain: Page = PageCfg { layout: 1, fields: [Speed; 6] }.into();
+    (app.pages[1], app.page_count, app.indoor.pages[1], app.indoor.count) = (map, 3, plain, 3);
+    app.open(Screen::Ride(1));
+    run(&mut sim, &mut app, 2000);
+    assert!(app.screen_has_map(), "the road set's page 2 has the map");
+    app.settings.profile = Some(ride::Profile::Indoor); // as a trainer heard
+    run(&mut sim, &mut app, 2000);
+    assert!(!app.screen_has_map(), "the indoor set's page 2 has none: the GPS may sleep");
+    app.settings.profile = None; // the trainer lost
+    run(&mut sim, &mut app, 2000);
+    assert!(app.screen_has_map(), "the map page is back: the GPS must be on");
+    let (pages, _, _) = app.set_mut(ride::Profile::Road);
+    pages[1] = plain; // an edit under the same screen
+    assert!(!app.screen_has_map());
+}

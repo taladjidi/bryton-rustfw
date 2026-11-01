@@ -189,8 +189,8 @@ impl App {
     }
 
     /// A page with a map is shown, worked out once per screen (and MORE page).
-    fn screen_has_map(&mut self) -> bool {
-        let key = (self.screen, self.more_shown());
+    pub(crate) fn screen_has_map(&mut self) -> bool {
+        let key = (self.screen, self.more_shown(), self.ride_profile().page_set(), self.ride.state(), self.page_count);
         match self.gps.map_on {
             Some((k, on)) if k == key => on,
             _ => {

@@ -8,7 +8,7 @@ use crate::*;
 impl App {
     /// Work per pass at most, in microseconds of CPU ([`prof::Clock::us`]): a tile read, inflated and decoded is the
     /// unit, so one may go over it; the next waits for the next pass.
-    const AHEAD_US: u32 = 6_000;
+    const AHEAD_US: u32 = 10_000;
     /// Units of work per pass at most (where the CPU time is not measured, as in the simulation).
     const AHEAD_STEPS: u32 = 24;
 
