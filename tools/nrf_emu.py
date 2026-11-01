@@ -3,7 +3,8 @@
 chip's real app"). The test bench of the radio chip: the library's real radio code can drive the real app byte for
 byte, with the SoftDevice replaced by stubs.
 
-  python3 -I tools/nrf_emu.py selftest    boot, version get, unknown opcode hangs, injected ANT events
+  python3 -I tools/nrf_emu.py selftest    boot, ANT event layouts, slice-size invariance, RTS hold, queue limit, hang
+  python3 -I tools/nrf_emu.py --serve      the UART as a byte pipe (src/sim/nrf_emu_tests.rs)
 
 NOTHING of the binary is in this repository: it is read at run time from NRF_BIN (default
 /Users/tangui/Documents/bryton/firmware/R039/nordic.bin). Its 16-byte header (u16 1, u16 init packet length, ...) gives
@@ -46,7 +47,8 @@ SVC_SD_ENABLE, SVC_APP_EVT_WAIT = 0x10, 0x3E
 SVC_BLE_ENABLE, SVC_BLE_EVT_GET, SVC_BLE_VERSION_GET, SVC_BLE_CFG_SET = 0x60, 0x61, 0x65, 0x69
 SVC_ANT_EVENT_GET = 0xC1
 SVC_EVT_GET = 0x48  # inferred: called after the ANT poll with one pointer (nrf_sdh_soc.c polls sd_evt_get)
-EVENT_RX = 0x80  # ant_parameters.h: the broadcast data event (the others, e.g. 0x4F, are not ANT events: the app hangs)
+EVENT_RX = 0x80  # ant_parameters.h: the broadcast data event. Event codes outside ant_event.c's switch (0x4F, 0x2F:
+# message ids, not event codes) make the encoder return NOT_SUPPORTED and the app hangs: that was the "bug".
 NOT_FOUND = 5  # NRF_ERROR_NOT_FOUND
 
 # UARTE register offsets (nRF52832 PS, UARTE) and interrupt bits
@@ -58,6 +60,16 @@ U_RXPTR, U_RXMAX, U_RXAMT, U_TXPTR, U_TXMAX, U_TXAMT = 0x534, 0x538, 0x53C, 0x54
 UARTE0, UARTE_IRQ, SWI2_IRQ = 0x40002000, 2, 22
 NVIC = {0xE000E100: "iser", 0xE000E180: "icer", 0xE000E200: "ispr", 0xE000E280: "icpr"}
 BYTE_US = 10
+MASKED_LIMIT = 20_000  # instructions
+
+
+def ant_message(channel, event, data):
+    """The ANT_MESSAGE the SoftDevice fills for an event (MESG_BUFFER_SIZE 41 bytes, SDK 14.2 nrf_sdh_ant.h ant_evt_t:
+    {ANT_MESSAGE; channel; event}): data events (EVENT_RX 0x80) carry the received message [size 9, id 0x4E broadcast,
+    channel, 8 bytes]; the others carry the channel event message [size 3, id 0x40, channel, 0x01, event code]
+    (ANT Message Protocol 9.5.6.1). Both inferred from those documents, not seen on a chip."""
+    m = bytes([9, 0x4E, channel]) + bytes(data).ljust(8, b"\0")[:8] if event == EVENT_RX else bytes([3, 0x40, channel, 1, event])
+    return m.ljust(41, b"\0")
 
 
 class Hang(Exception):
@@ -119,12 +131,19 @@ class Emu:
         self.ble_evts = collections.deque()
         self.ant_evts = collections.deque()
         self.svc_log = []
-        self.pcs = set()
         self.last_error_handler = None
         try:
             self.err_pc = json.loads(Path(PRIVATE).read_text()).get("error_handler")
         except (OSError, ValueError):
             self.err_pc = None
+        # `B .` handlers in the vector table (Cortex-M4 exception entries 2..15): reaching one is a hang, by address
+        self.dead = set()
+        for i in range(2, 16):
+            a = struct.unpack_from("<I", app, 4 * i)[0] & ~1
+            if a >= APP_BASE and struct.unpack_from("<H", app, a - APP_BASE)[0] == 0xE7FE:
+                self.dead.add(a)
+        self.masked = 0
+        self.hung = None  # (address, why) once the app is known to be dead
         uc.hook_add(UC_HOOK_INTR, self._intr)
         uc.hook_add(UC_HOOK_CODE, self._code)
         uc.hook_add(UC_HOOK_MEM_READ, self._mread, None, 0xE000E000, 0xE000EFFF)
@@ -175,13 +194,24 @@ class Emu:
             self.returned = True  # pc is already set: do not read it back
             self.uc.emu_stop()
             return
-        self.pcs.add(addr)
         if addr == RET:
             if not self.returned:
                 self.returned = True
                 self._exc_return()
         elif addr == self.err_pc:
             self.last_error_handler = addr
+        if self.started and not (self.nvic["iser"] >> UARTE_IRQ) & 1:
+            # the error handler enters the SoftDevice critical region (app interrupts masked) and spins; a healthy app
+            # masks the UART only for a few hundred instructions. Counted in instructions, so the slice size is no input.
+            self.masked += 1
+            if self.masked > MASKED_LIMIT and self.hung is None:
+                self.hung = (addr, f"UART interrupt masked for {MASKED_LIMIT} instructions (error handler)")
+                self.uc.emu_stop()
+        else:
+            self.masked = 0
+        if addr in self.dead and self.hung is None:
+            self.hung = (addr, "reached a `B .` exception handler")
+            self.uc.emu_stop()
 
     def _intr(self, uc, no, ud):
         pc = self.reg("pc")
@@ -223,7 +253,7 @@ class Emu:
             if not self.tx_on:
                 self.tx_on = True
                 r[U_TXAMT] = 0
-                self.tx_log.append(("start", self.t_us, self.instr))
+                self.tx_log.append(("start", self.now(), self.instr))
                 if self.fr_left is None and not self.fr_hdr:
                     self.marks.append(("fcall", self.instr))  # the app starts the next frame's header
                 self.at(BYTE_US, self.tx_pump)
@@ -312,7 +342,7 @@ class Emu:
         if r[U_TXAMT] >= r[U_TXMAX]:
             self.tx_on = False
             self.event(EV_ENDTX)
-            self.tx_log.append(("end", self.t_us, self.instr))
+            self.tx_log.append(("end", self.now(), self.instr))
         else:
             self.at(BYTE_US, self.tx_pump)
 
@@ -325,6 +355,9 @@ class Emu:
             pass  # a[2] is the ANT licence key: ignored on purpose
         elif n == SVC_APP_EVT_WAIT:
             self.sleep = True
+            self.pc = self.reg("pc") | 1  # the slice ends here, whatever its size: results must not depend on it
+            self.returned = True
+            self.uc.emu_stop()
         elif n in (SVC_BLE_ENABLE, SVC_BLE_CFG_SET):
             pass
         elif n == SVC_BLE_VERSION_GET:  # ble_version_t {u8 version, u16 company, u16 subversion}
@@ -346,6 +379,8 @@ class Emu:
                 self.uc.mem_write(a[2], buf)
             else:
                 ret = NOT_FOUND
+        elif 0xC0 <= n <= 0xFF:  # sd_ant_* commands (ant_interface.h ANT_SVC_BASE 0xC0): accepted, outputs left zero
+            pass
         else:
             raise Stop(f"unknown SVC {n:#x} r0-r3 {[hex(x) for x in a]} pc {self.reg('pc'):#x}")
         self.reg_set("r0", ret)
@@ -386,7 +421,6 @@ class Emu:
         """Runs `us` of virtual time (or until `until()`); returns when done. Raises Hang or Stop."""
         from unicorn import UcError
         end = self.t_us + us
-        quiet = 0
         while self.t_us < end and not (until and until()):
             self._run_events()
             if not self.in_irq and not self.reg("primask") & 1:  # cpsid i holds interrupts (the app's critical regions)
@@ -396,6 +430,8 @@ class Emu:
                         self.nvic["ispr"] &= ~(1 << irq)
                     self.sleep = False
                     self._exc_enter(irq)
+            if self.hung:
+                raise Hang(f"{self.hung[1]} at {self.hung[0]:#x}")
             if self.sleep and self.started and not (self.nvic["iser"] >> UARTE_IRQ) & 1:
                 # the error handler masks the app interrupts and idles (S332 critical region): a healthy app sleeps with the UART on
                 raise Hang(f"asleep at {self.pc:#x} with the UART interrupt masked")
@@ -410,7 +446,7 @@ class Emu:
             # stop at the next scheduled event so an interrupt is taken on time (the gap measure needs it)
             n_max = slice_n
             self.stop_at = (self.instr + int((self.ev[0][0] - self.t_us) * CPU_MHZ) + 1) if self.ev else 1 << 62
-            self.pcs.clear()
+            self.stop_at = min(self.stop_at, self.instr + int((end - self.t_us) * CPU_MHZ) + 1)  # never past `end`
             self.returned = False
             self.sleep = False  # only an sd_app_evt_wait inside this slice puts the core to sleep
             n0 = self.slice_i0 = self.instr
@@ -423,17 +459,8 @@ class Emu:
             did = self.instr - n0
             self.t_us += did / CPU_MHZ
             self.slice_i0 = self.instr
-            if len(self.pcs) <= 4 and did >= slice_n - 1:
-                # a tight loop: sleeping on a flag is fine while something can still change it
-                if not self.in_irq and (self.nvic["iser"] >> UARTE_IRQ) & 1 == 0:
-                    quiet += 1
-                    if quiet >= 3:
-                        raise Hang(f"spinning at {self.pc:#x} with the UART interrupt masked")
-                elif self.ev:
-                    self.t_us = max(self.t_us, min(self.ev[0][0], end))
-                    self.instr -= did  # a busy wait is not the app's work: keep it out of the frame-gap count
-            else:
-                quiet = 0
+            if self.hung:
+                raise Hang(f"{self.hung[1]} at {self.hung[0]:#x}")
 
     # ---- host side of the wire
     def send(self, payload):
@@ -455,10 +482,11 @@ class Emu:
             del self.out[:2 + n]
         return out
 
-    def inject_ant(self, channel, event, data=b""):
+    def inject_ant(self, channel, event, data=b"", queue_only=False):
         """A SoftDevice ANT event (ant_event_get) and the SWI2 interrupt that announces it."""
-        self.ant_evts.append((channel, event, bytes(data).ljust(32, b"\0")[:32]))
-        self.nvic["ispr"] |= 1 << SWI2_IRQ
+        self.ant_evts.append((channel, event, ant_message(channel, event, data)))
+        if not queue_only:
+            self.nvic["ispr"] |= 1 << SWI2_IRQ
 
     def inject_ble(self, raw):
         self.ble_evts.append(bytes(raw))
@@ -490,40 +518,162 @@ def selftest():
     f = e.frames()
     assert f and f[0][:2] == bytes([1, 0x65]) and len(f[0]) == 2 + 4 + 5, f"version answer {f}"
     assert f[0][2:6] == bytes(4), "result not success"
-    # injected ANT events come out as type 08 frames of 44 bytes
-    for i in range(3):
-        e.inject_ant(1, EVENT_RX, bytes(range(8)))
+    # injected ANT events come out as type 08 frames of 44 bytes: [08][41 message bytes][event][channel], the layout
+    # rustfw's nrf.rs parses (ant_broadcast, ant_closed, ant_tx_failed, ant_tx_completed, search time-out)
+    for code in (EVENT_RX, 0x01, 0x05, 0x06, 0x07):
+        e.inject_ant(3, code, bytes(range(8)))
         e.run(2_000)
-    fr = e.frames()
-    assert len(fr) == 3 and all(p[0] == 8 and len(p) == 44 for p in fr), [(p[0], len(p)) for p in fr]
-    print(f"ok: version {f[0].hex()}, 3 ANT frames")
+        fr = e.frames()
+        assert len(fr) == 1 and fr[0][0] == 8 and len(fr[0]) == 44, [(p[0], len(p)) for p in fr]
+        assert fr[0][42:] == bytes([code, 3]), f"event code {code:#x}: {fr[0][42:].hex()}"
+        want = bytes([9, 0x4E, 3]) + bytes(range(8)) if code == EVENT_RX else bytes([3, 0x40, 3, 1, code])
+        assert fr[0][1:1 + len(want)] == want
+    print("ok: ANT events 0x80, 0x01, 0x05, 0x06, 0x07 keep their layout")
     # a burst: one SWI2 pass brings 8 events, so the frames follow each other from the queue
     e.marks.clear()
     for i in range(8):
-        e.ant_evts.append((1, EVENT_RX, bytes(32)))
+        e.inject_ant(1, EVENT_RX, bytes([i]), queue_only=True)
     e.nvic["ispr"] |= 1 << SWI2_IRQ
     e.run(5_000)
-    assert len(e.frames()) == 8
+    assert [p[4] for p in e.frames()] == list(range(8))
     g, w = e.gaps("fcall"), e.gaps()
     assert len(g) == 7 and len(w) == 7
     print(f"ok: 8 queued events; app work between frames {g[0]} instr = {g[0] / CPU_MHZ:.0f} us at {CPU_MHZ} MHz "
           f"(CPI 1), {w[0]} instr to the first byte on the wire")
-    # an unknown opcode: the chip hangs, no response
-    e2 = Emu()
-    e2.run(50_000, until=lambda: bool(e2.svc_log) and e2.sleep)
-    e2.send(bytes([0, 0x01]))
-    try:
-        e2.run(100_000)
-    except Hang as h:
-        print(f"ok: unknown opcode hangs ({h})")
-    else:
-        raise AssertionError("an unknown opcode did not hang the app")
-    assert not e2.frames()
+    # results do not depend on the slice size
+    def script(n):
+        x = Emu()
+        x.run(50_000, until=lambda: bool(x.svc_log) and x.sleep, slice_n=n)
+        x.send(bytes([0, 0x65, 1]))
+        for i in range(10):
+            x.inject_ant(1, EVENT_RX, bytes([i]), queue_only=i % 2 == 0)
+            x.run(1_500, slice_n=n)
+        x.run(20_000, slice_n=n)
+        return bytes(x.out), x.tx_log
+    assert script(2000) == script(97) == script(5000), "frames or timing depend on the slice size"
+    print("ok: same frames and TX times at slice sizes 97, 2000, 5000")
+    # RTS held for 200 ms while 30 events arrive: no hang, every frame in order when released
+    h = Emu()
+    h.run(50_000, until=lambda: bool(h.svc_log) and h.sleep)
+    h.hold = True
+    for i in range(30):
+        h.inject_ant(1, EVENT_RX, bytes([i]))
+        h.run(6_600)
+    h.run(2_000)
+    assert not h.frames() or len(h.out) == 0
+    h.hold = False
+    h.run(20_000)
+    assert [p[4] for p in h.frames()] == list(range(30))
+    print("ok: RTS held 200 ms, 30 events: no hang, 30 frames in order after the release")
+    # the scheduler queue holds 96 events (nordic-app.md section 2): 96 in one pass are fine, 97 hang the app
+    for n, hangs in ((96, False), (97, True)):
+        q = Emu()
+        q.run(50_000, until=lambda: bool(q.svc_log) and q.sleep)
+        q.hold = True
+        for i in range(n):
+            q.inject_ant(1, EVENT_RX, bytes([i & 255]), queue_only=True)
+        q.nvic["ispr"] |= 1 << SWI2_IRQ
+        try:
+            q.run(5_000)
+            hung = False
+        except Hang:
+            hung = True
+        assert hung == hangs, f"{n} events in one pass: hung {hung}"
+    print("ok: 96 events in one SoftDevice pass are queued, 97 hang the app")
+    # an unknown opcode: the chip hangs, no response, at the same instruction whatever the slice size
+    seen = set()
+    for n in (97, 2000):
+        e2 = Emu()
+        e2.run(50_000, until=lambda: bool(e2.svc_log) and e2.sleep, slice_n=n)
+        e2.send(bytes([0, 0x01]))
+        try:
+            e2.run(100_000, slice_n=n)
+        except Hang as h:
+            seen.add((str(h), e2.instr))
+        else:
+            raise AssertionError("an unknown opcode did not hang the app")
+        assert not e2.frames()
+    assert len(seen) == 1, seen
+    print(f"ok: unknown opcode hangs ({seen.pop()[0]}), identical at two slice sizes")
     return 0
+
+
+def serve(inp=None, out=None):
+    """The chip's UART as a byte pipe on stdin / stdout, for the Rust host test (src/sim/nrf_emu_tests.rs). The host
+    sends requests, the harness answers each with [status][flags] and its payload. Status 0 ok; 1 the app hung or the
+    emulation stopped (then u16 length and the reason). Flags: bit 0 the chip holds CTS (it does not take bytes: its
+    4-byte FIFO is full), bit 1 the host's RTS is held (the chip's transmitter waits), bit 2 the app is dead.
+    All integers little endian. Requests:
+      'W' u16 n, bytes        host to chip bytes (queued; the chip takes one per 10 us of emulated time)
+      'R' u16 max             chip to host bytes, at most max: answer u16 n, bytes
+      'T' u32 us              advance emulated time
+      'H' u8                  hold (1) or release (0) the host's RTS
+      'A' ch ev n, n bytes    one ANT event now (n data bytes for ev 0x80), SWI2 pended
+      'B' ch ev, 8 bytes, u32 period_us, u16 count   count ANT broadcasts, one per period
+      'V' u16 n               one BLE GATTC HVX event carrying n bytes
+      'X'                     restart the app (the chip's reset), run to its idle wait
+      'Q'                     quit"""
+    inp, out = inp or sys.stdin.buffer, out or sys.stdout.buffer
+    e = [None]
+
+    def boot():
+        e[0] = Emu()
+        e[0].run(50_000, until=lambda: bool(e[0].svc_log) and e[0].sleep)
+
+    def reply(err=None, payload=b""):
+        x = e[0]
+        fl = (not x.rx_ready()) | x.hold << 1 | bool(x.hung) << 2
+        if err:
+            out.write(bytes([1, fl]) + struct.pack("<H", len(err)) + err.encode())
+        else:
+            out.write(bytes([0, fl]) + payload)
+        out.flush()
+
+    boot()
+    while True:
+        c = inp.read(1)
+        if not c or c == b"Q":
+            return 0
+        x, err, payload = e[0], None, b""
+        if c == b"W":
+            x.send_raw(inp.read(struct.unpack("<H", inp.read(2))[0]))
+        elif c == b"R":
+            n = min(struct.unpack("<H", inp.read(2))[0], len(x.out))
+            payload = struct.pack("<H", n) + bytes(x.out[:n])
+            del x.out[:n]
+        elif c == b"T":
+            try:
+                x.run(struct.unpack("<I", inp.read(4))[0])
+            except (Hang, Stop) as ex:
+                err = str(ex)
+        elif c == b"H":
+            x.hold = bool(inp.read(1)[0])
+        elif c == b"A":
+            ch, ev, n = inp.read(3)
+            x.inject_ant(ch, ev, inp.read(n))
+        elif c == b"B":
+            ch, ev = inp.read(2)
+            data = inp.read(8)
+            period, count = struct.unpack("<IH", inp.read(6))
+            for i in range(count):
+                x.at(period * (i + 1), lambda ch=ch, ev=ev, data=data: x.inject_ant(ch, ev, data))
+        elif c == b"V":
+            n = struct.unpack("<H", inp.read(2))[0]
+            # S132/S332 v5 ble_evt_t: {u16 evt_id 0x39 BLE_GATTC_EVT_HVX, u16 evt_len}, gattc {conn_handle, gatt_status,
+            # error_handle}, hvx {handle, type, len, data} (inferred from the v5 headers, as nordic-app.md section 2)
+            body = struct.pack("<HHHHBxH", 0, 0, 0, 0x0F, 1, n) + bytes(i & 255 for i in range(n))
+            x.inject_ble(struct.pack("<HH", 0x39, len(body)) + body)
+        elif c == b"X":
+            boot()
+        else:
+            err = f"unknown request {c!r}"
+        reply(err, payload)
 
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["selftest"]:
         sys.exit(selftest())
+    if sys.argv[1:] == ["--serve"]:
+        sys.exit(serve())
     print(__doc__)
     sys.exit(2)
