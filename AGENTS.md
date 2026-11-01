@@ -56,14 +56,14 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->769 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->770 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
   overflow reaches it: main.rs `stack_check`); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails
   when a function's frame passes its budget: keep big buffers in their own non-inlined function, never in main's. AXI
-  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->52 KB<!-- /n --> left; link.x
+  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->51 KB<!-- /n --> left; link.x
   says what is where); a static there must start as all zeros (an `Option` of a reference or a struct with a bool niche
   does not) or it lands in `.data`, in DTCM. The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road
   ahead inflates tiles into.
@@ -178,7 +178,8 @@ seconds, and the run ends with all of them and a total:
   links), `cargo deny check` (when installed), then what the tests wrote: `tools/fit_check.py` on the test rides when
   fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's Python) and `tools/walk.py selftest`;
 - **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `sync.py`, `assist.py`, `segments.py`,
-  `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py` and `theme.py selftest`, and
+  `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py`, `iaprecover.py`, `fetch_firmware.py` and
+  `theme.py selftest`, and
   `tools/font.py` regenerating `src/ui/fonts.rs` into a temporary file with `cmp` failing on a diff (skipped without PIL);
 - **the live numbers**, after the lanes (they need the ELF and the test list): `tools/numbers.py --write` (each changed
   marker printed) **only on main** (or with `--full`), by the merge step. A branch runs `--check` and prints the stale

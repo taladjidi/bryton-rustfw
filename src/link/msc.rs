@@ -82,6 +82,8 @@ const PROTECTED: Sense = (0x07, 0x27, 0x00);
 
 /// CSW status.
 const PASSED: u8 = 0;
+/// Longest host transfer taken: 65 535 blocks, a READ(10)'s most, is under it.
+const MAX_HOST: u32 = 1 << 25;
 const FAILED: u8 = 1;
 const PHASE: u8 = 2;
 
@@ -317,6 +319,7 @@ impl Drive {
                 out[4..8].copy_from_slice(&(BLOCK as u32).to_be_bytes());
                 (PASSED, Data::In(out, 8))
             }
+            (0x28 | 0x2a | 0x2f, Some(_)) if cb.len() < 10 => self.fail(BAD_FIELD), // a short CDB has no lba or count
             (0x28 | 0x2a | 0x2f, Some(n)) => {
                 let (lba, count) = (be32(cb, 2), be16(cb, 7));
                 if lba.checked_add(count).is_none_or(|end| end > n) {
@@ -351,6 +354,11 @@ impl Drive {
             Data::Read(_, n) | Data::Write(_, n) => n.saturating_mul(BLOCK as u32),
         };
         let device_in = matches!(data, Data::In(..) | Data::Read(..));
+        // a host length no command can use (READ(10) moves 32 MB at most) would drive the pad and absorb loops for
+        // minutes: a phase error at once (SCSI BOT 6.7.2 / 6.7.3 pad and absorb the difference, but a bounded one)
+        if host > MAX_HOST {
+            return (PHASE, host);
+        }
         // cases 2, 3, 7, 8, 10, 13
         let phase = want > 0 && (host < want || host_in != device_in);
         if host == 0 {
@@ -641,6 +649,22 @@ pub(crate) mod tests {
         assert_eq!(sense(&mut d, &mut h, &mut m), BAD_OPCODE);
         let (fc, st, _) = run(&mut d, &mut h, &mut m, 6, 252, true, &[0x23, 0, 0, 0, 0, 0, 0, 0, 252, 0]);
         assert_eq!((st, &fc[..12]), (PASSED, &[0, 0, 0, 8, 0, 0, 0, 100, 2, 0, 2, 0][..]));
+    }
+
+    #[test]
+    fn short_cdbs_and_huge_lengths_are_refused() {
+        let (mut d, mut h, mut m) = (Drive::new(), Host::default(), ram());
+        d.insert();
+        run(&mut d, &mut h, &mut m, 1, 0, false, &[0; 6]); // the medium-changed report
+        for op in [0x28u8, 0x2a, 0x2f] {
+            let (data, st, _) = run(&mut d, &mut h, &mut m, 2, 0, false, &[op, 0, 0, 0, 0, 1]);
+            assert_eq!((data.len(), st), (0, FAILED), "{op:#x} with a 6-byte CDB");
+            assert_eq!(sense(&mut d, &mut h, &mut m), BAD_FIELD);
+        }
+        let (data, st, res) = run(&mut d, &mut h, &mut m, 3, u32::MAX, true, &[0x12, 0, 0, 0, 36, 0]);
+        assert_eq!((data.len(), st, res), (0, PHASE, u32::MAX), "4 GiB asked: no padding");
+        let (_, st, _) = run(&mut d, &mut h, &mut m, 4, MAX_HOST + 1, false, &[0x00; 6]);
+        assert_eq!(st, PHASE);
     }
 
     #[test]

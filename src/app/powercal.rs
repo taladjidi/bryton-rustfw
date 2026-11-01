@@ -14,13 +14,6 @@ const AUTO_BTN: (u32, u32, u32, u32) = (8, 200, 224, 48);
 const MAIN_BTN: (u32, u32, u32, u32) = (8, 256, 224, 48);
 
 impl App {
-    /// The power meter is paired and heard (the CALIBRATE POWER row is offered).
-    pub(crate) fn power_heard(&self) -> bool {
-        let i = Kind::Power as usize;
-        matches!(self.radio.sensors.get(i), Some(Sensor::Paired(_)))
-            && self.radio.heard_ms.get(i).is_some_and(|&ms| ms < sensors::STALE_MS)
-    }
-
     /// Opens the calibration screen, unless a ride runs.
     pub(crate) fn open_powercal(&mut self) {
         if self.ride.state() == ride::State::Running {
@@ -37,7 +30,7 @@ impl App {
             self.powercal.reset();
         } else if self.ride.state() == ride::State::Running {
             self.say("NO CALIBRATION RIDING");
-        } else if !self.power_heard() {
+        } else if !self.radio.paired_heard(Kind::Power) {
             self.say("NO POWER METER HEARD");
         } else {
             self.powercal.start_zero();

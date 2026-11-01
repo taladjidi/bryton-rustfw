@@ -399,7 +399,7 @@ fn power_calibration_pages() {
 #[test]
 fn power_pages_mixed() {
     use crate::sensors::{Decoders, Kind, Live, Metric};
-    let (mut torque, mut combined) = (0, 0);
+    let (mut torque, mut combined, mut capped) = (0, 0, 0);
     for seed in 13..=16u32 {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
         let v: std::vec::Vec<u8> = bytes(seed, 1 << 16).collect();
@@ -415,6 +415,15 @@ fn power_pages_mixed() {
             }
             live.tick(1000); // values age out within 5 messages
             dec.decode(Kind::Power, d, 2105, &mut live);
+            // the plausibility caps: out-of-range power and cadence never reach `live`, and the fuzz sends them
+            let over = d[0] == 0x10 && u16::from_le_bytes([d[6], d[7]]) > crate::sensors::METER_MAX_W;
+            capped += usize::from(over);
+            assert!(live.get(Metric::Power).is_none_or(|v| v <= crate::sensors::METER_MAX_W), "power");
+            assert!(live.get(Metric::Cadence).is_none_or(|v| v <= 250), "cadence");
+            let mut hr = Live::default();
+            dec.decode(Kind::Hr, [4, 0, 0, 0, 0, 0, 0, d[7]], 2105, &mut hr);
+            assert!(hr.get(Metric::Hr).is_none_or(|v| v <= 250), "hr");
+            capped += usize::from(d[7] > 250);
             for m in [Metric::TorqueL, Metric::TorqueR, Metric::SmoothL, Metric::SmoothR, Metric::SmoothC] {
                 assert!(live.get(m).is_none_or(|v| v <= 200), "{m:?} {:?}", live.get(m));
             }
@@ -422,7 +431,7 @@ fn power_pages_mixed() {
             combined += live.get(Metric::SmoothC).is_some() as usize;
         }
     }
-    assert!(torque > 1000 && combined > 100, "reached: {torque} {combined}");
+    assert!(torque > 1000 && combined > 100 && capped > 1000, "reached: {torque} {combined} {capped}");
 }
 
 /// Random bytes from the computer, with command words mixed in, into the dev link protocol.
@@ -515,6 +524,136 @@ fn dev_link_input() {
         pc.got.clear();
     }
     assert!(maps > 0, "bench map reached");
+    dev_link_lines(&app);
+    dev_link_ride_open();
+}
+
+/// The same lines with a ride running: nothing that runs an image, resets, pokes, or stalls the loop gets out, and the
+/// refusals are reached.
+fn dev_link_ride_open() {
+    use crate::dev::{Effect, Session, Stats};
+    let mut sim = super::Sim::new(9, 0, 0);
+    let mut app = crate::App::start(&mut sim, None);
+    app.step(&mut sim);
+    app.press(&mut sim, crate::Press::Short(crate::Key::Start));
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    let addrs = ["0x40000000", "0x5ffffffc", "0x40013014", "0x20000000", "0xfffffffc"];
+    let (mut session, mut pc) = (Session::new(), super::Pc::default());
+    let (mut refused, mut other) = (0, 0);
+    for c in bytes(78, 6 << 10).collect::<std::vec::Vec<_>>().chunks_exact(6) {
+        let a = addrs[usize::from(c[1]) % addrs.len()];
+        let line = match c[0] % 10 {
+            0 => std::format!("load {} {}\n", 156 + u32::from(c[2]) * 100, c[3]),
+            1 => "reset\n".into(),
+            2 => std::format!("find {} {} {} {}\n", c[2], 1 + c[3], c[4], c[5]),
+            3 => std::format!("bench {} {} {}\n", c[2], 1 + c[3] % 32, 1 + c[4]),
+            4 => std::format!("bench scan {}\n", 1 + c[4]),
+            5 => std::format!("bench map {} 0 0\n", c[2] % 61),
+            6 => std::format!("sector {}\n", c[2]),
+            7 => std::format!("poke {a} {}\n", c[3]),
+            8 => std::format!("peek {a}\n"),
+            _ => std::format!("{}\n", "x".repeat(usize::from(c[4]))),
+        };
+        let e = session.feed(line.as_bytes(), &app, Stats::default(), &mut pc);
+        assert!(
+            !matches!(
+                e,
+                Effect::Run(_)
+                    | Effect::Reset
+                    | Effect::Find(..)
+                    | Effect::Sector(_)
+                    | Effect::Bench(..)
+                    | Effect::BenchScan(_)
+                    | Effect::BenchMap(..)
+            ),
+            "{line:?} got out with a ride open"
+        );
+        refused += pc.got.windows(14).filter(|w| *w == b"err ride open\n").count();
+        other += 1;
+        pc.got.clear();
+    }
+    assert!(pc.regs.is_empty(), "a poke reached the board with a ride open");
+    assert!(refused > 100 && other > 500, "refusals reached: {refused} of {other}");
+}
+
+/// The dev link by structure: addresses at and around the range edges, counts at the bounds, long lines, uploads at
+/// the size bounds. Every address the computer saw peeked or poked is aligned and inside the ranges, and each command
+/// is reached over the seeds (a regression of a bound, or of a parser, would pass word soup).
+fn dev_link_lines(app: &crate::App) {
+    use crate::dev::{Effect, IO, MEMORY, Session, Stats};
+    let addrs = ["0xfffffffc", "0x5ffffffc", "0x60000000", "0x40000000", "0x40000002", "0x1fffffff", "0x2001fffc"];
+    let addrs =
+        [addrs.as_slice(), &["0xd3fffffc", "0xe000e100", "0xe000e340", "0xe000ed04", "0x5ffffff8", "-4"]].concat();
+    let counts = ["0", "1", "2", "63", "64", "65", "4294967295", "x"];
+    let (mut session, mut pc) = (Session::new(), super::Pc::default());
+    let (mut peeks, mut pokes, mut loads, mut lss, mut gets, mut finds, mut wtests, mut sectors) =
+        (0, 0, 0, 0, 0, 0, 0, 0);
+    let effect = |session: &mut Session, pc: &mut super::Pc, line: &[u8]| {
+        let e = session.feed(line, app, Stats::default(), pc);
+        pc.got.clear();
+        e
+    };
+    for c in bytes(77, 6 << 10).collect::<std::vec::Vec<_>>().chunks_exact(6) {
+        let (a, n, v) = (addrs[usize::from(c[1]) % addrs.len()], counts[usize::from(c[2]) % counts.len()], c[3]);
+        let before = (pc.peeked.len(), pc.regs.len());
+        let line = match c[0] % 9 {
+            0 => std::format!("peek {a} {n}\n"),
+            1 => std::format!("poke {a} {v}\n"),
+            2 => std::format!("ls /{}\n", "d".repeat(usize::from(c[4]) % 80)),
+            3 => std::format!("get /{} {n} {n}\n", "g".repeat(usize::from(c[4]) % 80)),
+            4 => std::format!("find {n} {n} {v} {}\n", c[5]),
+            5 => std::format!("wtest {n}\n"),
+            6 => std::format!("sector {n}\n"),
+            7 => std::format!("peek {a}\n"),
+            _ => std::format!("{}\n", "x".repeat(usize::from(c[4]))),
+        };
+        let e = effect(&mut session, &mut pc, line.as_bytes());
+        peeks += usize::from(pc.peeked.len() > before.0);
+        pokes += usize::from(pc.regs.len() > before.1);
+        lss += usize::from(e == Effect::Ls);
+        gets += usize::from(matches!(e, Effect::Get(..)));
+        finds += usize::from(matches!(e, Effect::Find(..)));
+        wtests += usize::from(matches!(e, Effect::WriteTest(_)));
+        sectors += usize::from(matches!(e, Effect::Sector(_)));
+    }
+    for &a in pc.peeked.iter().chain(pc.regs.keys()) {
+        assert!(a % 4 == 0 && (IO.contains(&a) || MEMORY.iter().any(|r| r.contains(&a))), "{a:#x} reached the board");
+    }
+    assert!(pc.regs.keys().all(|a| IO.contains(a)), "a poke outside IO");
+    // uploads: sizes at the bounds, a good image (tag, size word, SP, reset vector) and a short one
+    for size in [155u32, 156, 157, 4096, 1 << 20, (1 << 20) + 1, 0, u32::MAX] {
+        let mut img = std::vec![0u8; size.min(1 << 20) as usize];
+        if img.len() >= 0x9c {
+            img[0..4].copy_from_slice(&0x2002_0000u32.to_le_bytes());
+            img[4..8].copy_from_slice(&0xd000_0101u32.to_le_bytes());
+            img[0x94..0x98].copy_from_slice(b"R039");
+            img[0x98..0x9c].copy_from_slice(&size.to_le_bytes());
+        }
+        let sum = img.iter().fold(0u32, |a, &b| a.wrapping_add(u32::from(b)));
+        pc.staged.clear();
+        let mut session = Session::new();
+        effect(&mut session, &mut pc, std::format!("load {size} {sum}\n").as_bytes());
+        let mut last = Effect::None;
+        for chunk in img.chunks(512) {
+            last = session.feed(chunk, app, Stats::default(), &mut pc);
+        }
+        pc.got.clear();
+        let ok = (4096..=1 << 20).contains(&size); // the reset vector (0x100) must lie inside the image
+        assert_eq!(last == Effect::Run(size), ok, "load {size}");
+        loads += usize::from(ok);
+    }
+    for (name, n) in [
+        ("peek", peeks),
+        ("poke", pokes),
+        ("load", loads),
+        ("ls", lss),
+        ("get", gets),
+        ("find", finds),
+        ("wtest", wtests),
+        ("sector", sectors),
+    ] {
+        assert!(n > 0, "{name} never reached");
+    }
 }
 
 /// FIT files from the card (stock's rides): random bytes behind a valid header, and every kind of damage to a
@@ -1358,15 +1497,40 @@ fn usb_snapshot_words() {
 #[test]
 fn usb_drive_commands() {
     use crate::msc::tests::{Host, cbw, ram};
-    use crate::msc::{Drive, LOG, PACKET};
+    use crate::msc::{Drive, LOG, Media, PACKET};
+    /// The RAM disk, or the card that cannot be identified (`blocks()` None).
+    struct Disk(crate::msc::tests::Ram, bool);
+    impl Media for Disk {
+        fn blocks(&mut self) -> Option<u32> {
+            if self.1 { None } else { self.0.blocks() }
+        }
+        fn writable(&self) -> bool {
+            self.0.writable()
+        }
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> bool {
+            self.0.read(lba, buf)
+        }
+        fn write(&mut self, lba: u32, buf: &[u8]) -> bool {
+            self.0.write(lba, buf)
+        }
+    }
     const OPS: [u8; 13] = [0x00, 0x03, 0x12, 0x1a, 0x1b, 0x1e, 0x23, 0x25, 0x28, 0x2a, 0x2f, 0x35, 0x5a];
     // what the drive logged: READ(10) and WRITE(10) that passed, those that failed, an opcode it does not have
     // (refused), a CBW not valid (0xfd)
     let (mut reads, mut writes, mut failed, mut refused, mut damaged) = (0usize, 0usize, 0usize, 0usize, 0usize);
-    for seed in 1..=4u32 {
+    // per seed: 0 a writable drive, 1 no medium (never inserted), 2 write protected, 3 a card with no size; and in the
+    // last two a pass per mode is counted apart: nothing may pass where the drive refuses
+    let (mut absent_ok, mut absent_failed, mut protected_ok, mut protected_failed, mut unsized_ok) = (0, 0, 0, 0, 0);
+    let mut short = 0usize; // READ / WRITE / VERIFY(10) with a block under 10 bytes, which must never pass
+    for seed in 1..=16u32 {
+        let mode = seed % 4;
         let v: Vec<u8> = bytes(seed, 1 << 18).collect();
-        let (mut d, mut h, mut m) = (Drive::new(), Host::default(), ram());
-        d.insert();
+        let (mut d, mut h) = (Drive::new(), Host::default());
+        let mut m = Disk(ram(), mode == 3);
+        m.0.1 = mode != 2;
+        if mode != 1 {
+            d.insert();
+        }
         for (k, c) in v.chunks_exact(24).enumerate() {
             let len = u32::from(u16::from_le_bytes([c[0], c[1]])) % 8192;
             let mut cb = [0u8; 16];
@@ -1375,7 +1539,12 @@ fn usb_drive_commands() {
             if c[3] % 6 == 0 {
                 cb[0] = 0x7f; // not an opcode the drive has
             }
-            let n = 1 + usize::from(c[18] % 16);
+            let mut n = 1 + usize::from(c[18] % 16);
+            if matches!(cb[0], 0x28 | 0x2a | 0x2f) && c[4] % 2 == 0 {
+                // a block inside the 100-block disk, so the commands the drive accepts are reached
+                cb[2..6].copy_from_slice(&[0, 0, 0, c[5] % 90]);
+                (cb[7], cb[8], n) = (0, 1 + c[6] % 8, 10 + usize::from(c[7] % 7));
+            }
             let mut packet = cbw(k as u32, len, c[19] & 1 == 0, &cb[..n]);
             if c[20] % 16 == 0 {
                 packet[usize::from(c[21]) % 31] ^= c[22] | 1; // a damaged CBW
@@ -1387,10 +1556,25 @@ fn usb_drive_commands() {
                 .collect();
             h.stalled = false;
             let before = d.log.n;
+            let short_rw = matches!(cb[0], 0x28 | 0x2a | 0x2f) && n < 10;
             d.packet(&packet, &mut h, &mut m);
             // every entry this packet logged (the ring keeps the last LOG)
             for i in before.max(d.log.n.saturating_sub(LOG as u32))..d.log.n {
                 let (op, _, _, status, _) = d.log.ring[i as usize % LOG];
+                if matches!(op, 0x28 | 0x2a | 0x2f) {
+                    let pass = status == 0;
+                    assert!(!(short_rw && pass), "a short block passed");
+                    short += usize::from(short_rw);
+                    match mode {
+                        1 => (absent_ok, absent_failed) = (absent_ok + usize::from(pass), absent_failed + 1),
+                        2 if op == 0x2a => {
+                            (protected_ok, protected_failed) =
+                                (protected_ok + usize::from(pass), protected_failed + usize::from(!pass));
+                        }
+                        3 => unsized_ok += usize::from(pass),
+                        _ => {}
+                    }
+                }
                 match (op, status) {
                     (0x28, 0) => reads += 1,
                     (0x2a, 0) => writes += 1,
@@ -1409,8 +1593,10 @@ fn usb_drive_commands() {
                 d.reset();
             }
         }
-        assert_eq!(m.0.len(), 100 * 512, "the disk never grows");
+        assert_eq!(m.0.0.len(), 100 * 512, "the disk never grows");
     }
+    assert_eq!((absent_ok, protected_ok, unsized_ok), (0, 0, 0), "a command passed where the drive refuses");
+    assert!(absent_failed > 0 && protected_failed > 0 && short > 0, "{absent_failed} {protected_failed} {short}");
     assert!(
         reads > 0 && writes > 0 && failed > 0 && refused > 0 && damaged > 0,
         "reached: {reads} {writes} {failed} {refused} {damaged}"
@@ -3054,7 +3240,7 @@ fn fec_pages_into_the_app() {
             app.press(&mut sim, Press::Short(Key::Page));
         }
         if let Some(p) = app.live.get(Metric::Power) {
-            assert!(p < 0xfff);
+            assert!(p <= crate::trainer::MAX_W, "{p}");
         }
         if let Some(s) = app.live.get(Metric::Speed) {
             assert!(s <= 2400, "{s}");
@@ -3087,6 +3273,7 @@ fn ftms_link_events() {
     let mut reached = [0usize; 4]; // owned, data, status, responses
     let mut gatt = [0usize; 5]; // Services, Chars, Descs, Read, ConnParamRequest
     let mut listed = [0usize; 3]; // advertising reports: listed, with a name, past the cap
+    let mut over = 0; // Indoor Bike Data powers past the cap, which never reach `live`
     for seed in 1..=4u32 {
         let v: Vec<u8> = bytes(seed, 1 << 16).collect();
         for (k, c) in v.chunks_exact(48).enumerate() {
@@ -3151,6 +3338,7 @@ fn ftms_link_events() {
                 }
             }
             app.phone_event(&mut sim, &p);
+            assert!(app.live.get(crate::sensors::Metric::Power).is_none_or(|p| p <= crate::trainer::MAX_W));
             if app.ftms.conn.is_none() {
                 app.ftms_down(); // the link made again at once (not after the backoff), so the fuzz keeps reaching it
                 run(&mut sim, &mut app, 1000);
@@ -3190,6 +3378,7 @@ fn ftms_link_events() {
         for c in v.chunks(13) {
             let mut r = crate::trainer::Reading::default();
             crate::ftms::bike_data(c, &mut r);
+            over += usize::from(r.power.is_some_and(|p| p > crate::trainer::MAX_W)); // what the cap must stop
             let _ = (crate::ftms::modes(c), crate::ftms::range(c), crate::ftms::response(c));
             let _ = (crate::ftms::advertised(c), crate::ftms::control_lost(c));
             let _ = crate::ftms::as_fec((c[0], c.get(1).copied().unwrap_or(0)));
@@ -3199,6 +3388,7 @@ fn ftms_link_events() {
     assert!(reached.iter().all(|&n| n > 50), "owned events, data, status, responses: {reached:?}");
     assert!(gatt.iter().all(|&n| n > 5), "Services, Chars, Descs, Read, ConnParamRequest: {gatt:?}");
     assert!(listed.iter().all(|&n| n > 5), "listed, named, past the cap: {listed:?}");
+    assert!(over > 20, "out-of-range powers reached the parser: {over}");
 }
 
 /// The FE-C over BLE trainer's link (drivers/fecble.rs, app/ftms.rs): with the D500 connected on connection 1,
@@ -3290,7 +3480,8 @@ fn fecble_link_events() {
             let r =
                 crate::nrf::AdvReport { addr_type: c[22] % 2, addr: [c[23] % 7, 1, 2, 3, 4, 5], rssi: -50, data: &ad };
             let fec = crate::fecble::advertised(&ad) == Some(crate::fecble::Proto::Fec);
-            listed[0] += usize::from(app.ftms.found(&r) && fec);
+            let _ = app.ftms.found(&r); // true only when the list changed: repeats are common here
+            listed[0] += usize::from(fec && app.ftms.n_found > 0);
             listed[1] += usize::from(crate::fecble::advertised(&ad).is_none());
         }
         app.ftms.searching = false;
@@ -5175,7 +5366,7 @@ fn card_survey_on_damaged_volumes() {
             img[i] = next() as u8;
         }
         let whole_info = crate::fat::Fat::mount(&mut Ram(img.clone(), 0))
-            .is_ok_and(|f| f.fsinfo_free(&mut Ram(img.clone(), 0)).is_some());
+            .is_ok_and(|f| f.free_clusters(&mut Ram(img.clone(), 0)).is_ok_and(|n| n.is_some()));
         let mut d = Ram(img, 0);
         let mut s = Survey::new();
         let mut passes = 0;

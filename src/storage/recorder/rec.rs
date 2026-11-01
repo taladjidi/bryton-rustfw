@@ -3,7 +3,7 @@
 
 use super::{Local, Phase, TAG};
 use crate::fat::{Error, SECTOR};
-use crate::fit::{self, LAP_WORDS, RECORD_LEN};
+use crate::fit::{LAP_WORDS, RECORD_LEN};
 use crate::ride::RIDE_WORDS;
 
 /// Where [`Rec::lap`] starts: after the ride words, in bytes every build before left zero.
@@ -27,7 +27,7 @@ pub(crate) struct Rec {
     /// never writes: a repair a cut tore is redone, never on a chain whose sector 1 changed since (another file's).
     /// 0 in the records of the builds before it, which ignore these bytes (only the record's CRC covers them).
     pub(crate) checked: Option<u16>,
-    /// The current lap's sums ([`fit::Writer::lap_words`]), bytes 192..228, after the ride words: zeros in the
+    /// The current lap's sums ([`crate::fit::Writer::lap_words`]), bytes 192..228, after the ride words: zeros in the
     /// records of the builds before them, which ignore these bytes (the lap then averages from the resume).
     pub(crate) lap: [u32; LAP_WORDS],
 }
@@ -51,16 +51,12 @@ impl Rec {
         for (c, w) in s[LAP_AT..LAP_AT + 4 * LAP_WORDS].chunks_exact_mut(4).zip(self.lap) {
             c.copy_from_slice(&w.to_le_bytes());
         }
-        let crc = fit::crc(0, &s[..SECTOR - 2]);
-        s[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+        crate::storage::seal16(&mut s);
         s
     }
 
     pub(crate) fn from_sector(s: &[u8; SECTOR]) -> Option<Rec> {
-        if s[..4] != TAG
-            || usize::from(s[21]) != RIDE_WORDS
-            || fit::crc(0, &s[..SECTOR - 2]).to_le_bytes() != s[SECTOR - 2..]
-        {
+        if s[..4] != TAG || usize::from(s[21]) != RIDE_WORDS || !crate::storage::sealed16(s) {
             return None;
         }
         let word = |i: usize| s.get(i..i + 4).and_then(|b| b.try_into().ok()).map_or(0, u32::from_le_bytes);

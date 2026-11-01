@@ -153,7 +153,7 @@ fn quick_unit(phone: bool) -> (Sim, App) {
         app.activate(&mut sim, Menu::Phone, 1); // PAIR
     }
     run(&mut sim, &mut app, 5000);
-    assert!(app.power_heard());
+    assert!(app.radio.paired_heard(Kind::Power));
     (sim, app)
 }
 
@@ -301,7 +301,7 @@ fn zero_on_the_quick_panel_needs_two_taps_in_time() {
     // heard no more: a tap does nothing
     app.quick.zero.0 = None;
     app.radio.heard_ms[Kind::Power as usize] = u32::MAX;
-    assert!(!app.power_heard());
+    assert!(!app.radio.paired_heard(Kind::Power));
     tap(&mut app, &mut sim, line);
     assert!(app.quick.zero.0.is_none() && !app.powercal.asking(), "cannot calibrate: no arming");
 }

@@ -616,3 +616,21 @@ fn a_reconnect_during_a_pause_keeps_the_trainer_free() {
     run(&mut sim, &mut app, 3000);
     assert!(erg(&sim), "the target on resume");
 }
+
+/// A record's continuation that never came (More Data left set) does not keep the next record from clearing the
+/// fields it omits: after 2 s without a notification the flag is forgotten.
+#[test]
+fn a_lost_continuation_does_not_freeze_the_power() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    let h = app.ftms.handle(crate::ftms::BIKE_DATA);
+    assert_ne!(h, 0);
+    app.ftms_hvx(&mut sim, h, &[0x44, 0x00, 0xb8, 0x0b, 180, 0, 250, 0]); // whole: 250 W
+    assert_eq!(app.trainer.reading.power, Some(250));
+    app.ftms_hvx(&mut sim, h, &[0x01, 0x00]); // More Data: the continuation is lost
+    assert!(app.trainer.reading.bike_more);
+    *app.radio.heard_ms.at_mut(crate::sensors::Kind::Trainer) = 3000;
+    app.ftms_hvx(&mut sim, h, &[0x04, 0x00, 0xb8, 0x0b, 180, 0]); // a whole record, no power
+    assert_eq!(app.trainer.reading.power, None, "cleared although the flag was left set");
+}

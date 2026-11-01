@@ -2,6 +2,36 @@
 //! panic. One reader for the unit's own files (`storage::bikes`, `storage::route`, the places and the settings
 //! sectors) and the BLE events, so each caller's out-of-range case is the same `None`.
 
+/// Copies the printable ASCII of `src` into the name buffer `dst` (others become '?'), as long as `dst` holds, and
+/// sets `len`. True when the name changed. The one copy of the loop behind every fixed name buffer (a scanned
+/// device's, a trainer's, a course's).
+///
+/// ```
+/// use bryton_rustfw::storage::bytes::{ascii, set_ascii};
+/// let (mut buf, mut len) = ([0; 4], 0);
+/// assert!(set_ascii(&mut buf, &mut len, b"Kick\xffr"));
+/// assert_eq!(ascii(&buf, len), "Kick");
+/// assert!(!set_ascii(&mut buf, &mut len, b"Kick"), "same name");
+/// set_ascii(&mut buf, &mut len, b"a\x01");
+/// assert_eq!(ascii(&buf, len), "a?");
+/// ```
+pub fn set_ascii(dst: &mut [u8], len: &mut u8, src: &[u8]) -> bool {
+    let n = src.len().min(dst.len());
+    let mut changed = usize::from(*len) != n;
+    for (slot, &c) in dst.iter_mut().zip(src) {
+        let c = if c.is_ascii_graphic() || c == b' ' { c } else { b'?' };
+        changed |= *slot != c;
+        *slot = c;
+    }
+    *len = n as u8;
+    changed
+}
+
+/// The name in the first `len` bytes of `buf`, empty when it is not UTF-8 or `len` runs past `buf`.
+pub fn ascii(buf: &[u8], len: u8) -> &str {
+    core::str::from_utf8(buf.get(..usize::from(len)).unwrap_or(&[])).unwrap_or("")
+}
+
 /// The u16 at byte `at` of `b`, little-endian; `None` if fewer than two bytes are there.
 ///
 /// ```

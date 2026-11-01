@@ -62,6 +62,22 @@ pub mod seen {
     pub const P2: u8 = 128;
 }
 
+/// No page 25 for this long and the power and cadence it gave are dropped ([`age`]): any other page keeps the trainer
+/// "heard", so its last power would stand for ever. The 5 s is the sensors' stale time; that the profile sends page 25
+/// every few messages is inferred (no source found for the exact pattern).
+pub const P25_STALE_MS: u32 = 5000;
+
+/// `dt_ms` passes with the trainer-data page 25 as the source of the power: past [`P25_STALE_MS`] it is no reading.
+/// Only once a page 25 came (an FTMS trainer's power is not this page's).
+pub fn age(r: &mut Reading, dt_ms: u32) {
+    if r.seen & seen::P25 != 0 {
+        r.p25_ms = r.p25_ms.saturating_add(dt_ms);
+        if r.p25_ms >= P25_STALE_MS {
+            (r.power, r.cadence) = (None, None);
+        }
+    }
+}
+
 /// Takes the 8 data bytes of a broadcast from the trainer into `r`; pages not listed in the module doc change
 /// nothing.
 ///
@@ -86,6 +102,7 @@ pub fn decode(d: [u8; 8], r: &mut Reading) {
         // trainer data: cadence, power (12 bits), status, target flags and state
         25 => {
             r.seen |= seen::P25;
+            r.p25_ms = 0;
             r.cadence = Some(d[2]).filter(|&c| c != 0xff);
             r.power = Some(u16_at(5) & 0x0fff).filter(|&p| p != 0x0fff);
             r.status = d[6] >> 4 & 7;
@@ -195,6 +212,22 @@ mod tests {
         decode([71, 0x31, 0, 0, 255, 255, 0x20, 0x03], &mut r);
         assert_eq!(r.last_cmd, Some((0x31, 0)));
         assert_eq!(r.seen, seen::P16 | seen::P25 | seen::P54 | seen::P71);
+    }
+
+    #[test]
+    fn power_goes_when_page_25_stops() {
+        let mut r = Reading::default();
+        decode([25, 1, 85, 0, 0, 0x2c, 0x71, 0x30], &mut r);
+        for _ in 0..4 {
+            decode([16, 25, 0, 0, 0, 0, 0, 0], &mut r); // general pages keep coming
+            age(&mut r, 1000);
+            assert_eq!(r.power, Some(300), "under 5 s");
+        }
+        age(&mut r, 1000);
+        assert_eq!((r.power, r.cadence), (None, None));
+        let mut ftms = Reading { power: Some(200), ..Reading::default() };
+        age(&mut ftms, 60_000);
+        assert_eq!(ftms.power, Some(200), "no page 25 ever: not this source");
     }
 
     #[test]

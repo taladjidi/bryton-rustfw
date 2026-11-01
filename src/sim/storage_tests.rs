@@ -29,7 +29,7 @@ fn storage_lists_the_card_and_opens_its_oldest_ride() {
     let (mut next, mut free) = (2, 0);
     assert!(fat.count_free(&mut d, &mut next, &mut free, u32::MAX).unwrap());
     // the survey counts the FAT (FSInfo is only an estimate until then); on the Sim FSInfo and the FAT agree exactly
-    let info = fat.fsinfo_free(&mut d).expect("the Sim's FSInfo is whole");
+    let info = fat.free_clusters(&mut d).unwrap().expect("the Sim's FSInfo is whole");
     assert_eq!(free, info, "the Sim's FSInfo is exact");
     assert_eq!(app.survey.free(), Some(fat.clusters_bytes(free)), "the free space: the FAT's count");
     assert_eq!(app.survey.total(), Some(fat.clusters_bytes(fat.clusters())));
