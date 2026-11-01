@@ -55,6 +55,18 @@ const SUFFIXES: u8 = 99;
 const FROM: [&str; 2] = [ACTIVITIES, FULL_PATH];
 const TO: [&str; 2] = ["Rustfw/Deleted", "Rustfw/Deleted/Full"];
 
+/// Why a delete left the ride where it was, nothing pending (the record done): a deliberate outcome, never a card
+/// error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Left {
+    /// The card full or every suffix taken: put back (`put_back`). [`delete`] says [`Error::Refused`] for it.
+    PutBack,
+    /// Not in `\Activities` by its chain: a computer moved or renamed it (`\Backup`).
+    Elsewhere,
+    /// Its chain shorter than its size: never unlinked (its clusters would be lost).
+    Damaged,
+}
+
 /// One file of a move: its first cluster, its size, and the CRC of its first sector (None: an empty file, or a
 /// record of the first builds, flag 1, which had none).
 type Moved = (u32, u32, Option<u16>);
@@ -204,17 +216,18 @@ fn ready(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, room: bool, t: (u16
 
 /// Moves the ride whose file in `\Activities` is `ride` (its first cluster: the history's), and its full copy if
 /// any, into `\Rustfw\Deleted` (module doc); first finishes a move a cut left. `t`: (DOS date, time) of the new
-/// entries and folders. [`Error::NotFound`] when no ride in `\Activities` has that chain (moved or renamed by a
-/// computer since the history was made, or a pending move of it found it so: the record then done, the ride where
-/// the computer put it). A move of this ride a failure left (a card error midway) is finished: Ok, it is deleted.
+/// entries and folders. `Ok(None)`: deleted (a move of this ride a failure left, a card error midway, is finished:
+/// it is deleted). `Ok(Some(_))`: not deleted, the ride where it was, nothing pending: [`Left::Elsewhere`] when no
+/// ride in `\Activities` has that chain under a stock-style name ([`crate::stock::ride_start`]: moved, or renamed
+/// otherwise, by a computer since the history was made; one renamed to another stock-style name is deleted under
+/// it), or a pending move of it found it so; [`Left::Damaged`] when its chain is shorter than its size.
 /// [`Error::Refused`]: not deleted, the ride where it was, nothing pending (the card full, every suffix taken; the
-/// record written and done). [`Error::Corrupt`] also when the ride's chain is shorter than its size (damaged):
-/// left where it is, nothing pending.
+/// record written and done). Any other error: a card error, a move maybe left pending (finished at the next start).
 #[inline(never)] // in its own frame, not the main loop's
-pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), Error> {
+pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<Option<Left>, Error> {
     let mut fat = Fat::mount(d)?;
     if finish_on(&mut fat, d, t)?.is_some_and(|r| r.files[0].map(|f| f.0) == Some(ride.cluster)) {
-        return Ok(());
+        return Ok(None);
     }
     // the name the chain has in \Activities
     let acts = fat.open(d, ACTIVITIES)?;
@@ -226,7 +239,7 @@ pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), 
             break;
         }
     }
-    let name = name.ok_or(Error::NotFound)?;
+    let Some(name) = name else { return Ok(Some(Left::Elsewhere)) };
     let mut buf = [0u8; 20];
     let mut files = [None; 2];
     for (slot, from) in files.iter_mut().zip(FROM.iter()) {
@@ -242,7 +255,7 @@ pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), 
         };
     }
     if files[0].map(|f| f.0) != Some(ride.cluster) {
-        return Err(Error::NotFound);
+        return Ok(Some(Left::Elsewhere));
     }
     // the folders, then a free name, then the record: all before the first entry changes. Made for the first time,
     // they leave no record to finish after a cut, which may leave the second FAT different in a sector: so the
@@ -257,7 +270,10 @@ pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), 
     ready(&mut fat, d, &mut r, false, t)?;
     let mut rec = rec_file(&mut fat, d, t)?;
     fat.write_sectors(d, &mut rec, 0, &r.to_sector())?;
-    settle(&mut fat, d, &mut r, &mut rec, t)?.map_or(Ok(()), Err)
+    match settle(&mut fat, d, &mut r, &mut rec, t)? {
+        Some(Left::PutBack) => Err(Error::Refused),
+        left => Ok(left),
+    }
 }
 
 /// At start-up, and before the card is lent to a computer: finishes a move a cut left (module doc); true if there
@@ -284,21 +300,20 @@ fn finish_on(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Opt
 }
 
 /// [`moves`], then the record done. A move that cannot be finished ([`Error::Refused`]: the card full, every suffix
-/// taken) is put back instead (`put_back`). None if moved; else why the ride is where it was, the record done:
-/// [`Error::Refused`] put back, or what `moves` left ([`Error::NotFound`], [`Error::Corrupt`]).
+/// taken) is put back instead (`put_back`). None if moved; else why the ride is where it was, the record done.
 fn settle(
     fat: &mut Fat,
     d: &mut impl DiskWrite,
     r: &mut Rec,
     rec: &mut Handle,
     t: (u16, u16),
-) -> Result<Option<Error>, Error> {
+) -> Result<Option<Left>, Error> {
     let left = match moves(fat, d, r, rec, t) {
         Ok(left) => left,
         Err(Error::Refused) => {
             // a put back refused leaves the move pending: never `Refused` out of here ([`delete`]: nothing pending)
             put_back(fat, d, r, t).map_err(|e| if e == Error::Refused { Error::Io } else { e })?;
-            Some(Error::Refused)
+            Some(Left::PutBack)
         }
         Err(e) => return Err(e),
     };
@@ -501,15 +516,15 @@ fn still_ours(
 /// named still (unlinked and not linked again, they were lost), nothing moved for it.
 ///
 /// None if the clean copy moved; else it is where it was, not deleted, and its full copy left where it is named
-/// too: [`Error::NotFound`] if a computer named it elsewhere meanwhile (renamed in `\Activities`, moved to
-/// `\Backup`) while the move was pending, [`Error::Corrupt`] if its chain is damaged.
+/// too: [`Left::Elsewhere`] if a computer named it elsewhere meanwhile (renamed in `\Activities`, moved to
+/// `\Backup`) while the move was pending, [`Left::Damaged`] if its chain is damaged.
 fn moves(
     fat: &mut Fat,
     d: &mut impl DiskWrite,
     r: &mut Rec,
     rec: &mut Handle,
     t: (u16, u16),
-) -> Result<Option<Error>, Error> {
+) -> Result<Option<Left>, Error> {
     if ready(fat, d, r, true, t)? {
         fat.write_sectors(d, rec, 0, &r.to_sector())?;
     }
@@ -527,7 +542,7 @@ fn moves(
                     if h.first == first {
                         fat.remove(d, &h)?;
                         if k == 0 {
-                            left = Some(Error::NotFound);
+                            left = Some(Left::Elsewhere);
                         }
                     }
                 }
@@ -544,7 +559,7 @@ fn moves(
         // again its clusters were lost; left where it is (named or not), nothing moved for it
         if first != 0 && !still_ours(fat, d, first, size, crc, false)? {
             if k == 0 {
-                left = Some(Error::Corrupt);
+                left = Some(Left::Damaged);
             }
             continue;
         }
@@ -553,7 +568,7 @@ fn moves(
         // name hid it from `unlink_old`), or by a repair: in sight, left there (linked, two names would share it)
         let named = gone && named_elsewhere(fat, d, from, first)?;
         if k == 0 && named {
-            left = Some(Error::NotFound);
+            left = Some(Left::Elsewhere);
         }
         if first == 0 || still_ours(fat, d, first, size, crc, gone)? && !named {
             fat.link(d, dst, file_name(&r.name, r.suffix, &mut buf)?, &Handle { first, size, ..Handle::default() }, t)?;
@@ -636,7 +651,7 @@ pub(crate) mod tests {
         assert_eq!(file(&d.0, "Rustfw/Deleted/261020080000.fit"), Some(Vec::new()), "the other file kept");
         assert_eq!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit").as_ref(), Some(&full), "the full copy kept");
         assert_eq!(fsck(&d.0), Ok(0));
-        assert_eq!(delete(&mut d, &File { cluster: 3, size: 0, dir: false }, T), Err(Error::NotFound));
+        assert_eq!(delete(&mut d, &File { cluster: 3, size: 0, dir: false }, T), Ok(Some(Left::Elsewhere)));
         assert_eq!(finish(&mut d, T), Ok(false), "nothing left to finish");
         let mut out = [0u8; 20];
         assert_eq!(file_name(b"261020080000", 42, &mut out), Ok("261020080000-42.fit"));
@@ -754,7 +769,7 @@ pub(crate) mod tests {
     fn a_delete_asked_again_after_a_failure_succeeds() {
         let ride = cluster(&volume(), RIDE);
         let mut d = Ram(cut_midway(), 0);
-        assert_eq!(delete(&mut d, &ride, T), Ok(()));
+        assert_eq!(delete(&mut d, &ride, T), Ok(None));
         assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some());
         assert_eq!(fsck(&d.0), Ok(0));
     }
@@ -1229,7 +1244,8 @@ pub(crate) mod tests {
         let (clean, full) =
             (file(&volume(), RIDE).unwrap(), file(&volume(), "Rustfw/Activities/261020080000.fit").unwrap());
         for (what, img) in [("delete", taken(volume())), ("finish", taken(cut_midway()))] {
-            let run = |d: &mut Cut| if what == "delete" { delete(d, &ride, T) } else { finish(d, T).map(|_| ()) };
+            let run =
+                |d: &mut Cut| if what == "delete" { delete(d, &ride, T).map(|_| ()) } else { finish(d, T).map(|_| ()) };
             let mut whole = Cut(Ram(img.clone(), 0), u32::MAX);
             run(&mut whole).unwrap();
             let writes = u32::MAX - whole.1;
@@ -1370,10 +1386,10 @@ pub(crate) mod tests {
         for (what, img) in [("delete", cut_short(volume())), ("finish", cut_short(pending_named()))] {
             let lost0 = lost(&img, what);
             assert!(lost0 > 0, "{what}: the clusters the computer cut off");
-            let run = |d: &mut Cut| if what == "delete" { delete(d, &ride, T) } else { finish(d, T).map(|_| ()) };
+            let run = |d: &mut Cut| if what == "delete" { delete(d, &ride, T) } else { finish(d, T).map(|_| None) };
             let mut whole = Cut(Ram(img.clone(), 0), u32::MAX);
             let r = run(&mut whole);
-            assert_eq!(r, if what == "delete" { Err(Error::Corrupt) } else { Ok(()) }, "{what}");
+            assert_eq!(r, Ok((what == "delete").then_some(Left::Damaged)), "{what}");
             let writes = u32::MAX - whole.1;
             for budget in 0..=writes {
                 let mut d = Cut(Ram(img.clone(), 0), budget);
@@ -1389,7 +1405,7 @@ pub(crate) mod tests {
                 }
                 assert!(file(&d.0.0, "Rustfw/Activities/261020080000.fit").is_some(), "{at}: the full copy");
                 assert_eq!(finish(&mut d, T), Ok(false), "{at}: nothing pending");
-                assert_eq!(delete(&mut d, &ride, T), Err(Error::Corrupt), "{at}: asked again");
+                assert_eq!(delete(&mut d, &ride, T), Ok(Some(Left::Damaged)), "{at}: asked again");
                 assert!(lost(&d.0.0, &at) <= lost0 + 1, "{at}: asked again, no new lost chain");
                 assert_eq!(cluster(&d.0.0, RIDE).cluster, ride.cluster, "{at}: still there");
             }
@@ -1621,7 +1637,7 @@ pub(crate) mod tests {
                 }
                 assert!(file(img, "Rustfw/Activities/261020080000.fit").is_some(), "full {full}, {at}: the full copy");
             });
-            assert_eq!(delete(&mut d, &ride, T), Err(Error::NotFound), "full {full}");
+            assert_eq!(delete(&mut d, &ride, T), Ok(Some(Left::Elsewhere)), "full {full}");
             assert_eq!(fsck(&d.0), Ok(0), "full {full}");
             assert_eq!(finish(&mut d, T), Ok(false), "full {full}: the record done");
             assert!(file(&d.0, "Backup/261020080000.fit").is_some(), "full {full}");
@@ -1658,7 +1674,7 @@ pub(crate) mod tests {
         for n in 0..reads {
             let mut d = Bad(Ram(img.clone(), 0), n);
             let r = delete(&mut d, &ride, T);
-            assert!(r.is_ok() || r == Err(Error::Io), "read {n}: {r:?}");
+            assert!(r == Ok(None) || r == Err(Error::Io), "read {n}: {r:?}");
             if r.is_ok() {
                 assert!(file(&d.0.0, RIDE).is_none(), "read {n}: Ok, the ride moved"); // an error swallowed left it
             }
