@@ -15,13 +15,12 @@ fn power210(_: u64) -> [u8; 8] {
 
 /// The unit with a power meter in range, paired (register 10) and heard, the answer it gives set.
 fn unit(answer: MeterAnswer) -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    sim.own_settings();
-    sim.backup[Kind::Power.backup()] = Kind::Power.to_word(ID);
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
-    sim.nordic.meter.answer = answer;
-    let mut app = App::start(&mut sim, Some(KEY));
+    let (mut sim, mut app) = super::tests::unit_with(Some(KEY), |sim| {
+        sim.own_settings();
+        sim.backup[Kind::Power.backup()] = Kind::Power.to_word(ID);
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
+        sim.nordic.meter.answer = answer;
+    });
     run(&mut sim, &mut app, 3000);
     assert!(app.radio.paired_heard(Kind::Power), "the meter is paired and heard");
     (sim, app)

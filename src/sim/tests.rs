@@ -16,6 +16,16 @@ use super::ride_tests::power_noisy;
 use crate::ui::tests::Frame;
 use crate::ui::{Field, Rec, Strip, UsbDot};
 /// A stand-in for the ANT+ network key (the real one is never in the repository).
+/// A unit on the test card (`Sim::new(9, 0, 0)` and the card image), `f` setting the simulator up before the app starts
+/// with the ANT+ `key`: the set-up the sim files share (each keeps a one-line `unit` of its own).
+pub(super) fn unit_with(key: Option<[u8; 8]>, f: impl FnOnce(&mut Sim)) -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    f(&mut sim);
+    let app = App::start(&mut sim, key);
+    (sim, app)
+}
+
 pub(super) const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 /// The owner's strap, as the unit paired it.
 pub(super) const STRAP: SensorId = SensorId { device: 25126, trans: 0xf1 };

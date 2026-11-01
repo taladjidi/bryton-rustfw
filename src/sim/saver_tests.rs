@@ -3,11 +3,10 @@
 
 use super::tests::run;
 use super::*;
+use crate::ui::GREEN;
 
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = super::tests::unit_with(None, |_| {});
     app.settings.light_level = 0; // 100 %
     app.settings.light_timeout = 0; // never off
     app.settings.gps_power = GpsPower::Full;
@@ -84,6 +83,21 @@ fn the_strip_tag_is_drawn() {
     app.settings.saver = SaverMode::On;
     run(&mut sim, &mut app, 3000);
     sim.save("saver_strip");
+    assert!(tag_pixels(&sim) > 0, "the green S is on screen");
+    app.settings.saver = SaverMode::Off;
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(tag_pixels(&sim), 0, "and gone with the saver");
+}
+
+/// The strip's boxes, from ui/strip.rs (W 240, CELL 6): the saver's tag at x 181 to 187, y 10 to 20, the USB symbol
+/// at x 167 to 180, y 8 to 22. Green pixels in the tag's box.
+fn tag_pixels(sim: &Sim) -> usize {
+    (10..20).flat_map(|y| (181..187).map(move |x| (x, y))).filter(|&(x, y)| sim.screen[y * 240 + x] == GREEN).count()
+}
+
+/// The pixels of the USB symbol's box.
+fn usb_box(sim: &Sim) -> Vec<u16> {
+    (8..22).flat_map(|y| (167..181).map(move |x| sim.screen[y * 240 + x])).collect()
 }
 
 /// A battery voltage the charge estimate calls `p` percent.
@@ -166,8 +180,15 @@ fn the_tag_clears_usb_and_a_full_battery() {
     sim.charger = true;
     sim.battery_mv = Some(4250);
     app.settings.saver = SaverMode::On;
+    app.set_usb(&mut sim, UsbDot::Ready);
     run(&mut sim, &mut app, 12_000);
     sim.save("saver_strip_usb");
+    let (tag, usb) = (tag_pixels(&sim), usb_box(&sim));
+    assert!(tag > 0, "the tag is drawn");
+    assert!(usb.iter().any(|&p| p != 0), "the symbol is drawn");
+    sim.battery_mv = Some(3700); // a shorter text: 1 or 2 digits
+    run(&mut sim, &mut app, 12_000);
+    assert_eq!((tag_pixels(&sim), usb_box(&sim)), (tag, usb), "the percent text leaves them alone");
 }
 
 /// The battery poll reads VREFINT (channel 19) and then the battery (channel 1), in that order; a failed battery

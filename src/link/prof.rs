@@ -263,9 +263,9 @@ mod tests {
         let mut sim = crate::sim::Sim::new(0, 0, 0);
         let mut c = Clock::default();
         sim.cycles = u32::MAX - 100;
-        assert_eq!(c.us(&mut sim), ((u64::from(u32::MAX) - 100) / 1000) as u32);
-        sim.cycles = 400; // wrapped, 501 cycles since (the simulator's counter runs at 1 GHz)
-        assert_eq!(c.us(&mut sim), (((1u64 << 32) + 400) / 1000) as u32); // 64 bits inside, no lost wrap
+        assert_eq!(c.us(&mut sim), ((u64::from(u32::MAX) - 100) / 200) as u32);
+        sim.cycles = 400; // wrapped, 501 cycles since (the simulator's counter runs at 200 MHz)
+        assert_eq!(c.us(&mut sim), (((1u64 << 32) + 400) / 200) as u32); // 64 bits inside, no lost wrap
     }
 
     #[test]

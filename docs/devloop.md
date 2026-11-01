@@ -133,3 +133,10 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | first the dev link (`tools/dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
 | 7. On the unit, features | docs/status.md "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |
+
+**Golden screens.** `walk_every_screen` (`src/sim/walk_tests.rs`) hashes every screen it visits (FNV-1a of the
+framebuffer) into `test-data/walk.hashes`, one `NNN-path hash` line each, and fails on any difference, naming the
+first ten. A screen change you meant: run `WALK_HASHES=write cargo test-host -- walk_every_screen`, read the diff of
+that file together with the screenshots in `target/sim/walk/`, and commit it with the change. A change you did not
+mean is the bug the check exists for. The walk is deterministic (the simulator's clock and the synthetic state), so
+no frame is left out.

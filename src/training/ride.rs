@@ -426,6 +426,8 @@ impl Ride {
             up9: u64::from(m(0)) | u64::from(m(1)) << 32,
             down9: u64::from(m(2)) | u64::from(m(3)) << 32,
             alt_ref: (m(4) >> 8) as u8,
+            // a resume whose first altitude comes from another source than before (GPS vs the barometer) drops the
+            // restored max altitude and ascent points, as it did before the resume totals
             max_alt_mm: (m(4) & 1 != 0).then_some(m(5) as i32),
             ..Ride::new()
         }

@@ -24,14 +24,12 @@ fn power210(_: u64) -> [u8; 8] {
 
 /// The unit with an FE-C trainer in range, already paired (register 14), the rider making 180 W.
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    sim.own_settings();
-    sim.backup[14] = Kind::Trainer.to_word(ID);
-    sim.nordic.sensors.push(trainer_sensor());
-    sim.nordic.trainer.rider_w = 180;
-    let app = App::start(&mut sim, Some(KEY));
-    (sim, app)
+    super::tests::unit_with(Some(KEY), |sim| {
+        sim.own_settings();
+        sim.backup[14] = Kind::Trainer.to_word(ID);
+        sim.nordic.sensors.push(trainer_sensor());
+        sim.nordic.trainer.rider_w = 180;
+    })
 }
 
 /// The trainer in `\Rustfw\sensors.bin` on the card: None without a readable file.
@@ -69,6 +67,52 @@ pub(super) fn records(sim: &Sim, name: [u8; 12]) -> Vec<(Option<u16>, Option<u32
     });
     assert_eq!(rd.result(), Some(Ok(())), "a whole FIT file");
     v
+}
+
+/// A planned workout in ERG over a Bluetooth trainer already paired (FTMS or FE-C over BLE), saved and read back:
+/// each step's target held, sent again while it stands, the ride recording the power and the speed's distance.
+/// `view` reads the simulated trainer: (mode, target W, writes so far, violations and rejections).
+pub(super) fn workout_ride(sim: &mut Sim, app: &mut App, view: fn(&Sim) -> (u8, i16, usize, u32)) {
+    run(sim, app, 2000);
+    app.press(sim, Press::Long(Key::Page));
+    super::tests::to_row(sim, app, Row::Open(Menu::Workouts));
+    app.press(sim, Press::Short(Key::Start));
+    app.press(sim, Press::Short(Key::Start)); // SHORT INTERVALS
+    let name = crate::recorder::ride_name(app.rec_time().0);
+    app.press(sim, Press::Short(Key::Start)); // START
+    run(sim, app, 8000);
+    assert_eq!((view(sim).0, view(sim).1), (5, 110), "100-120 W");
+    run(sim, app, 14_000);
+    assert_eq!(view(sim).1, 210, "the second step");
+    let writes = view(sim).2;
+    run(sim, app, 9000);
+    assert!(view(sim).2 > writes, "sent again while it stands");
+    app.press(sim, Press::Short(Key::Start)); // pause
+    save_ride(sim, app);
+    run(sim, app, 2000);
+    let rec = records(sim, name);
+    let powers: Vec<u16> = rec.iter().filter_map(|r| r.0).collect();
+    assert!(powers.contains(&110) && powers.contains(&210), "the targets held: {powers:?}");
+    let dist = rec.iter().filter_map(|r| r.1).max().unwrap_or(0);
+    assert!(dist > 12_000, "the trainer's speed gives the distance: {dist} cm");
+    assert_eq!(view(sim).3, 0);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
+/// A course ridden indoors on a paired trainer: the hill chosen, SIM on, 200 s ridden. The caller checks the grade sent.
+pub(super) fn course_ride(sim: &mut Sim, app: &mut App) {
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    run(sim, app, 2000);
+    app.press(sim, Press::Short(Key::Start));
+    app.press(sim, Press::Long(Key::Page));
+    super::tests::to_row(sim, app, Row::Open(Menu::Courses));
+    app.press(sim, Press::Short(Key::Start));
+    run(sim, app, 1000);
+    for _ in 0..super::tests::hill(app) {
+        app.press(sim, Press::Short(Key::Page));
+    }
+    app.press(sim, Press::Short(Key::Start));
+    run(sim, app, 200_000);
 }
 
 /// Pairing from SENSORS (Start on the TRAINER row finds it, keeps it in register 14), the pages decoded onto the

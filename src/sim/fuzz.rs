@@ -5149,13 +5149,30 @@ fn recovery_sectors<T: PartialEq + std::fmt::Debug>(
 
 #[test]
 fn recovery_records() {
+    use super::Sim;
     use crate::fit::RECORD_LEN;
-    use crate::recorder::{Phase, rec::Rec};
+    use crate::recorder::{Phase, Recorder, rec::Rec};
     use crate::ride::RIDE_WORDS;
-    let (mut recorder, mut trash, mut restored) = ([0u32; 4], [0u32; 4], 0);
+    let (mut recorder, mut trash, mut restored, mut resumed) = ([0u32; 4], [0u32; 4], 0, 0);
+    // a card that has seen a ride: the folder and the record file a fuzzed record is put in
+    let base = {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = crate::App::start(&mut sim, None);
+        super::tests::run(&mut sim, &mut app, 1000);
+        app.press(&mut sim, crate::Press::Short(crate::Key::Start));
+        super::tests::run(&mut sim, &mut app, 3000);
+        sim.emmc.image
+    };
+    let rec_lba = {
+        let mut d = crate::fat::tests::Ram(base.clone(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let cluster = fat.open(&mut d, "Rustfw/ride.rec").unwrap().cluster;
+        fat.lba(cluster)
+    };
     for seed in 1..=64u32 {
         let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9) ^ 0x5ec0_0001);
-        for _ in 0..100 {
+        for i in 0..100 {
             let mut name = [0u8; 12];
             name.iter_mut().for_each(|b| *b = next() as u8);
             let mut fit = [0u8; RECORD_LEN];
@@ -5198,6 +5215,18 @@ fn recovery_records() {
             let _ = (rd.descent_m(), rd.uphill_m(), rd.downhill_m(), rd.max_alt_m(), rd.more_words(&p));
             restored += usize::from(p.np().is_some() && p.wbal_j().is_some() && rd.max_alt_m().is_some());
 
+            // one record per seed through a card (Recorder::recover_from): the totals it resumes from are the record's
+            if i == 0 && phase != Phase::Done {
+                let mut img = base.clone();
+                let at = (rec_lba as usize + 2) * crate::fat::SECTOR;
+                img[at..at + crate::fat::SECTOR].copy_from_slice(&r.to_sector());
+                img[at + 3 * crate::fat::SECTOR..at + 4 * crate::fat::SECTOR].fill(0); // the other copy: none
+                let mut rec = Recorder::new();
+                rec.recover(&mut crate::fat::tests::Ram(img, 0), (2026, 10, 23, 10, 0, 0));
+                assert_eq!(rec.more(), r.more, "seed {seed}: the resume totals");
+                resumed += 1;
+            }
+
             // the trash's move record: each file of the move is there or not, with its CRC or without
             let moved = |next: &mut dyn FnMut() -> u32| {
                 (!next().is_multiple_of(3)).then(|| (next(), next(), (next().is_multiple_of(2)).then(|| next() as u16)))
@@ -5226,6 +5255,7 @@ fn recovery_records() {
             recovery_sectors(&mut next, &expect, sector, crate::trash::Rec::from_sector, &mut trash);
         }
     }
+    assert!(resumed > 20, "{resumed} records resumed through a card");
     assert!(restored > 400, "{restored} resumes with NP, W' balance and max altitude");
     // a 16-bit CRC misses about 2^-16 of the changes: at most 4 accepted per 6400 damaged sectors, all equal
     for c in [recorder, trash] {

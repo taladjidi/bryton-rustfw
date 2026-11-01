@@ -107,49 +107,18 @@ fn the_trainer_and_the_phone_at_once() {
 fn erg_workout_over_ble_is_recorded() {
     let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
     pair(&mut sim, &mut app);
-    run(&mut sim, &mut app, 2000);
-    app.press(&mut sim, Press::Long(Key::Page));
-    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start)); // SHORT INTERVALS
-    let name = crate::recorder::ride_name(app.rec_time().0);
-    app.press(&mut sim, Press::Short(Key::Start)); // START
-    run(&mut sim, &mut app, 8000);
-    assert_eq!((trainer(&sim).mode, trainer(&sim).target_w), (5, 110), "100-120 W");
-    run(&mut sim, &mut app, 14_000);
-    assert_eq!(trainer(&sim).target_w, 210, "the second step");
-    let writes = trainer(&sim).got.len();
-    run(&mut sim, &mut app, 9000);
-    assert!(trainer(&sim).got.len() > writes, "sent again while it stands");
-    app.press(&mut sim, Press::Short(Key::Start)); // pause
-    save_ride(&mut sim, &mut app);
-    run(&mut sim, &mut app, 2000);
-    let rec = super::trainer_tests::records(&sim, name);
-    let powers: Vec<u16> = rec.iter().filter_map(|r| r.0).collect();
-    assert!(powers.contains(&110) && powers.contains(&210), "the targets held: {powers:?}");
-    let dist = rec.iter().filter_map(|r| r.1).max().unwrap_or(0);
-    assert!(dist > 12_000, "the trainer's speed gives the distance: {dist} cm");
-    assert_eq!(trainer(&sim).violations, 0);
-    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    super::trainer_tests::workout_ride(&mut sim, &mut app, |sim| {
+        let t = trainer(sim);
+        (t.mode, t.target_w, t.got.len(), t.violations)
+    });
 }
 
 /// A course over Bluetooth: SIM, the course's grade written as the indoor bike simulation parameters.
 #[test]
 fn sim_follows_the_course_over_ble() {
     let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
-    app.set_course_memory(crate::storage::course_file::tests::memory());
     pair(&mut sim, &mut app);
-    run(&mut sim, &mut app, 2000);
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Page));
-    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Courses));
-    app.press(&mut sim, Press::Short(Key::Start));
-    run(&mut sim, &mut app, 1000);
-    for _ in 0..super::tests::hill(&app) {
-        app.press(&mut sim, Press::Short(Key::Page));
-    }
-    app.press(&mut sim, Press::Short(Key::Start));
-    run(&mut sim, &mut app, 200_000);
+    super::trainer_tests::course_ride(&mut sim, &mut app);
     let t = trainer(&sim);
     assert_eq!(t.mode, 0x11);
     let last = t.got.iter().rev().find(|w| w[0] == 0x11).expect("simulation written");
