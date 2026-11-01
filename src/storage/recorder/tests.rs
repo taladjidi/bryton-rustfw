@@ -1865,6 +1865,13 @@ fn a_damaged_record_is_refused() {
         bad[at] ^= 0x10;
         assert_eq!(Rec::from_sector(&bad), None, "byte {at}");
     }
+    // sealed whole, but another tag, or another count of ride words (another layout): no record either
+    for at in [0, 21] {
+        let mut other = s;
+        other[at] ^= 0x10;
+        crate::storage::seal16(&mut other);
+        assert_eq!(Rec::from_sector(&other), None, "sealed, byte {at}");
+    }
 }
 
 /// The `Discarded` entry in `\Rustfw`'s first directory sector.
