@@ -157,7 +157,8 @@ fn a_truncated_frame_hangs_the_chip() {
 }
 
 /// The chip holds CTS after a command's header exactly while the previous response waits for an event frame that
-/// waits for our RTS; it takes the header and our FIFO's 16 bytes, no more.
+/// waits for our RTS; it takes the header and its UART's 4 bytes, and our FIFO holds 16, no more. (The 4 were found by
+/// the differential test against the emulated app: nrf_diff_tests.rs, 11 bytes in all behind a 5-byte command.)
 #[test]
 fn cts_is_held_while_an_event_frame_keeps_the_response_waiting() {
     let mut s = chip();
@@ -166,14 +167,14 @@ fn cts_is_held_while_an_event_frame_keeps_the_response_waiting() {
     // cmd 1 is taken whole (the chip had read no header); its response waits behind the event frame in flight
     assert_eq!(s.nrf_send(&[3, 0, 0, 0x65, 1]), 5);
     assert_eq!(s.nordic.resp.len(), 1, "queued, not out");
-    // cmd 2: the header goes in, then CTS is held: 2 bytes to the chip and 16 in our FIFO
+    // cmd 2: the header goes in, then CTS is held: 2 bytes to the chip, 4 in its UART and 16 in our FIFO
     let two = [(WRITE20.len() as u16).to_le_bytes().as_slice(), &WRITE20].concat();
-    assert_eq!(s.nrf_send(&two), 18);
+    assert_eq!(s.nrf_send(&two), 22);
     assert!(s.nordic.blocked());
     // reading the event frame releases the response, and CTS: cmd 2 goes through whole
     drain(&mut s);
     assert!(!s.nordic.blocked());
-    assert_eq!(s.nrf_send(&two[18..]), two.len() - 18);
+    assert_eq!(s.nrf_send(&two[22..]), two.len() - 22);
     assert_eq!(s.nordic.got.len(), 2);
     // no hold when no response waits
     let mut s = chip();
@@ -320,7 +321,7 @@ fn cts_is_released_when_the_event_frame_in_flight_ends() {
     ant(&mut s, 3);
     s.delay_ms(1);
     assert_eq!(s.nrf_send(&[3, 0, 0, 0x65, 1]), 5);
-    assert_eq!(s.nrf_send(&[34, 0]), 2); // the next header: CTS is held from here
+    assert_eq!(s.nrf_send(&[34, 0, 0, 0, 0, 0]), 6); // the next header and the UART's 4 bytes: CTS is held from here
     assert!(s.nordic.blocked());
     let on_chip = s.nordic.out.len(); // what of the event frame is still in the chip's TX buffer
     let mut one = [0u8; 1];

@@ -197,6 +197,33 @@ specific to it stays in the private notes (`NRF_PRIVATE`, environment only, may 
   first byte on the wire, 18 us. The simulator's `frame_gap_us: 80` is pessimistic by about four times, before the
   real SoftDevice's own call time.
 
+- **Differential tests and the soak (`src/sim/nrf_diff_tests.rs`, `#[ignore]`d, not in check.sh):**
+  - `cargo test-host -- --ignored nrf_diff` plays one script through the library's real radio code to the emulated app
+    and to the fast model (`chip_link.rs`, `chip_table.rs`) and compares what the host sees: the frames out (type, op,
+    length, order), whether the chip holds CTS at each checkpoint, the bytes the chip took behind a stalled event frame,
+    and the hang verdict. About 10 s. Scenarios: start and a version request; ANT at 4 Hz on 3 channels drained every
+    pass; RTS held 200 ms and 2 s with 30 events; 96 events in one pass (fine) and 97 (hang in both); an unknown BLE and
+    ANT opcode, a wrong length, a type-only packet, a bad type and an oversize packet (each hangs both); two commands
+    behind a stalled event frame. Times are not compared. A disagreement prints both traces: fix the fast model unless
+    the emulator is shown wrong against nordic-app.md.
+  - Found on 2026-11-01: the chip's UARTE takes 4 more bytes after the header it holds CTS on (11 bytes in all behind a
+    5-byte command, not 7); the fast model took none (fixed, `UART_FIFO`, tested in `chip_link_tests.rs`). Two
+    emulator limits, not model errors: a payload length of 0 is not hung by the emulator (it does not model a MAXCNT of
+    0; nordic-app.md says the real app hangs, the model follows that), and a lone-byte HVX comes out with a zero length
+    (an artefact of the inferred input struct, so the tests use 3 bytes). The CTS flag is not compared after a hang (the
+    emulator stops stepping there).
+  - `NRF_SOAK_S=3600 cargo test-host -- --ignored nrf_soak --nocapture`: a ride's radio traffic for that many emulated
+    seconds (default 3600) against the real app: three ANT channels at 246 to 252 ms, a BLE trainer at 10 Hz, a phone
+    burst of 12 notifications every 30 s, a version request every 10 s, the host's pass every 50 ms and a 200 ms stall
+    every 20 s. It asserts no hang and that every broadcast and response came out, and prints the deepest backlog.
+    Speed: about 6 emulated s per wall s (120 s in 19 s; an hour in 593 s, measured 2026-11-01: 81119 events and requests, all 81119 frames out, deepest backlog 16).
+  - `python3 -I tools/nrf_emu.py load [s]`: the gap between frames under the same kind of load (below).
+- **The gap under load (2026-11-01, `nrf_emu.py load 20`: 3 ANT channels at 4 Hz, trainer at 10 Hz, bursts of 12, the
+  host draining at once, 487 gaps):** ENDTX to the next STARTTX is 965 instructions at the least (15 us at 64 MHz and
+  CPI 1, the model's `frame_gap_us`), 1632 in the median (26 us), 2056 at p99 (32 us), 6760 at the worst (106 us). The
+  15 us holds for frames back to back from the queue; a frame that follows an idle spell costs the wake-up work too.
+  The longest stretch with the UART interrupt masked stays 272 instructions.
+
 ### Renode with the radio chip's real app (`renode/nrf_run.py`, a spike, 2026-11-01)
 
 The firmware's own board code (`src/main.rs`: the USART2 setup, `nrf_reset` with PA6, `nrf_send`, `nrf_recv`) runs on

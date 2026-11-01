@@ -13,16 +13,19 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::rc::Rc;
 use std::{cell::RefCell, string::String, vec, vec::Vec};
 
-struct Pipe {
+pub(super) struct Pipe {
     child: Child,
     to: ChildStdin,
     from: ChildStdout,
     /// Flags of the last answer: bit 0 the chip holds CTS, bit 1 the host's RTS is held, bit 2 the app is dead.
-    flags: u8,
+    pub(super) flags: u8,
+    /// Keep going when the harness reports a hang (nrf_diff_tests.rs): the reason lands in `hung`.
+    pub(super) soft: bool,
+    pub(super) hung: Option<String>,
 }
 
 impl Pipe {
-    fn spawn() -> Option<Pipe> {
+    pub(super) fn spawn() -> Option<Pipe> {
         let bin = std::env::var("NRF_BIN").unwrap_or_else(|_| {
             format!("{}/Documents/bryton/firmware/R039/nordic.bin", std::env::var("HOME").unwrap_or_default())
         });
@@ -44,11 +47,11 @@ impl Pipe {
             .spawn()
             .ok()?;
         let (to, from) = (child.stdin.take()?, child.stdout.take()?);
-        Some(Pipe { child, to, from, flags: 0 })
+        Some(Pipe { child, to, from, flags: 0, soft: false, hung: None })
     }
 
     /// One request; returns the answer's payload. Panics when the harness reports a hang.
-    fn req(&mut self, msg: &[u8], has_payload: bool) -> Vec<u8> {
+    pub(super) fn req(&mut self, msg: &[u8], has_payload: bool) -> Vec<u8> {
         self.to.write_all(msg).unwrap();
         self.to.flush().unwrap();
         let mut h = [0u8; 2];
@@ -56,6 +59,10 @@ impl Pipe {
         self.flags = h[1];
         if h[0] != 0 {
             let t = self.chunk();
+            if self.soft {
+                self.hung = Some(String::from_utf8_lossy(&t).into_owned());
+                return Vec::new();
+            }
             panic!("the emulated chip stopped: {}", String::from_utf8_lossy(&t));
         }
         if has_payload { self.chunk() } else { Vec::new() }
@@ -70,7 +77,7 @@ impl Pipe {
         v
     }
 
-    fn advance_us(&mut self, us: u32) {
+    pub(super) fn advance_us(&mut self, us: u32) {
         self.req(&[b"T".as_slice(), &us.to_le_bytes()].concat(), false);
     }
 }
@@ -84,7 +91,7 @@ impl Drop for Pipe {
 
 /// Shares the pipe between the test (events, flow control) and the [`Sim`] (the primitives).
 #[derive(Clone)]
-struct Shared(Rc<RefCell<Pipe>>);
+pub(super) struct Shared(pub(super) Rc<RefCell<Pipe>>);
 
 impl NrfExt for Shared {
     fn reset(&mut self) {

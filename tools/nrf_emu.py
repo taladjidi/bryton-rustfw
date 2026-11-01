@@ -5,6 +5,7 @@ byte, with the SoftDevice replaced by stubs.
 
   python3 -I tools/nrf_emu.py selftest    boot, ANT event layouts, slice-size invariance, RTS hold, queue limit, hang,
                                           the commands stock never sends
+  python3 -I tools/nrf_emu.py load [s]     the gap between two frames under ride load (docs/devloop.md)
   python3 -I tools/nrf_emu.py --serve      the UART as a byte pipe (src/sim/nrf_emu_tests.rs)
 
 NOTHING of the binary is in this repository: it is read at run time from NRF_BIN (default
@@ -756,6 +757,38 @@ def selftest():
     return 0
 
 
+def hvx_raw(n):
+    """One BLE GATTC HVX event of n data bytes as the SoftDevice hands it over. S132/S332 v5 ble_evt_t: {u16 evt_id 0x39
+    BLE_GATTC_EVT_HVX, u16 evt_len}, gattc {conn_handle, gatt_status, error_handle}, hvx {handle, type, len, data}
+    (inferred from the v5 headers; a lone data byte comes out of the app with a zero length: an artefact of the
+    inferred input, use 0 or 2 and more)."""
+    body = struct.pack("<HHHHBxH", 0, 0, 0, 0x0F, 1, n) + bytes(i & 255 for i in range(n))
+    return struct.pack("<HH", 0x39, len(body)) + body
+
+
+def load(seconds=20):
+    """The gap between two frames under ride load (the host drains at once): three ANT channels at about 4 Hz, a BLE
+    trainer's notifications at 10 Hz, and a phone's burst of 12 notifications every 5 s. Prints the app's own work
+    between the end of a frame and the next frame's header DMA, in instructions and us at CPU_MHZ."""
+    e = boot_emu()
+    e.marks.clear()
+    us = seconds * 1_000_000
+    for ch, (per, off) in enumerate(((250_000, 0), (246_000, 80_000), (252_000, 160_000))):
+        for k in range(us // per):
+            e.at(off + per * k, lambda ch=ch: e.inject_ant(ch, EVENT_RX, bytes(range(8))))
+    for k in range(us // 100_000):
+        e.at(50_000 + 100_000 * k, lambda: e.inject_ble(hvx_raw(13)))
+    for k in range(us // 5_000_000):
+        e.at(2_500_000 + 5_000_000 * k, lambda: [e.inject_ble(hvx_raw(20 + i)) for i in range(12)])
+    e.run(us)
+    for what, g in (("to the next STARTTX (the app's work)", e.gaps("fcall")), ("to the first byte on the wire", e.gaps())):
+        g = sorted(g)
+        q = lambda f: g[min(len(g) - 1, int(len(g) * f))]
+        print(f"{len(g)} gaps, ENDTX {what}: min {g[0]} / median {q(.5)} / p99 {q(.99)} / max {g[-1]} instr "
+              f"= {g[0] / CPU_MHZ:.0f} / {q(.5) / CPU_MHZ:.0f} / {q(.99) / CPU_MHZ:.0f} / {g[-1] / CPU_MHZ:.0f} us at {CPU_MHZ} MHz")
+    print(f"frames out {len(e.frames())}, longest masked stretch {e.masked_max} instructions, hung {bool(e.hung)}")
+
+
 def serve(inp=None, out=None):
     """The chip's UART as a byte pipe on stdin / stdout, for the Rust host test (src/sim/nrf_emu_tests.rs). The host
     sends requests, the harness answers each with [status][flags] and its payload. Status 0 ok; 1 the app hung or the
@@ -769,6 +802,7 @@ def serve(inp=None, out=None):
       'A' ch ev n, n bytes    one ANT event now (n data bytes for ev 0x80), SWI2 pended
       'B' ch ev, 8 bytes, u32 period_us, u16 count   count ANT broadcasts, one per period
       'V' u16 n               one BLE GATTC HVX event carrying n bytes
+      'N'                     bytes of 'W' the chip has not taken yet (not on the wire into it): answer u16 2, u16 n
       'X'                     restart the app (the chip's reset), run to its idle wait
       'Q'                     quit"""
     inp, out = inp or sys.stdin.buffer, out or sys.stdout.buffer
@@ -812,11 +846,9 @@ def serve(inp=None, out=None):
             for i in range(count):
                 x.at(period * (i + 1), lambda ch=ch, ev=ev, data=data: x.inject_ant(ch, ev, data))
         elif c == b"V":
-            n = struct.unpack("<H", inp.read(2))[0]
-            # S132/S332 v5 ble_evt_t: {u16 evt_id 0x39 BLE_GATTC_EVT_HVX, u16 evt_len}, gattc {conn_handle, gatt_status,
-            # error_handle}, hvx {handle, type, len, data} (inferred from the v5 headers)
-            body = struct.pack("<HHHHBxH", 0, 0, 0, 0x0F, 1, n) + bytes(i & 255 for i in range(n))
-            x.inject_ble(struct.pack("<HH", 0x39, len(body)) + body)
+            x.inject_ble(hvx_raw(struct.unpack("<H", inp.read(2))[0]))
+        elif c == b"N":
+            payload = struct.pack("<HH", 2, len(x.in_q))
         elif c == b"X":
             e[0] = boot_emu()
         else:
@@ -827,6 +859,9 @@ def serve(inp=None, out=None):
 if __name__ == "__main__":
     if sys.argv[1:] == ["selftest"]:
         sys.exit(selftest())
+    if sys.argv[1:2] == ["load"]:
+        load(int(sys.argv[2]) if sys.argv[2:] else 20)
+        sys.exit(0)
     if sys.argv[1:] == ["--serve"]:
         sys.exit(serve())
     print(__doc__)

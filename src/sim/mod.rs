@@ -698,6 +698,8 @@ pub struct Nordic {
     sd_ant: std::collections::VecDeque<Vec<u8>>,
     /// The chip stopped pulling events (0 slots free) until more than half are free.
     suspended: bool,
+    /// Bytes taken since a command's header was read while its predecessor's response waited for the TX buffer.
+    stall: Option<u8>,
     /// The chip's clock, us (it never runs behind the simulated ms), when its transmitter is free, and when the last
     /// frame ended.
     t: u64,
@@ -1775,6 +1777,8 @@ mod laps_tests;
 mod map_tests;
 #[cfg(test)]
 mod menu_tests;
+#[cfg(test)]
+mod nrf_diff_tests;
 #[cfg(test)]
 mod nrf_emu_tests;
 #[cfg(test)]

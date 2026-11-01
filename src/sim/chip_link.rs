@@ -5,8 +5,8 @@
 //! drains only while the chip's RTS (our CTS) allows. A byte is 10 bits at 1 Mbaud: 10 us.
 //!
 //! The chip (Bryton's nRF app, reversed; bryton-S510-mods ghidra/nordic-app.md): one frame in flight on a single TX
-//! buffer, 15 us between two frames (measured in an emulator of the app); a command's header read, it holds our CTS until
-//! the previous command's response is queued, and queuing needs the TX buffer, which an event frame in flight keeps while
+//! buffer, 15 us between two frames (measured in an emulator of the app); a command's header read, it holds our CTS (after
+//! the 4 bytes its UART still takes) until the previous command's response is queued, and queuing needs the TX buffer, which an event frame in flight keeps while
 //! it waits on our RTS; no new event frame starts between a command's header and its response. The events come from the
 //! SoftDevice in passes (all pending BLE, then all pending ANT) into 96 slots; a pass bringing more events than free
 //! slots hangs the app; after a put leaves 0 free it stops pulling until more than 48 are free. The SoftDevice's ANT queue
@@ -28,6 +28,9 @@ pub(super) const RESUME_FREE: usize = 48;
 pub(super) const ANT_QUEUE: usize = 32;
 /// Bytes a hung chip still takes.
 const HUNG_TAKES: u8 = 4;
+/// The chip's UARTE FIFO: the bytes it still takes after the header it holds CTS on (found by the differential test
+/// against the emulated app, nrf_diff_tests.rs; nRF52 UARTE, 4 bytes).
+const UART_FIFO: u8 = 4;
 
 impl Nordic {
     /// The real chip's side of an event the fuzzes make up for the app: a DISCONNECTED or AUTH_STATUS frees a security
@@ -60,7 +63,7 @@ impl Nordic {
         if self.hung {
             return self.hung_rx >= HUNG_TAKES;
         }
-        self.frame.len() >= 2 && !self.resp.is_empty() && !self.out.is_empty()
+        matches!(self.stall, Some(k) if k >= UART_FIFO) && !self.resp.is_empty() && !self.out.is_empty()
     }
 
     /// SoftDevice to queue: one pass (all pending BLE, then all pending ANT). More than the free slots: the app hangs.
@@ -108,6 +111,9 @@ impl Nordic {
         loop {
             let mut moved = false;
             self.pull();
+            if self.resp.is_empty() || self.out.is_empty() {
+                self.stall = None;
+            }
             while !self.blocked() {
                 let Some(b) = self.txq.pop_front() else { break };
                 self.t += BYTE_US;
@@ -116,6 +122,14 @@ impl Nordic {
                     self.hung_rx += 1;
                 } else {
                     self.feed(b, self.now_ms);
+                    // a header read while the previous response waits for the TX buffer: the UART takes 4 more
+                    match &mut self.stall {
+                        Some(k) => *k = k.saturating_add(1),
+                        None if self.frame.len() == 2 && !self.resp.is_empty() && !self.out.is_empty() => {
+                            self.stall = Some(0);
+                        }
+                        None => {}
+                    }
                 }
             }
             while self.fifo.len() < FIFO && !self.hung {
@@ -204,6 +218,7 @@ impl Nordic {
         (self.hung, self.hung_rx) = (false, 0);
         self.txq.clear();
         self.frame.clear();
+        self.stall = None;
     }
 
     /// A byte is in the FIFO now (one still on the wire is not).
