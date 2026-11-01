@@ -293,3 +293,19 @@ fn a_card_that_fails_its_reads_costs_one_try_per_backoff_period() {
     emmc.read(&mut sim, 7, &mut buf).unwrap();
     assert_eq!(buf, emmc_sector(7));
 }
+
+/// A card that worked (one good read) and then fails every read, asked once a second for 130 s: identified six times
+/// (the first, then the immediate retry of a card that had worked, then after 5, 10, 20 and 40 s waits). It pins
+/// that `proven` is cleared by a failure, so a degraded card is not identified again at every pass.
+#[test]
+fn a_card_that_worked_and_then_fails_is_identified_six_times_in_130_s() {
+    let mut sim = Sim::new(9, 0, 0);
+    let (mut emmc, mut buf) = (Emmc::new(), [0u8; SECTOR]);
+    emmc.read(&mut sim, 7, &mut buf).unwrap();
+    sim.emmc.unreadable = std::vec![0..u32::MAX];
+    for _ in 0..130 {
+        assert!(emmc.read(&mut sim, 7, &mut buf).is_err());
+        emmc.advance(1000);
+    }
+    assert_eq!(sim.emmc.cmds.iter().filter(|c| c.0 == 0).count(), 6);
+}
