@@ -16,9 +16,16 @@ struct Outcome {
     heard: [u32; 3],
 }
 
-/// A ride of `minutes` with the three sensors paired, the phone linked and 12 notifications every 20 s, the main loop
-/// passing every `pass_ms` and the receive waiting `wait_us`.
-fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
+/// The ride's radio mix on a unit over `image`, paired and started up, the Nordic chip's limits on: HR, power and Di2 (and
+/// with `bsc` a speed and cadence sensor), the phone linked, 12 notifications every 20 s for `minutes`, the receive
+/// waiting `wait_us`; `prep` runs on the simulator before the app starts. The ANT periods are the app's channel setup.
+pub(super) fn radio_unit(
+    minutes: u64,
+    wait_us: u32,
+    image: Vec<u8>,
+    bsc: bool,
+    prep: impl FnOnce(&mut Sim),
+) -> (Sim, App) {
     fn hr(_: u64) -> [u8; 8] {
         [0, 0, 0, 0, 0, 0, 0, 72]
     }
@@ -27,6 +34,11 @@ fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
     }
     fn di2(_: u64) -> [u8; 8] {
         [0, 0, 2, 11, 60, 0, 0, 0]
+    }
+    fn bsc_page(t: u64) -> [u8; 8] {
+        // cumulative cadence and speed event times (1/1024 s) and revolutions, moving on with the clock
+        let (e, r) = ((t * 1024 / 1000) as u16, (t / 700) as u16);
+        [e as u8, (e >> 8) as u8, r as u8, (r >> 8) as u8, e as u8, (e >> 8) as u8, r as u8, (r >> 8) as u8]
     }
     let mut script = Vec::new();
     for burst in 0..minutes * 3 {
@@ -42,18 +54,30 @@ fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
     let mut sim = Sim::new(9, 0, 0);
     sim.gnss.expect = Some("stream time-out"); // a hung chip's reset blocks the pass for seconds: the receiver's stream stops after 1.5 s
     sim.own_settings();
-    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.image = image;
     sim.backup[Kind::Hr.backup()] = Kind::Hr.to_word(SensorId { device: 9, trans: 1 });
     sim.backup[Kind::Power.backup()] = Kind::Power.to_word(SensorId { device: 7, trans: 5 });
     sim.backup[Kind::Di2.backup()] = Kind::Di2.to_word(SensorId { device: 4321, trans: 0xf1 });
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 9, data: hr, network: 0, ack: &[] });
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power, network: 0, ack: &[] });
     sim.nordic.sensors.push(AntSensor { device_type: 1, id: 4321, data: di2, network: 1, ack: &[4] });
+    if bsc {
+        sim.backup[Kind::SpeedCadence.backup()] = Kind::SpeedCadence.to_word(SensorId { device: 555, trans: 0xf1 });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x79, id: 555, data: bsc_page, network: 0, ack: &[] });
+    }
     sim.nordic.phone = Some(phone);
+    prep(&mut sim);
     let mut app = App::start_with(&mut sim, Some(KEY), Some(DI2_KEY));
     sim.nordic.expect_hang = Some("event queue overflow"); // the outcome counts hangs
     sim.nordic.limits = ChipLimits { wait_us, ..Default::default() };
     app.activate(&mut sim, Menu::Phone, 1); // PAIR
+    (sim, app)
+}
+
+/// A ride of `minutes` with the three sensors paired, the phone linked and 12 notifications every 20 s, the main loop
+/// passing every `pass_ms` and the receive waiting `wait_us`.
+fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
+    let (mut sim, mut app) = radio_unit(minutes, wait_us, crate::fat::tests::image(), false, |_| {});
     app.press(&mut sim, Press::Short(Key::Start)); // the ride
     let (start, resets0, heard0) = (sim.ms, sim.nordic.resets.len(), app.radio_counts().1);
     while sim.ms < start + minutes * 60_000 {
@@ -101,13 +125,13 @@ fn a_four_hour_ride_never_overflows_the_chip() {
     assert_healthy(&ride(240, POLL_MS, board_wait_us()), 240);
 }
 
-/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (16 against 12 at the 50 ms
-/// pass, `ChipLimits::parse_us` 20 between two reads: inferred, not measured); with the 100 ms pass (below) the
+/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (15 against 12 at the 50 ms
+/// pass with the transfers' time charged, 16 before it; `ChipLimits::parse_us` 20 between two reads: inferred, not measured); with the 100 ms pass (below) the
 /// ride's traffic overflows it.
 #[test]
 fn the_20_us_wait_leaves_the_queue_higher() {
     let (slow, fast) = (ride(10, POLL_MS, 20), ride(10, POLL_MS, board_wait_us()));
-    assert!(slow.high_water >= fast.high_water + 4, "{} against {}", slow.high_water, fast.high_water);
+    assert!(slow.high_water >= fast.high_water + 3, "{} against {}", slow.high_water, fast.high_water);
 }
 
 /// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) is no better. Worst case for a short wait

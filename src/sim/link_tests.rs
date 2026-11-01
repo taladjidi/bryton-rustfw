@@ -70,7 +70,7 @@ fn a_hung_chip_is_reset() {
     assert_eq!(app.live.get(Metric::Hr), Some(72), "the strap is back");
     assert_eq!(app.radio.sensors[Kind::Hr as usize], Sensor::Paired(STRAP));
     ride_ok(&app, t0, &sim);
-    sim.gnss.assert_reads(3048, 3);
+    sim.gnss.assert_reads(2008, 2);
 }
 
 /// The bonded phone is connected when the chip hangs; after the reset the server is set up again and the unit
@@ -92,7 +92,7 @@ fn the_phone_comes_back_after_a_reset() {
     assert_eq!(app.watch.resets, 1);
     assert_ne!(app.phone.link(), Link::NoBle);
     assert!(sim.nordic.server.adv.is_some() || app.phone.link() == Link::Secure, "advertising, or already back");
-    sim.gnss.assert_reads(3048, 2);
+    sim.gnss.assert_reads(2007, 2);
 }
 
 /// No sensor, no phone, a sensor paired that is not in range: 30 minutes of a quiet healthy link are never a
@@ -136,7 +136,7 @@ fn repeated_failures_back_off() {
     sim.nordic.dead = false;
     run(&mut sim, &mut app, 6 * 60 * 1000);
     assert!(app.ble.is_some() && app.ant, "started at last");
-    sim.gnss.assert_reads(2475, 3);
+    sim.gnss.assert_reads(1433, 0);
 }
 
 /// Fuzz: bytes of the chip's stream dropped, added and flipped at random, over long rides, seeds fixed. No panic,
@@ -170,7 +170,9 @@ fn a_damaged_stream_is_recovered_from() {
             w.resyncs,
             sim.nordic.channels[0].open
         );
-        sim.gnss.assert_reads(3323, 7);
+        super::budget_tests::print_gap_breakdown(&sim, "damaged stream");
+        // measured after the non-blocking chip reset: longest gap 1802 ms, no epoch lost (bound: measured + 10 %)
+        sim.gnss.assert_reads(1983, 0);
         ride_ok(&app, t0, &sim);
     }
     assert!(resyncs > 20, "{resyncs} resyncs reached");
@@ -202,7 +204,7 @@ fn a_refusal_at_a_restart_is_not_retried_by_reset() {
     assert!(n <= 3, "reset {n} times");
     run(&mut sim, &mut app, 60 * 60 * 1000);
     assert_eq!(app.watch.resets, n, "still resetting a chip that answers");
-    sim.gnss.assert_reads(3598, 3);
+    sim.gnss.assert_reads(2008, 2);
 }
 
 /// Review: a resync dropped the bytes of a connection's end, and the unit stayed "connected" for ever, advertising
@@ -260,5 +262,5 @@ fn a_reset_during_pairing_goes_on_pairing() {
     run(&mut sim, &mut app, 60_000);
     assert!(app.watch.resets >= 1);
     assert_eq!(app.phone.link(), Link::Pairing, "pairing resumed");
-    sim.gnss.assert_reads(3048, 3);
+    sim.gnss.assert_reads(2007, 2);
 }

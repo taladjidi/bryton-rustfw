@@ -135,6 +135,33 @@ fn index_skips_broken_files() {
 /// each).
 #[test]
 fn index_is_capped_and_sliced() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = capped_card();
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    // The build waits 5 s after the start (`START_AT_MS`) and the boot takes simulated time now (1.8 s: the card is
+    // read at the first start), so the passes are counted from 5 s after the app started, not from the test's 5 s.
+    let from = sim.ms + 5000;
+    let (mut worst, mut passes, mut total) = (0, 0, 0);
+    while !app.segments().unwrap().ready() && total < 400 {
+        let before = sim.emmc.bytes_read;
+        app.step(&mut sim);
+        sim.delay_ms(POLL_MS);
+        let read = sim.emmc.bytes_read - before;
+        if sim.ms >= from {
+            (worst, passes) = (worst.max(read), passes + u32::from(read > 0));
+        }
+        total += 1;
+    }
+    let s = app.segments().unwrap();
+    assert_eq!((s.indexed(), s.skipped), (128, 2));
+    std::println!("segment index: {passes} passes that read, worst {worst} B read in one pass");
+    assert!(passes >= 16, "sliced: {passes}");
+    assert!(worst < 40_000, "{worst} B in a pass");
+}
+
+/// The card with 130 segments (the index caps at 128).
+pub(super) fn capped_card() -> Vec<u8> {
     let files: Vec<(std::string::String, Vec<u8>)> = (0..130u32)
         .map(|k| {
             let mut f = synth(20, &CODES);
@@ -143,24 +170,7 @@ fn index_is_capped_and_sliced() {
         })
         .collect();
     let files: Vec<(&str, Vec<u8>)> = files.iter().map(|(n, f)| (n.as_str(), f.clone())).collect();
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = card(&files);
-    let mut app = App::start(&mut sim, None);
-    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
-    run(&mut sim, &mut app, 5000);
-    let (mut worst, mut passes) = (0, 0);
-    while !app.segments().unwrap().ready() && passes < 100 {
-        let before = sim.emmc.bytes_read;
-        app.step(&mut sim);
-        sim.delay_ms(POLL_MS);
-        worst = worst.max(sim.emmc.bytes_read - before);
-        passes += 1;
-    }
-    let s = app.segments().unwrap();
-    assert_eq!((s.indexed(), s.skipped), (128, 2));
-    std::println!("segment index: {passes} passes, worst {worst} B read in one pass");
-    assert!(passes >= 16, "sliced: {passes}");
-    assert!(worst < 40_000, "{worst} B in a pass");
+    card(&files)
 }
 
 /// A ride at the PR's pace: the approach, the start, a delta near 0 on the way, the finish.

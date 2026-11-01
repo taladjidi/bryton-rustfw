@@ -127,7 +127,7 @@ pub struct Gnss {
     pub(super) off_since: u64,
     pub(super) next_ms: u64,
     /// The time of the last transfer, and whether a TIME_UTC was accepted since power-up.
-    last_xfer: u64,
+    pub(super) last_xfer: u64,
     time_known: bool,
     out: std::collections::VecDeque<u8>,
     /// Answers made during this transfer: they come out from the next one (the receiver takes time to process).
