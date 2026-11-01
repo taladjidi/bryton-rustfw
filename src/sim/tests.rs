@@ -1900,17 +1900,17 @@ fn idle_loop_slows_and_a_key_wakes_it() {
     assert!(first <= 45_000 + u64::from(TOUCH_MS), "a pass {} ms after the key went down", first - 45_000);
     assert!(matches!(app.screen(), Screen::Ride(_)), "Page acted on: {:?}", app.screen());
     assert_eq!(app.pass_ms(), POLL_MS, "fast again after a key");
-    // a ride keeps it from the idle rate, however long without a key: 10 passes a second once nothing is going on
+    // a ride keeps it from the idle rate, however long without a key
     app.press(&mut sim, Press::Short(Key::Start));
     run_loop(&mut sim, &mut app, 60_000);
-    assert_eq!(app.pass_ms(), RIDE_POLL_MS);
+    assert_eq!(app.pass_ms(), POLL_MS);
 }
 
-/// A running ride with nothing going on runs 10 passes a second (review of 2026-10-31, finding 9): the strap's
-/// broadcasts wait for the next pass (they do not end its sleep) and all reach the app, every second is counted, a key
-/// is acted on at once, a finger or a tone makes the pass short again.
+/// A running ride with nothing going on keeps the short pass (the 100 ms ride pass of review 2026-10-31 finding 9 was
+/// taken out on 2026-11-01: the radio chip went silent on the road with it), whose sleep the Nordic chip's bytes do not
+/// hold back: every broadcast reaches the app, every second is counted, a key is acted on within a pass.
 #[test]
-fn a_quiet_ride_runs_ten_passes_a_second() {
+fn a_quiet_ride_keeps_the_short_pass() {
     let mut sim = Sim::new(9, 0, 0).keys(|ms| if (95_000..95_120).contains(&ms) { Key::Page as u8 } else { 0 });
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
@@ -1918,10 +1918,10 @@ fn a_quiet_ride_runs_ten_passes_a_second() {
     run_loop(&mut sim, &mut app, 5_000);
     app.press(&mut sim, Press::Short(Key::Start));
     run_loop(&mut sim, &mut app, 30_000); // the start's banner and tone gone
-    assert_eq!(app.pass_ms(), RIDE_POLL_MS);
+    assert_eq!(app.pass_ms(), POLL_MS);
     let (t0, timer0) = (sim.ms, app.ride.timer_s());
     let passes = run_loop(&mut sim, &mut app, 50_000);
-    assert!((495..=505).contains(&passes.len()), "10 passes a second: {} in 50 s", passes.len());
+    assert!(passes.len() >= 950, "20 passes a second: {} in 50 s", passes.len());
     let timer = app.ride.timer_s() - timer0;
     assert!((49..=51).contains(&timer), "every second counted: {timer} s in {} ms", sim.ms - t0);
     assert_eq!(app.live.get(Metric::Hr), Some(72), "the strap read");
@@ -1930,15 +1930,10 @@ fn a_quiet_ride_runs_ten_passes_a_second() {
     let left = 97_000 - sim.ms; // the key goes down at 95 s
     let passes = run_loop(&mut sim, &mut app, left);
     let first = passes.iter().find(|&&t| t >= 95_000).copied().unwrap_or(u64::MAX);
-    assert!(first <= 95_000 + u64::from(TOUCH_MS), "a pass {} ms after the key went down", first - 95_000);
+    assert!(first <= 95_000 + u64::from(POLL_MS), "a pass {} ms after the key went down", first - 95_000);
     assert_ne!(app.screen(), screen, "Page acted on");
     run_loop(&mut sim, &mut app, 3_000);
-    assert_eq!(app.pass_ms(), RIDE_POLL_MS, "quiet again");
-    app.tlink.up = true;
-    assert_eq!(app.pass_ms(), POLL_MS, "a trainer heard: its commands go one a pass");
-    app.tlink.up = false;
-    app.tones.play(&BEEP_ALERT);
-    assert_eq!(app.pass_ms(), POLL_MS, "a tone: timed by the short pass");
+    assert_eq!(app.pass_ms(), POLL_MS, "quiet again");
 }
 
 /// The Nordic link at the idle rate, even without its wake (main.rs ends an idle sleep when a byte arrives): the

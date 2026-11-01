@@ -40,7 +40,7 @@ fn one(f: [u8; 32]) -> Msg {
 pub const ANO_GAP: u8 = 1;
 
 /// GNSS bytes read per pass at most: 128 per 50 ms is 2560 bytes/s, twenty times NAV-PVT at 1 Hz; at a ride's
-/// passes ([`RIDE_POLL_MS`]) 1 280 B/s, about 12 times NAV-PVT. A pass stops at the first 32 bytes of idle fill
+/// 100 ms passes 1 280 B/s, about 12 times NAV-PVT. A pass stops at the first 32 bytes of idle fill
 /// between frames, so most passes read 32.
 pub(crate) const GNSS_READ: usize = 128;
 
@@ -48,7 +48,7 @@ pub(crate) const GNSS_READ: usize = 128;
 /// [`POLL_MS`]), not every pass: its output is NAV-PVT once a second (and the answers to the configuration), which
 /// then waits at most this long in its buffer; a read that finds bytes keeps reading every pass until the fill comes
 /// back. Each read is a 32-byte SPI4 transfer the CPU polls (113 us a pass on the unit, 0.24 % of the time:
-/// 2026-10-26). Time, not passes: a ride's passes are [`RIDE_POLL_MS`].
+/// 2026-10-26). Time, not passes, so the wait does not depend on the pass length.
 pub const GNSS_FILL_MS: u32 = 200;
 
 /// After a NAV-PVT read whole (the fill after it), with nothing left to send the receiver (the configuration, the

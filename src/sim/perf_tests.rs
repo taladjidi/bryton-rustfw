@@ -346,7 +346,7 @@ fn gnss_read_waits_for_the_next_pvt() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 20_000); // powered, configured, fixed
     assert!(app.gps.sent >= 5 && app.gps.ano.done(), "nothing left to send");
-    for pass in [POLL_MS, RIDE_POLL_MS] {
+    for pass in [POLL_MS, 100] {
         let (g, end, mut oldest) = (sim.gnss.got.len(), sim.ms + 60_000, 0);
         while sim.ms < end {
             app.step(&mut sim);

@@ -199,7 +199,7 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
   largest part (0.23 %). Half the CPU's awake time, which is a fraction of a mA (0.5 % of the difference between
   Run and Sleep currents): the loop Stop mode needs (a long sleep that wakes on what matters) more than a saving in
   itself.
-- **A running ride (2026-10-31, review finding 9):** a pass every 100 ms (`RIDE_POLL_MS`) while nothing wants the
+- **A running ride (2026-10-31, review finding 9; the 100 ms pass was taken out on 2026-11-01, a ride runs the short pass again, 1.62 % awake against 1.05 %; this describes what was tried):** a pass every 100 ms while nothing wants the
   short one (no finger, key held, tone, banner, editor, AssistNow data, card failure, course or road-ahead tile being
   read, trainer link: its control messages go one a pass). A key ends the sleep at once; the Nordic chip's bytes do not (its sensors' broadcasts would end nearly every
   sleep): our side holds them (RTS and the RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11, the

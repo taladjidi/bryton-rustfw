@@ -132,9 +132,7 @@ impl<L: UsbLink> MainLoop<L> {
         // while the finger is down)
         // idle: a longer sleep (App::pass_ms), ended at once by a key, and woken by a byte from the Nordic chip for a
         // radio pass (App::radio_pass), so neither waits for it (the chip's own buffers are not known: it is read as
-        // soon as it sends, as before); a ride's 100 ms pass by a key only (LoopPolicy::begin_sleep): our side holds
-        // the chip's bytes (RTS, the RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11), its BLE and
-        // serialization queues are not known
+        // soon as it sends, as before); a ride's pass is the short one (LoopPolicy::begin_sleep)
         let wake = self.policy.begin_sleep(app.pass_ms(), app.radio_up());
         if !wake.radio {
             b.nrf_flush();

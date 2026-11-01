@@ -1185,6 +1185,8 @@ area. A build without EMMC_WRITE=1 offers it write protected.
 - **The main loop's policy** (app/loop_policy.rs, host-tested): when the USB link starts (cable in), when an unplug resets
   the unit (never during a ride or its card work), which wake sources an idle sleep arms, how long each slice is, and how a
   pass counts in the awake and CPU shares `tools/dev.py info` reports. main.rs keeps the primitives. Seen on the unit from a RAM run.
+  A running ride sleeps the short pass (50 ms) like the overview in use: the 100 ms ride pass of 2026-10-31 was taken out
+  on 2026-11-01 (see status.md).
 - **USB suspend** (board/usb.rs `Link::watch`, link/dev.rs `watch_usb`): when the computer suspends the unit's USB, the link
   should wake without a new enumeration. Worked out on the host; the sleep is not yet seen on the unit (status.md).
 

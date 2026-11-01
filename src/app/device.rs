@@ -79,12 +79,6 @@ pub const fn stack_intact(word: u32) -> bool {
 /// from the Nordic chip end main.rs's sleep at once, so this bounds only what nothing announces: the clock shown (a
 /// second at most this late), the GNSS read, the timers' resolution.
 pub const IDLE_POLL_MS: u32 = 250;
-/// Main loop period while a ride runs and nothing wants the short pass ([`App::pass_ms`]): no finger, key held,
-/// tone, banner, editor, AssistNow data, card failure, trainer link, course or road ahead being read. Keys end the
-/// sleep at once (main.rs `wake_on_io`); the Nordic chip's bytes do not (its broadcasts would end nearly every
-/// sleep): our side holds them (RTS and the 16-byte RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11,
-/// the enable's 0x20), its BLE and serialization queues are not known. Review of 2026-10-31, finding 9.
-pub const RIDE_POLL_MS: u32 = 100;
 /// No key for this long (the backlight's default OFF AFTER), and the loop may slow to [`IDLE_POLL_MS`].
 pub const IDLE_AFTER_MS: u32 = 30_000;
 /// A pass's work counted at most ([`prof::Clock::us`]): the first pass, or a stall, is not a key held for seconds.
@@ -217,8 +211,9 @@ impl App {
 
     /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,
     /// no key for [`IDLE_AFTER_MS`], no finger, no tone or banner timed by the passes, the card not lent to the
-    /// computer, no AssistNow Offline data left to send, a few seconds after the receiver starts), [`RIDE_POLL_MS`]
-    /// while a ride runs with the same quiet and no per-pass work waiting, else [`POLL_MS`]. Measured 2026-10-28
+    /// computer, no AssistNow Offline data left to send, a few seconds after the receiver starts), else [`POLL_MS`] (a
+    /// running ride included: a 100 ms ride pass was tried on 2026-10-31 and taken out on 2026-11-01, docs/status.md).
+    /// Measured 2026-10-28
     /// overnight on the overview: 20 passes/s of 0.4 ms each.
     pub fn pass_ms(&self) -> u32 {
         let quiet = !self.touching()
@@ -226,29 +221,7 @@ impl App {
             && self.notes.ms.is_none()
             && !self.emmc.lent()
             && (self.gps.off || self.gps.ano.done()); // AssistNow Offline messages go out at a pass each
-        if quiet && !self.busy() && self.light.idle_ms >= IDLE_AFTER_MS {
-            IDLE_POLL_MS
-        } else if quiet && self.ride_quiet() {
-            RIDE_POLL_MS
-        } else {
-            POLL_MS
-        }
-    }
-
-    /// A ride runs and nothing counts on 20 passes a second: no key held (its hold is timed by the passes), no
-    /// editor, no card failure waiting for its retry (the recorder counts calls, storage/recorder `RETRY`), no
-    /// course or road-ahead tile being read (a budget a pass), no trainer heard or Bluetooth trainer connected (its
-    /// FE-C and FTMS control messages go one a call, app/trainer.rs `send_trainer`: half the rate on 100 ms passes).
-    fn ride_quiet(&self) -> bool {
-        self.ride.state() == ride::State::Running
-            && !self.keys.any_down()
-            && self.edit.is_none()
-            && self.rec.clean.fails() == 0
-            && self.rec.full.fails() == 0
-            && self.courses.as_deref().is_none_or(|c| !c.loading())
-            && self.ahead.road.as_ref().is_none_or(|(a, _)| !a.busy())
-            && !self.tlink.up
-            && self.ftms.conn.is_none()
+        if quiet && !self.busy() && self.light.idle_ms >= IDLE_AFTER_MS { IDLE_POLL_MS } else { POLL_MS }
     }
 
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.

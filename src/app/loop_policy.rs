@@ -31,10 +31,8 @@ pub struct Wake {
     /// reads neither ends every WFI nor waits stale for the next start.
     pub radio: bool,
     /// The chip's bytes wake the sleep for a radio pass (`App::radio_pass`: read at once, the rest of the step at the
-    /// sleep's end): read, and an idle sleep ([`IDLE_POLL_MS`]). Not a ride's pass
-    /// ([`crate::RIDE_POLL_MS`]): the sensors' broadcasts would end nearly every one; our side holds them (RTS and
-    /// the RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11, the enable's 0x20), its BLE and
-    /// serialization queues are not known.
+    /// sleep's end): read, and an idle sleep ([`IDLE_POLL_MS`]); a ride's pass is the short one, like
+    /// any other pass that is not idle (a 100 ms ride pass without the wake was taken out on 2026-11-01).
     pub bytes: bool,
 }
 
@@ -272,8 +270,6 @@ mod tests {
         let mut p = LoopPolicy::new(HZ, MAX);
         assert_eq!(p.begin_sleep(IDLE, true), Wake { io: true, radio: true, bytes: true });
         assert_eq!(p.begin_sleep(IDLE, false), Wake { io: true, radio: false, bytes: false });
-        // a ride's pass: the keys end it, the sensors' bytes wait in the FIFO for the next pass
-        assert_eq!(p.begin_sleep(crate::RIDE_POLL_MS, true), Wake { io: true, radio: true, bytes: false });
         assert_eq!(p.begin_sleep(POLL_MS, true), Wake { io: false, radio: true, bytes: false });
         assert_eq!(p.begin_sleep(TOUCH_MS, false), Wake { io: false, radio: false, bytes: false });
     }

@@ -23,12 +23,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   peek` of a temporary diagnostic, none of either before or after). Still to see, before a ride build: a ride with the
   owner's sensors, `tools/dev.py info` at the start and after 60 s: each kind's count after `ant` (HR, SPEED, CAD,
   SPD+CAD, POWER...) grown by about 4 a second per sensor, `resyncs` and `radio resets` unchanged.
-- **The 100 ms ride pass without the Nordic wake (2026-10-31, app/device.rs `RIDE_POLL_MS`)**: sim and a 10 s
-  profile only; needed before a ride build. Still to see: a ride with HR, power, cadence and speed plus the phone
-  connected, the ANT broadcasts per kind over 60 s against about 4.06 Hz per sensor (`tools/dev.py info`'s `ant` counts),
-  its `resyncs` and `radio resets` unchanged, a sensor search started mid-ride still pairing, backlight AUTO
-  following a light change within 2 s and THEME AUTO switching after 30 s, and a ride over two checkpoints restarted
-  mid-ride (four buttons) then saved.
+- **The 100 ms ride pass (2026-10-31, review finding 9): taken out on 2026-11-01** as the second suspect of the ride's
+  radio dropouts (the Nordic chip went silent as a whole about 30 s after every restart on the 2026-11-01 road ride;
+  the first suspect, ATT MTU 103, is out as well, each in its own commit to be tested apart). A running ride is
+  back on the short pass with the chip's wake as before 18e270e; the awake cost is back to about the pre-18e270e figure
+  (1.62 % riding, against 1.05 % with the 100 ms pass, as measured then). Finding 10's gating stays. To see: a ride
+  with the owner's sensors, the `ant` counts per kind over 60 s, `resyncs` and `radio resets` unchanged.
 - **A card that answers late at boot (2026-10-31, app/riding.rs `step_recorder`)**: sim only. Still to see: a ride
   recording over a checkpoint, the unit restarted (four buttons) with the card failing at the boot (no way to force
   that on the unit yet: a RAM run whose first eMMC commands fail, `tools/dev.py poke` on the card's clock, or a dev
