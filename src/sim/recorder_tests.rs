@@ -39,6 +39,7 @@ fn a_ride_reset_resumed_and_saved() {
     assert_eq!(sim2.backup[RIDE_BKP], 0);
     let lost = crate::fat::write::tests::fsck(&sim2.emmc.image).unwrap();
     assert_eq!(lost, 0);
+    crate::fat::tests::dump("ride_resumed_saved", &sim2.emmc.image);
 
     // the history lists it first (the newest), with its time
     app.stock.start(app.date);

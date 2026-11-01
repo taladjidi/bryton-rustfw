@@ -7,3 +7,4 @@ di2_key.bin
 .claude/
 mutants.out*
 check.log
+tools/real.env
