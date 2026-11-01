@@ -125,13 +125,13 @@ fn a_four_hour_ride_never_overflows_the_chip() {
     assert_healthy(&ride(240, POLL_MS, board_wait_us()), 240);
 }
 
-/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (16 against 12 at the 50 ms
-/// pass, `ChipLimits::parse_us` 20 between two reads: inferred, not measured); with the 100 ms pass (below) the
+/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (15 against 12 at the 50 ms
+/// pass with the transfers' time charged, 16 before it; `ChipLimits::parse_us` 20 between two reads: inferred, not measured); with the 100 ms pass (below) the
 /// ride's traffic overflows it.
 #[test]
 fn the_20_us_wait_leaves_the_queue_higher() {
     let (slow, fast) = (ride(10, POLL_MS, 20), ride(10, POLL_MS, board_wait_us()));
-    assert!(slow.high_water >= fast.high_water + 4, "{} against {}", slow.high_water, fast.high_water);
+    assert!(slow.high_water >= fast.high_water + 3, "{} against {}", slow.high_water, fast.high_water);
 }
 
 /// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) is no better. Worst case for a short wait

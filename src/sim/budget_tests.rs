@@ -217,7 +217,8 @@ impl Rig {
 
     /// `ms` of long passes (`FILL_STRIDE`) with the Nordic limits off: a filler whose gaps are not measured.
     fn fill(&mut self, ms: u64) {
-        let limits = self.sim.nordic.limits.take();
+        let limits = self.sim.nordic.limits;
+        self.sim.nordic.limits.slots = usize::MAX / 2; // the filler's long passes must not overflow the chip
         let end = self.sim.ms + ms;
         while self.sim.ms < end {
             self.app.step(&mut self.sim);

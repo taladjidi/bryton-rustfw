@@ -1972,7 +1972,7 @@ fn idle_loop_ignores_bytes_from_a_chip_not_started() {
     }
     assert!(passes <= 44, "{passes} passes in 10 s");
     assert!(sim.nordic.out.is_empty(), "flushed");
-    sim.gnss.assert_reads(2640, 3);
+    sim.gnss.assert_reads(1652, 0);
 }
 
 /// A tone started after an idle pass of 250 ms keeps its whole length: the alert's first beep lasts its 100 ms
