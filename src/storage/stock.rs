@@ -1710,8 +1710,7 @@ pub(crate) mod tests {
     #[ignore]
     fn stock_backups() {
         let Ok(root) = std::env::var("BRYTON_DRIVE") else {
-            std::println!("BRYTON_DRIVE not set: skipped");
-            return;
+            panic!("BRYTON_DRIVE not set (tools/real.sh)");
         };
         let (mut rides, mut power, mut bad, mut bytes, mut same_max) = (0, 0, 0, 0, 0);
         for e in std::fs::read_dir(std::format!("{root}/Activities")).unwrap().flatten() {

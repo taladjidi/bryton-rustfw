@@ -9,11 +9,14 @@ a few instructions before, pointing at a static in .rodata: file, line; src/ or 
 which the Location names by its absolute path); with none, the line-table entry the objdump
 prints before it (the innermost frame), or `?` when that is in core (no llvm-symbolizer is shipped to walk the
 inlined frames).
-Kinds: bounds, unwrap, overflow, explicit, trap (a `udf`). The summary lists the sites per folder and the sites in
+Any call or branch whose target name matches DENY (panic, _fail, unwrap, expect) is a site, whatever KINDS says: KINDS
+only names the kind ("other" when none fits), so a new panic entry of a newer core cannot slip by unclassified.
+Kinds: bounds, unwrap, overflow, explicit, other, trap (a `udf`). The summary lists the sites per folder and the sites in
 files that deny clippy::indexing_slicing outside tests (there should be no bounds site). LTO can merge identical
-panic calls into one site, so a line may stand for several. Sites inside the panic handler or hw.rs's fault path
-(HANDLER: its own reset loop, which branches to itself) are the handler, not a way into it: left out of the count
-and the tables, and named on their own line ("panic handler: N sites, excluded").
+panic calls into one site, so a line may stand for several. Only the panic handler's own reset loop (a function of
+HANDLER that branches to itself) is left out of the count and the tables, named on its own line ("panic handler:
+N sites, excluded"). A parse that finds fewer than MIN_FNS functions fails (an objdump that changed its format would
+otherwise report zero sites).
 
     panics.py [ELF]            the report (default: the release ELF); exit 0 always
     panics.py [ELF] --json F   also write it as JSON to F
@@ -35,6 +38,9 @@ KINDS = [('panic_bounds_check', 'bounds'), ('core::slice::index::slice_', 'bound
          ('unwrap_failed', 'unwrap'), ('expect_failed', 'unwrap'),
          ('div_by_zero', 'overflow'), ('rem_by_zero', 'overflow'), ('_overflow', 'overflow'),
          ('core::panicking::', 'explicit'), ('rust_begin_unwind', 'explicit'), ('board::hw::panic', 'explicit')]
+# a branch target that is a panic entry, whatever KINDS names it (default deny)
+DENY = re.compile(r'panic|_fail|unwrap|expect')
+MIN_FNS = 1000  # the release image has about 4500 functions
 # the panic handler itself (hw.rs: `panic`, `default_handler`, `fault`, `mark`): the enclosing function's last path
 # segment, its hash dropped, in hw.rs or the unwind symbol
 HANDLER = {'rust_begin_unwind', 'panic', 'default_handler', 'fault', 'mark'}
@@ -82,11 +88,18 @@ def sites(text, rd=lambda a, n: None):
             recent = dict(list(recent.items())[-6:])
         t = re.search(r'<([^>]*)>', rest)
         if t and BRANCH.fullmatch(op):
-            kind = next((k for s, k in KINDS if s in t.group(1)), None)
+            kind = next((k for s, k in KINDS if s in t.group(1)), 'other' if DENY.search(t.group(1)) else None)
+            if kind and handler(fn) and re.sub(r'\+0x[0-9a-f]+$', '', t.group(1)) == fn:
+                kind = 'handler'  # its own reset loop: a branch to itself
             if kind:
                 out.append((kind, fn, location(rd, recent) or loc))
                 recent = {}
     return out
+
+
+def functions(text):
+    """How many function headers `sites` would parse in the objdump text."""
+    return len(re.findall(r'^[0-9a-f]+ <.*>:$', text, re.M))
 
 
 def image(path):
@@ -120,10 +133,10 @@ def handler(fn):
 
 
 def report(found, deny):
-    """Text report: by file, every site, the summary; and the same as a dict. The panic handler's own sites
-    (HANDLER) are only counted, on their own line."""
-    own = [s for s in found if handler(s[1])]
-    found = [s for s in found if s not in own]
+    """Text report: by file, every site, the summary; and the same as a dict. The panic handler's own reset loop
+    ('handler' kind) is only counted, on their own line."""
+    own = [s for s in found if s[0] == 'handler']
+    found = [s for s in found if s[0] != 'handler']
     rows = sorted((loc.rsplit(':', 1)[0], int(loc.rsplit(':', 1)[1]) if ':' in loc else 0, k, fn) for k, fn, loc in found)
     by = collections.defaultdict(collections.Counter)
     for f, _, k, _ in rows:
@@ -178,10 +191,18 @@ def selftest():
     assert js['total'] == 2 and js['denied_bounds'] == [] and 'bounds=1' in txt, txt
     txt, js = report(got[3:5], ['src/storage/'])
     assert js['denied_bounds'] == [{'file': 'src/storage/fit.rs', 'line': 9}], js
-    txt, js = report(got[:2] + [('explicit', '__rustc::rust_begin_unwind', 'src/board/hw.rs:74')], [])
+    txt, js = report(got[:2] + [('handler', '__rustc::rust_begin_unwind', 'src/board/hw.rs:74')], [])
     assert js['total'] == 2 and js['handler'] == 1 and 'hw.rs' not in txt, txt
     assert 'panic handler: 1 sites, excluded' in txt, txt
     assert handler('bryton_rustfw::board::hw::fault::h818e159d6185cfe3') and not handler('core::panicking::panic::h0')
+    # any panic-named target counts (kind "other"); the handler's branch to itself is the only exception
+    other = sites('d0 <app::x>:\nd0: \tbl\t0x9 <core::foo::new_panic_entry::h1>\nd2: \tbl\t0x9 <core::foo::bar_fail>')
+    assert [k for k, *_ in other] == ['other', 'other'], other
+    own = sites('d0 <bryton_rustfw::board::hw::panic::h818e159d6185cfe3>:\nd0: \tb\t0x0 <bryton_rustfw::board::hw::panic::h818e159d6185cfe3+0x4>')
+    assert [k for k, *_ in own] == ['handler'], own
+    ext = sites('d0 <bryton_rustfw::board::hw::panic::h818e159d6185cfe3>:\nd0: \tbl\t0x0 <core::panicking::panic_fmt>')
+    assert [k for k, *_ in ext] == ['explicit'], ext  # a call out of the handler still counts
+    assert functions('d0 <a>:\nd0: nop\nd2 <b>:\n') == 2
     assert not handler('bryton_rustfw::app::faultlog::mark_fault') and not handler('x::board::hw::faultish::h1')
     print('panics.py selftest ok')
 
@@ -191,14 +212,22 @@ if __name__ == '__main__':
         selftest()
         sys.exit()
     args = sys.argv[1:]
-    jf = args.pop(args.index('--json') + 1) if '--json' in args else None
-    mx = int(args.pop(args.index('--max') + 1)) if '--max' in args else None
-    elf = [a for a in args if a != '--max']
-    elf = pathlib.Path(elf[0]) if elf else ELF
+    jf = mx = None
+    if '--json' in args:
+        i = args.index('--json')
+        jf = args[i + 1]
+        del args[i:i + 2]
+    if '--max' in args:
+        i = args.index('--max')
+        mx = int(args[i + 1])
+        del args[i:i + 2]
+    elf = pathlib.Path(args[0]) if args else ELF
     sysroot = subprocess.run(['rustc', '--print', 'sysroot'], capture_output=True, text=True, check=True).stdout.strip()
     bins = next(pathlib.Path(sysroot).glob('lib/rustlib/*/bin/llvm-objdump')).parent
     dis = subprocess.run([str(bins / 'llvm-objdump'), '-d', '-C', '-l', '--no-show-raw-insn', str(elf)],
-                         capture_output=True, text=True).stdout
+                         capture_output=True, text=True, check=True).stdout
+    if functions(dis) < MIN_FNS:
+        sys.exit(f'panics: only {functions(dis)} functions parsed from the objdump of {elf} (format changed?)')
     txt, js = report(sites(dis, image(elf)), denied())
     print(txt)
     if jf:

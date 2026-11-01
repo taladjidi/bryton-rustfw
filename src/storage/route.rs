@@ -1473,8 +1473,7 @@ pub(crate) mod tests {
     #[ignore]
     fn real_file() {
         let Ok(path) = std::env::var("BRYTON_ROUTE_DAT") else {
-            std::println!("BRYTON_ROUTE_DAT not set: skipped");
-            return;
+            panic!("BRYTON_ROUTE_DAT not set (tools/real.sh)");
         };
         let bytes = std::fs::read(&path).unwrap();
         let name = std::string::String::from(std::path::Path::new(&path).file_name().unwrap().to_str().unwrap());

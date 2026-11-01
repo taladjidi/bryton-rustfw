@@ -225,7 +225,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore]
     fn real_rides() {
-        let files = std::env::var("HRVT_FILES").unwrap_or_default();
+        let files = std::env::var("HRVT_FILES").expect("HRVT_FILES not set (tools/real.sh)");
         for path in files.split(':').filter(|p| !p.is_empty()) {
             let data = std::fs::read(path).unwrap();
             let (mut r, mut fit, mut with) = (Reader::with_alpha1(), hrvt::RideFit::new(), 0);

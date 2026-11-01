@@ -1129,7 +1129,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "reads the .seg files of $SEGMENTS_DIR"]
     fn built_files_parse() {
-        let dir = std::env::var("SEGMENTS_DIR").expect("SEGMENTS_DIR");
+        let dir = std::env::var("SEGMENTS_DIR").expect("SEGMENTS_DIR not set (tools/real.sh)");
         let (mut ok, mut bad) = (0, std::vec::Vec::new());
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let b = std::fs::read(e.path()).unwrap();

@@ -3,7 +3,7 @@
 #   ./check.sh          the gate: the guards, then three lanes in parallel (F firmware, H host, P Python tools),
 #                       skipping what the branch's diff cannot affect
 #   ./check.sh --full   everything, as on main (also rewrites the live numbers)
-#   ./check.sh --quick  the iteration tier, NOT the gate: guards, lint, fmt, clippy and tests on the host
+#   ./check.sh --quick  the iteration tier, NOT the gate: guards, lint, fmt, firmware clippy, host clippy and tests
 #   -v                  print every lane's log, not only a failed one
 # Each step prints its wall seconds; a lane writes target/check/<lane>.log, shown on failure.
 set -e
@@ -18,7 +18,9 @@ for a in "$@"; do
     esac
 done
 C=target/check
-rm -rf "$C"; mkdir -p "$C"; : > "$C/skipped"; : > "$C/times"
+# what the tests wrote (target/fit, target/sim, target/fat) is removed first: a stale file must not pass fit_check,
+# fsck or Renode when its test no longer writes it
+rm -rf "$C" target/fit target/sim target/fat; mkdir -p "$C"; : > "$C/skipped"; : > "$C/times"
 now() { python3 -c 'import time; print(time.time())'; }
 t_all=$(now)
 # step LABEL CMD...: run, then print the wall seconds (also when it fails); a failure fails the lane (set -e)
@@ -33,23 +35,30 @@ step() {
 skip() { echo "skip: $1"; echo "$1" >> "$C/skipped"; }
 
 # The split (AGENTS.md, Layout): the library cannot reach hardware, since it forbids unsafe; unsafe lives in hw.rs,
-# plus usb.rs's one marker-trait line.
+# plus usb.rs's marker-trait line and its allow. Any text "unsafe" in code (comments stripped) outside hw.rs is
+# refused, which covers `unsafe {`, `unsafe fn / impl / trait / extern`, `#[unsafe(no_mangle)]`, `allow` / `expect` of
+# unsafe_code; the only lines allowed are lib.rs's forbid, main.rs's deny, and those two of usb.rs (exactly).
 grep -q '^#!\[forbid(unsafe_code)\]' src/lib.rs || { echo "layout: src/lib.rs lost #![forbid(unsafe_code)]"; exit 1; }
-n=$(grep -rl 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src | sort | grep -v '^src/board/hw.rs$' | tr '\n' ' ')
-[ "$n" = "src/board/usb.rs " ] && [ "$(grep -c 'unsafe impl\|allow(unsafe_code)' src/board/usb.rs)" = 2 ] \
-    || { echo "layout: unsafe outside hw.rs: $n"; exit 1; }
+u=$(for f in $(git ls-files -co --exclude-standard src | grep '\.rs$' | grep -v '^src/board/hw\.rs$'); do
+        sed 's,//.*,,' "$f" | grep -n 'unsafe' | sed "s,^,$f:,"
+    done | grep -vE '^src/lib\.rs:[0-9]+:#!\[forbid\(unsafe_code\)\]|^src/main\.rs:[0-9]+:#!\[deny\(unsafe_code\)\]' || true)
+[ "$(printf '%s\n' "$u" | grep -c .)" = 2 ] && printf '%s\n' "$u" | grep -qE '^src/board/usb\.rs:[0-9]+:#\[allow\(unsafe_code\)\]$' \
+    && printf '%s\n' "$u" | grep -qE '^src/board/usb\.rs:[0-9]+:unsafe impl UsbPeripheral for ' \
+    || { echo "layout: unsafe outside hw.rs (only usb.rs's allow and its one marker impl are allowed):"; printf '%s\n' "$u"; exit 1; }
 # The merge guard: no conflict marker left in a tracked text file (one reached main on 2026-10-29 through a
 # branch's own merge of main, and nothing else here reads the docs).
 m=$(git ls-files -z -- '*.rs' '*.md' '*.py' '*.sh' '*.toml' '*.x' | xargs -0 grep -l '^<<<<<<< \|^>>>>>>> ' 2>/dev/null | tr '\n' ' ')
 [ -z "$m" ] || { echo "merge: conflict markers in: $m"; exit 1; }
-# The docs guard: every file of src and tools is named in docs/layout.md, by its path or by its basename as a
-# backticked word (`menus.rs`); the data folders (tools/fonts/) are the only ones without an entry of their own.
+# The docs guard: every file of src and tools is named in docs/layout.md, by its path or, when no other file has the
+# same basename (not mod.rs, tests.rs, fields.rs ...), by its basename as a backticked word (`menus.rs`); the data
+# folders (tools/fonts/) are the only ones without an entry of their own.
+dup=$(git ls-files -co --exclude-standard src tools | xargs -n1 basename | sort | uniq -d)
 # No doc names the files that moved (src/sim.rs, src/ui.rs).
 miss=""
 for f in $(git ls-files -co --exclude-standard src tools); do
     ok=0
     grep -qF "$f" docs/layout.md && ok=1
-    grep -qF "\`$(basename "$f")\`" docs/layout.md && ok=1
+    case " $(echo $dup) " in *" $(basename "$f") "*) ;; *) grep -qF "\`$(basename "$f")\`" docs/layout.md && ok=1 ;; esac
     [ "$ok" = 1 ] && continue
     case $f in tools/fonts/*) continue ;; esac
     miss="$miss $f"
@@ -64,9 +73,10 @@ command -v ruff >/dev/null 2>&1 || skip "ruff (not installed)"
 step "cargo fmt --check" cargo fmt --check
 
 if [ $quick = 1 ]; then
+    step "cargo clippy --release" cargo clippy --release -- -D warnings  # two branches failed the gate on it
     step "cargo clippy --tests (host)" cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings
     step "cargo test-host" cargo test-host
-    echo "QUICK TIER: guards, lint, fmt, host clippy and tests only. This is NOT the gate: run ./check.sh before a commit."
+    echo "QUICK TIER: guards, lint, fmt, firmware and host clippy and host tests only. This is NOT the gate: run ./check.sh before a commit."
     exit 0
 fi
 
@@ -86,9 +96,20 @@ if [ $full = 0 ] && [ -n "$br" ] && [ "$br" != main ]; then
 fi
 # touched REGEX: did a changed path match (always true when nothing may be skipped)
 touched() { [ $skipok = 0 ] || printf '%s\n' "$changed" | grep -qE "$1"; }
+# touched_beyond REGEX: did a changed path fall outside REGEX (always true when nothing may be skipped)
+touched_beyond() { [ $skipok = 0 ] || printf '%s\n' "$changed" | grep -vE "$1" | grep -q .; }
+# main, --full and a detached HEAD are strict: a missing optional checker fails instead of skipping
+strict=1; [ $skipok = 1 ] && strict=0
 
 lane_F() {  # the firmware
     step "cargo clippy --release" cargo clippy --release -- -D warnings
+    # the ride build (EMMC_WRITE=1: the recorder and the card writes) is the one that goes on the unit for a ride. It is
+    # built first, in the same target dir (option_env! is per crate: only the binary crate rebuilds, the library and
+    # the dependencies are shared; measured 35 s against 41 s with a target dir of its own after a lib.rs change),
+    # checked, then the default build goes last so that pack.py and the Renode run see the default ELF.
+    step "cargo build --release (EMMC_WRITE=1)" env EMMC_WRITE=1 cargo build --release
+    step "stack_check (ride build)" python3 -I tools/stack_check.py
+    step "panics.py --max 0 (ride build)" python3 -I tools/panics.py --max 0
     step "cargo build --release" cargo build --release
     step "stack_check" python3 -I tools/stack_check.py
     step "stack_check selftest" python3 -I tools/stack_check.py selftest
@@ -100,7 +121,36 @@ lane_H() {  # the host
     step "cargo clippy --tests (host)" cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings
     step "cargo test-host" cargo test-host
     step "cargo doc" env RUSTDOCFLAGS="-D warnings" cargo doc --target aarch64-apple-darwin --no-deps -q
-    if command -v cargo-deny >/dev/null 2>&1; then step "cargo deny" cargo deny check -s; else skip "cargo-deny (not installed)"; fi
+    # the advisory database is fetched from GitHub: without a network, the cached copy (--offline) is checked instead
+    deny() {
+        if cargo deny check -s > "$C/deny.out" 2>&1; then cat "$C/deny.out"; return 0; fi
+        if [ $strict = 0 ] && grep -q 'failed to fetch advisory database' "$C/deny.out"; then
+            skip "cargo-deny advisory database not fetched (no network): checked --offline"
+            cargo deny --offline check -s
+        else
+            cat "$C/deny.out"; return 1
+        fi
+    }
+    if command -v cargo-deny >/dev/null 2>&1; then step "cargo deny" deny; else skip "cargo-deny (not installed)"; fi
+    # An independent FAT checker on the volumes the tests wrote (target/fat/*.img, raw images: a recorded and saved
+    # ride after a cut and its resume, a HISTORY delete, a full card's refusal, a create and move): fsck_msdos on
+    # macOS, fsck.vfat on Linux, read only (-n). Any error it reports fails.
+    fat_check() {
+        PATH="$PATH:/sbin:/usr/sbin"
+        if command -v fsck_msdos >/dev/null 2>&1; then fs="fsck_msdos -n"
+        elif command -v fsck.vfat >/dev/null 2>&1; then fs="fsck.vfat -n"
+        elif [ $strict = 1 ]; then echo "fsck: no fsck_msdos / fsck.vfat: on main (or --full) an independent FAT checker is required"; return 1
+        else skip "fsck (no fsck_msdos / fsck.vfat)"; return 0; fi
+        n=0
+        for img in target/fat/*.img; do
+            [ -f "$img" ] || continue
+            n=$((n + 1))
+            $fs "$img" > "$C/fsck.out" 2>&1 || { cat "$C/fsck.out"; echo "fsck: $fs failed on $img"; return 1; }
+        done
+        [ $n -ge 4 ] || { echo "fsck: only $n images in target/fat (4 expected: the tests write them)"; return 1; }
+        echo "fsck: $n images clean"
+    }
+    step "fat fsck" fat_check
     # What the tests wrote (target/fit, target/sim): the test rides decoded by independent readers (fitdecode,
     # Garmin's FIT SDK; FIT_PYTHON may name a venv's Python), and the unit walk's path filter (needs PIL; plain
     # python3, not -I, which drops the user site-packages where PIL may be).
@@ -110,6 +160,9 @@ lane_H() {  # the host
             "$0" tools/fit_check.py target/fit/sample.fit target/fit/cut.fit target/fit/sample_full.fit
             "$0" tools/fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
             "$0" tools/fit_check.py --profile target/fit/indoor.fit target/fit/older.fit target/fit/mtb.fit' "$PY"
+    elif [ $strict = 1 ]; then
+        echo "fit_check: fitdecode / garmin-fit-sdk are not installed: on main (or --full) the independent FIT readers are required"
+        return 1
     else
         skip "fit_check (fitdecode / garmin-fit-sdk not installed)"
     fi
@@ -177,8 +230,8 @@ if [ -n "$bad" ]; then echo "check.sh: FAILED lane(s):$bad (logs in $C/)"; exit 
 export RENODE="${RENODE:-/Applications/Renode.app/Contents/MacOS/renode}"
 if ! command -v "$RENODE" >/dev/null 2>&1; then
     skip "renode (not installed)"
-elif ! touched '^(src/main\.rs|src/lib\.rs|src/app/pass\.rs|src/board/|src/drivers/panel\.rs|src/ui/strip\.rs|src/ui/overview\.rs|link\.x|build\.rs|Cargo\.(toml|lock)|renode/)'; then
-    skip "renode (no change in main.rs, lib.rs, app/pass.rs, board/, drivers/panel.rs, ui/strip.rs, ui/overview.rs, link.x, build.rs, Cargo.toml/lock, renode/)"
+elif ! touched '^(src/main\.rs|src/lib\.rs|src/app/pass\.rs|src/board/|src/drivers/|src/ui/strip\.rs|src/ui/overview\.rs|link\.x|build\.rs|Cargo\.(toml|lock)|\.cargo/config\.toml|rust-toolchain\.toml|renode/)'; then
+    skip "renode (no change in main.rs, lib.rs, app/pass.rs, board/, drivers/, ui/strip.rs, ui/overview.rs, link.x, build.rs, Cargo.toml/lock, .cargo/config.toml, rust-toolchain.toml, renode/)"
 else
     renode2() {  # the boot (first screen, then the cable in) and the switch-off; in sequence unless RENODE_PARALLEL=1
         if [ "${RENODE_PARALLEL:-0}" = 1 ]; then

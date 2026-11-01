@@ -843,11 +843,11 @@ mod tests {
     #[test]
     #[ignore]
     fn parse_speed() {
-        let Ok(dir) = std::env::var("BRYTON_RIDES") else { return };
+        let dir = std::env::var("BRYTON_RIDES").expect("BRYTON_RIDES not set (tools/real.sh)");
         let Some(f) = std::fs::read_dir(dir).ok().and_then(|d| {
             d.filter_map(|e| e.ok().map(|e| e.path())).find(|p| p.extension().is_some_and(|e| e == "fit"))
         }) else {
-            return;
+            panic!("BRYTON_RIDES holds no .fit file");
         };
         let data = std::fs::read(f).unwrap();
         for slices in [false, true] {

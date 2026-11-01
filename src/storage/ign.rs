@@ -274,8 +274,7 @@ pub(crate) mod tests {
     #[ignore]
     fn every_packed_tile() {
         let Ok(dir) = std::env::var("IGN_PACKS") else {
-            std::println!("IGN_PACKS not set: skipped");
-            return;
+            panic!("IGN_PACKS not set (tools/real.sh)");
         };
         let mut out = std::vec![0u16; TILE];
         let (mut n, mut bytes, mut t) = (0u64, 0u64, std::time::Duration::ZERO);
