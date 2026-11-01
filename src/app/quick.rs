@@ -419,6 +419,7 @@ impl App {
                         self.media(b, key, false);
                     }
                     Some(Hit::Zero) => self.quick_zero_tap(),
+                    Some(Hit::Light(_)) if !self.settings_ready(b) => {}
                     Some(Hit::Light(up)) => {
                         // dim to bright: the levels from the last (10 %) to the first (100 %), then AUTO
                         let n = LIGHT_LEVELS.len();

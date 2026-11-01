@@ -221,7 +221,7 @@ impl App {
 
     /// ACTIVE BIKE: the next bike, its gear into the settings (the old one's kept in its own).
     pub(crate) fn next_bike(&mut self, b: &mut impl Board) {
-        if !self.bikes_ready(b) {
+        if !self.bikes_ready(b) || !self.settings_ready(b) {
             return;
         }
         let gear = bikes::Gear::of(&self.settings);

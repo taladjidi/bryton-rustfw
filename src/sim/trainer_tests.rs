@@ -1924,3 +1924,32 @@ fn edits_wait_for_a_late_card() {
     run(&mut sim2, &mut app2, 20_000);
     assert!(!app2.settings_store.file.dirty);
 }
+
+/// Every writer of the settings obeys `settings_ready`: the quick panel's brightness buttons and the power average
+/// tap change nothing while the card is down and the file unread (a late read would overwrite the change), and work
+/// once it is read.
+#[test]
+fn the_quick_panel_waits_for_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = sim.emmc.image.clone();
+    sim2.backup = sim.backup;
+    sim2.emmc.dead = true;
+    let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+    run(&mut sim2, &mut app2, 6000);
+    let (light, avg) = (app2.settings.light_level, app2.settings.wkt_avg);
+    app2.input(&mut sim2, Input::Touch(Gesture::Swipe(crate::touch::Dir::Down)));
+    assert_eq!(app2.screen(), Screen::Quick);
+    run(&mut sim2, &mut app2, 1500);
+    let (x, y, w, h) = crate::ui::quick::BRIGHT[1];
+    app2.input(&mut sim2, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
+    assert_eq!(app2.settings.light_level, light, "refused while the file is unread");
+    assert_eq!(app2.notes.text.as_str(), "SETTINGS NOT READ");
+    app2.cycle_wkt_avg(&mut sim2);
+    assert_eq!(app2.settings.wkt_avg, avg);
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app2, 70_000);
+    app2.cycle_wkt_avg(&mut sim2);
+    assert_ne!(app2.settings.wkt_avg, avg, "works once the file is read");
+}

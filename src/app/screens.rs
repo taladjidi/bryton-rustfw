@@ -429,6 +429,9 @@ impl App {
     /// A tap on a power average field of the page: the window goes to the next (3, 10, 30 s, round), kept, and
     /// those boxes are drawn again, each in its own box.
     pub(crate) fn cycle_wkt_avg(&mut self, b: &mut impl Board) {
+        if !self.settings_ready(b) {
+            return;
+        }
         self.settings.wkt_avg = (self.settings.wkt_avg + 1) % 3;
         self.save_misc(b);
         for (i, (bx, w)) in self.widgets().enumerate() {

@@ -911,6 +911,7 @@ impl App {
             Some(Row::Set(menu::Setting::Trip(_))) if self.ride.state() != ride::State::Idle => {
                 self.say("END THE RIDE FIRST")
             }
+            Some(Row::Set(menu::Setting::Trip(_))) if !self.settings_ready(b) => {}
             Some(Row::Set(menu::Setting::Trip(n)))
                 if self.confirmed(menu, sel, if n == 0 { "RESET TRIP 1" } else { "RESET TRIP 2" }) =>
             {
