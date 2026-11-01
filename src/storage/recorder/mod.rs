@@ -101,7 +101,7 @@
 //! fails (a name taken by a folder, a full card) is left to the writers (or to the next boot) until the next boot.
 //!
 //! **One writer, one ride.** What the last run left unfinished is finished before a new ride: by the boot
-//! ([`Recorder::recover`]), or, if the boot did not (its marker lost, or the card failed then), at the new ride's
+//! ([`Recorder::recover`]), or, if the boot did not (its marker lost alone, or the card failed then), at the new ride's
 //! first card work: a ride in progress is resumed in its place if the marker said it was open or it stopped less
 //! than [`RESUME_S`] ago, else ended at its last record and saved; a save is finished. `recover` does nothing
 //! once a ride has started.
@@ -1742,9 +1742,9 @@ impl Recorder {
     }
 
     /// Whether the card's record says a ride is left unfinished (recording or saving; or a card error reading it),
-    /// read only: one the boot did not take up (its marker lost, a flat battery), which the next Start does. While
-    /// so, the card is not lent writable: a computer could free or reuse the chain the record alone may name (the
-    /// review of 2026-10-29, S3).
+    /// read only: one the boot did not take up (its marker lost alone), which the next Start does; also the boot's
+    /// own look after a flat battery (`App::left_by_a_power_loss`). While so, the card is not lent writable: a
+    /// computer could free or reuse the chain the record alone may name (the review of 2026-10-29, S3).
     #[inline(never)]
     pub fn left_open(&mut self, d: &mut impl DiskWrite) -> bool {
         let read = |s: &mut Self, d: &mut _| -> Result<bool, Error> {

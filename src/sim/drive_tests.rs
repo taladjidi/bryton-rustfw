@@ -183,8 +183,10 @@ fn a_delete_left_pending_on_a_full_card_is_put_back_before_lending() {
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
-/// The review of 2026-10-29, S3: a reset mid-ride that lost the boot's marker (a flat battery), so no ride comes
-/// back, while the card's record says "recording": USB DRIVE lends it write protected (no computer's fsck frees the
+/// The review of 2026-10-29, S3: a reset mid-ride that lost the boot's marker alone (this firmware's other registers
+/// kept, so the boot does not read the card; a power loss that resets the whole backup domain is resumed at the boot:
+/// recorder_tests.rs `a_ride_survives_a_power_loss_that_clears_the_backup_registers`), so no ride comes back, while
+/// the card's record says "recording": USB DRIVE lends it write protected (no computer's fsck frees the
 /// chain the record may name alone). The next ride's Start takes the old one up; once saved, the drive is writable.
 #[test]
 fn a_ride_left_open_without_its_marker_lends_the_drive_read_only() {
@@ -195,8 +197,10 @@ fn a_ride_left_open_without_its_marker_lends_the_drive_read_only() {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 90_000); // a checkpoint on the card
     assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
-    let mut sim2 = Sim::new(9, 3, 0); // the backup registers lost
+    let mut sim2 = Sim::new(9, 3, 0);
     sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    sim2.backup[RIDE_BKP] = 0; // the marker lost
     let mut app = App::start(&mut sim2, None);
     app.set_usb(&mut sim2, UsbDot::Ready);
     run(&mut sim2, &mut app, 1000);

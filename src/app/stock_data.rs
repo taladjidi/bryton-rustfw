@@ -6,6 +6,16 @@ use crate::*;
 /// Stock's rides are read by themselves this long after start-up (for the totals), unless a ride runs.
 pub const STOCK_SCAN_MS: u32 = 30_000;
 
+/// Whether a backup register holds anything of this firmware's (settings, a paired sensor, a page): none at its first
+/// start on a unit, and after a battery run flat, which resets the backup domain. [`WHEEL_BKP`] alone is not enough:
+/// it is written only when a setting is changed, and a unit can have its sensors paired and pages set without that
+/// (review of ecb8b98: stock's then replaced them).
+pub(crate) fn own_registers(b: &mut impl Board) -> bool {
+    matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xac)
+        || Kind::ALL.iter().any(|k| k.from_word(b.backup_read(k.backup())).is_some())
+        || PAGE_BKP.iter().any(|r| PageCfg::from_words([b.backup_read(r[0]), b.backup_read(r[1])]).is_some())
+}
+
 impl App {
     // -----------------------------------------------------------------------------------------------------------
     // What stock left on the card (storage/stock.rs): the stock data menu
@@ -269,11 +279,7 @@ impl App {
     /// this firmware's settings, so the next start is a first start again: stock's are better than the defaults then.
     #[inline(never)] // its card reading in its own frame, not begin's
     pub(crate) fn first_start(&mut self, b: &mut impl Board) {
-        // [`WHEEL_BKP`] alone is not enough: it is written only when a setting is changed, and a unit can have its
-        // sensors paired and pages set without that (review of ecb8b98: stock's then replaced them)
-        let own = matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xac)
-            || Kind::ALL.iter().any(|k| k.from_word(b.backup_read(k.backup())).is_some())
-            || PAGE_BKP.iter().any(|r| PageCfg::from_words([b.backup_read(r[0]), b.backup_read(r[1])]).is_some());
+        let own = own_registers(b);
         // the registers written below are not the rider's change: settings.bin, if there, still wins over them
         let lost = self.settings_store.lost;
         if own || self.rec.resume_pending {

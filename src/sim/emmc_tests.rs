@@ -347,24 +347,50 @@ fn the_card_models_rules_trigger() {
     assert!(sim.ms - t0 >= 30, "CMD1 busy until the programming is over: {} ms", sim.ms - t0);
 }
 
-/// Every R1 error bit (emmc_model.rs `R1_ERRORS`) fails the write wherever the card reports it: in the first
-/// CMD13 after a write, in a CMD13 while still programming (the bits are clear by read: a poll that drops them loses
-/// them, Linux's `mmc_blk_busy_cb` accumulates them), and in CMD12's answer after an open-ended CMD25 (Linux checks
-/// `brq->stop.resp[0]`), plain or reliable. EXCEPTION_EVENT alone is not an error.
+/// The R1 error bits fail the write where the card reports them (emmc_model.rs `DATA_ERRORS`, `COMMAND_ERRORS`):
+/// - the data bits in the first CMD13 after the write or its stop, also while still programming (clear by read: a
+///   poll that drops them loses them; Linux's `mmc_blk_busy_cb` accumulates them), and in the stop's answer after an
+///   open-ended CMD25 (Linux checks `brq->stop.resp[0]`), but OUT_OF_RANGE there (`oor_with_open_end`);
+/// - every bit in the write command's own answer;
+/// - a command bit (COM_CRC_ERROR, ILLEGAL_COMMAND: the previous command's) in a poll while programming is not the
+///   write's error.
+///
+/// Plain or reliable, one sector or four. EXCEPTION_EVENT alone is not an error.
 #[test]
 fn every_r1_error_bit_fails_the_write() {
-    for (bit, name) in super::emmc_model::R1_ERRORS {
-        for (rel, polls, sectors) in [(0, 0, 1), (0, 3, 1), (0, 0, 4), (0, 3, 4), (crate::emmc::EN_REL_WR, 3, 4)] {
-            let mut sim = Sim::new(9, 0, 0);
-            sim.emmc.image = vec![0; 64 * SECTOR];
-            sim.emmc.rel_param = rel;
-            let card = Card::init(&mut sim).unwrap();
-            (sim.emmc.prog_polls, sim.emmc.prog_error) = (polls, bit);
-            let got = card.write(&mut sim, 8, &vec![1; sectors * SECTOR]);
-            assert!(
-                matches!(got, Err(Error::Status(_, s)) if s & bit == bit),
-                "{name}: {got:?} (reliable {rel}, {polls} polls, {sectors} sectors)"
-            );
+    use super::emmc_model::{COMMAND_ERRORS, DATA_ERRORS, EmmcCard, OUT_OF_RANGE};
+    let write = |rel, polls, sectors, set: &dyn Fn(&mut EmmcCard)| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = vec![0; 64 * SECTOR];
+        sim.emmc.rel_param = rel;
+        let card = Card::init(&mut sim).unwrap();
+        sim.emmc.prog_polls = polls;
+        set(&mut sim.emmc);
+        card.write(&mut sim, 8, &vec![1; sectors * SECTOR])
+    };
+    let rel = crate::emmc::EN_REL_WR;
+    let all = [(0, 0, 1), (0, 3, 1), (0, 0, 4), (0, 3, 4), (rel, 0, 4), (rel, 3, 4)];
+    let fails = |got: Result<(), Error>, bit| matches!(got, Err(Error::Status(_, s)) if s & bit == bit);
+    for (bit, name) in DATA_ERRORS {
+        for (rel, polls, sectors) in all {
+            let got = write(rel, polls, sectors, &|c| c.prog_error = bit);
+            assert!(fails(got, bit), "{name} programming: {got:?} (reliable {rel}, {polls} polls, {sectors} sectors)");
+        }
+        for polls in [0, 3] {
+            let got = write(0, polls, 4, &|c| c.stop_error = bit);
+            assert_eq!(fails(got, bit), bit != OUT_OF_RANGE, "{name} in the stop: {got:?} ({polls} polls)");
+        }
+    }
+    for (bit, name) in DATA_ERRORS.iter().chain(&COMMAND_ERRORS) {
+        for (rel, polls, sectors) in all {
+            let got = write(rel, polls, sectors, &|c| c.write_answer = *bit);
+            assert!(fails(got, *bit), "{name} in the write's answer: {got:?} (reliable {rel}, {sectors} sectors)");
+        }
+    }
+    for (bit, name) in COMMAND_ERRORS {
+        for (rel, sectors) in [(0, 1), (0, 4), (rel, 4)] {
+            let got = write(rel, 3, sectors, &|c| c.prog_error = bit);
+            assert_eq!(got, Ok(()), "{name} in a poll while programming (reliable {rel}, {sectors} sectors)");
         }
     }
     let mut sim = Sim::new(9, 0, 0);

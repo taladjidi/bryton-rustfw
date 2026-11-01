@@ -14,8 +14,11 @@
 //!   it: CMD1 answers busy until the programming is over (**inferred**). `prog_polls` is the count-based variant.
 //! - E2 R1 error bits: ILLEGAL_COMMAND (a command not legal in the state: no answer, the bit in the next answer,
 //!   type "er, b"), WP_VIOLATION (a write touching [`EmmcCard::wp`]: nothing lands, the bit in the next answer, CMD12's
-//!   for an open-ended CMD25, else the first CMD13; "erx, c"), and any bit a test puts in [`EmmcCard::pending`] or
-//!   [`EmmcCard::prog_error`] (ERROR, CC_ERROR...: "erx, c"). An answer that carries pending bits clears them (clear by read).
+//!   for an open-ended CMD25, else the first CMD13; "erx, c"), and the bits a test injects: in the next answer
+//!   ([`EmmcCard::pending`]), in a write's own ([`EmmcCard::write_answer`]), in its stop's ([`EmmcCard::stop_error`])
+//!   or in the first CMD13 after its data, or after its stop: CMD12 is R1b, answered before the programming busy
+//!   ([`EmmcCard::prog_error`]: ERROR, CC_ERROR...: "erx, c"). An answer that carries pending bits clears them
+//!   (clear by read). Which bits a host checks where: [`DATA_ERRORS`], [`COMMAND_ERRORS`].
 //! - E3 the CRC status token of a written block: [`EmmcCard::bad`] answers a CRC error (`BusError::Crc`).
 //! - E4 an URGENT_BKOPS-style stall ([`EmmcCard::bkops`]): busy as E1 for N ms, and R1's EXCEPTION_EVENT (bit 6,
 //!   "sr, a": a status, not an error) in every answer meanwhile (EXT_CSD EXCEPTION_EVENTS_STATUS URGENT_BKOPS; that
@@ -40,22 +43,27 @@ pub const WP_VIOLATION: u32 = 1 << 26;
 pub const ILLEGAL_COMMAND: u32 = 1 << 22;
 /// R1 EXCEPTION_EVENT ("sr, a"): not an error.
 pub const EXCEPTION_EVENT: u32 = 1 << 6;
-/// Every R1 error bit a write can be answered with (mmc.h), each of which the driver must reject. UNDERRUN and
-/// OVERRUN (17, 18) are stream-mode bits, outside Linux's R1_STATUS mask too; the erase and lock bits stay in since
-/// a card may set them on any command.
-pub const R1_ERRORS: [(u32, &str); 14] = [
+/// The R1 error bits that describe a write's data, found during it or its programming (Linux block.c `CMD_ERRORS`):
+/// reported in its stop's answer or a CMD13 poll as well as in its own answer (mmc.h).
+pub const DATA_ERRORS: [(u32, &str); 7] = [
     (1 << 31, "OUT_OF_RANGE"),
     (1 << 30, "ADDRESS_ERROR"),
     (1 << 29, "BLOCK_LEN_ERROR"),
-    (1 << 28, "ERASE_SEQ_ERROR"),
-    (1 << 27, "ERASE_PARAM"),
     (1 << 26, "WP_VIOLATION"),
-    (1 << 24, "LOCK_UNLOCK_FAILED"),
-    (1 << 23, "COM_CRC_ERROR"),
-    (1 << 22, "ILLEGAL_COMMAND"),
     (1 << 21, "CARD_ECC_FAILED"),
     (1 << 20, "CC_ERROR"),
     (1 << 19, "ERROR"),
+];
+/// The other R1 error bits (mmc.h): about the command whose answer carries them (COM_CRC_ERROR and ILLEGAL_COMMAND,
+/// "b": the previous command's), so the driver rejects them in a write's own answer only. UNDERRUN and OVERRUN
+/// (17, 18) are stream-mode bits, outside Linux's R1_STATUS mask too; the erase and lock bits stay in since a card
+/// may set them on any command.
+pub const COMMAND_ERRORS: [(u32, &str); 7] = [
+    (1 << 28, "ERASE_SEQ_ERROR"),
+    (1 << 27, "ERASE_PARAM"),
+    (1 << 24, "LOCK_UNLOCK_FAILED"),
+    (1 << 23, "COM_CRC_ERROR"),
+    (1 << 22, "ILLEGAL_COMMAND"),
     (1 << 16, "CID_CSD_OVERWRITE"),
     (1 << 7, "SWITCH_ERROR"),
 ];
@@ -117,6 +125,13 @@ pub struct EmmcCard {
     /// Error bits the card finds while programming the next write (E2, the "x" types: ERROR, CC_ERROR,
     /// CARD_ECC_FAILED...): put in [`EmmcCard::pending`] once its data is in, so the next answer carries them.
     pub prog_error: u32,
+    /// Error bits the next write's stop (CMD12 after an open-ended CMD25) answers with: found while the data came in.
+    pub stop_error: u32,
+    /// Error bits the next write command's own answer carries.
+    pub write_answer: u32,
+    /// `prog_error` of an open-ended write, held until its stop has answered (CMD12 is R1b: its answer goes out
+    /// before the programming busy, so the first CMD13 after it reports what the programming found).
+    after_stop: u32,
     /// Write protected sectors (E2).
     pub wp: Vec<core::ops::Range<u32>>,
     /// Busy programming until this time of the simulator's clock, ms (E1, E4).
@@ -157,6 +172,9 @@ impl Default for EmmcCard {
             powered: false,
             pending: 0,
             prog_error: 0,
+            stop_error: 0,
+            write_answer: 0,
+            after_stop: 0,
             wp: Vec::new(),
             busy_until: 0,
             urgent_bkops: false,
@@ -284,7 +302,12 @@ impl EmmcCard {
             }
             (12, 5 | 6) => {
                 self.state = 4;
-                r1(self, st)
+                if st == 6 {
+                    self.pending |= core::mem::take(&mut self.stop_error);
+                }
+                let r = r1(self, st);
+                self.pending |= core::mem::take(&mut self.after_stop); // for the first CMD13 after the stop
+                r
             }
             _ => Err(self.illegal()),
         }
@@ -357,7 +380,7 @@ impl EmmcCard {
         }
         let end = u64::from(arg) + (buf.len() / 512) as u64;
         assert!(end <= u64::from(EMMC_SECTORS - crate::emmc::RESERVED), "a write at or past B: {arg:#x}");
-        let s = self.answer(4); // the command's answer goes out before the data
+        let s = self.answer(4) | core::mem::take(&mut self.write_answer); // the answer goes out before the data
         // receiving: an open-ended CMD25 until CMD12, a counted one until its count, which ends it (`tran`)
         self.state = if index == 25 { 6 } else { 4 };
         let tran = |c: &mut Self| {
@@ -412,7 +435,12 @@ impl EmmcCard {
             return Err(crate::emmc::BusError::Crc);
         }
         self.prog_left = self.prog_polls;
-        self.pending |= core::mem::take(&mut self.prog_error);
+        let found = core::mem::take(&mut self.prog_error);
+        if index == 25 && count.is_none() {
+            self.after_stop |= found;
+        } else {
+            self.pending |= found; // the first CMD13 reports it
+        }
         tran(self);
         Ok(s)
     }

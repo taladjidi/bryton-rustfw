@@ -58,6 +58,13 @@ pub const SWITCH_BUS_4BIT: u32 = 0x03b7_0101;
 /// parameter, write protect, lock failed, command CRC, illegal command, ECC, controller, general error,
 /// CID / CSD overwrite, switch error.
 const STATUS_ERRORS: u32 = 0xfdf9_0080;
+/// The R1 error bits that describe a transfer's data rather than the command carrying them, so they count in a
+/// stop's answer and in every CMD13 poll (Linux drivers/mmc/core/block.c `CMD_ERRORS`): OUT_OF_RANGE (31),
+/// ADDRESS_ERROR (30), BLOCK_LEN_ERROR (29), WP_VIOLATION (26), CARD_ECC_FAILED (21), CC_ERROR (20), ERROR (19), the
+/// bit numbers as include/linux/mmc/mmc.h. COM_CRC_ERROR and ILLEGAL_COMMAND are about the previous command.
+const DATA_ERRORS: u32 = 0xe438_0000;
+/// R1 ADDRESS_OUT_OF_RANGE.
+const OUT_OF_RANGE: u32 = 1 << 31;
 /// Card status: READY_FOR_DATA.
 const READY_FOR_DATA: u32 = 1 << 8;
 /// Card status CURRENT_STATE values (bits 9..12).
@@ -221,14 +228,15 @@ fn status(index: u8, s: u32) -> Result<u32, Error> {
 }
 
 /// CMD13 until the card is in the transfer state and ready for data, as stock (a card left sending or receiving
-/// is stopped with CMD12 first). Returns the last status with the error bits of every poll before it: they are
-/// clear by read, so a card that reports one while still programming has cleared it by the next poll (Linux's
-/// `mmc_blk_busy_cb`, drivers/mmc/core/block.c, accumulates them the same way). The error bits are left to the caller.
+/// is stopped with CMD12 first). Returns the last status with the data error bits ([`DATA_ERRORS`]) of every poll
+/// before it: they are clear by read, so a card that reports one while still programming has cleared it by the next
+/// poll (Linux's `mmc_blk_busy_cb`, drivers/mmc/core/block.c, accumulates them, checked against `CMD_ERRORS`). The
+/// error bits are left to the caller.
 fn wait_ready(b: &mut impl Board) -> Result<u32, Error> {
     let mut errors = 0;
     for _ in 0..TRIES {
         let s = cmd(b, 13, RCA, Resp::R1)?[0];
-        errors |= s & STATUS_ERRORS;
+        errors |= s & DATA_ERRORS;
         match (s >> 9) & 0xf {
             STATE_TRAN if s & READY_FOR_DATA != 0 => return Ok(s | errors),
             STATE_DATA | STATE_RCV => {
@@ -357,10 +365,12 @@ impl Card {
         let got = b.emmc_write(index, arg, buf).map_err(|e| Error::Bus(index, e));
         let mut stop = 0;
         if index == 25 && (!reliable || got.is_err()) {
-            // stop even after an error. Its answer carries what the card found in the data (WP_VIOLATION,
-            // OUT_OF_RANGE: clear by read, gone by the CMD13 below), checked as Linux's `mmc_blk_status_error` checks
-            // the stop's; a stop not answered is left to the CMD13 below, which stops again
-            stop = cmd(b, 12, 0, Resp::R1).map_or(0, |r| r[0]);
+            // stop even after an error. Its answer carries what the card found in the data (WP_VIOLATION, ECC...:
+            // clear by read, gone by the CMD13 below), its data bits checked as Linux's `mmc_blk_status_error` checks
+            // the stop's, but OUT_OF_RANGE: an open-ended write's stop may report it past the last block written
+            // (JESD84-B51 6.8.3; Linux `mmc_blk_eval_resp_error`, "oor_with_open_end"). A stop not answered is left to
+            // the CMD13 below, which stops again
+            stop = cmd(b, 12, 0, Resp::R1).map_or(0, |r| r[0] & DATA_ERRORS & !OUT_OF_RANGE);
         }
         status(index, got?)?;
         status(12, stop)?;

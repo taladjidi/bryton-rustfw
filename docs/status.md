@@ -44,6 +44,15 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   sourced from Linux's mmc.h; the stall's length and period, and whether the unit's card raises URGENT_BKOPS
   (EXCEPTION_EVENT, R1 bit 6) at all, are *inferred*. To see on the unit, with the write bench above: the longest
   CMD13 busy over a few thousand sector writes, and R1 bit 6 in `tools/dev.py emmc`'s status.
+- **A power cut with the backup domain lost, then the boot (2026-11-02, app/riding.rs `left_by_a_power_loss`):** a
+  boot with none of this firmware's backup registers set reads the ride's record once (read only) and resumes a ride
+  left open as the marker's path does; seen in the simulator only, with the RTC back at 2000-01-01. To see on the
+  unit, with the owner: a ride recorded a few minutes, the battery run flat (or VBAT cut), the boot: RIDE RESUMED,
+  paused at the last checkpoint, then the save; and a first start of this firmware on a unit that never ran it
+  (nothing resumed, stock's settings imported).
+- **A write the card answers `Busy` after landing it (2026-11-02, fat/write.rs `take_free`, `link_taken`,
+  `drop_chain`):** the cluster being taken is given back or kept in its chain, no longer lost at each retry; seen
+  in the simulator only (`a_write_that_lands_but_fails_loses_no_cluster`).
 - **First ride on a fresh card (2026-11-01, src/sim/budget_tests.rs):** the recorder creates its 20 folders and files on the first ride (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms): the Start pass is 1051 to 1730 ms, the gate's one named exemption for it. On a card that already had a ride the Start pass is 53 to 97 ms, and the prepared-card rows (keys 108 to 136 ms, GNSS under 1.1 s) hold the general limits. Open owner decision: prepare the card's folders at boot or when idle, or buffer the first seconds in RAM (a branch's approach, not merged: the golden rule wants ride data on the eMMC as it goes).
 
 - **Review 3 of the chip's reset (2026-11-01):** nothing is sent while PA6 is low or the chip boots (the TX FIFO is flushed

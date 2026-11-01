@@ -333,8 +333,9 @@ impl Fat {
 
     /// Grows `h`'s chain to `want` clusters (end of chain first, then the link), then FSInfo (the clusters taken
     /// counted, a failure part way included). Each cluster is a free one, linked from `h.last`; the handle moves on
-    /// only once its FAT writes are done. A grow that fails part way may leave the cluster it was taking marked in
-    /// the first FAT (or in both) and named by nothing: one lost cluster, which the next grow does not take up. It
+    /// only once its FAT writes are done. A grow that fails part way gives the cluster it was taking back, or keeps
+    /// it when its link landed ([`Fat::take_free`], [`Fat::link_taken`]); only a card that fails the give-back too (a
+    /// cut) leaves it marked and named by nothing: one lost cluster, which the next grow does not take up. It
     /// never links to a cluster this grow did not just find free: every take-up of such a cluster (the review of
     /// 2026-10-29, S5) left a way to a cross-link (the full copy's grow taking it while it was free on both copies, a
     /// FAT sync from another writer reverting it to free for another file), and a cross-link loses a ride.
@@ -364,16 +365,50 @@ impl Fat {
                 // clusters allocated", the review of 2026-11-01, 84). A size there with no chain is no size: 0, so
                 // a caller that sets the size only when it differs (the app's one-sector files) still sets it, and
                 // with it the cluster (B1b-2's review: else a cluster lost at each save, the data never read back)
-                self.set_entries(d, &[(c, EOC)])?;
+                self.take_free(d, c)?;
                 (h.first, h.size) = (c, 0);
             } else {
                 // two writes even in one FAT sector: a torn write of both could land the link without the end
-                self.set_entries(d, &[(c, EOC)])?;
-                self.set_entries(d, &[(h.last, c)])?;
+                self.take_free(d, c)?;
+                if let Err((e, linked)) = self.link_taken(d, h.last, c) {
+                    if linked {
+                        (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1); // in the chain: the handle's
+                    }
+                    return Err(e);
+                }
             }
             (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1);
         }
         Ok(())
+    }
+
+    /// Marks free cluster `c` (just found by [`Fat::find_free`]) as a chain's end. On a failure it is given back
+    /// (0) in the same call: an end that landed while the card reported an error (a card busy past the driver's
+    /// bound lands its data) would be named by nothing, and the retry takes another free cluster: one lost each time
+    /// (2026-11-02, the card model's stalls). Nothing names `c` yet, so freeing it is safe; a give-back that fails
+    /// too leaves the lost cluster, as before.
+    fn take_free(&mut self, d: &mut impl DiskWrite, c: u32) -> Result<(), Error> {
+        let r = self.set_entries(d, &[(c, EOC)]);
+        if r.is_err() {
+            let _ = self.set_entries(d, &[(c, 0)]);
+        }
+        r
+    }
+
+    /// Links `c` (just taken, [`Fat::take_free`]) after `last`. On a failure the link may have landed in the first
+    /// FAT: read back, it names `c`: the link stands, written once more for the other copy, and the error says
+    /// `true` (`c` is in the chain) unless that write passes; it does not: `c` is given back; unreadable: left as it
+    /// is (a lost cluster at worst). Never frees a cluster a chain may name.
+    fn link_taken(&mut self, d: &mut impl DiskWrite, last: u32, c: u32) -> Result<(), (Error, bool)> {
+        let Err(e) = self.set_entries(d, &[(last, c)]) else { return Ok(()) };
+        match self.entry(d, last) {
+            Ok(next) if next == c => self.set_entries(d, &[(last, c)]).map_err(|_| (e, true)),
+            Ok(_) => {
+                let _ = self.set_entries(d, &[(c, 0)]);
+                Err((e, false))
+            }
+            Err(_) => Err((e, false)),
+        }
     }
 
     /// Writes `buf` (whole sectors) to `h`'s sectors from `sector` on, taking clusters as needed; one disk write
@@ -390,7 +425,26 @@ impl Fat {
             return Err(Error::Corrupt); // spc 0 would never advance
         }
         let end = sector.checked_add(n).ok_or(Error::Corrupt)?;
-        self.grow(d, h, end.div_ceil(self.spc))?;
+        let fresh = h.clusters == 0;
+        let r = self.grow(d, h, end.div_ceil(self.spc)).and_then(|()| self.write_chain(d, h, sector, end, buf));
+        if fresh && r == Err(Error::Io) {
+            // the chain this call took for a file that had none is named by nothing on the card (its entry gets it
+            // with its size, `set_size`): given back, else one lost at every retry (2026-11-02, the card's stalls).
+            // Not on a full card, whose caller sizes the file to what fit (`a_full_card_refuses_and_stays_valid`)
+            let _ = self.drop_chain(d, h);
+        }
+        r
+    }
+
+    /// [`Fat::write_sectors`]'s data, its chain long enough.
+    fn write_chain(
+        &mut self,
+        d: &mut impl DiskWrite,
+        h: &Handle,
+        sector: u32,
+        end: u32,
+        buf: &[u8],
+    ) -> Result<(), Error> {
         let mut c = self.nth(d, h.first, sector.checked_div(self.spc).unwrap_or(0))?;
         let mut at = sector;
         let mut done = 0;
@@ -452,13 +506,23 @@ impl Fat {
         if h.entry_lba != 0 {
             return Err(Error::Refused);
         }
+        let r = self.drop_chain(d, h);
+        if h.clusters == 0 {
+            *h = Handle::default();
+        }
+        r
+    }
+
+    /// Frees `h`'s chain, which nothing on the card names (`free_chain`, a failed first write), the handle left
+    /// with none; its entry, if it has one, is not touched (it names cluster 0).
+    fn drop_chain(&mut self, d: &mut impl DiskWrite, h: &mut Handle) -> Result<(), Error> {
         if h.clusters == 0 {
             return Ok(());
         }
         self.trim(d, h, 0)?;
         self.set_entries(d, &[(h.first, 0)])?;
         let first = h.first;
-        *h = Handle::default();
+        (h.first, h.last, h.clusters) = (0, 0, 0);
         self.fsinfo_update(d, -1, first, None)
     }
 
@@ -667,8 +731,13 @@ impl Fat {
             slot.copy_from_slice(e);
         }
         self.fill_cluster(d, c, &s)?;
-        self.set_entries(d, &[(c, EOC)])?; // then the link, in its own write (as `take`)
-        self.set_entries(d, &[(last, c)])?;
+        self.take_free(d, c)?; // then the link, in its own write (as `take`)
+        if let Err((e, linked)) = self.link_taken(d, last, c) {
+            if linked {
+                let _ = self.fsinfo_update(d, 1, c + 1, None); // in the directory's chain: counted taken
+            }
+            return Err(e);
+        }
         self.fsinfo_update(d, 1, c + 1, None)?;
         Ok(self.lba(c))
     }
@@ -710,9 +779,17 @@ impl Fat {
         s[..32].copy_from_slice(&dot[1]); // [0] is the long name piece: not wanted for dot entries
         s[32..64].copy_from_slice(&dotdot[1]);
         self.fill_cluster(d, c, &s)?;
-        self.set_entries(d, &[(c, EOC)])?;
-        self.fsinfo_update(d, 1, c + 1, None)?;
-        self.add_named(d, dir, name, DIR, (c, 0), time)?;
+        self.take_free(d, c)?;
+        // FSInfo is a hint (a cut before it leaves it a cluster high, module doc): its failure must not stop here,
+        // with `c` named by nothing
+        let _ = self.fsinfo_update(d, 1, c + 1, None);
+        if let Err(e) = self.add_named(d, dir, name, DIR, (c, 0), time) {
+            // given back only if its entry is surely not there: a card that does not answer leaves it (lost at worst)
+            if matches!(self.locate(d, dir, name), Err(Error::NotFound)) && self.set_entries(d, &[(c, 0)]).is_ok() {
+                let _ = self.fsinfo_update(d, -1, c, None);
+            }
+            return Err(e);
+        }
         Ok(File { cluster: c, size: 0, dir: true })
     }
 
@@ -1661,6 +1738,77 @@ pub(crate) mod tests {
             }
             Ok(())
         }
+    }
+
+    /// A disk whose write number `.1` (counted down) lands and is still answered as failed, once: a card busy past
+    /// the driver's bound (emmc.rs `Busy`, the data on the card).
+    pub struct Busy(pub Ram, pub u32);
+
+    impl Disk for Busy {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Busy {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            self.0.write(lba, buf)?;
+            self.1 = self.1.wrapping_sub(1);
+            if self.1 == u32::MAX { Err(Error::Io) } else { Ok(()) }
+        }
+    }
+
+    /// The cluster leak of 2026-11-02 (the card model's stalls): a write that lands but fails, at every write of a
+    /// file's growth over clusters and of a folder's, the call retried: no cluster lost, the data whole, the FATs
+    /// equal. Before, the cluster being taken stayed marked, named by nothing, and the retry took another.
+    #[test]
+    fn a_write_that_lands_but_fails_loses_no_cluster() {
+        let data: Vec<u8> = (0..40 * SECTOR as u32).map(|i| (i * 7 + i / 509) as u8).collect();
+        let mut checked = 0;
+        for k in 0..400 {
+            let mut d = Busy(Ram(image(), 0), k);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let retry = |d: &mut Busy, f: &mut dyn FnMut(&mut Busy) -> Result<(), Error>| {
+                (0..3).find_map(|_| f(d).ok()).ok_or(Error::Io)
+            };
+            let mut dir = None;
+            retry(&mut d, &mut |d| {
+                dir = Some(fat.ensure_dir(d, fat.root(), "Rustfw", T)?);
+                Ok(())
+            })
+            .unwrap();
+            let dir = dir.unwrap();
+            // enough names to take a second cluster of the folder (extend_dir)
+            let mut h = None;
+            for n in 0..20 {
+                retry(&mut d, &mut |d| {
+                    let name = std::format!("{n:012}.fit");
+                    h = Some(match fat.locate(d, dir, &name) {
+                        Ok(x) => x,
+                        Err(_) => fat.create(d, dir, &name, T)?,
+                    });
+                    Ok(())
+                })
+                .unwrap();
+            }
+            assert!(h.is_some());
+            // as the recorder: each piece then its size, a retry from the entry (the handle of a failed call dropped)
+            for (a, b) in [(0usize, 3usize), (3, 17), (17, 40)] {
+                retry(&mut d, &mut |d| {
+                    let mut h = fat.locate(d, dir, "000000000019.fit")?;
+                    fat.write_sectors(d, &mut h, a as u32, &data[a * SECTOR..b * SECTOR])?;
+                    fat.set_size(d, &mut h, (b * SECTOR) as u32, T)
+                })
+                .unwrap();
+            }
+            if d.1 < u32::MAX - 1_000_000 {
+                break; // the failing write is past the last one: every one has been tried
+            }
+            checked += 1;
+            assert_eq!(read_all(&mut fat, &mut d.0, "Rustfw/000000000019.fit"), data, "fail at write {k}");
+            assert_eq!(fsck(&d.0.0), Ok(0), "fail at write {k}");
+        }
+        assert!(checked > 30, "{checked} writes failed");
     }
 
     /// A file a computer emptied (first cluster 0, size 0, its chain freed) written again: its entry gets its

@@ -588,7 +588,9 @@ impl App {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
         self.card_writable = b.emmc_writable();
         self.awake_at = self.prof.clock.us(b);
-        self.rec.resume_if(self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN);
+        let marker = b.backup_read(RIDE_BKP) == RIDE_OPEN;
+        let open = self.card_writable && (marker || self.left_by_a_power_loss(b));
+        self.rec.resume_if(open);
         self.trash_check = self.card_writable;
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
