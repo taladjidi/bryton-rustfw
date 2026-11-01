@@ -60,7 +60,24 @@ struct Walk {
     hashes: Vec<String>,
 }
 
+/// The clock every screenshot is taken at (seconds into the day): the strip's clock and the GPS UTC.
+const SHOT_CLOCK_S: u64 = 12 * 3600 + 34 * 60 + 56;
+/// Time the app takes to draw the clock it was just set to.
+const SHOT_SETTLE_MS: u64 = 1100;
+
 impl Walk {
+    /// A screen after the clock is set to [`SHOT_CLOCK_S`]: how many keys came before (each takes simulated time)
+    /// no longer shows in the strip's clock and the GPS UTC, so a menu row added or removed changes the hashes of
+    /// its own menu only (the golden list moved 28 later screens when the HEIGHT row went, 2026-11-01).
+    fn shot_at(&mut self, sim: &mut Sim, app: &mut App) {
+        // saturating: a walk past 12.5 h of simulated time would leave the clock moving, not panic (it lasts minutes).
+        // The strip clock's own formatting (midnight, date change, 12/24 h) is covered by `ticks_through_midnight`
+        // (sim/tests.rs) and the strip's tests, since the walk shows one fixed time now.
+        sim.start_s = SHOT_CLOCK_S.saturating_sub((sim.ms + SHOT_SETTLE_MS) / 1000);
+        run(sim, app, SHOT_SETTLE_MS);
+        self.shot(sim);
+    }
+
     /// Notes the cuts since the last call.
     fn drain(&mut self) {
         for c in clips::take() {
@@ -146,7 +163,7 @@ fn visit(sim: &mut Sim, app: &mut App, w: &mut Walk, m: Menu, name: &str) {
     w.seen.push(m);
     w.cur = name.into();
     w.drain();
-    w.shot(sim);
+    w.shot_at(sim, app);
     let base = w.keys.len();
     let mut cards = 0; // rows of a long list that open a card: the first few
     for i in 0..app.rows(m) {
@@ -215,7 +232,7 @@ fn visit(sim: &mut Sim, app: &mut App, w: &mut Walk, m: Menu, name: &str) {
                         app.show(sim);
                     }
                     w.drain();
-                    w.shot(sim);
+                    w.shot_at(sim, app);
                 }
             }
             back_to(sim, app, w, m, i);
@@ -286,7 +303,7 @@ fn pass(w: &mut Walk, imperial: bool) {
     w.seen.clear();
     w.keys.clear();
     w.cur = format!("{tag} OVERVIEW");
-    w.shot(&sim);
+    w.shot_at(&mut sim, &mut app);
     key(&mut sim, &mut app, w, "page --long");
     visit(&mut sim, &mut app, w, Menu::Main, &format!("{tag} MAIN"));
     app.screen = Screen::Main;
@@ -305,7 +322,7 @@ fn pass(w: &mut Walk, imperial: bool) {
         run(&mut sim, &mut app, 1500);
         w.cur = format!("{tag} RIDE PAGE {n}");
         w.drain();
-        w.shot(&sim);
+        w.shot_at(&mut sim, &mut app);
     }
     key(&mut sim, &mut app, w, "page --long");
     if let Screen::Menu(m, 0) = app.screen() {

@@ -296,7 +296,7 @@ fn map_zoom_buttons() {
     assert_eq!(app.map_view.zoom, Some(MIN_LEVEL), "no finer than 1.5 m a pixel");
     assert_eq!(app.map_view(0).unwrap().mpp16, 24);
     sim.save("map_zoom_in");
-    // riding on, zoomed in: the view follows, centred again only when the arrow leaves the middle part
+    // riding on, zoomed in: the view follows, centred again only when the arrow leaves the middle four fifths
     let (t0, px0) = (sim.ms, sim.pixels);
     let mut recentres = 0;
     while sim.ms < t0 + 120_000 {
@@ -306,8 +306,8 @@ fn map_zoom_buttons() {
         recentres += u32::from(Some(v) != view);
         assert_eq!(v.mpp16, 24, "the zoom kept");
         let (x, y) = v.px(area, app.track.pos().unwrap());
-        assert!(x >= area.2 / 6 && x < area.2 * 5 / 6, "the arrow on the map: {x}");
-        assert!(y >= area.1 + area.3 / 6 && y < area.1 + area.3 * 5 / 6, "the arrow on the map: {y}");
+        assert!(x >= area.2 / 12 && x < area.2 * 11 / 12, "the arrow on the map: {x}");
+        assert!(y >= area.1 + area.3 / 12 && y < area.1 + area.3 * 11 / 12, "the arrow on the map: {y}");
         if (sim.ms - t0) % 30_000 < u64::from(POLL_MS) {
             assert_consistent(&sim, &app);
         }
@@ -491,7 +491,7 @@ fn map_zoom_with_a_course() {
     let mut views = 0;
     // ten minutes on the course, then on past its end (course_route, 8 m/s) until the view follows the rider: the
     // view that follows holds a pixel of the course or none, by when in its second the fix is read (2026-10-31)
-    for k in 0..12 {
+    for k in 0..14 {
         let view = app.map_view(0);
         run(&mut sim, &mut app, 60_000);
         let v = app.map_view(0).unwrap();

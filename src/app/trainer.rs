@@ -48,6 +48,8 @@ pub const SENSORS_LOAD_MS: u32 = 3500;
 pub(crate) struct SensorStore {
     /// The file was read (or tried).
     pub(crate) loaded: bool,
+    /// The last read met a card that did not answer: the pairing rows wait for it ([`App::sensors_ready`]).
+    pub(crate) io_failed: bool,
     /// The paired trainer was opened after the read.
     pub(crate) applied: bool,
     /// The trainer pairing changed: to be written.
@@ -61,6 +63,19 @@ pub(crate) struct SensorStore {
 }
 
 impl App {
+    /// The trainer's pairing may be changed: its file read, or the card not known to be down (else the late read
+    /// would meet the change). Else why not, said.
+    pub(crate) fn sensors_ready(&mut self, b: &mut impl Board) -> bool {
+        if self.sensors_store.loaded || !self.sensors_store.io_failed {
+            return true;
+        }
+        self.sensors_storage(b);
+        if !self.sensors_store.loaded {
+            self.say(if self.emmc.lent() { "USB DRIVE ON" } else { "SENSORS NOT READ" });
+        }
+        self.sensors_store.loaded
+    }
+
     /// A trainer is paired or searched for, over ANT+ or Bluetooth (its menu row and screen are offered).
     pub(crate) fn trainer_on(&self) -> bool {
         self.radio.sensors.get(Kind::Trainer as usize).is_some_and(|s| *s != Sensor::Off)
@@ -321,27 +336,44 @@ impl App {
             return;
         }
         if !self.sensors_store.loaded {
-            self.sensors_store.loaded = true;
-            if !self.sensors_store.dirty {
-                let mut s = [0u8; 512];
+            let mut s = [0u8; 512];
+            let read = if self.sensors_store.dirty {
+                Err(fat::Error::NotFound) // a pairing made already is the rider's (migration below): the file waits
+            } else {
                 let mut d = emmc::Volume(&mut self.emmc, b);
-                let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
+                fat::Fat::mount(&mut d).and_then(|mut fat| {
                     let dir = fat.open(&mut d, recorder::DIR)?;
                     let f = fat.open_in(&mut d, dir, sensors::SENSORS_FILE)?;
                     fat.read_at(&mut d, &f, 0, &mut s)
-                });
+                })
+            };
+            self.sensors_store.io_failed = read == Err(fat::Error::Io);
+            // a card not answering (yet): asked again at the next pass (the eMMC layer's backoff keeps that cheap);
+            // the pairing menu waits for the read, so a late read never meets a change
+            if !self.sensors_store.io_failed {
+                self.sensors_store.loaded = true;
                 if let (Ok(512), Some(t)) = (read, sensors::from_sector(&s)) {
                     let bt = sensors::bt_from_sector(&s);
                     (self.sensors_store.trainer, self.sensors_store.bt) = (t, bt.map(|b| b.0));
                     self.sensors_store.bt_fec = bt.is_some_and(|b| b.1);
                 }
-            }
-            if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
-                self.keep_pairing(b, Kind::Trainer, id); // moved to the file below
+                if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
+                    self.keep_pairing(b, Kind::Trainer, id); // moved to the file below
+                }
             }
         }
         // opened once ANT is up (it may come later than the file), unless the rider already did something with it
-        if !self.sensors_store.applied && self.ant {
+        if !self.sensors_store.loaded && self.ant && self.radio.sensors.at(Kind::Trainer) == Sensor::Off {
+            // the card is down: the pairing an earlier build kept in the register is used meanwhile (not kept: the
+            // file's read decides, `applied` stays false)
+            if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
+                // set_sensor keeps the pairing (dirty): undone, so the file is still read and wins or merges
+                let kept = (self.sensors_store.dirty, self.sensors_store.trainer);
+                self.set_sensor(b, Kind::Trainer, Sensor::Paired(id));
+                (self.sensors_store.dirty, self.sensors_store.trainer) = kept;
+            }
+        }
+        if self.sensors_store.loaded && !self.sensors_store.applied && self.ant {
             self.sensors_store.applied = true;
             if let Some(id) = self.sensors_store.trainer
                 && self.radio.sensors.at(Kind::Trainer) == Sensor::Off

@@ -316,6 +316,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   (`src/sim/walk_tests.rs`) replayed on the unit, unit and sim shots side by side in contact sheets under `target/walk/`.
 - `src/link/usbsnap.rs`: the USB core and ULPI PHY registers taken at a link's first failure (`Keeper`), packed into
   backup-register words (`pack`) that `tools/dev.py usbdrop` decodes.
+- `src/link/packets.rs`: which packets a bulk IN reply goes in and when a zero-length packet ends it (`Tx`), pure logic.
 - `src/link/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
@@ -386,6 +387,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   panic handler's own reset loop (hw.rs, a branch to itself) is left out and counted on their own line (a report, exit 0; `selftest`).
 - `tools/numbers.py`: the live numbers of the docs (image, AXI SRAM free, the cells' sizes, the tests, lines of Rust): `--write`
   rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after tools/pack.py), `--check` lists the stale ones, `selftest`.
+- `tools/test_select.py`: the changed paths to libtest name filters (`./check.sh --quick` on a branch; ALL for anything shared
+  or unmapped), `selftest`.
 - `tools/lint.py`: the checks reviewers did by hand (pub items only tests use, dashes, licensed keys in tracked files, dead
   tool functions, ruff F and E9; check.sh, before cargo), `selftest`.
 - `tools/review.py`: the per-branch review report (cargo-mutants on the diff, new jscpd clones, lint; `--base REF`, `--quick`

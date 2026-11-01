@@ -238,9 +238,9 @@ fn perf_budgets() {
         ("six values, 4 Hz sensors", [values, graph, map], 0, None, true, (3_000, 12)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
         ("two graphs", [graph, values, map], 0, None, false, (1_000, 30)),
-        // 1985, 40: the default view (about 1 km across, following the rider: a whole map at each re-centre when the
-        // rider leaves the middle three fifths); the budget is that plus 10 %; 1494, 33 with the fit of the whole track
-        ("map", [map, values, graph], 0, None, false, (2_200, 50)),
+        // 1725, 40 (1985 before the wider re-centre margin, 2026-11-01): the default view (about 1 km across, following the rider: a whole map at each re-centre when the
+        // rider leaves the middle four fifths); the budget is that plus 10 %; 1494, 33 with the fit of the whole track
+        ("map", [map, values, graph], 0, None, false, (1_900, 50)),
         // 584, 3: on the course, the profile's rider column (a whole profile at each eighth), two values, and the
         // hill's left turn said twice (2026-10-25: 456 before the cues; a banner and the page under it again, about
         // 19 000 px each)
@@ -248,11 +248,11 @@ fn perf_budgets() {
         // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
         // NEXT TURN's last digit (1548 before it), the turn's two banners; 3412, 15 with the CLIMB page opening at the climb's start (one whole page)
         ("course page", [values, graph, map], crate::COURSE, None, false, (3_600, 20)),
-        // 4563, 44: zoomed in at 1.5 m a pixel (map.rs MIN_LEVEL), following the rider: a whole map at each
+        // 3532, 42 (4563, 44 before the wider margin): zoomed in at 1.5 m a pixel (map.rs MIN_LEVEL), following the rider: a whole map at each
         // re-centre (about every 26 s at 8 m/s)
-        ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), false, (6_000, 60)),
-        // 3470, 42: at 2 m a pixel, a re-centre about every 35 s
-        ("map zoomed 2 m", [map, values, graph], 0, Some(2), false, (4_500, 60)),
+        ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), false, (3_900, 60)),
+        // 2694, 41 (3470, 42 before): at 2 m a pixel, a re-centre about every 35 s
+        ("map zoomed 2 m", [map, values, graph], 0, Some(2), false, (3_000, 60)),
     ];
     let mut over = std::vec::Vec::new();
     for (name, pages, screen, zoom, fast, (px_max, win_max)) in cases {

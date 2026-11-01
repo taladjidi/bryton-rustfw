@@ -127,13 +127,22 @@ def main():
                    'echo "instructions"', 'cpu ExecutedInstructions']
     script += ['cpu PC', 'quit']
     with open(log, 'w') as f:
-        # Bounded: Renode hangs now and then on a loaded machine (2026-10-31) and a gate would wait for ever.
-        limit = float(os.environ.get('RENODE_TIMEOUT', 300))
-        try:
-            subprocess.run([a.renode, '--disable-gui', '--console', '-e', '; '.join(script)], stdout=f,
-                           stderr=subprocess.STDOUT, check=True, cwd=ROOT, timeout=limit)
-        except subprocess.TimeoutExpired:  # run() kills the child before raising
-            sys.exit(f'renode: timed out after {limit:g} s (RENODE_TIMEOUT)')
+        # Bounded: Renode hangs now and then on a loaded machine (2026-10-31) and a gate would wait for ever. The default
+        # limit grows with the load (300 s at one process per core, more above), and a timeout is retried once at twice
+        # the limit (printed), so a busy Mac does not fail the gate for being slow; RENODE_TIMEOUT fixes the first limit.
+        limit = float(os.environ.get('RENODE_TIMEOUT') or 300 * max(1.0, os.getloadavg()[0] / (os.cpu_count() or 1)))
+        for attempt in (1, 2):
+            f.seek(0)
+            f.truncate()
+            try:
+                subprocess.run([a.renode, '--disable-gui', '--console', '-e', '; '.join(script)], stdout=f,
+                               stderr=subprocess.STDOUT, check=True, cwd=ROOT, timeout=limit)
+                break
+            except subprocess.TimeoutExpired:  # run() kills the child before raising
+                if attempt == 2:
+                    sys.exit(f'renode: timed out twice, after {limit:g} s (RENODE_TIMEOUT)')
+                limit *= 2
+                print(f'renode: timed out; retrying once with {limit:g} s (the machine is loaded?)', flush=True)
 
     stream, dc, usb, after_usb, pc, counts, counting, mark = [], 0, 0, 0, None, [], False, None
     for line in open(log, errors='replace'):

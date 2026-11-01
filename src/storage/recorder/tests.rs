@@ -9,6 +9,25 @@ use crate::fitread::{Msg, Reader};
 use crate::ride::Profile;
 use std::vec::Vec;
 
+/// One test of a cut family: `cut_part!(name_part_3, power_cut(3))` is `#[test] fn name_part_3() { power_cut(3) }`.
+/// The families have [`CUT_PARTS`] tests each, so the slowest were cut from 10 to 14 s to 2 to 5 s (the wall-clock
+/// floor of `cargo test-host`); every cut still runs, in exactly one part.
+macro_rules! cut_part {
+    ($(#[$m:meta])* $name:ident, $body:expr) => {
+        $(#[$m])*
+        #[test]
+        fn $name() {
+            $body;
+        }
+    };
+}
+
+fn two_copies_cut(part: u64) {
+    for torn in [false, true] {
+        two_copies_cut_torn(torn, part);
+    }
+}
+
 /// The card: the volume in memory, and a power cut after `budget` sectors written (the sector that would be
 /// next and every one after it never lands, within a multi-sector write too); then it never answers again.
 /// `torn`: the sector the cut falls in is left as garbage (a card without reliable write); with `prefix` Some(k)
@@ -349,14 +368,18 @@ fn sub_sport(img: &[u8], name: &str) -> Option<u64> {
     m.iter().find(|x| x.0 == 18).and_then(|s| crate::fit::tests::field(s, 6))
 }
 
-/// The golden rule: the power cut after every sector of a whole ride, its start (folders made) and its save
-/// included. After each, the boot's recovery gives back the ride at its last checkpoint (at most a minute
-/// lost), it goes on and is saved, and the volume is clean (FATs equal, FSInfo exact, no chain into a free
-/// cluster, no cross-link; a lost cluster at worst).
-#[test]
-fn power_cut_at_every_sector_write() {
-    power_cut_at_every_sector(Profile::Road, false);
-}
+// The golden rule: the power cut after every sector of a whole ride, its start (folders made) and its save
+// included. After each, the boot's recovery gives back the ride at its last checkpoint (at most a minute
+// lost), it goes on and is saved, and the volume is clean (FATs equal, FSInfo exact, no chain into a free
+// cluster, no cross-link; a lost cluster at worst).
+cut_part!(power_cut_at_every_sector_write_part_0, power_cut_at_every_sector(Profile::Road, false, 0));
+cut_part!(power_cut_at_every_sector_write_part_1, power_cut_at_every_sector(Profile::Road, false, 1));
+cut_part!(power_cut_at_every_sector_write_part_2, power_cut_at_every_sector(Profile::Road, false, 2));
+cut_part!(power_cut_at_every_sector_write_part_3, power_cut_at_every_sector(Profile::Road, false, 3));
+cut_part!(power_cut_at_every_sector_write_part_4, power_cut_at_every_sector(Profile::Road, false, 4));
+cut_part!(power_cut_at_every_sector_write_part_5, power_cut_at_every_sector(Profile::Road, false, 5));
+cut_part!(power_cut_at_every_sector_write_part_6, power_cut_at_every_sector(Profile::Road, false, 6));
+cut_part!(power_cut_at_every_sector_write_part_7, power_cut_at_every_sector(Profile::Road, false, 7));
 
 /// The heart rate and power of the saved file `name`'s laps (fields 15, 16, 19, 20).
 fn lap_values(img: &[u8], name: &str) -> Vec<[Option<u64>; 4]> {
@@ -395,27 +418,63 @@ fn a_resume_mid_lap_keeps_its_averages() {
     assert!(tried > 3, "{tried} resumes in the second lap");
 }
 
-/// The same for an indoor ride: after every cut it comes back indoor (the recovery record keeps the profile)
-/// and is saved with sub_sport indoor_cycling (6), at boot too (ended from the record alone).
-#[test]
-fn an_indoor_ride_cut_at_every_sector_stays_indoor() {
-    power_cut_at_every_sector(Profile::Indoor, false);
-}
+// The same for an indoor ride: after every cut it comes back indoor (the recovery record keeps the profile)
+// and is saved with sub_sport indoor_cycling (6), at boot too (ended from the record alone).
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_0, power_cut_at_every_sector(Profile::Indoor, false, 0));
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_1, power_cut_at_every_sector(Profile::Indoor, false, 1));
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_2, power_cut_at_every_sector(Profile::Indoor, false, 2));
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_3, power_cut_at_every_sector(Profile::Indoor, false, 3));
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_4, power_cut_at_every_sector(Profile::Indoor, false, 4));
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_5, power_cut_at_every_sector(Profile::Indoor, false, 5));
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_6, power_cut_at_every_sector(Profile::Indoor, false, 6));
+cut_part!(an_indoor_ride_cut_at_every_sector_stays_indoor_part_7, power_cut_at_every_sector(Profile::Indoor, false, 7));
 
-/// The same for an MTB ride: after every cut it comes back MTB and is saved with sub_sport mountain (8).
-#[test]
-fn an_mtb_ride_cut_at_every_sector_stays_mtb() {
-    power_cut_at_every_sector(Profile::Mtb, true);
-}
+// The same for an MTB ride: after every cut it comes back MTB and is saved with sub_sport mountain (8).
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_0, power_cut_at_every_sector(Profile::Mtb, true, 0));
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_1, power_cut_at_every_sector(Profile::Mtb, true, 1));
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_2, power_cut_at_every_sector(Profile::Mtb, true, 2));
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_3, power_cut_at_every_sector(Profile::Mtb, true, 3));
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_4, power_cut_at_every_sector(Profile::Mtb, true, 4));
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_5, power_cut_at_every_sector(Profile::Mtb, true, 5));
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_6, power_cut_at_every_sector(Profile::Mtb, true, 6));
+cut_part!(an_mtb_ride_cut_at_every_sector_stays_mtb_part_7, power_cut_at_every_sector(Profile::Mtb, true, 7));
 
-/// The same for an indoor ride set by hand (no trainer: a dumb trainer, rollers): it comes back by hand too, so
-/// the app does not give it back to the automatic choice (which turns it ROAD without a trainer).
-#[test]
-fn an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand() {
-    power_cut_at_every_sector(Profile::Indoor, true);
-}
+// The same for an indoor ride set by hand (no trainer: a dumb trainer, rollers): it comes back by hand too, so
+// the app does not give it back to the automatic choice (which turns it ROAD without a trainer).
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_0,
+    power_cut_at_every_sector(Profile::Indoor, true, 0)
+);
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_1,
+    power_cut_at_every_sector(Profile::Indoor, true, 1)
+);
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_2,
+    power_cut_at_every_sector(Profile::Indoor, true, 2)
+);
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_3,
+    power_cut_at_every_sector(Profile::Indoor, true, 3)
+);
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_4,
+    power_cut_at_every_sector(Profile::Indoor, true, 4)
+);
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_5,
+    power_cut_at_every_sector(Profile::Indoor, true, 5)
+);
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_6,
+    power_cut_at_every_sector(Profile::Indoor, true, 6)
+);
+cut_part!(
+    an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand_part_7,
+    power_cut_at_every_sector(Profile::Indoor, true, 7)
+);
 
-fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
+fn power_cut_at_every_sector(profile: Profile, by_hand: bool, part: u64) {
     PROFILE.set((profile, by_hand));
     let sub = Some(match profile {
         Profile::Road => 7,
@@ -432,7 +491,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
     let (mut resumed, mut saved_at_boot, mut nothing, mut max_lost, mut twice_cuts) = (0, 0, 0, 0, 0);
     assert_eq!(laps_match_records(&full.img, SAVED, "uncut"), 2);
     let mut mid_lap = 0; // resumed in the second lap, its sums from the record
-    for cut in 0..total {
+    for cut in (part..total).step_by(CUT_PARTS as usize) {
         let what = std::format!("cut {cut} of {total}");
         let mut d = Card { budget: Some(cut), ..card(img.clone()) };
         assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}: the card died");
@@ -512,57 +571,50 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
         "{total} cut points: {resumed} resumed, {saved_at_boot} saved at boot, {nothing} before the first \
          checkpoint; lost clusters at most {max_lost}; {twice_cuts} cuts of a reboot"
     );
-    assert!(resumed > 50 && saved_at_boot > 0);
-    assert!(mid_lap > 5, "{mid_lap} resumes in the second lap");
+    assert!(resumed > 50 / CUT_PARTS as usize);
+    // the cuts after the last checkpoint, whose save the boot finishes (found by printing them, as AT_BOOT_CUTS): the
+    // part that owns each must meet it, so the whole run asserts what the single test did (`saved_at_boot > 0`)
+    // they are the ride's last three writes, from the uncut run's count: a change of the writes that moves them fails here
+    let owned = (total.saturating_sub(3)..total).filter(|c| c % CUT_PARTS == part).count();
+    assert_eq!(
+        saved_at_boot, owned,
+        "part {part}: {saved_at_boot} cuts saved at boot, the last three of {total} writes expected to ({owned} here): \
+         did the recorder's write count or its save order change?"
+    );
+    assert!(mid_lap > 5 / CUT_PARTS as usize, "{mid_lap} resumes in the second lap");
     assert!(max_lost <= 2);
 }
 
-/// The golden rule on a card without reliable write: the power cut at every sector of a whole ride, the sector
-/// being written left as garbage (the ride file's sector 0 and last sector, its directory sector, a FAT
-/// sector, FSInfo, a record). The ride is resumed (at most a minute lost) or saved from its record, never
-/// lost once its first checkpoint is on the card; the next ride is recorded and saved; the volume is clean.
-/// A torn directory sector of `\Activities` or the root (stock's entries) is the card's reliable write's to
-/// prevent (emmc.rs): here it only must not stop the recorder.
-///
-/// After each cut, the reboot is cut (torn too) at each of its own writes, then booted again: the same outcome.
-/// A resumed ride is cut a second time once in each of its checkpoints (the review of 2026-11-01, finding 10):
-/// resumed or saved again, at most a minute lost. Each test runs every [`CUT_PARTS`]th cut.
-#[test]
-fn power_cut_tearing_the_sector_at_every_write_part_0() {
-    torn_cuts(false, 0);
-}
-#[test]
-fn power_cut_tearing_the_sector_at_every_write_part_1() {
-    torn_cuts(false, 1);
-}
-#[test]
-fn power_cut_tearing_the_sector_at_every_write_part_2() {
-    torn_cuts(false, 2);
-}
-#[test]
-fn power_cut_tearing_the_sector_at_every_write_part_3() {
-    torn_cuts(false, 3);
-}
+// The golden rule on a card without reliable write: the power cut at every sector of a whole ride, the sector
+// being written left as garbage (the ride file's sector 0 and last sector, its directory sector, a FAT
+// sector, FSInfo, a record). The ride is resumed (at most a minute lost) or saved from its record, never
+// lost once its first checkpoint is on the card; the next ride is recorded and saved; the volume is clean.
+// A torn directory sector of `\Activities` or the root (stock's entries) is the card's reliable write's to
+// prevent (emmc.rs): here it only must not stop the recorder.
+//
+// After each cut, the reboot is cut (torn too) at each of its own writes, then booted again: the same outcome.
+// A resumed ride is cut a second time once in each of its checkpoints (the review of 2026-11-01, finding 10):
+// resumed or saved again, at most a minute lost. Each test runs every [`CUT_PARTS`]th cut.
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_0, torn_cuts(false, 0));
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_1, torn_cuts(false, 1));
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_2, torn_cuts(false, 2));
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_3, torn_cuts(false, 3));
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_4, torn_cuts(false, 4));
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_5, torn_cuts(false, 5));
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_6, torn_cuts(false, 6));
+cut_part!(power_cut_tearing_the_sector_at_every_write_part_7, torn_cuts(false, 7));
 
-/// The same, the torn sector's first k bytes new and the rest old (k on a 4-byte edge, a FAT entry's, every 8th on a
-/// 32-byte one, a directory entry's; from 4 to 508 over the cuts): a sector a reader accepts, which garbage never
-/// is (the review of 2026-11-01, finding 3: a grow's two FAT entries in one write would pass every other test).
-#[test]
-fn power_cut_tearing_a_prefix_at_every_write_part_0() {
-    torn_cuts(true, 0);
-}
-#[test]
-fn power_cut_tearing_a_prefix_at_every_write_part_1() {
-    torn_cuts(true, 1);
-}
-#[test]
-fn power_cut_tearing_a_prefix_at_every_write_part_2() {
-    torn_cuts(true, 2);
-}
-#[test]
-fn power_cut_tearing_a_prefix_at_every_write_part_3() {
-    torn_cuts(true, 3);
-}
+// The same, the torn sector's first k bytes new and the rest old (k on a 4-byte edge, a FAT entry's, every 8th on a
+// 32-byte one, a directory entry's; from 4 to 508 over the cuts): a sector a reader accepts, which garbage never
+// is (the review of 2026-11-01, finding 3: a grow's two FAT entries in one write would pass every other test).
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_0, torn_cuts(true, 0));
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_1, torn_cuts(true, 1));
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_2, torn_cuts(true, 2));
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_3, torn_cuts(true, 3));
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_4, torn_cuts(true, 4));
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_5, torn_cuts(true, 5));
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_6, torn_cuts(true, 6));
+cut_part!(power_cut_tearing_a_prefix_at_every_write_part_7, torn_cuts(true, 7));
 
 /// The torn card cut after `budget` sectors: garbage, or (`prefix`) the first k bytes new, k from `seed`.
 fn torn_card(img: Vec<u8>, budget: u64, prefix: bool, seed: u64) -> Card {
@@ -1094,39 +1146,25 @@ fn two_copies_cost() {
     assert!(d2.written < 3 * one2.written);
 }
 
-/// The golden rule with two copies: the power cut (the sector left whole, or torn) after every sector of a ride
-/// recorded by both. The clean copy comes back as with one recorder (resumed or saved at boot, at most a minute
-/// lost); the full one is resumed or saved too, or, cut before its first checkpoint, never promised; a full
-/// one back without its clean one is ended and saved (the app's rule). The next ride gets both, the volume
-/// stays clean.
-///
-/// Four tests run in parallel, each every fourth cut (`part` 0 to 3 of [`CUT_PARTS`]).
-#[test]
-fn two_copies_power_cut_at_every_sector_part_0() {
-    two_copies_cut(0);
-}
-#[test]
-fn two_copies_power_cut_at_every_sector_part_1() {
-    two_copies_cut(1);
-}
-#[test]
-fn two_copies_power_cut_at_every_sector_part_2() {
-    two_copies_cut(2);
-}
-#[test]
-fn two_copies_power_cut_at_every_sector_part_3() {
-    two_copies_cut(3);
-}
+// The golden rule with two copies: the power cut (the sector left whole, or torn) after every sector of a ride
+// recorded by both. The clean copy comes back as with one recorder (resumed or saved at boot, at most a minute
+// lost); the full one is resumed or saved too, or, cut before its first checkpoint, never promised; a full
+// one back without its clean one is ended and saved (the app's rule). The next ride gets both, the volume
+// stays clean.
+//
+// Four tests run in parallel, each every fourth cut (`part` 0 to 3 of [`CUT_PARTS`]).
+cut_part!(two_copies_power_cut_at_every_sector_part_0, two_copies_cut(0));
+cut_part!(two_copies_power_cut_at_every_sector_part_1, two_copies_cut(1));
+cut_part!(two_copies_power_cut_at_every_sector_part_2, two_copies_cut(2));
+cut_part!(two_copies_power_cut_at_every_sector_part_3, two_copies_cut(3));
+cut_part!(two_copies_power_cut_at_every_sector_part_4, two_copies_cut(4));
+cut_part!(two_copies_power_cut_at_every_sector_part_5, two_copies_cut(5));
+cut_part!(two_copies_power_cut_at_every_sector_part_6, two_copies_cut(6));
+cut_part!(two_copies_power_cut_at_every_sector_part_7, two_copies_cut(7));
 
 /// The cuts are shared among this many tests (cut `c` belongs to part `c % CUT_PARTS`), so each sees the whole
 /// ride's range of cut points, and the four run in parallel.
-const CUT_PARTS: u64 = 4;
-
-fn two_copies_cut(part: u64) {
-    for torn in [false, true] {
-        two_copies_cut_torn(torn, part);
-    }
-}
+const CUT_PARTS: u64 = 8;
 
 fn two_copies_cut_torn(torn: bool, part: u64) {
     let img = crate::fat::tests::image();
@@ -1423,31 +1461,23 @@ fn a_file_named_activities_never_stops_a_ride() {
     assert_eq!(check_clean(&d.img, "kept"), lost);
 }
 
-/// The golden rule through the discard: the power cut (the sector left whole, or torn) after every sector of a
-/// ride recorded by both copies and discarded. After the next start each copy is in exactly one place, its ride
-/// folder (resumed, paused, then discarded again) or `\Rustfw\Discarded`, never in `\Activities` or
-/// `\Rustfw\Activities`, with at most a minute lost; the volume stays clean. One exception, on a card without
-/// reliable write only: a torn sector that takes the ride's entry before the end's record (which is the first to
-/// say "discard") has the ride saved whole from its record at the start (`recover_from`, as for any ride whose
-/// entry a cut tore), in `\Activities`: in one place still, never lost (HISTORY's DELETE moves it after).
-///
-/// Four tests run in parallel, each every fourth cut ([`CUT_PARTS`]).
-#[test]
-fn a_discard_cut_at_every_sector_part_0() {
-    a_discard_cut(0);
-}
-#[test]
-fn a_discard_cut_at_every_sector_part_1() {
-    a_discard_cut(1);
-}
-#[test]
-fn a_discard_cut_at_every_sector_part_2() {
-    a_discard_cut(2);
-}
-#[test]
-fn a_discard_cut_at_every_sector_part_3() {
-    a_discard_cut(3);
-}
+// The golden rule through the discard: the power cut (the sector left whole, or torn) after every sector of a
+// ride recorded by both copies and discarded. After the next start each copy is in exactly one place, its ride
+// folder (resumed, paused, then discarded again) or `\Rustfw\Discarded`, never in `\Activities` or
+// `\Rustfw\Activities`, with at most a minute lost; the volume stays clean. One exception, on a card without
+// reliable write only: a torn sector that takes the ride's entry before the end's record (which is the first to
+// say "discard") has the ride saved whole from its record at the start (`recover_from`, as for any ride whose
+// entry a cut tore), in `\Activities`: in one place still, never lost (HISTORY's DELETE moves it after).
+//
+// Four tests run in parallel, each every fourth cut ([`CUT_PARTS`]).
+cut_part!(a_discard_cut_at_every_sector_part_0, a_discard_cut(0));
+cut_part!(a_discard_cut_at_every_sector_part_1, a_discard_cut(1));
+cut_part!(a_discard_cut_at_every_sector_part_2, a_discard_cut(2));
+cut_part!(a_discard_cut_at_every_sector_part_3, a_discard_cut(3));
+cut_part!(a_discard_cut_at_every_sector_part_4, a_discard_cut(4));
+cut_part!(a_discard_cut_at_every_sector_part_5, a_discard_cut(5));
+cut_part!(a_discard_cut_at_every_sector_part_6, a_discard_cut(6));
+cut_part!(a_discard_cut_at_every_sector_part_7, a_discard_cut(7));
 
 /// The cuts of the discard's ride at which the next start finds it already discarded (both torn modes).
 const AT_BOOT_CUTS: [u64; 3] = [872, 873, 874];
@@ -1927,12 +1957,14 @@ fn a_bad_discarded_folder_never_stops_a_ride() {
     }
 }
 
-/// REVIEW: a ride resumed at boot (setup never ran for it) on a volume without the Discarded folders (a ride open
-/// at the update), discarded, the power cut (torn) at every sector: is the ride ever lost?
-/// A discard never makes a folder: a ride resumed with the folders missing, then discarded, is in one place
-/// whatever the cut.
-#[test]
-fn a_resumed_ride_discarded_without_folders_survives_every_cut() {
+// REVIEW: a ride resumed at boot (setup never ran for it) on a volume without the Discarded folders (a ride open
+// at the update), discarded, the power cut (torn) at every sector: is the ride ever lost?
+// A discard never makes a folder: a ride resumed with the folders missing, then discarded, is in one place
+// whatever the cut.
+cut_part!(a_resumed_ride_discarded_without_folders_survives_every_cut_untorn, resumed_discard_cuts(false));
+cut_part!(a_resumed_ride_discarded_without_folders_survives_every_cut_torn, resumed_discard_cuts(true));
+
+fn resumed_discard_cuts(torn: bool) {
     let img = crate::fat::tests::image();
     // mid-ride cut
     let mut whole = card(img.clone());
@@ -1965,7 +1997,7 @@ fn a_resumed_ride_discarded_without_folders_survives_every_cut() {
     let (d0, _) = run(None, false);
     let total = d0.written;
     let mut bad = Vec::new();
-    for torn in [false, true] {
+    {
         for cut in 0..total {
             let (d, _) = run(Some(cut), torn);
             let at = d.cut_at;
@@ -1991,7 +2023,7 @@ fn a_resumed_ride_discarded_without_folders_survives_every_cut() {
             }
         }
     }
-    assert!(bad.is_empty(), "{} bad cuts of {}: {bad:?}", bad.len(), 2 * total);
+    assert!(bad.is_empty(), "{} bad cuts of {}: {bad:?}", bad.len(), total);
 }
 
 /// `\Activities` left with `left` free slots in its directory's last sector: deleted entries (0xe5) written from

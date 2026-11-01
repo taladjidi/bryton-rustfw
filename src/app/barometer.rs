@@ -165,7 +165,6 @@ impl App {
         // the read is allowed while a ride is open (a resumed ride has its calibration back), and by a build that may
         // not write the card; the write is not
         if !self.alt_store.loaded {
-            self.alt_store.loaded = true;
             let mut s = [0u8; 512];
             let mut d = emmc::Volume(&mut self.emmc, b);
             let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
@@ -173,6 +172,10 @@ impl App {
                 let f = fat.open_in(&mut d, dir, ALT_FILE)?;
                 fat.read_at(&mut d, &f, 0, &mut s)
             });
+            if read == Err(fat::Error::Io) {
+                return; // a card not answering: asked again at the next pass (the eMMC layer's backoff keeps it cheap)
+            }
+            self.alt_store.loaded = true;
             if let Ok(512) = read
                 && let Some(cal) = altitude::Cal::from_sector(&s)
             {

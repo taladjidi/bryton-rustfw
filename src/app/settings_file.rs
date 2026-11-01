@@ -550,6 +550,22 @@ impl App {
         }
     }
 
+    /// The settings may be changed: the file read, or the card not known to be down (else the late read would meet
+    /// the change and overwrite every field only the file holds). Read now if it was not; else why not, said.
+    pub(crate) fn settings_ready(&mut self, b: &mut impl Board) -> bool {
+        let f = self.settings_store.file;
+        if f.loaded || !f.io_failed {
+            return true;
+        }
+        if !self.emmc.lent() {
+            self.load_settings(b);
+        }
+        if !self.settings_store.file.loaded {
+            self.say(if self.emmc.lent() { "USB DRIVE ON" } else { "SETTINGS NOT READ" });
+        }
+        self.settings_store.file.loaded
+    }
+
     /// Reads `\Rustfw\settings.bin` (module doc: which wins).
     #[inline(never)] // its 1 KB buffer in its own frame
     pub(crate) fn load_settings(&mut self, b: &mut impl Board) {

@@ -14,6 +14,7 @@
 use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
 use bryton_rustfw::dev::{self, Effect, Host, Session, Stats, UsbWatch};
+use bryton_rustfw::packets;
 use bryton_rustfw::usbsnap::{self, Keeper, UsbSnap};
 use bryton_rustfw::{App, Board, UsbLink, msc};
 use static_cell::StaticCell;
@@ -257,7 +258,7 @@ pub struct Link {
     msc: Msc,
     out: [u8; 512],
     len: usize,
-    last_full: bool,
+    tx: packets::Tx,
     /// The drop detector's state (lib dev.rs).
     watcher: dev::Watcher,
     /// A drive command ran since [`Link::worked`]: its eMMC access may have slept, which takes over SysTick.
@@ -355,7 +356,7 @@ pub fn start() -> Option<Link> {
         msc,
         out: [0; 512],
         len: 0,
-        last_full: false,
+        tx: packets::Tx::new(MPS),
         watcher: dev::Watcher::new(),
         worked: false,
         dead: false,
@@ -471,11 +472,15 @@ impl Link {
     fn write(&mut self, len: usize) {
         if self.dead {
             self.len = 0;
-            self.last_full = false;
+            self.tx.drop_output();
             return;
         }
-        let data = self.out.get(..len).unwrap_or(&[]);
-        'packets: for p in data.chunks(MPS).chain((len == 0).then_some(&[][..])) {
+        // never more than the buffer holds: a longer length would send empty packets for the missing bytes
+        let len = len.min(self.out.len());
+        let mut at = 0;
+        'packets: for n in self.tx.write(len) {
+            let p = self.out.get(at..at + n).unwrap_or(&[]);
+            at += n;
             let t0 = cycles();
             loop {
                 match self.cdc.write_packet(p) {
@@ -490,16 +495,19 @@ impl Link {
                 }
             }
         }
-        self.last_full = len > 0 && len.is_multiple_of(MPS);
         self.len = 0;
     }
 
     /// Sends what is buffered; a transfer ending on a full packet needs a zero-length one to end it.
     pub fn flush(&mut self) {
-        if self.len > 0 || self.last_full {
+        if self.len > 0 {
             self.write(self.len);
         }
-        self.last_full = false;
+        // a reply of a whole number of packets (full speed: 64 B, `info` is 256 B at times) is ended by an empty one,
+        // or the computer holds it until the next packet (seen 2026-11-01: `info` unanswered until the next command)
+        if self.tx.needs_zlp() {
+            self.write(0);
+        }
     }
 }
 

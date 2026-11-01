@@ -1816,3 +1816,185 @@ fn power_totals_go_on_after_a_reset() {
         assert!(np.is_some_and(|w| if late { w < 180 } else { (178..=180).contains(&w) }), "{late}: NP {np:?}");
     }
 }
+
+/// Finding 88 (review 2026-11-01): the card dead at the boot and answering only later: the pairing file is read then
+/// (before, one failed read ended it for the boot and the trainer stayed unpaired).
+#[test]
+fn the_pairing_is_read_after_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(sensors_file(&sim), Some(Some(ID)), "kept in the file, the register emptied");
+    for late_ms in [5000, 20_000] {
+        let (mut sim2, mut app2) = {
+            let mut sim2 = Sim::new(9, 5, 0);
+            sim2.emmc.image = sim.emmc.image.clone();
+            sim2.backup = sim.backup;
+            sim2.nordic.sensors.push(trainer_sensor());
+            sim2.emmc.dead = true;
+            let app = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+            (sim2, app)
+        };
+        run(&mut sim2, &mut app2, late_ms);
+        assert_eq!(app2.sensors_store.trainer, None, "{late_ms}: the card is down");
+        sim2.emmc.dead = false;
+        run(&mut sim2, &mut app2, 60_000);
+        assert_eq!(app2.sensors_store.trainer, Some(ID), "{late_ms}");
+        assert_eq!(app2.radio.sensors.at(Kind::Trainer), Sensor::Paired(ID), "{late_ms}");
+    }
+}
+
+/// Review finding 88, the other state files: a card dead at the boot and answering 5 s or 20 s later gives every
+/// file back (the rider's changes first saved by an earlier session on the same card).
+#[test]
+fn every_state_file_is_read_after_a_late_card() {
+    let (mut sim, mut app) = unit();
+    app.set_bike_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::BikeStore::new())));
+    run(&mut sim, &mut app, 8000);
+    app.press(&mut sim, Press::Short(Key::Start)); // a ride's start makes bikes.bin and places.bin
+    run(&mut sim, &mut app, 3000);
+    for _ in 0..3 {
+        if app.ride.state() != ride::State::Idle {
+            save_ride(&mut sim, &mut app);
+            run(&mut sim, &mut app, 3000);
+        }
+    }
+    app.settings.weight_kg = 77;
+    app.save_misc(&mut sim); // the registers too, as a menu change does
+    app.settings_store.file.dirty = true;
+    app.places.list.add(1000, 2000, Some(123_000));
+    app.places.file.dirty = true;
+    app.phone.stored.notify = false;
+    app.phone_changed();
+    let now = app.now_s();
+    app.alt.calibrate(321_000, now);
+    run(&mut sim, &mut app, 20_000);
+    for late_ms in [0, 5000, 20_000] {
+        let mut sim2 = Sim::new(9, 5, 0);
+        sim2.emmc.image = sim.emmc.image.clone();
+        sim2.backup = sim.backup;
+        sim2.nordic.sensors.push(trainer_sensor());
+        sim2.emmc.dead = late_ms > 0; // 0: the control, no late card
+        let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+        app2.set_bike_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::BikeStore::new())));
+        run(&mut sim2, &mut app2, late_ms);
+        sim2.emmc.dead = false;
+        run(&mut sim2, &mut app2, 80_000); // the copies' minute between tries
+        let a = &app2;
+        let got = (
+            a.settings.weight_kg,
+            a.places.list.get(0).is_some(),
+            a.phone.stored.notify,
+            a.alt.cal().is_some(),
+            a.settings_store.file.loaded,
+            a.store.file.loaded,
+            a.places.file.loaded,
+            a.bikes().is_some(),
+        );
+        assert_eq!(got, (77, true, false, true, true, true, true, true), "{late_ms}");
+    }
+}
+
+/// Review finding 88, rider changes: while the card is down (and the files unread) the settings, the trainer's
+/// pairing and the phone's settings refuse to change, with a notice; once read they change and are kept.
+#[test]
+fn edits_wait_for_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = sim.emmc.image.clone();
+    sim2.backup = sim.backup;
+    sim2.nordic.sensors.push(trainer_sensor());
+    sim2.emmc.dead = true;
+    let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+    run(&mut sim2, &mut app2, 6000);
+    assert!(!app2.settings_ready(&mut sim2));
+    assert!(app2.notes.text.as_str() == "SETTINGS NOT READ", "{}", app2.notes.text.as_str());
+    assert!(!app2.sensors_ready(&mut sim2));
+    assert!(app2.notes.text.as_str() == "SENSORS NOT READ", "{}", app2.notes.text.as_str());
+    assert!(!app2.phone_ready(&mut sim2));
+    assert!(app2.notes.text.as_str() == "PHONE NOT READ", "{}", app2.notes.text.as_str());
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app2, 70_000);
+    assert!(app2.settings_ready(&mut sim2) && app2.sensors_ready(&mut sim2) && app2.phone_ready(&mut sim2));
+    assert_eq!(app2.sensors_store.trainer, Some(ID), "read, not erased");
+    app2.phone.stored.notify = false;
+    app2.phone_changed();
+    app2.settings.weight_kg = 77;
+    app2.save_misc(&mut sim2);
+    run(&mut sim2, &mut app2, 20_000);
+    assert!(!app2.settings_store.file.dirty);
+}
+
+/// Every writer of the settings obeys `settings_ready`: the quick panel's brightness buttons and the power average
+/// tap change nothing while the card is down and the file unread (a late read would overwrite the change), and work
+/// once it is read.
+#[test]
+fn the_quick_panel_waits_for_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = sim.emmc.image.clone();
+    sim2.backup = sim.backup;
+    sim2.emmc.dead = true;
+    let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+    run(&mut sim2, &mut app2, 6000);
+    let (light, avg) = (app2.settings.light_level, app2.settings.wkt_avg);
+    app2.input(&mut sim2, Input::Touch(Gesture::Swipe(crate::touch::Dir::Down)));
+    assert_eq!(app2.screen(), Screen::Quick);
+    run(&mut sim2, &mut app2, 1500);
+    let (x, y, w, h) = crate::ui::quick::BRIGHT[1];
+    app2.input(&mut sim2, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
+    assert_eq!(app2.settings.light_level, light, "refused while the file is unread");
+    assert_eq!(app2.notes.text.as_str(), "SETTINGS NOT READ");
+    app2.cycle_wkt_avg(&mut sim2);
+    assert_eq!(app2.settings.wkt_avg, avg);
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app2, 70_000);
+    app2.cycle_wkt_avg(&mut sim2);
+    assert_ne!(app2.settings.wkt_avg, avg, "works once the file is read");
+}
+
+/// The trainer an earlier build kept in register 14 is used while the card is down, and the late read still finds
+/// the Bluetooth trainer in sensors.bin: both pairings are there afterwards, and the file keeps both.
+#[test]
+fn a_register_pairing_does_not_hide_the_file_after_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    let peer = [1, 6, 5, 4, 3, 2, 0xc1];
+    app.sensors_store.bt = Some(peer);
+    app.sensors_store.dirty = true;
+    run(&mut sim, &mut app, 5000);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = sim.emmc.image.clone();
+    sim2.backup = sim.backup;
+    sim2.backup[14] = Kind::Trainer.to_word(ID); // an earlier build's pairing
+    sim2.nordic.sensors.push(trainer_sensor());
+    sim2.emmc.dead = true;
+    let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+    run(&mut sim2, &mut app2, 6000);
+    assert_eq!(app2.radio.sensors.at(Kind::Trainer), Sensor::Paired(ID), "used while the card is down");
+    assert!(!app2.sensors_store.dirty && !app2.sensors_store.loaded);
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app2, 70_000);
+    assert_eq!((app2.sensors_store.trainer, app2.sensors_store.bt), (Some(ID), Some(peer)));
+    let mut d = Ram(sim2.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let v: [u8; 512] = read_all(&mut fat, &mut d, "Rustfw/sensors.bin").unwrap().try_into().unwrap();
+    assert_eq!(crate::sensors::bt_from_sector(&v).map(|b| b.0), Some(peer), "the file keeps the BT trainer");
+}
+
+/// A ride started during a long backoff gets its card within 5 s: both recorder copies leave Starting.
+#[test]
+fn a_ride_cuts_the_backoff_short() {
+    let mut sim = Sim::new(9, 5, 0);
+    sim.own_settings();
+    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.dead = true;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 100_000); // attempts at 0, 5, 15, 35 and 75 s: the next one waits for 60 s more
+    sim.emmc.dead = false;
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 7000);
+    assert_ne!(app.rec.clean.phase(), crate::recorder::Phase::Starting);
+    assert_ne!(app.rec.full.phase(), crate::recorder::Phase::Starting);
+}

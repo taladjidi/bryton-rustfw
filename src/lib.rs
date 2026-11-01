@@ -30,7 +30,7 @@ pub mod ui;
 pub use drivers::{
     ambient, battery, ble, emmc, fec, fecble, ftms, gnss, mga, nrf, panel, periph, powercal, sensors, touch,
 };
-pub use link::{dev, msc, phone, prof, usbsnap};
+pub use link::{dev, msc, packets, phone, prof, usbsnap};
 pub use nav::{altitude, climbs_ahead, course, math, places, segment, segment_match, sun};
 pub use storage::{
     bikes, copies, fat, fit, fitread, history, ign, inflate, ini, named, osm, recorder, route, stock, thresholds,
@@ -621,6 +621,8 @@ impl App {
         let work_us = now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)).saturating_sub(sleep_work_us);
         let pass_ms = (sleep_ms + (work_us / 1000)).min(MAX_PASS_MS);
         self.dt_ms = pass_ms;
+        self.emmc.advance(pass_ms);
+        self.emmc.urgent(!self.ride_settled());
         let up_before = self.up_ms;
         self.up_ms = self.up_ms.saturating_add(pass_ms);
         let sec = self.read_clock(b);

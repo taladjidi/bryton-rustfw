@@ -806,3 +806,32 @@ fn theme_font_key_sets_face_on_pick_only() {
     assert_eq!(app.theme, crate::theme::parse(BARLOW_FONT.as_bytes()).unwrap());
     assert_eq!(app.settings.face, Face::Pixel, "an AUTO switch leaves FONT alone");
 }
+
+/// Finding 88: settings.bin names a theme file, the card is dead at the boot and answers 5 s later: the settings are
+/// read again (copies.rs `second`) and the theme with them (`load_settings` applies it).
+#[test]
+fn the_theme_is_applied_after_a_late_card() {
+    let (mut sim, mut app) = unit(Some(with_themes(&[("SUNNY.ini", SUNNY)])));
+    app.settings.set_theme_name("SUNNY");
+    app.save_misc(&mut sim);
+    for _ in 0..200 {
+        run(&mut sim, &mut app, 200);
+        if !app.settings_store.file.dirty {
+            break;
+        }
+    }
+    app.apply_theme(&mut sim, false);
+    let sunny = app.theme;
+    assert_ne!(sunny, Theme::DARK);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.own_settings();
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.emmc.dead = true;
+    let mut app2 = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app2, 5000);
+    assert_eq!(app2.theme, Theme::DARK, "the card is down");
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app2, 80_000);
+    assert_eq!(app2.settings.theme_name(), "SUNNY");
+    assert_eq!(app2.theme, sunny);
+}
