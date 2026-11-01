@@ -143,9 +143,12 @@ Bryton's nRF52 application (the radio chip's firmware) runs in a Unicorn emulato
 to the real app byte for byte instead of to the simulator's model. `python3 -I tools/nrf_emu.py selftest` (a fraction of
 a second, in check.sh lane P) boots it, gets the version, checks that an unknown opcode hangs it with no answer, and
 that injected ANT events come out as type 08 frames of 44 bytes; it prints `skip:` when the binary
-(`NRF_BIN`, default `~/Documents/bryton/firmware/R039/nordic.bin`) or `unicorn` is missing. Nothing of the binary is
+(`NRF_BIN`, default `~/Documents/bryton/firmware/R039/nordic.bin`) or `unicorn` is missing. `python3 -I` ignores the user
+  site-packages, so install unicorn where `-I` sees it (`python3 -m pip install unicorn` into the interpreter's own
+  site-packages or a venv) and name that interpreter with `NRF_PYTHON` (default `python3`; check.sh lane P and the Rust
+  test use it, as `FIT_PYTHON` works for the FIT readers): then the gate runs the selftest instead of skipping it. Nothing of the binary is
 in this repository: the header gives the app's offset, the load address is the S332 application origin, and anything
-specific to it stays in the private notes (`NRF_PRIVATE` may name a JSON with its error handler's address).
+specific to it stays in the private notes (`NRF_PRIVATE`, environment only, may name a JSON with its error handler's address).
 
 - **Why Unicorn, not Renode:** the harness must pace the UART byte by byte against a host that holds RTS, count
   instructions between two frames, inject SoftDevice events through SWI2 and answer SVCs in Python; Unicorn gives that
@@ -156,22 +159,32 @@ specific to it stays in the private notes (`NRF_PRIVATE` may name a JSON with it
   poll (enable, cfg_set, ble_enable, version get, ble and ANT event get, SoC event get, app event wait). Any other SVC
   stops the run and is named. Events are injected with `inject_ant` / `inject_ble` (SWI2 pended).
 - **Does not model:** the real SoftDevice (its calls cost nothing here; they cost microseconds on the chip), the ANT
-  queue of 32, radio timing, RTC, the 4-byte UART FIFO beyond a count, UART errors, priorities (one interrupt at a
-  time). One instruction is one cycle at 64 MHz; the Cortex-M4 average is a little higher.
+  queue of 32, radio timing, RTC, UART errors, a MAXCNT of 0. One instruction is one cycle at 64 MHz; the Cortex-M4
+  average is a little higher. The ANT SVCs the app is seen to call (8 of them, in start, `ant_start`, `ant_open`) are
+  accepted with success and no output; any other ANT SVC stops the run (its number and pc are printed, never a
+  register: the ANT licence key could be in one).
+- **UARTE and the NVIC (spec-faithful parts):** RXD / TXD pointer and count are latched at STARTRX / STARTTX, AMOUNT is
+  written at ENDRX / ENDTX / STOP only, the ENDRX_STARTRX short restarts from the new pointer and leaves the finished
+  AMOUNT for the ISR; RXSTARTED, TXSTARTED, TXSTOPPED, RXTO, CTS and NCTS (our RTS changes) are raised; INTEN, INTENSET
+  and INTENCLR share one value. Exception entry and return follow ARMv7-M (8-byte aligned frame with the xPSR bit 9
+  padding flag, EXC_RETURN in LR, return detected on the branch to it, IPSR set); priorities come from IPR (lower
+  number first, preemption only by a strictly higher one, nesting), BASEPRI and PRIMASK are honoured.
 - **Hang detection (by address and instruction count, never by slice size):** the harness reports a hang when the core
-  reaches a `B .` exception handler of the vector table, or when the UART interrupt stays masked for 20 000
-  instructions (the error handler enters the SoftDevice critical region and spins; a healthy app masks it for a few
-  hundred), or sleeps with it masked. `selftest` runs one script at slice sizes 97, 2000 and 5000 and asserts the same
-  frames and TX times, and the unknown opcode's hang at the same instruction.
-- **ANT event codes:** the app's encoder (SDK `ant_event.c`, `ant_event_enc`) accepts only the codes in its switch
-  (0x00 to 0x07, 0x80 and the rest of `ant_parameters.h`'s events). A value that is a message id (0x4F) or an
-  unlisted one returns NOT_SUPPORTED and the app hangs: that was the earlier "events beyond 0x80 hang", not a harness
-  bug. The harness fills the message like the SoftDevice: `[9, 0x4E, ch, 8 bytes]` for 0x80, `[3, 0x40, ch, 1, code]`
-  for the channel events (inferred from the ANT message protocol), then the event code and the channel, which is what
+  reaches a `B .` exception handler of the vector table (or the error handler address from `NRF_PRIVATE`, a JSON
+  `{"error_handler": N}` kept outside this repository), or runs 2720 instructions in a row with the UART interrupt
+  unable to be taken (NVIC disabled, PRIMASK, or BASEPRI at or above its priority), or sleeps in that state. Sleeping
+  executes nothing, so waiting for an interrupt never counts. Measured in this emulator: the longest such stretch over
+  a healthy start plus 10 s of traffic (version requests, single events, bursts of 8) and over the Rust test's
+  `nrf::start`, `ant_start`, `ant_open` and broadcasts is 272 instructions; the limit is 10 times that. `selftest` runs
+  one script at slice sizes 97, 2000 and 5000 and asserts the same frames and TX times, and the unknown opcode's hang
+  at the same instruction.
+- **ANT event codes:** an event code outside `ant_parameters.h`'s list hangs the app (Bryton's nRF app, reversed). The
+  harness fills the message like the SoftDevice: `[9, 0x4E, ch, 8 bytes]` for 0x80, `[3, 0x40, ch, 1, code]` for the
+  channel events (inferred from the ANT message protocol), then the event code and the channel, which is what
   `nrf::ant_broadcast`, `ant_closed`, `ant_tx_failed` and `ant_tx_completed` parse; `selftest` checks each code.
-- **Flow control and the scheduler queue (selftest):** with the host's RTS held for 200 ms while 30 events arrive the
-  app waits without hanging and the 30 frames come out in order when released; 96 events in one SoftDevice pass are
-  queued, 97 hang it (the 96-slot scheduler queue).
+- **Flow control and the event queue (selftest):** with the host's RTS held for 200 ms while 30 events arrive nothing
+  is sent, the app does not hang and the 30 frames come out in order when released; 96 events in one SoftDevice pass
+  are queued, 97 hang it (Bryton's nRF app, reversed: 96 slots).
 - **`--serve` and the Rust test:** `python3 -I tools/nrf_emu.py --serve` is the chip's UART as a byte pipe on
   stdin / stdout (requests `W`rite, `R`ead, `T`ime, `H`old RTS, `A`NT event, `B`roadcasts at a period, BLE `V` HVX,
   re`X`et; every answer starts with a status and the flags CTS held / RTS held / dead; see `serve`).
@@ -179,10 +192,10 @@ specific to it stays in the private notes (`NRF_PRIVATE` may name a JSON with it
   and `ant_open` against the real app, then injected broadcasts read through `ant_broadcast`. It prints `skip:` and
   passes without python `unicorn` or the binary. `Sim::nrf_ext` ([`NrfExt`]) routes `nrf_send`, `nrf_recv`, `nrf_reset`
   and `delay_ms` to the pipe instead of the `Nordic` model.
-- **Measured (burst of 8 queued ANT events, deterministic detector):** 966 instructions of app work between ENDTX of a
-  frame and the app starting the next frame's header DMA (STARTTX), 15 us at CPI 1 and 64 MHz; 1168 instructions to
-  the first byte on the wire. The simulator's `frame_gap_us: 80` is pessimistic by about five times, before the real
-  SoftDevice's own call time.
+- **Measured in this emulator (burst of 8 queued ANT events):** 965 instructions of app work between ENDTX of a frame
+  and the app starting the next frame's header DMA (STARTTX), 15 us at CPI 1 and 64 MHz; 1167 instructions to the
+  first byte on the wire, 18 us. The simulator's `frame_gap_us: 80` is pessimistic by about four times, before the
+  real SoftDevice's own call time.
 
 ## Testing strategy
 

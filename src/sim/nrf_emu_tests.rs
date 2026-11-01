@@ -1,6 +1,6 @@
 //! Bryton's real radio-chip app, run by `tools/nrf_emu.py --serve` (docs/devloop.md, "The radio chip's real app"), driven
 //! by the library's real `nrf` code through the nrf primitives of [`Sim`] ([`NrfExt`]). `#[ignore]`d: it needs
-//! python3, the `unicorn` package and the binary (`NRF_BIN`, default `~/Documents/bryton/firmware/R039/nordic.bin`);
+//! python3 (`NRF_PYTHON` may name another, as `FIT_PYTHON` does in check.sh), the `unicorn` package and the binary (`NRF_BIN`, default `~/Documents/bryton/firmware/R039/nordic.bin`);
 //! without them it prints `skip:` and passes. Run it with `cargo test-host -- --ignored nrf_emu`.
 //!
 //! Wire protocol: see `serve` in the Python file. Time: a byte costs 10 us of emulated time (1 Mbaud), a `delay_ms`
@@ -26,17 +26,18 @@ impl Pipe {
         let bin = std::env::var("NRF_BIN").unwrap_or_else(|_| {
             format!("{}/Documents/bryton/firmware/R039/nordic.bin", std::env::var("HOME").unwrap_or_default())
         });
+        let py = std::env::var("NRF_PYTHON").unwrap_or_else(|_| "python3".into());
         if !std::path::Path::new(&bin).is_file() {
             std::println!("skip: nrf_emu ({bin} missing)");
             return None;
         }
         let dir = env!("CARGO_MANIFEST_DIR");
         let tool = format!("{dir}/tools/nrf_emu.py");
-        if !Command::new("python3").args(["-I", "-c", "import unicorn"]).output().is_ok_and(|o| o.status.success()) {
+        if !Command::new(&py).args(["-I", "-c", "import unicorn"]).output().is_ok_and(|o| o.status.success()) {
             std::println!("skip: nrf_emu (python unicorn missing)");
             return None;
         }
-        let mut child = Command::new("python3")
+        let mut child = Command::new(&py)
             .args(["-I", tool.as_str(), "--serve"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
