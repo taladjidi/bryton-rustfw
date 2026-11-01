@@ -16,15 +16,16 @@
 //!
 //! **Never a ride lost, never in two places.** A move is the FAT writer's (fat/write.rs): the old entry marked
 //! deleted (0xe5 only, never zeroed), then the new entry on the same chain. Between the two, the chain is named by
-//! no entry, so first a record, `\Rustfw\delete.rec` (one sector: a tag, "pending", the name, the suffix, each
-//! file's first cluster, size and first sector's CRC, a CRC), says what is being moved; after the last move it says
-//! "done". A cut
-//! anywhere leaves either the record not written (nothing moved yet: a torn record does not check out and is
+//! no entry, so first the folders, one suffix free in both and room for both new entries (a full card refuses the
+//! delete there, the ride still in `\Activities`), then a record, `\Rustfw\delete.rec` (one sector: a tag,
+//! "pending", the name, the suffix, each file's first cluster, size and first sector's CRC, a CRC), says what is
+//! being moved; after the last move it says "done". A cut anywhere leaves either the record not written (nothing moved yet: a torn record does not check out and is
 //! ignored), or a pending record, which the next start finishes ([`finish`]): the FATs made equal first
 //! ([`Fat::sync_fats`]), then each file is found in its new place (done), or removed from its old place if still
 //! there, and linked into the new one if its chain is still whole and still the ride's (its first sector's CRC: a
 //! computer's fsck may have freed it and something taken it). A suffix taken then is recorded before any entry
-//! changes, and a folder removed meanwhile is made again. The app finishes a pending move at the scan's start and
+//! of that start changes, and a folder removed meanwhile is made again. A move the card cannot finish (full) stays
+//! pending, and the card is lent to a computer write protected meanwhile. The app finishes a pending move at the scan's start and
 //! before lending the card to a computer (app/drive.rs), which would see the ride in neither folder. Tested by
 //! cutting the power after every sector written (below).
 //!
@@ -78,13 +79,12 @@ impl Rec {
             slot[12] = u8::from(crc.is_some());
             slot[14..16].copy_from_slice(&crc.unwrap_or(0).to_le_bytes());
         }
-        let crc = crate::fit::crc(0, &s[..SECTOR - 2]);
-        s[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+        super::seal16(&mut s);
         s
     }
 
     pub(crate) fn from_sector(s: &[u8; SECTOR]) -> Option<Rec> {
-        if s[..4] != TAG || crate::fit::crc(0, &s[..SECTOR - 2]).to_le_bytes() != s[SECTOR - 2..] {
+        if s[..4] != TAG || !super::sealed16(s) {
             return None;
         }
         let word = |i: usize| u32::from_le_bytes(super::take(s, i));
@@ -154,22 +154,34 @@ fn first_crc(fat: &mut Fat, d: &mut impl DiskWrite, h: &Handle) -> Result<Option
     Ok(Some(crate::fit::crc(0, &s)))
 }
 
-/// The first suffix from `from` whose name is free in every folder of `to` the files go to.
-fn free_suffix(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, from: u8) -> Result<u8, Error> {
+/// Readies the move of `r` before any entry changes: its folders made (a computer may have removed one), the first
+/// suffix from `r.suffix` whose name is, in each folder, free or the file itself (moved already: so both files end
+/// under one suffix), then room for each new name ([`Fat::make_room`]: a full card refuses here, never after an old
+/// entry went, the ride then named nowhere; the review of 2026-10-31). True if the suffix changed.
+fn ready(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, t: (u16, u16)) -> Result<bool, Error> {
     let mut buf = [0u8; 20];
+    let mut dirs = [None; 2];
+    for (k, (dir, f)) in dirs.iter_mut().zip(r.files).enumerate() {
+        if f.is_some() {
+            *dir = Some(to_dir(fat, d, k, t)?);
+        }
+    }
+    let from = r.suffix;
     'next: for k in from..=SUFFIXES {
-        for (to, f) in TO.iter().zip(r.files) {
-            if f.is_none() {
-                continue;
-            }
-            let dir = fat.open(d, to)?;
-            match fat.find(d, dir, file_name(&r.name, k, &mut buf)?) {
-                Err(Error::NotFound) => {}
+        for (dir, f) in dirs.iter().zip(r.files) {
+            let (Some(dir), Some((first, _, _))) = (dir, f) else { continue };
+            match fat.find(d, *dir, file_name(&r.name, k, &mut buf)?) {
+                Ok(f) if f.cluster == first => {}
                 Ok(_) => continue 'next,
+                Err(Error::NotFound) => {}
                 Err(e) => return Err(e),
             }
         }
-        return Ok(k);
+        for dir in dirs.iter().flatten() {
+            fat.make_room(d, *dir, file_name(&r.name, k, &mut buf)?)?;
+        }
+        r.suffix = k;
+        return Ok(k != from);
     }
     Err(Error::Refused)
 }
@@ -221,13 +233,8 @@ pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), 
     if !made {
         fat.sync_fats(d)?;
     }
-    let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
-    let deleted = fat.ensure_dir(d, mine, DELETED, t)?;
-    if files[1].is_some() {
-        fat.ensure_dir(d, deleted, "Full", t)?;
-    }
     let mut r = Rec { pending: true, name, suffix: 0, files };
-    r.suffix = free_suffix(&mut fat, d, &r, 0)?;
+    ready(&mut fat, d, &mut r, t)?;
     let mut rec = rec_file(&mut fat, d, t)?;
     fat.write_sectors(d, &mut rec, 0, &r.to_sector())?;
     moves(&mut fat, d, &mut r, &mut rec, t)?;
@@ -263,23 +270,22 @@ fn finish_on(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Opt
 /// Each file of `r` moved, or found moved already: the old entry marked deleted if it is still there, then the new
 /// one, unless it is there already. A chain named by no entry is linked only if it is still the ride's: whole for
 /// its size and its first sector the one the record says (a computer's fsck may have freed it meanwhile, and
-/// something else taken it: linked, two files would share clusters). A new suffix goes into the record `rec`
-/// before any entry changes, so a second cut finishes with the same one, in both folders.
+/// something else taken it: linked, two files would share clusters). The suffix and the room come first
+/// ([`ready`]); a new suffix goes into the record `rec` before any entry of this call changes, so a second cut
+/// finishes with the same one, in both folders. Shortcut: after a cut that left a chain nameless, that rewrite
+/// of the one-sector record relies on the card's atomic sector write (enhanced reliable write, docs/journal.md
+/// 2026-10-24); two slots, as `ride.rec` has, if a card without it is ever used.
 fn moves(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, t: (u16, u16)) -> Result<(), Error> {
+    if ready(fat, d, r, t)? {
+        fat.write_sectors(d, rec, 0, &r.to_sector())?;
+    }
     let mut buf = [0u8; 20];
     for k in 0..2 {
         let (Some((first, size, crc)), Some(from)) = (r.files.get(k).copied().flatten(), FROM.get(k)) else { continue };
         let dst = to_dir(fat, d, k, t)?;
         match fat.find(d, dst, file_name(&r.name, r.suffix, &mut buf)?) {
             Ok(f) if f.cluster == first => continue, // moved already
-            Ok(_) => {
-                // a name taken since (by a computer): another suffix, free in both folders, recorded first
-                for j in (0..2).filter(|&j| r.files.get(j).is_some_and(Option::is_some)) {
-                    to_dir(fat, d, j, t)?;
-                }
-                r.suffix = free_suffix(fat, d, r, r.suffix)?;
-                fat.write_sectors(d, rec, 0, &r.to_sector())?;
-            }
+            Ok(_) => return Err(Error::Refused),     // free in `ready`, and nothing wrote since
             Err(Error::NotFound) => {}
             Err(e) => return Err(e),
         }
@@ -300,7 +306,6 @@ fn moves(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, t
             Err(e) => return Err(e),
         };
         if ours || first == 0 {
-            let dst = to_dir(fat, d, k, t)?;
             fat.link(d, dst, file_name(&r.name, r.suffix, &mut buf)?, &Handle { first, size, ..Handle::default() }, t)?;
         }
     }
@@ -547,5 +552,88 @@ pub(crate) mod tests {
         assert_eq!(finish(&mut d, T), Ok(true));
         assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some());
         assert!(fsck(&d.0).is_ok(), "{:?}", fsck(&d.0));
+    }
+
+    /// `\Rustfw\Deleted` (made already) with no room for one more name without a new cluster (all its slots used
+    /// but two, as many deletes leave), on a card with no free cluster (the owner's, nearly full of map tiles).
+    pub(crate) fn no_room(img: &mut [u8]) {
+        let mut d = Ram(img.to_vec(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let del = fat.open(&mut d, TO[0]).unwrap();
+        assert_eq!(fat.chain(&mut d, del.cluster).unwrap().clusters, 1, "one cluster");
+        let (lba, slots) = (fat.lba(del.cluster) as usize * SECTOR, fat.cluster_bytes() as usize / 32);
+        let end = (0..slots).find(|k| img[lba + k * 32] == 0).unwrap();
+        for k in end..slots - 2 {
+            img[lba + k * 32] = 0xe5;
+            img[lba + k * 32 + 11] = 0x20;
+        }
+        crate::fat::write::tests::fill(img, 0, true);
+    }
+
+    /// The review of 2026-10-31 (storage, 1): a delete on a full card whose `\Rustfw\Deleted` needs a cluster for
+    /// the new name is refused before anything is written: the ride still in `\Activities`, no move pending (the
+    /// old entry went first, and the ride was in neither folder).
+    #[test]
+    fn a_full_card_refuses_the_delete_with_the_ride_in_place() {
+        let img = volume();
+        let ride = cluster(&img, RIDE);
+        let mut d = Ram(img, 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        to_dir(&mut fat, &mut d, 1, T).unwrap();
+        rec_file(&mut fat, &mut d, T).unwrap();
+        no_room(&mut d.0);
+        let before = d.0.clone();
+        assert_eq!(delete(&mut d, &ride, T), Err(Error::Refused));
+        assert!(d.0 == before, "nothing written");
+        assert!(file(&d.0, RIDE).is_some(), "the ride where it was");
+        assert_eq!(finish(&mut d, T), Ok(false), "no move pending");
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// The review of 2026-10-31 (storage, 6): a name taken in one folder only (a computer put a file of the ride's
+    /// name in `\Rustfw\Deleted\Full`), for a delete and for a move a cut left, then a cut at every sector and the
+    /// next start: the suffix is chosen before any entry changes, so both copies end under the same one (`-1`), each
+    /// in one place, no chain named twice (the clean copy was linked under no suffix, then the record said `-1`,
+    /// and a cut after that linked it again).
+    #[test]
+    fn a_name_taken_in_one_folder_gives_both_copies_one_suffix() {
+        let taken = |img: Vec<u8>| {
+            let mut d = Ram(img, 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let full = to_dir(&mut fat, &mut d, 1, T).unwrap();
+            fat.create(&mut d, full, "261020080000.fit", T).unwrap();
+            rec_file(&mut fat, &mut d, T).unwrap(); // nothing left for the delete to make (a cluster a cut would lose)
+            d.0
+        };
+        let ride = cluster(&volume(), RIDE);
+        let (clean, full) =
+            (file(&volume(), RIDE).unwrap(), file(&volume(), "Rustfw/Activities/261020080000.fit").unwrap());
+        for (what, img) in [("delete", taken(volume())), ("finish", taken(cut_midway()))] {
+            let run = |d: &mut Cut| if what == "delete" { delete(d, &ride, T) } else { finish(d, T).map(|_| ()) };
+            let mut whole = Cut(img.clone(), u64::MAX);
+            run(&mut whole).unwrap();
+            let writes = u64::MAX - whole.1;
+            for budget in 0..=writes {
+                let mut d = Cut(img.clone(), budget);
+                let _ = run(&mut d);
+                d.1 = u64::MAX;
+                finish(&mut d, T).unwrap();
+                if file(&d.0, RIDE).is_some() {
+                    delete(&mut d, &ride, T).unwrap(); // cut before its record: asked again
+                }
+                let at = std::format!("{what}, cut after {budget} of {writes}");
+                assert_eq!(fsck(&d.0).map_err(|e| std::format!("{at}: {e}")), Ok(0));
+                assert!(file(&d.0, "Rustfw/Deleted/261020080000-1.fit") == Some(clean.clone()), "{at}: clean");
+                assert!(file(&d.0, "Rustfw/Deleted/Full/261020080000-1.fit") == Some(full.clone()), "{at}: full");
+                assert_eq!(
+                    file(&d.0, "Rustfw/Deleted/Full/261020080000.fit"),
+                    Some(Vec::new()),
+                    "{at}: the other file"
+                );
+                for p in [RIDE, "Rustfw/Activities/261020080000.fit", "Rustfw/Deleted/261020080000.fit"] {
+                    assert!(file(&d.0, p).is_none(), "{at}: {p}");
+                }
+            }
+        }
     }
 }

@@ -5175,7 +5175,7 @@ fn card_survey_on_damaged_volumes() {
             img[i] = next() as u8;
         }
         let whole_info = crate::fat::Fat::mount(&mut Ram(img.clone(), 0))
-            .is_ok_and(|f| f.fsinfo_free(&mut Ram(img.clone(), 0)).is_some());
+            .is_ok_and(|f| f.free_clusters(&mut Ram(img.clone(), 0)).is_ok_and(|n| n.is_some()));
         let mut d = Ram(img, 0);
         let mut s = Survey::new();
         let mut passes = 0;

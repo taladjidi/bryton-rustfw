@@ -138,8 +138,7 @@ impl App {
             // before the drive is lent, read only meanwhile (drive_on; the review of 2026-10-29, S4); a damaged
             // volume: dropped, as drive_on does
             self.trash_tried = true;
-            let t = fat::write::dos_time(self.rec_time().0);
-            self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t) == Err(fat::Error::Io);
+            self.finish_trash(b);
         }
         let t0 = self.prof.clock.us(b);
         if self.stock.status() == stock::Status::Running {
@@ -209,6 +208,15 @@ impl App {
             Some(Err(_)) => self.notice("BAD RIDE FILE"),
             None => {}
         }
+    }
+
+    /// [`trash::finish`]: `trash_check` kept unless no move is left pending (the review of 2026-10-31: a full card's
+    /// `Refused` left the move pending and lent the card writable). A damaged volume (`Corrupt`, or no FAT32 at all)
+    /// drops it: the move cannot use the volume either, and a computer is to mend it.
+    pub(crate) fn finish_trash(&mut self, b: &mut impl Board) {
+        let t = fat::write::dos_time(self.rec_time().0);
+        let r = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t);
+        self.trash_check = r.is_err_and(|e| !matches!(e, fat::Error::Corrupt | fat::Error::NotFat32));
     }
 
     /// DELETE on a past ride's card (a tap on it or Start held asks, Start or a tap again does: [`PAST_DELETE`]): the ride moved into

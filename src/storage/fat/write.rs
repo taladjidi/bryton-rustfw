@@ -8,9 +8,9 @@
 //! differing from the first in the one sector being written (the first is the one every reader uses;
 //! [`Fat::sync_fats`] puts it right after a cut). Never a chain that runs into a free cluster, never a size longer
 //! than its chain, never two entries on one chain, never a half-written directory entry:
-//! - **a new cluster:** marked end of chain first, then linked from the chain's last (one FAT sector when both
-//!   are in it, which is the usual case: one write per FAT copy; else the new one's sector first); each FAT sector
-//!   is written to FAT 1, then FAT 2;
+//! - **a new cluster:** marked end of chain first, then linked from the chain's last, each its own write even when
+//!   both are in one FAT sector (the usual case: two writes per FAT copy, so a sector torn by a cut on a card without
+//!   reliable write never holds the link without the end); each FAT sector is written to FAT 1, then FAT 2;
 //! - **a file grows:** clusters first, then the data, then the size in its entry ([`Fat::set_size`]);
 //! - **a file shrinks** (only after a resume): the size first, then the chain cut and the rest freed;
 //! - **a new entry:** its cluster is taken first; the entry (long name pieces and the 8.3 entry) always lands in
@@ -181,6 +181,12 @@ impl Fat {
         self.spc * SECTOR_U32
     }
 
+    /// The clusters a file of `size` bytes takes, at least one. A cluster of 0 bytes (never: the mount takes a power
+    /// of two sectors) counts as one byte: no division by zero on the save's path.
+    pub fn clusters_for(&self, size: u32) -> u32 {
+        size.div_ceil(self.cluster_bytes().max(1)).max(1)
+    }
+
     fn write(&self, d: &mut impl DiskWrite, lba: u32, buf: &[u8]) -> Result<(), Error> {
         let n = u32::try_from(buf.len() / SECTOR).map_err(|_| Error::Corrupt)?;
         if lba.checked_add(n).is_none_or(|end| end > self.total) || lba < self.fat_start {
@@ -291,7 +297,7 @@ impl Fat {
     }
 
     /// FSInfo's free cluster count, None when unknown (no FSInfo, or 0xffffffff). A few clusters high after a cut.
-    pub fn free_clusters(&mut self, d: &mut impl Disk) -> Result<Option<u32>, Error> {
+    pub fn free_clusters(&self, d: &mut impl Disk) -> Result<Option<u32>, Error> {
         Ok(self.fsinfo_read(d)?.map(|(free, _, _)| free).filter(|&n| n <= self.clusters))
     }
 
@@ -338,6 +344,9 @@ impl Fat {
 
     /// [`Fat::grow`]'s clusters, `taken` counting those on the handle.
     fn take(&mut self, d: &mut impl DiskWrite, h: &mut Handle, want: u32, taken: &mut i64) -> Result<(), Error> {
+        if h.clusters == 0 && h.first != 0 {
+            return Err(Error::Corrupt); // a chain without its length (built by hand): grown as empty, it would be lost
+        }
         while h.clusters < want {
             let from = if h.clusters == 0 { self.hint(d)? } else { h.last + 1 };
             let c = self.find_free(d, from)?;
@@ -351,7 +360,9 @@ impl Fat {
                     self.set_first(d, h)?;
                 }
             } else {
-                self.set_entries(d, &[(c, EOC), (h.last, c)])?;
+                // two writes even in one FAT sector: a torn write of both could land the link without the end
+                self.set_entries(d, &[(c, EOC)])?;
+                self.set_entries(d, &[(h.last, c)])?;
             }
             (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1);
         }
@@ -419,7 +430,7 @@ impl Fat {
         size: u32,
         time: (u16, u16),
     ) -> Result<(), Error> {
-        let need = size.div_ceil((self.spc * SECTOR_U32).max(1)).max(1);
+        let need = self.clusters_for(size);
         if need > h.clusters {
             return Err(Error::Corrupt);
         }
@@ -455,7 +466,7 @@ impl Fat {
     /// Cuts `h`'s chain after the clusters `size` bytes need (at least one) and frees the rest: its size already
     /// that, or no entry at all ([`Fat::chain`]).
     pub fn trim(&mut self, d: &mut impl DiskWrite, h: &mut Handle, size: u32) -> Result<(), Error> {
-        let need = size.div_ceil((self.spc * SECTOR_U32).max(1)).max(1);
+        let need = self.clusters_for(size);
         if need < h.clusters {
             let keep = self.nth(d, h.first, need - 1)?;
             let mut rest = self.next(d, keep)?;
@@ -657,7 +668,8 @@ impl Fat {
             slot.copy_from_slice(e);
         }
         self.fill_cluster(d, c, &s)?;
-        self.set_entries(d, &[(c, EOC), (last, c)])?;
+        self.set_entries(d, &[(c, EOC)])?; // then the link, in its own write (as `take`)
+        self.set_entries(d, &[(last, c)])?;
         self.fsinfo_update(d, 1, c + 1, None)?;
         Ok(self.lba(c))
     }
@@ -1433,5 +1445,83 @@ pub(crate) mod tests {
                 assert_eq!(fsck(&d.0).map(|_| ()), Ok(()), "round {round}");
             }
         }
+    }
+
+    /// A disk whose power goes during its `.1`-th next sector write, which lands torn: its first `.2` bytes new, the
+    /// rest as they were (a card without reliable write). Every entry of such a FAT sector is a sane value.
+    struct Prefix(Ram, u32, usize);
+
+    impl Disk for Prefix {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Prefix {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            for (i, s) in buf.chunks(SECTOR).enumerate() {
+                if self.1 == 0 {
+                    let at = (lba as usize + i) * SECTOR;
+                    if self.0.0.len() < at + SECTOR {
+                        self.0.0.resize(at + SECTOR, 0);
+                    }
+                    self.0.0[at..at + self.2].copy_from_slice(&s[..self.2]);
+                    return Err(Error::Io);
+                }
+                self.1 -= 1;
+                self.0.write(lba + i as u32, s)?;
+            }
+            Ok(())
+        }
+    }
+
+    /// The review of 2026-10-31 (storage, 2): a grow whose new cluster and the link to it are in one FAT sector,
+    /// torn at every 4-byte edge of every write: the end of chain lands before the link, so a FAT the sync takes as
+    /// sane never has a chain running into a free cluster (in one write, a prefix holding the link but not the end
+    /// did).
+    #[test]
+    fn a_torn_grow_never_links_a_free_cluster() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let mut h = fat.create(&mut d, root, "A.BIN", T).unwrap();
+        fat.write_sectors(&mut d, &mut h, 0, &[1; SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut h, SECTOR as u32, T).unwrap();
+        let img = d.0.clone();
+        let (mut bad, mut cut) = (Vec::new(), 0);
+        for k in 0..6u32 {
+            for keep in (4..SECTOR).step_by(4) {
+                let mut c = Prefix(Ram(img.clone(), 0), k, keep);
+                let mut fat = Fat::mount(&mut c).unwrap();
+                let mut h2 = h;
+                if fat.write_sectors(&mut c, &mut h2, fat.spc, &[2; SECTOR]).is_ok() {
+                    continue;
+                }
+                cut += 1;
+                let mut m = Ram(c.0.0.clone(), 0);
+                Fat::mount(&mut m).unwrap().sync_fats(&mut m).unwrap();
+                if let Err(e) = fsck_cut(&m.0) {
+                    bad.push((k, keep, e));
+                }
+            }
+        }
+        assert!(cut >= 4 * 127, "{cut} torn writes");
+        assert!(bad.is_empty(), "{} bad, first {:?}", bad.len(), bad.first());
+    }
+
+    /// A chain handle built by hand (first cluster, no length) is refused when it would grow, not grown as an empty
+    /// file: its first cluster replaced by a new one, the write landing outside the ride's chain (the review of
+    /// 2026-10-31, storage 9).
+    #[test]
+    fn a_chain_without_its_length_is_not_grown() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let h = fat.create(&mut d, root, "A.BIN", T).unwrap();
+        let before = d.0.clone();
+        let mut bare = Handle { first: h.first, size: 0, ..Handle::default() };
+        assert_eq!(fat.write_sectors(&mut d, &mut bare, 0, &[1; SECTOR]), Err(Error::Corrupt));
+        assert_eq!(bare.first, h.first);
+        assert!(d.0 == before, "nothing written");
     }
 }

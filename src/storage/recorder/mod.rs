@@ -269,12 +269,6 @@ pub const KEPT: [(&str, u32); 8] = [
     (crate::trash::REC, SECTOR_U32),
 ];
 
-/// The clusters a file of `size` bytes takes, at least one. A cluster of 0 bytes (never: the mount takes a power of two
-/// sectors) counts as one byte: no division by zero on the save's path.
-fn clusters_for(size: u32, cluster_bytes: u32) -> u32 {
-    size.div_ceil(cluster_bytes.max(1)).max(1)
-}
-
 /// [`KEPT`] made where missing or not their size (zeros where they were shorter), then `\Rustfw\Deleted\Full` and
 /// `\Rustfw\Log` (the fault log's folder: storage/faultlog.rs never makes it); the FATs synced first when anything is
 /// to be made, as in [`Recorder::setup`] (a cut while making them leaves no record to say so). Reads only when all
@@ -285,7 +279,7 @@ fn make_kept(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(),
         fat.find(d, dir, crate::trash::DELETED).and_then(|del| fat.find(d, del, "Full")).is_ok_and(|f| f.dir);
     whole &= fat.find(d, dir, crate::storage::faultlog::LOG_DIR).is_ok_and(|f| f.dir);
     for (name, size) in KEPT {
-        whole &= fat.locate(d, dir, name).is_ok_and(|h| h.size == size);
+        whole &= fat.locate(d, dir, name).is_ok_and(|h| h.size >= size); // longer: a newer build's, kept
     }
     if whole {
         return Ok(());
@@ -297,7 +291,7 @@ fn make_kept(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(),
             Err(Error::NotFound) => fat.create(d, dir, name, t)?,
             Err(e) => return Err(e),
         };
-        if h.size != size {
+        if h.size < size {
             // shorter: never whole for its reader (each writes its sectors, then the size)
             for k in h.size.div_ceil(SECTOR_U32)..size / SECTOR_U32 {
                 fat.write_sectors(d, &mut h, k, &[0; SECTOR])?;
@@ -1516,7 +1510,7 @@ impl Recorder {
         fat.write_sectors(d, &mut file, 0, &s)?;
         // a checkpoint that grew the chain, then failed: cut back to the size (its entry's size first), else saved
         // a cluster longer than its size
-        if file.clusters > clusters_for(size, fat.cluster_bytes()) {
+        if file.clusters > fat.clusters_for(size) {
             fat.set_size(d, &mut file, size, t)?;
             self.file = Some(file);
         }
