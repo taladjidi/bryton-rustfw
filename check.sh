@@ -18,6 +18,7 @@ for a in "$@"; do
         *) echo "usage: check.sh [--full | --quick] [-v]"; exit 2 ;;
     esac
 done
+[ $quick = 1 ] || unset FUZZ_SCALE # the gate always runs every fuzz seed
 C=target/check
 # what the tests wrote (target/fit, target/sim, target/fat) is removed first: a stale file must not pass fit_check,
 # fsck or Renode when its test no longer writes it
@@ -73,14 +74,6 @@ grep -q "keys: no key files" "$C/lint.out" && skip "keys (no key files)"
 command -v ruff >/dev/null 2>&1 || skip "ruff (not installed)"
 step "cargo fmt --check" cargo fmt --check
 
-if [ $quick = 1 ]; then
-    step "cargo clippy --release" cargo clippy --release -- -D warnings  # two branches failed the gate on it
-    step "cargo clippy --tests (host)" cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings
-    step "cargo test-host" cargo test-host
-    echo "QUICK TIER: guards, lint, fmt, firmware and host clippy and host tests only. This is NOT the gate: run ./check.sh before a commit."
-    exit 0
-fi
-
 # What the branch changed (against the merge base with origin/main, plus the working tree): the skips below.
 # On main, without a base, or with --full, everything runs.
 changed=""; skipok=0
@@ -101,6 +94,28 @@ touched() { [ $skipok = 0 ] || printf '%s\n' "$changed" | grep -qE "$1"; }
 touched_beyond() { [ $skipok = 0 ] || printf '%s\n' "$changed" | grep -vE "$1" | grep -q .; }
 # main, --full and a detached HEAD are strict: a missing optional checker fails instead of skipping
 strict=1; [ $skipok = 1 ] && strict=0
+
+if [ $quick = 1 ]; then
+    step "cargo clippy --release" cargo clippy --release -- -D warnings  # two branches failed the gate on it
+    step "cargo clippy --tests (host)" cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings
+    # Tests: a quarter of the fuzz seeds (FUZZ_SCALE, src/sim/fuzz.rs), and on a branch only the tests the changed paths
+    # can affect (tools/test_select.py; ALL when anything is shared or unmapped, or with no diff). The gate runs all.
+    filters=ALL
+    if [ $skipok = 1 ] && [ -n "$changed" ]; then filters=$(printf '%s\n' "$changed" | python3 -I tools/test_select.py | paste -s -d ' ' -); fi
+    echo "quick tests: FUZZ_SCALE=0.25, filters: $filters"
+    case $filters in
+        ALL) step "cargo test-host" env FUZZ_SCALE="${FUZZ_SCALE:-0.25}" cargo test-host ;;
+        NONE) skip "host tests (no Rust, test or build file changed)" ;;
+        *)  # a filter that matches no test would pass with 0 tests run: refuse it
+            for f in $filters; do
+                [ "$(cargo test-host --lib -q -- --list "$f" 2>/dev/null | grep -c ': test$')" -gt 0 ] \
+                    || { echo "quick: filter '$f' selects 0 tests (tools/test_select.py is stale)"; exit 1; }
+            done
+            step "cargo test-host (selected)" env FUZZ_SCALE="${FUZZ_SCALE:-0.25}" cargo test-host --lib -- $filters ;;
+    esac
+    echo "QUICK TIER: guards, lint, fmt, firmware and host clippy and host tests only (a quarter of the fuzz seeds; the tests the diff can reach). This is NOT the gate: run ./check.sh before a commit."
+    exit 0
+fi
 
 lane_F() {  # the firmware
     step "cargo clippy --release" cargo clippy --release -- -D warnings
@@ -189,6 +204,7 @@ lane_P() {  # the Python tools' self-tests
         step "s810_probe.py selftest" python3 -I tools/s810_probe.py selftest
         step "route_pack.py selftest" python3 -I tools/route_pack.py selftest
         step "ign_pack.py selftest" python3 -I tools/ign_pack.py selftest
+        step "test_select.py selftest" python3 -I tools/test_select.py selftest
         step "review.py selftest" python3 -I tools/review.py selftest
         step "map_pack.py selftest" python3 -I tools/map_pack.py selftest
         step "theme.py selftest" python3 -I tools/theme.py selftest

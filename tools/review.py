@@ -109,6 +109,7 @@ def mutants(base, jobs, timeout, quick):
 
 
 def main(argv):
+    os.environ.pop("FUZZ_SCALE", None)  # mutants must be judged by every fuzz seed, never a quarter of them
     base, jobs, timeout, quick = "origin/main", max(1, (os.cpu_count() or 2) // 2), 300, False
     args = iter(argv)
     for a in args:
