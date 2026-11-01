@@ -911,6 +911,7 @@ impl App {
             Some(Row::Set(menu::Setting::Trip(_))) if self.ride.state() != ride::State::Idle => {
                 self.say("END THE RIDE FIRST")
             }
+            Some(Row::Set(menu::Setting::Trip(_))) if !self.settings_ready(b) => {}
             Some(Row::Set(menu::Setting::Trip(n)))
                 if self.confirmed(menu, sel, if n == 0 { "RESET TRIP 1" } else { "RESET TRIP 2" }) =>
             {
@@ -956,6 +957,7 @@ impl App {
             Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {
                 self.rescan();
             }
+            Some(Row::Stock(menu::StockRow::Import)) if !self.settings_ready(b) => {}
             Some(Row::Stock(menu::StockRow::Import)) if self.confirmed(menu, sel, "IMPORT SETTINGS") => {
                 self.import_stock(b, false)
             }
@@ -1081,6 +1083,9 @@ impl App {
 
     /// Select on a setting: a number starts or ends its editing, a choice cycles.
     fn activate_setting(&mut self, b: &mut impl Board, s: menu::Setting) {
+        if !self.menu.editing && s != menu::Setting::Altitude && !self.settings_ready(b) {
+            return;
+        }
         if s.number().is_some() {
             self.menu.editing = !self.menu.editing;
             if self.menu.editing && s == menu::Setting::Altitude {
@@ -1119,6 +1124,9 @@ impl App {
     /// Select on an ANT+ sensor: pair, stop, search again, forget.
     fn activate_sensor(&mut self, b: &mut impl Board, menu: Menu, sel: usize, k: usize) {
         let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };
+        if kind == Kind::Trainer && !self.sensors_ready(b) {
+            return;
+        }
         let heard = self.radio.heard(kind);
         match self.radio.sensors.get(k).copied() {
             Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
@@ -1145,6 +1153,9 @@ impl App {
     /// Select on a row of the phone menu.
     fn activate_phone(&mut self, b: &mut impl Board, menu: Menu, sel: usize, r: menu::PhoneRow) {
         use menu::PhoneRow;
+        if matches!(r, PhoneRow::Pair | PhoneRow::Forget | PhoneRow::Notify | PhoneRow::Keys) && !self.phone_ready(b) {
+            return;
+        }
         match r {
             PhoneRow::Status => {}
             PhoneRow::Pair => self.phone_pair(b),

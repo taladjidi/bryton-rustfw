@@ -81,6 +81,9 @@ impl App {
 
     /// APPLY on the result screen: the FTP found becomes the setting ([`App::applied_ftp`]).
     pub(crate) fn apply_ramp(&mut self, b: &mut impl Board) {
+        if !self.settings_ready(b) {
+            return;
+        }
         if let Some(o) = self.ramp.result.take() {
             self.settings.ftp = Self::applied_ftp(&o);
             self.save_misc(b);

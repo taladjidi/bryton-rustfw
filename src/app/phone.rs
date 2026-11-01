@@ -132,6 +132,8 @@ pub struct Phone {
     pub(crate) stored: Stored,
     /// `ble.bin` read (or tried); to be written.
     loaded: bool,
+    /// The last read of `ble.bin` met a card that did not answer: PHONE rows that change it wait for it.
+    io_failed: bool,
     save: bool,
     /// The GATT server was set up.
     ready: bool,
@@ -202,6 +204,7 @@ impl Default for Phone {
         Phone {
             stored: Stored::default(),
             loaded: false,
+            io_failed: false,
             save: false,
             ready: false,
             adv: Adv::Off,
@@ -475,6 +478,19 @@ impl App {
         self.advertise(b, want);
     }
 
+    /// The phone's settings and bond may be changed: `ble.bin` read, or the card not known to be down (else a late
+    /// read would meet the change and erase the bond). Else why not, said.
+    pub(crate) fn phone_ready(&mut self, b: &mut impl Board) -> bool {
+        if self.phone.loaded || !self.phone.io_failed {
+            return true;
+        }
+        self.phone_storage(b);
+        if !self.phone.loaded {
+            self.say(if self.emmc.lent() { "USB DRIVE ON" } else { "PHONE NOT READ" });
+        }
+        self.phone.loaded
+    }
+
     /// The PHONE menu's PAIR: advertise to be found for [`ADV_FAST`]'s time.
     pub(crate) fn phone_pair(&mut self, b: &mut impl Board) {
         if self.phone.conn.is_some() {
@@ -511,13 +527,17 @@ impl App {
             return;
         }
         if !self.phone.loaded {
-            self.phone.loaded = true;
             let mut d = emmc::Volume(&mut self.emmc, b);
             let mut s = [0u8; 512];
             let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
                 let f = fat.open(&mut d, "Rustfw/ble.bin")?;
                 fat.read_at(&mut d, &f, 0, &mut s)
             });
+            self.phone.io_failed = read == Err(fat::Error::Io);
+            if self.phone.io_failed {
+                return; // a card not answering: asked again at the next pass (the eMMC layer's backoff keeps it cheap)
+            }
+            self.phone.loaded = true;
             // a phone paired before the read (its bond not written yet) is the one kept
             if let Ok(512) = read
                 && let Some(stored) = Stored::from_sector(&s)

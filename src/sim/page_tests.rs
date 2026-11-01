@@ -484,7 +484,7 @@ fn a_first_start_on_a_read_only_build_keeps_the_files_pages() {
     use crate::ui::Field::*;
     assert_ne!(&app.pages()[0].fields[..4], &[Power, Hr, Cadence, Speed][..], "stock's first page not taken");
     ro.emmc.unreadable.clear();
-    run(&mut ro, &mut app, PAGES_LOAD_MS as u64 + 200);
+    run(&mut ro, &mut app, PAGES_LOAD_MS as u64 + 6000); // the failed read's backoff (5 s) first
     assert_eq!(pages(&app), want, "the file's pages once read");
     assert!(ro.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
     assert!(ro.emmc.image == image, "the card unchanged");
@@ -815,6 +815,7 @@ fn a_failed_read_is_tried_again() {
     let mut app = App::start(&mut sim2, None);
     run(&mut sim2, &mut app, PAGES_LOAD_MS as u64 + 200);
     sim2.emmc.dead = false;
+    app.emmc.advance(crate::emmc::BACKOFF_FIRST_MS); // the wait after the failed identification is over
     let p = Page::preset(2, [Speed, Ascent, Time, Time, Time, Time, Time, Time]).unwrap();
     app.screen = Screen::Ride(0);
     app.edit_page(&mut sim2, 0, 0);

@@ -807,6 +807,7 @@ impl App {
                 self.pages[OVERVIEW] = q;
                 save_page(b, OVERVIEW, &q);
             }
+            QUICK if !self.settings_ready(b) => {}
             QUICK => {
                 self.settings.quick_page = q;
                 self.save_misc(b);

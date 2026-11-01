@@ -153,6 +153,9 @@ impl App {
     /// starts with AUTO; the others are DARK, OUTDOOR, LIGHT and the card's files. A DAY or NIGHT pick redraws only
     /// when AUTO is on and the theme in use changes.
     pub(crate) fn next_theme(&mut self, b: &mut impl Board, s: menu::Setting) {
+        if !self.settings_ready(b) {
+            return;
+        }
         let (files, n) = self.theme_files(b);
         let auto_first = s == menu::Setting::Theme;
         let off = usize::from(auto_first);

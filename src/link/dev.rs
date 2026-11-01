@@ -896,7 +896,7 @@ pub fn send_layout(h: &mut impl Host, r: Result<emmc::Card, emmc::Error>) {
     }
 }
 
-/// `err cmd <n> timeout|crc|overrun`, `err busy`, `err status cmd <n> <status>`, `err range`, `err ext_csd` or `err lent as usb drive`.
+/// `err cmd <n> timeout|crc|overrun`, `err busy`, `err backoff`, `err status cmd <n> <status>`, `err range`, `err ext_csd` or `err lent as usb drive`.
 fn send_error(h: &mut impl Host, e: emmc::Error) {
     use emmc::{BusError, Error};
     match e {
@@ -916,6 +916,7 @@ fn send_error(h: &mut impl Host, e: emmc::Error) {
             h.send(b" ");
             h.send(&hex(s));
         }
+        Error::Backoff => h.send(b"err backoff\n"),
         Error::Range => h.send(b"err range\n"),
         Error::ExtCsd => h.send(b"err ext_csd\n"),
         Error::Lent => h.send(b"err lent as usb drive\n"),

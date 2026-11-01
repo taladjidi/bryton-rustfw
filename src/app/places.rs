@@ -25,10 +25,6 @@ pub const PLACES_FILE: &str = "places.bin";
 /// Reads tried before giving up until a menu asks again.
 const LOAD_TRIES: u8 = 3;
 
-/// After [`LOAD_TRIES`] failed, one more read this often, s (a card that answers again: the places come back without a
-/// restart, and with them the calibration at a place).
-const RETRY_S: u8 = 60;
-
 /// Stopped: under 2 km/h (mm/s).
 const STOPPED_MM_S: u32 = 556;
 
@@ -45,8 +41,6 @@ pub(crate) struct PlaceStore {
     pub(crate) list: places::Places,
     /// The file's state.
     pub(crate) file: copies::Copies,
-    /// Seconds since the reads gave up: one more read a minute ([`RETRY_S`]).
-    idle_s: u8,
     /// The place the barometer was calibrated at, until the rider leaves it.
     at: Option<u8>,
 }
@@ -54,7 +48,7 @@ pub(crate) struct PlaceStore {
 impl PlaceStore {
     /// Nothing read.
     pub(crate) const fn new() -> Self {
-        PlaceStore { list: places::Places::new(), file: copies::Copies::new(), idle_s: 0, at: None }
+        PlaceStore { list: places::Places::new(), file: copies::Copies::new(), at: None }
     }
 }
 
@@ -140,13 +134,6 @@ impl App {
 
     /// Once a second: stopped at a place with an altitude, the barometer reads it (module doc).
     pub(crate) fn places_second(&mut self) {
-        let st = &mut self.places;
-        if !st.file.loaded && st.file.tries >= LOAD_TRIES {
-            st.idle_s = st.idle_s.saturating_add(1);
-            if st.idle_s >= RETRY_S {
-                (st.file.tries, st.idle_s) = (LOAD_TRIES - 1, 0); // step_places reads once more
-            }
-        }
         let Some(p) = self.gps.pvt.filter(|p| p.good() && p.h_acc_mm <= H_ACC_MM) else { return };
         match self.places.list.nearest_with_alt(p.lat, p.lon) {
             Some((k, d)) if d <= places::NEAR_M => {

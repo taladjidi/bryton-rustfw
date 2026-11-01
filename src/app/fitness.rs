@@ -144,6 +144,9 @@ impl App {
         if !self.confirmed(menu, sel, what.as_str()) {
             return;
         }
+        if !self.settings_ready(b) {
+            return;
+        }
         if ftp {
             self.settings.ftp = value;
         } else {
