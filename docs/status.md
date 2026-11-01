@@ -18,11 +18,13 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
-- **The radio receive's short wait (2026-10-31, main.rs `nrf_recv`, review finding 8)**: seen at the desk only (no
-  sensors there: the chip's own traffic, about 40 frames a minute; frames, resyncs and resets read by `tools/dev.py
-  peek` of a temporary diagnostic, none of either before or after). Still to see, before a ride build: a ride with the
-  owner's sensors, `tools/dev.py info` at the start and after 60 s: each kind's count after `ant` (HR, SPEED, CAD,
-  SPD+CAD, POWER...) grown by about 4 a second per sensor, `resyncs` and `radio resets` unchanged.
+- **The radio receive's wait (main.rs `nrf_recv`): the short wait of finding 8 (2026-10-31) was taken out on 2026-11-01**,
+  back to 200 us after every byte. The chip's app needs more than 20 us to pull and encode its next event, so the
+  20 us wait ended each read after one frame; the drain fell behind a ride's events and the chip's 96-slot queue
+  overflowed, which hangs it for ever (the ride's silence about 30 s after every reset). The sim now models that queue
+  (`ChipLimits`, `src/sim/ride_radio_tests.rs`). To see on the unit: a ride with the owner's sensors, `tools/dev.py info`
+  at the start and after 60 s: each kind's count after `ant` grown by about 4 a second per sensor, `resyncs` and
+  `radio resets` unchanged; the awake cost is back to the pre-finding-8 figure (est. 2.4 to 3.2 ms a second more).
 - **The 100 ms ride pass (2026-10-31, review finding 9): taken out on 2026-11-01** as the second suspect of the ride's
   radio dropouts (the Nordic chip went silent as a whole about 30 s after every restart on the 2026-11-01 road ride;
   the first suspect, ATT MTU 103, is out as well, each in its own commit to be tested apart). A running ride is

@@ -757,6 +757,35 @@ pub struct Nordic {
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
     out: std::collections::VecDeque<u8>,
+    /// The chip's real limits (None: events are sent as they come, the model every other test uses).
+    pub limits: Option<ChipLimits>,
+    /// With limits: the events (ANT and BLE frames) waiting for the host to read them, one frame at a time.
+    events: std::collections::VecDeque<Vec<u8>>,
+    ended_ms: Option<u64>,
+    /// With limits: times the queue overflowed (the chip hung), and the most events ever waiting; both survive a reset.
+    pub hangs: u32,
+    pub high_water: usize,
+}
+
+/// The Nordic app's limits (bryton-S510-mods ghidra/nordic-app.md, "Model parameters for the simulator"): it queues
+/// events in `slots` slots and hangs for ever when one more arrives with none free. It sends one frame at a time and
+/// only while the host reads (RTS holds it otherwise; the RX FIFO's 16 bytes just refill as the host reads, so
+/// bytes are produced at read time), and needs `frame_gap_us` between two frames (inferred: the unit shows
+/// a freed FIFO refilled within 4 us, not a new frame).
+#[derive(Clone, Copy)]
+pub struct ChipLimits {
+    /// Event queue depth.
+    pub slots: usize,
+    /// Time from the end of a frame to the start of the next, us.
+    pub frame_gap_us: u32,
+    /// How long one `nrf_recv` waits for the next byte, us: the board's `nrf_wait_cycles` (200; 20 before 2026-11-01).
+    pub wait_us: u32,
+}
+
+impl Default for ChipLimits {
+    fn default() -> Self {
+        Self { slots: 96, frame_gap_us: 50, wait_us: 200 }
+    }
 }
 
 /// A simulated FE-C trainer (drivers/fec.rs): sends pages 16 and 25 (and 80, 81, 54 when asked), applies the control
@@ -1051,6 +1080,19 @@ impl Nordic {
             return;
         }
         let frame = [&(payload.len() as u16).to_le_bytes()[..], payload].concat();
+        if let Some(l) = self.limits
+            && payload.first() != Some(&1)
+        {
+            if self.events.len() >= l.slots {
+                (self.hung, self.hangs) = (true, self.hangs + 1);
+                self.events.clear();
+                self.out.clear();
+                return;
+            }
+            self.events.push_back(frame);
+            self.high_water = self.high_water.max(self.events.len());
+            return;
+        }
         let Some((x, rate)) = &mut self.chaos else {
             return self.out.extend(frame);
         };
@@ -1068,6 +1110,28 @@ impl Nordic {
                 _ => self.out.push_back(byte ^ 1 << ((*x >> 20) % 8)), // a bit flipped
             }
         }
+    }
+
+    /// One `nrf_recv` with the chip's limits: the frame in flight, then the next event's frame only when the board
+    /// waits long enough for the chip's gap (a call that ends with nothing more to read ends the burst).
+    fn read_limited(&mut self, buf: &mut [u8], l: ChipLimits, now: u64) -> usize {
+        let mut n = 0;
+        while n < buf.len() {
+            if let Some(b) = self.out.pop_front() {
+                buf[n] = b;
+                n += 1;
+                if self.out.is_empty() {
+                    self.ended_ms = Some(now);
+                }
+            } else if n == 0 && self.ended_ms == Some(now) {
+                break; // a call at the very time the last frame ended: the chip's gap has not passed (a later ms: it has)
+            } else if let Some(f) = (n == 0 || l.frame_gap_us <= l.wait_us).then(|| self.events.pop_front()).flatten() {
+                self.out.extend(f);
+            } else {
+                break;
+            }
+        }
+        n
     }
 
     /// A stray byte in the stream, between frames.
@@ -1470,6 +1534,7 @@ impl Board for Sim {
         let meter = std::mem::take(&mut self.nordic.meter);
         let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
+        let (limits, hangs, high_water) = (self.nordic.limits, self.nordic.hangs, self.nordic.high_water);
         resets.push(self.ms);
         self.nordic = Nordic {
             dead,
@@ -1486,6 +1551,9 @@ impl Board for Sim {
             reset: true,
             resets,
             chaos,
+            limits,
+            hangs,
+            high_water,
             ..Nordic::default()
         };
         self.ms += 950;
@@ -1630,6 +1698,9 @@ impl Board for Sim {
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         self.nordic_due();
+        if let Some(l) = self.nordic.limits {
+            return self.nordic.read_limited(buf, l, self.ms);
+        }
         let n = buf.len().min(self.nordic.out.len());
         for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
             *slot = b;
@@ -1664,6 +1735,8 @@ mod perf_tests;
 #[cfg(test)]
 mod pmc_tests;
 mod poi_tests;
+#[cfg(test)]
+mod ride_radio_tests;
 #[cfg(test)]
 mod ride_tests;
 #[cfg(test)]

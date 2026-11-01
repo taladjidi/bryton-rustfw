@@ -916,25 +916,18 @@ fn nrf_send(data: &[u8]) {
 }
 
 /// Reads what has arrived, and while bytes keep coming waits for the next one as long as
-/// [`bryton_rustfw::nrf_wait_cycles`] says (20 us, or 200 us after a full FIFO), so a long burst comes in one call
-/// instead of 16 bytes per main loop pass. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
+/// [`bryton_rustfw::nrf_wait_cycles`] says (200 us), so every frame the chip has ready comes in one call, however
+/// long the burst. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
 fn nrf_recv(buf: &mut [u8]) -> usize {
     let mut n = 0;
-    let mut run = 0; // bytes read with no empty poll between them: a byte off the wire comes alone (10 us each)
-    let mut gap = false;
     let mut last = cycles();
     while let Some(slot) = buf.get_mut(n) {
         if rd(U_ISR) & ISR_RXFNE != 0 {
             *slot = rd(U_RDR) as u8;
             n += 1;
-            run = if gap { 1 } else { run + 1 };
-            gap = false;
             last = cycles();
-        } else {
-            if n == 0 || cycles().wrapping_sub(last) > bryton_rustfw::nrf_wait_cycles(run, CPU_HZ) {
-                break;
-            }
-            gap = true;
+        } else if n == 0 || cycles().wrapping_sub(last) > bryton_rustfw::nrf_wait_cycles(CPU_HZ) {
+            break;
         }
     }
     wr(U_ICR, 0xf); // an overrun cannot happen with RTS, but never let an error flag stop reception

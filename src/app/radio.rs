@@ -6,22 +6,18 @@
 use crate::*;
 use phone::Media;
 
-/// The Nordic UART's RX FIFO depth (USART2, RM0399 USART, FIFO mode): this many bytes found waiting in a row mean it
-/// was full and RTS was holding the chip.
-pub const NRF_FIFO: u32 = 16;
-
-/// How long the receive (main.rs `nrf_recv`) waits for a burst's next byte, in cycles at `cpu_hz`, after `run` bytes
-/// read with no empty poll between them: two byte times (20 us at 1 Mbaud) end a burst; after a full FIFO
-/// ([`NRF_FIFO`]: RTS held the chip) 200 us, for the chip to go on once reading frees the FIFO (within 4 us on the unit,
-/// BOARD.md 11). The rest of a burst split by a longer gap waits in the FIFO (RTS) for the next read.
+/// How long the receive (main.rs `nrf_recv`) waits for a burst's next byte, in cycles at `cpu_hz`: 200 us after every
+/// byte, so a pass drains every frame the chip has ready. The chip needs more than two byte times (20 us, the wait
+/// of 2026-10-31 to 2026-11-01, review finding 8) to pull and encode its next event, so that wait ended each read
+/// after one frame; the drain then fell behind the ride's events and the chip's 96-slot queue overflowed and hung it
+/// (sim/ride_radio_tests.rs).
 ///
 /// ```
 /// use bryton_rustfw::nrf_wait_cycles;
-/// assert_eq!(nrf_wait_cycles(1, 200_000_000), 4_000); // 20 us
-/// assert_eq!(nrf_wait_cycles(16, 200_000_000), 40_000); // 200 us
+/// assert_eq!(nrf_wait_cycles(200_000_000), 40_000); // 200 us
 /// ```
-pub fn nrf_wait_cycles(run: u32, cpu_hz: u32) -> u32 {
-    if run >= NRF_FIFO { cpu_hz / 5_000 } else { cpu_hz / 50_000 }
+pub fn nrf_wait_cycles(cpu_hz: u32) -> u32 {
+    cpu_hz / 5_000
 }
 
 /// How long a sensor's channel rests, closed, after its search timed out ([`nrf::SEARCH_TIMEOUT`]) before it
@@ -343,11 +339,10 @@ mod wait_tests {
     use super::*;
 
     #[test]
-    fn a_full_fifo_waits_long_and_a_byte_off_the_wire_short() {
-        let hz = 200_000_000;
-        assert_eq!(nrf_wait_cycles(0, hz), hz / 50_000);
-        assert_eq!(nrf_wait_cycles(NRF_FIFO - 1, hz), hz / 50_000, "15 waiting: the FIFO was not full");
-        assert_eq!(nrf_wait_cycles(NRF_FIFO, hz), hz / 5_000);
-        assert_eq!(nrf_wait_cycles(NRF_FIFO + 30, hz), hz / 5_000, "the chip went on as the FIFO drained");
+    fn the_wait_after_a_byte_outlasts_the_chips_gap_between_frames() {
+        let us = |hz: u32| u64::from(nrf_wait_cycles(hz)) * 1_000_000 / u64::from(hz);
+        assert_eq!(us(200_000_000), 200);
+        assert_eq!(us(100_000_000), 200, "a time, whatever the clock");
+        assert!(us(200_000_000) > 50, "longer than the chip's gap before its next frame (sim ChipLimits)");
     }
 }
