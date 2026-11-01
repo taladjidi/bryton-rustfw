@@ -173,6 +173,9 @@ pub struct Sim {
     pub awake_ns: u64,
     /// Time slept in a transfer's wait (the panel's DMA) not yet taken by [`Board::waited_us`], ns.
     waited_ns: u64,
+    /// In-pass `delay_ms` calls count as waits of the work, as on the unit. Off by default: most tests sleep with
+    /// `delay_ms` themselves; the clock tests and the budget rig sleep with [`Sim::sleep_ms`] and turn it on.
+    pub count_waits: bool,
     /// What each transfer costs in time ([`Cost`]); the sub-millisecond rest of it is in `cost_rem`.
     pub cost: Cost,
     cost_rem: u64,
@@ -1246,6 +1249,21 @@ impl Sim {
         self.cost_rem %= 1_000_000;
     }
 
+    /// The loop's own sleep: the clock moves on, nothing is owed to the app's clock.
+    pub fn sleep_ms(&mut self, ms: u32) {
+        self.ms += u64::from(ms);
+        if let Some(x) = &mut self.nrf_ext {
+            x.advance_ms(ms);
+        }
+        if let Some((dir, n)) = &mut self.record
+            && self.dirty
+        {
+            std::fs::write(dir.join(format!("{:05}.bmp", *n)), bmp(&self.screen)).unwrap();
+            *n += 1;
+            self.dirty = false;
+        }
+    }
+
     /// This firmware's default settings in the backup registers, as after its first start: the next start does not
     /// import stock's ([`App::first_start`]).
     pub fn own_settings(&mut self) {
@@ -1319,6 +1337,7 @@ impl Sim {
             long_gnss_gaps: (0, [0; 6]),
             awake_ns: 0,
             waited_ns: 0,
+            count_waits: false,
             cycles: 0,
             cycles_step: 0,
             adc_calls: [0; 4],
@@ -1540,18 +1559,13 @@ impl Board for Sim {
         self.rtc_sets += 1;
     }
 
+    /// A delay inside the work is a wait the app's clock must count ([`Board::waited_us`]), when
+    /// [`Sim::count_waits`] is on; the loop's own sleep is [`Sim::sleep_ms`].
     fn delay_ms(&mut self, ms: u32) {
-        self.ms += u64::from(ms);
-        if let Some(x) = &mut self.nrf_ext {
-            x.advance_ms(ms);
+        if self.count_waits {
+            self.waited_ns += u64::from(ms) * 1_000_000;
         }
-        if let Some((dir, n)) = &mut self.record
-            && self.dirty
-        {
-            std::fs::write(dir.join(format!("{:05}.bmp", *n)), bmp(&self.screen)).unwrap();
-            *n += 1;
-            self.dirty = false;
-        }
+        self.sleep_ms(ms);
     }
 
     fn standby(&mut self) {

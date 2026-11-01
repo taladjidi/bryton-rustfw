@@ -416,8 +416,6 @@ fn spi_end() {
     wr(SPI_CR1, CR1_SSI);
 }
 
-/// [`dma_timeout_ms`] of the divider spi_init chose, set there once before the DMA handle exists (0 keeps it in
-/// .bss: no .data).
 /// Microseconds the work slept in WFI (`dma_wait`, `delay_ms`) since `Board::waited_us` last took them.
 static WAITED_US: AtomicU32 = AtomicU32::new(0);
 
@@ -425,6 +423,8 @@ fn waited_add(us: u32) {
     let _ = WAITED_US.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |w| Some(w.saturating_add(us)));
 }
 
+/// [`dma_timeout_ms`] of the divider spi_init chose, set there once before the DMA handle exists (0 keeps it in
+/// .bss: no .data).
 static DMA_TIMEOUT_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Sleeps until DMA1 stream 0 has sent its words: true, or false on a DMA error, a mode fault or a timeout.
@@ -446,6 +446,7 @@ fn dma_wait() -> bool {
     wr(RCC_AHB1LPENR, lp.0 | 1); // DMA1LPEN
     wr(RCC_APB2LPENR, lp.1 | (1 << 12)); // SPI1LPEN
     let t0 = cycles();
+    let mut fired = false;
     let ok = loop {
         let isr = rd(DMA1_LISR);
         if isr & DMA_ERR0 != 0 {
@@ -456,7 +457,8 @@ fn dma_wait() -> bool {
             break true;
         }
         let sr = rd(SPI_SR);
-        if sr & SR_MODF != 0 || (own && timer_done()) || cycles().wrapping_sub(t0) > limit * (CPU_HZ / 1000) {
+        fired = own && timer_done();
+        if sr & SR_MODF != 0 || fired || cycles().wrapping_sub(t0) > limit * (CPU_HZ / 1000) {
             DMA_FAIL.store(0x2000_0000 | (u32::from(own) << 24) | (sr & 0xffff) | (isr << 16), Ordering::Relaxed);
             break false;
         }
@@ -469,8 +471,11 @@ fn dma_wait() -> bool {
     if own {
         // our SysTick period began at the wait's start: what it has counted is the wait, WFI included (the cycle
         // counter stops there; SysTick runs on the core clock, which the sleep keeps: ARMv7-M B3.3)
+        // a period that ended (read here too: TCIF may land just after the wrap) counts whole, as CVR has reloaded
         let total = limit.min(TIMER_MAX_MS) * (CPU_HZ / 1000);
-        waited_add(total.saturating_sub(rd(SYST_CVR)) / (CPU_HZ / 1_000_000));
+        fired |= timer_done();
+        let counted = if fired { total } else { total.saturating_sub(rd(SYST_CVR)) };
+        waited_add(counted / (CPU_HZ / 1_000_000));
         timer_stop();
     }
     ok

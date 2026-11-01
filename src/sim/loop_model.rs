@@ -159,7 +159,7 @@ impl LoopBoard for Sim {
         self.main.bytes_always || self.nordic.has_bytes(now)
     }
     fn sleep(&mut self) {
-        self.delay_ms(1);
+        self.sleep_ms(1);
     }
     fn take_io(&mut self) -> (u32, u32, u32) {
         (0, 0, 0)

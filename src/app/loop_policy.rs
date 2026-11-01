@@ -86,6 +86,8 @@ pub struct LoopPolicy {
     usb_tried: bool,
     /// Slept so far in this pass, ms, by SysTick: the cycle counter stops in WFI.
     slept: u32,
+    /// The sub-ms rest of the work, us, counted in the next pass.
+    rest_us: u32,
     /// Slept since the panel was last read, ms.
     since_touch: u32,
     /// Awake cycles in the current window, all cycles run (the sleep loop's too), and the window's length, ms.
@@ -104,6 +106,7 @@ impl LoopPolicy {
             timer_max_ms,
             usb_tried: false,
             slept: 0,
+            rest_us: 0,
             since_touch: 0,
             awake: 0,
             ran: 0,
@@ -189,7 +192,11 @@ impl LoopPolicy {
         let worked = pass_cycles.wrapping_sub(sleep_cycles);
         self.awake = self.awake.saturating_add(worked);
         self.ran = self.ran.saturating_add(worked).saturating_add(sleep_cycles);
-        let pass_ms = worked / per_ms + waited_us / 1000 + self.slept;
+        // in us, the sub-ms rest carried to the next pass (as App::step does): a truncation each pass drifts
+        let per_us = (self.cpu_hz / 1_000_000).max(1);
+        let us = (worked / per_us).saturating_add(waited_us).saturating_add(self.rest_us);
+        self.rest_us = us % 1000;
+        let pass_ms = us / 1000 + self.slept;
         self.window_ms = self.window_ms.wrapping_add(pass_ms);
         if self.window_ms >= 1000 {
             let w = u64::from(self.window_ms);

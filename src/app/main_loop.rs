@@ -125,7 +125,6 @@ impl<L: UsbLink> MainLoop<L> {
         let mut press = None;
         let mut touched = None;
         let sleep_start = b.cycles();
-        let waited_pre = b.waited_us(); // the step's waits (the panel's DMA): work, not sleep
         let mut woke = false;
         let (mut radio_passes, mut radio_cycles) = (0, 0u32);
         // the pass's sleep, in slices: TOUCH_MS ones while a finger is on the panel, and one ends early when the
@@ -261,7 +260,6 @@ impl<L: UsbLink> MainLoop<L> {
         let sleep_cycles = b.cycles().wrapping_sub(sleep_start).wrapping_sub(radio_cycles);
         let slept = self.policy.slept_ms();
         app.prof().clock.slept(slept, sleep_cycles / (B::CPU_HZ / 1_000_000));
-        let _ = b.waited_us(); // the sleep's own waits are in the slices' ms already
         let t1 = b.cycles();
         if press.is_some() || touched.is_some() {
             if let Some(p) = press {
@@ -274,7 +272,8 @@ impl<L: UsbLink> MainLoop<L> {
         }
         b.checkpoint(7);
         // the app's work is the pass less its sleep loop (USB polls, a WFI that does not sleep)
-        let waited = waited_pre.saturating_add(b.waited_us());
+        // the whole pass's waits in WFI (the step's DMA, a touch's, a radio pass's, an input's): work, not sleep
+        let waited = b.waited_us();
         app.prof().clock.owed_us = app.prof().clock.owed_us.saturating_add(waited); // the next step's work
         let pass_ms = self.policy.account(b.cycles().wrapping_sub(t0), sleep_cycles, waited);
         app.prof().pass(pass_ms, slept);

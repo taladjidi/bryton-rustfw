@@ -21,6 +21,7 @@
 //! `cargo test-host budget -- --nocapture` prints the table. Out of scope: the unit's own measurements
 //! (docs/status.md, "Not yet seen on the unit").
 
+use super::SimLink;
 use super::ride_radio_tests::radio_unit;
 use super::*;
 use crate::ui::menu::Row;
@@ -181,6 +182,7 @@ impl Rig {
             sim.gnss.fix = Some(8000);
             sim.work_ns_per_byte = 430;
             sim.cost = s.cost;
+            sim.count_waits = true;
             prep(sim);
         });
         app.screen = Screen::Main;
@@ -205,7 +207,7 @@ impl Rig {
         let t = self.sim.ms;
         self.app.step(&mut self.sim);
         self.worst_pass = self.worst_pass.max(self.sim.ms - t);
-        self.sim.delay_ms(POLL_MS);
+        self.sim.sleep_ms(POLL_MS);
     }
 
     fn run(&mut self, ms: u64) {
@@ -222,7 +224,7 @@ impl Rig {
         let end = self.sim.ms + ms;
         while self.sim.ms < end {
             self.app.step(&mut self.sim);
-            self.sim.delay_ms(FILL_STRIDE);
+            self.sim.sleep_ms(FILL_STRIDE);
         }
         self.sim.nordic.limits = limits;
         self.run(3000);
@@ -562,4 +564,42 @@ fn the_app_clock_counts_the_waits_of_the_work() {
     }
     let (up, real) = (u64::from(r.app.up_ms) - up0, r.sim.ms - real0);
     assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
+}
+
+/// The same through the unit's own loop ([`crate::MainLoop::pass`]) with the radio mix and a finger on the panel: the
+/// waits of the touch and radio passes between the sleep's slices count once (not dropped, not twice).
+#[test]
+fn the_loop_keeps_real_time_through_all_its_waits() {
+    let (mut sim, mut app) = radio_unit(70, board_wait_us(), crate::fat::tests::image(), true, |sim| {
+        sim.count_waits = true;
+        // a tap on the strip every 7 s: the touch path (a read and a gesture) runs between slices
+        sim.touch.set_finger(|ms| (ms % 7000 < 120).then_some((120, 5)));
+    });
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..200 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up0, real0) = (u64::from(app.up_ms), sim.ms);
+    while sim.ms < real0 + 3_600_000 {
+        app.show(&mut sim); // a full redraw each pass
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (u64::from(app.up_ms) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
+}
+
+/// A pass longer than MAX_PASS_MS (a save, a card stall) is spread over the next passes, not lost: after a 1.7 s
+/// pass the clock (and the checkpoint cadence that counts it) is back on real time within a few passes.
+#[test]
+fn a_long_pass_is_owed_to_the_clock_not_dropped() {
+    let mut r = Rig::new(crate::fat::tests::image(), settings()[0]);
+    r.press(Press::Short(Key::Start));
+    r.run(5000);
+    let (up0, real0) = (u64::from(r.app.up_ms), r.sim.ms);
+    r.sim.awake_ns += 1_700_000_000; // the work of one pass: 1.7 s of CPU
+    r.sim.ms += 1700;
+    r.run(60_000);
+    let (up, real) = (u64::from(r.app.up_ms) - up0, r.sim.ms - real0);
+    assert!(real.abs_diff(up) <= 60, "app clock {up} ms against real {real} ms after a 1.7 s pass");
 }

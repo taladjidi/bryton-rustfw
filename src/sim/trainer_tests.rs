@@ -242,7 +242,7 @@ fn the_full_copy_records_the_trainer_for_erg() {
     let (mut sim, mut app) = unit();
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
     app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
-    run(&mut sim, &mut app, 30_000); // the sensor's pages 80 and 81 are heard before the ride starts
+    run(&mut sim, &mut app, 4000);
     app.press(&mut sim, Press::Long(Key::Page));
     super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
     app.press(&mut sim, Press::Short(Key::Start));

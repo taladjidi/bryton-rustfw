@@ -593,6 +593,7 @@ impl App {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
         self.card_writable = b.emmc_writable();
         self.awake_at = self.prof.clock.us(b);
+        let _ = b.waited_us(); // the start-up's waits (panel init, touch, Nordic boot) are not the first pass's
         self.rec.resume_if(self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN);
         self.trash_check = self.card_writable;
         if self.chips.baro {
@@ -649,8 +650,13 @@ impl App {
             .saturating_sub(sleep_work_us)
             .saturating_add(core::mem::take(&mut self.prof.clock.owed_us))
             .saturating_add(b.waited_us());
-        let pass_ms = (sleep_ms + (work_us / 1000)).min(MAX_PASS_MS);
-        self.prof.clock.owed_us = work_us % 1000; // the sub-ms rest counts in the next pass: no drift
+        // a pass longer than MAX_PASS_MS (a save, a fresh card's start, a card stall) counts MAX_PASS_MS: one huge dt
+        // would fire every timer and catch-up at once; the excess is owed and spread over the next passes, so the
+        // clock (checkpoint cadence, time-outs) keeps real time. The debt is capped: a minute.
+        let total_ms = sleep_ms.saturating_add(work_us / 1000);
+        let pass_ms = total_ms.min(MAX_PASS_MS);
+        self.prof.clock.owed_us =
+            (work_us % 1000).saturating_add((total_ms - pass_ms).saturating_mul(1000)).min(60_000_000);
         self.dt_ms = pass_ms;
         self.emmc.advance(pass_ms);
         self.emmc.urgent(!self.ride_settled());
