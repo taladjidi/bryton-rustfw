@@ -21,7 +21,11 @@ then the sectors (fat.rs tests expand it).
 
 usage (on a Mac): tools/fat_image.py
 """
-import importlib.util, math, os, shutil, struct, subprocess, tempfile
+import importlib.util, math, os, shutil, struct, subprocess, sys, tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from route_pack import cos_q16, mm_per_degree  # the one copy of src/nav/math.rs's lengths of a degree
+M_DEG_N, M_DEG_E = (v / 1000 for v in mm_per_degree(cos_q16(0)))  # metres per degree at 0 N, where the tracks are
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'test-data', 'fat32.sparse')
 # layers
@@ -162,8 +166,8 @@ def rides(m):
     # tracks (the ride history's cards) in the sea at 0 N 0 E, nowhere real (AGENTS.md, "Public repository")
     def loop(t):  # 14.4 km round a circle in 30 min, over two 40 m hills: 80 m of ascent
         a = 2 * math.pi * t / 1800
-        r = 14400 / (2 * math.pi) / 111320
-        return -0.03 + r * math.sin(a), -0.03 + r * math.cos(a) / math.cos(math.radians(0.03)), \
+        r = 14400 / (2 * math.pi)
+        return -0.03 + r * math.sin(a) / M_DEG_N, -0.03 + r * math.cos(a) / M_DEG_E, \
             100 + 20 * (1 - math.cos(2 * a))
     def out_back(t):  # east and back, climbing 30 m and down
         f = t / 1500
@@ -282,7 +286,7 @@ def hill(step=25.0):
         for k in range(0 if i == 0 else 1, n + 1):
             t = k / n
             x, y, z = (a[j] + (b[j] - a[j]) * t for j in range(3))
-            pts.append((y / 111_320, x / 111_320, z, dist + length * t))
+            pts.append((y / M_DEG_N, x / M_DEG_E, z, dist + length * t))
         dist += length
     return pts
 
@@ -384,7 +388,7 @@ def zigzag():
     for i, (x, y) in enumerate(xy):
         if i:
             dist += math.hypot(x - xy[i - 1][0], y - xy[i - 1][1])
-        pts.append((y / 111_320, x / 111_320, 50.0, dist))
+        pts.append((y / M_DEG_N, x / M_DEG_E, 50.0, dist))
     return pts
 
 
@@ -395,7 +399,7 @@ def courses(m):
     pts = hill()
     zig = zigzag()
     def near(c):  # the zigzag's point nearest corner c
-        return min(range(len(zig)), key=lambda i: math.hypot(zig[i][1] * 111_320 - c[0], zig[i][0] * 111_320 - c[1]))
+        return min(range(len(zig)), key=lambda i: math.hypot(zig[i][1] * M_DEG_E - c[0], zig[i][0] * M_DEG_N - c[1]))
     turns = [(near(c), kind) for c, kind in ZIGZAG_CUES]
     os.makedirs(os.path.join(m, 'PlanTrip', 'LiveSegment'))
     for name, data in (('PlanTrip/Hill.fit', bryton_route(pts)), ('PlanTrip/Broken.fit', b'not a FIT file\n'),

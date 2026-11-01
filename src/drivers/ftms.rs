@@ -18,8 +18,8 @@
 //!   u8, u8 heart rate...) are the GATT Specification Supplement's; pycycling (github.com/zacharyedwardbull/pycycling,
 //!   `ftms_parsers/indoor_bike_data.py`) reads them the same way, and reads the cadence bit (2) as present when set.
 //!   Checked against the specification text (FTMS 1.0, table 4.10): every flag but two is "field present when set";
-//!   More Data (bit 0) is the other way round, and so is Instantaneous Cadence (bit 2: "fields present" when 0, "not
-//!   present" when 1), which no trainer does (pycycling's users: inferred, not seen here).
+//!   More Data (bit 0) is the other way round (Instantaneous Speed is present when it is 0). Instantaneous Cadence (bit
+//!   2) is present when set, as the code reads it.
 //! - The errors a Control Point write can get (CSS Part B 1.2): 0xfd, its CCCD not set for indications; 0xfe, a
 //!   procedure already in progress. The SoftDevice gives them as GATT status 0x0100 + the ATT error.
 
@@ -87,6 +87,12 @@ pub fn bike_data(d: &[u8], r: &mut Reading) {
     let Some(&[f0, f1]) = d.get(..2) else { return };
     let flags = u16::from_le_bytes([f0, f1]);
     let mut at = 2;
+    // a record's first notification with no power, cadence or heart rate means the trainer has none now: a field
+    // written only when present would stay for ever. The rest of a split record (after More Data) keeps them.
+    if !r.bike_more {
+        (r.cadence, r.power, r.hr) = (None, None, None);
+    }
+    r.bike_more = flags & 1 != 0;
     // each field in the specification's order: (flag bit, present when set, its size)
     let fields: [(u8, bool, usize); 13] = [
         (0, false, 2), // instantaneous speed
@@ -131,6 +137,12 @@ pub fn bike_data(d: &[u8], r: &mut Reading) {
 pub fn modes(d: &[u8]) -> Option<u8> {
     let t = u32::from_le_bytes(d.get(4..8)?.try_into().ok()?);
     Some(u8::from(t & 1 << 2 != 0) | u8::from(t & 1 << 3 != 0) << 1 | u8::from(t & 1 << 13 != 0) << 2)
+}
+
+/// The trainer's maximum target power from a Supported Power Range value, `known` when it gives none or 0 (a 0 would
+/// make every ERG target 0 W), never above [`crate::trainer::MAX_W`].
+pub fn max_power(d: &[u8], known: u16) -> u16 {
+    range(d).map_or(known, |(_, hi)| if hi <= 0 { known } else { hi.min(crate::trainer::MAX_W as i16) as u16 })
 }
 
 /// A supported range's minimum and maximum (raw, as the trainer gives them).
@@ -229,6 +241,28 @@ mod tests {
     extern crate std;
     use super::*;
 
+    #[test]
+    fn a_power_range_of_zero_is_unknown() {
+        assert_eq!(max_power(&[0, 0, 0, 0, 1, 0], 2000), 2000, "max 0");
+        assert_eq!(max_power(&[0, 0, 0x18, 0xfc, 1, 0], 1500), 1500, "negative");
+        assert_eq!(max_power(&[0, 0, 0xb8, 0x0b, 1, 0], 2000), 2000, "3000 W: capped");
+        assert_eq!(max_power(&[0, 0, 0xf4, 0x01, 1, 0], 2000), 500);
+        assert_eq!(max_power(&[0, 0], 1234), 1234, "short");
+    }
+
+    #[test]
+    fn a_whole_record_without_power_clears_it() {
+        let mut r = Reading::default();
+        bike_data(&[0x44, 0x00, 0xb8, 0x0b, 180, 0, 250, 0], &mut r);
+        assert_eq!(r.power, Some(250));
+        bike_data(&[0x04, 0x00, 0xb8, 0x0b, 180, 0], &mut r);
+        assert_eq!((r.power, r.cadence), (None, Some(90)), "power absent: cleared");
+        bike_data(&[0x05, 0x00, 160, 0], &mut r);
+        assert_eq!(r.cadence, Some(80));
+        bike_data(&[0x40, 0x00, 0xb8, 0x0b, 100, 0], &mut r);
+        assert_eq!((r.cadence, r.power), (Some(80), Some(100)), "More Data: the second part keeps the first's");
+    }
+
     /// A record split in two (More Data): the first without the speed, the second with it; each updates what it has,
     /// and a notification cut short leaves the rest as it was.
     #[test]
@@ -241,7 +275,7 @@ mod tests {
         bike_data(&[0x40, 0x00, 0xf6, 0x09, 0xfd, 0xff], &mut r);
         assert_eq!((r.speed_x10, r.power, r.cadence), (Some(255), Some(0), Some(80)));
         bike_data(&[0x40, 0x00, 0x10, 0x27, 0xc8], &mut r);
-        assert_eq!((r.speed_x10, r.power), (Some(1000), Some(0)), "the power cut short: not read");
+        assert_eq!((r.speed_x10, r.power), (Some(1000), None), "the power cut short: not read, none now");
         bike_data(&[0x40], &mut r);
         // every field: the heart rate is past the energy's 5 bytes
         let mut all = std::vec![0xfe, 0x1f];

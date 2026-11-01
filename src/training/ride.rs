@@ -235,7 +235,8 @@ impl Ride {
                 (self.lap_dist_m(), self.lap_hr.get(), Avg { sum: 0, n: 0 });
             self.laps = self.laps.saturating_add(1);
             (self.lap_timer_s, self.lap_dist9) = (self.timer_s, self.dist9);
-            (self.lap_power, self.lap_ascent_mm, self.lap_descent_mm) = (crate::power::Power::new(), 0, 0);
+            (self.lap_power, self.lap_ascent_mm, self.lap_descent_mm) =
+                (crate::power::Power::new_lap(self.power.n > 0), 0, 0);
             Event::Lap
         })
     }
@@ -315,11 +316,11 @@ impl Ride {
                     self.down9 = self.down9.saturating_add(step9);
                 }
             }
-            self.power.add(i.power); // zeros count: coasting is part of the average power
+            // zeros count: coasting is part of the average power, and so is a dropout once power was heard (power.rs)
+            self.power.add(i.power.or((self.power.n > 0).then_some(0)));
             self.balance.add(i.balance.filter(|&b| b <= 100));
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
             self.max_cadence = self.max_cadence.max(i.cadence.unwrap_or(0));
-            self.lap_power.sample(i.power, true);
             if let Some(alt) = alt_mm {
                 self.max_alt_mm = Some(self.max_alt_mm.map_or(alt, |m| m.max(alt)));
                 let low = self.alt_low.get_or_insert(alt);
@@ -343,6 +344,9 @@ impl Ride {
                 }
             }
         }
+        // the lap's power follows the ride's rule (power.rs `Power::second`): the ring sees every running second, the
+        // totals and NP count the moving ones
+        self.lap_power.sample(i.power, self.moving);
         Some(Event::Second)
     }
 
@@ -383,6 +387,7 @@ impl Ride {
         let lap_dist9 = (u64::from(w[12]) | u64::from(w[13]) << 32).min(dist9);
         Ride {
             state: State::Paused,
+            lap_power: crate::power::Power::new_lap(w[7] > 0), // the ride's power average has a count: power was heard
             timer_s: w[0],
             elapsed_s: w[0], // the trip time starts from the moving time: it is never less than the timer's
             dist9,
@@ -1290,6 +1295,40 @@ fn mean(a: u16, b: u16) -> u16 {
 mod tests {
     extern crate std;
     use super::*;
+
+    /// A dropout once power was heard is a 0 W second in the lap and in the ride alike (power.rs), so the two
+    /// averages agree over the same seconds; the lap started in the dropout does too, and a ride with no meter at all
+    /// has none.
+    #[test]
+    fn lap_and_ride_average_power_agree_over_a_dropout() {
+        let mut r = Ride::new();
+        r.start_pause();
+        let sec = |r: &mut Ride, power| {
+            r.second(&Input { speed_x10: Some(300), power, ..Input::default() });
+        };
+        for _ in 0..10 {
+            sec(&mut r, Some(200));
+        }
+        for _ in 0..10 {
+            sec(&mut r, None);
+        }
+        assert_eq!((r.avg_power(), r.lap_avg_power()), (Some(100), Some(100)));
+        r.lap(); // a lap that starts in a dropout
+        for _ in 0..5 {
+            sec(&mut r, None);
+        }
+        for _ in 0..5 {
+            sec(&mut r, Some(300));
+        }
+        assert_eq!(r.lap_avg_power(), Some(150), "the lap's own seconds, the dropout counted");
+        assert_eq!(r.avg_power(), Some(116), "(2000 + 1500) / 30 seconds");
+        let mut none = Ride::new();
+        none.start_pause();
+        for _ in 0..5 {
+            sec(&mut none, None);
+        }
+        assert_eq!((none.avg_power(), none.lap_avg_power()), (None, None));
+    }
 
     /// The zone tables for both rules against the cited percentages: the max-HR rule's 60, 70, 80 and 90 % of 190, and
     /// Friel's cycling zones from an LTHR of 170 (81, 90, 94, 100 %); a zone starts at the first whole bpm at or over

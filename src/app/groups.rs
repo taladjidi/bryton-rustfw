@@ -248,6 +248,16 @@ pub(crate) struct Radio {
 pub(crate) const LOST_MS: u32 = 10_000;
 
 impl Radio {
+    /// `kind` was heard in the last [`sensors::STALE_MS`].
+    pub(crate) fn heard(&self, kind: Kind) -> bool {
+        self.heard_ms.get(kind as usize).is_some_and(|&ms| ms < sensors::STALE_MS)
+    }
+
+    /// The sensor of `kind` is paired and was heard lately.
+    pub(crate) fn paired_heard(&self, kind: Kind) -> bool {
+        matches!(self.sensors.get(kind as usize), Some(Sensor::Paired(_))) && self.heard(kind)
+    }
+
     /// None heard, with the sensors that were paired at start-up.
     pub(crate) fn new(sensors: [Sensor; Kind::ALL.len()]) -> Self {
         Radio {

@@ -23,7 +23,7 @@ fn unit(answer: MeterAnswer) -> (Sim, App) {
     sim.nordic.meter.answer = answer;
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 3000);
-    assert!(app.power_heard(), "the meter is paired and heard");
+    assert!(app.radio.paired_heard(Kind::Power), "the meter is paired and heard");
     (sim, app)
 }
 

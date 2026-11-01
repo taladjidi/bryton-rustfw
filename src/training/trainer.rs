@@ -178,6 +178,10 @@ pub struct Reading {
     pub cal_results: u8,
     /// The pages understood so far, one bit each ([`crate::fec::seen`]); for the tests.
     pub seen: u8,
+    /// The last Indoor Bike Data notification had More Data set: the next one continues its record ([`crate::ftms::bike_data`]).
+    pub bike_more: bool,
+    /// Time since the last trainer-data page (25), ms ([`crate::fec::age`]).
+    pub p25_ms: u32,
 }
 
 impl Reading {

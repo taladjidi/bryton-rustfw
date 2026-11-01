@@ -32,15 +32,28 @@ import struct
 Z = 14
 BITS = 20
 LAT0, LON0 = -52.0, -145.0  # the origin of the made-up network (open ocean)
-M_PER_E7 = 0.011132         # metres per 1e-7 degree of latitude, as src/ui/map.rs
 MAIN, BRANCH, SIDE = 100001, 100002, 100003  # way ids of the made-up roads
 ATTR = 0xee                 # an edge's attribute byte (class); the side road has another
 
 
+COS_TAB = [round(math.cos(math.radians(i)) * 65536) for i in range(91)]  # src/nav/math.rs COS_TAB
+
+
 def cos_q16(lat_e7):
-    """src/ui/map.rs cos_q16, integer for integer (truncating division toward zero, as Rust's)."""
-    t = int(lat_e7 / 10000)
-    return ((32_400_000_000 - 4 * t * t) << 16) // (32_400_000_000 + t * t)
+    """src/nav/math.rs cos_q16, integer for integer (the table, linear between degrees, truncating toward zero)."""
+    a = min(abs(lat_e7), 900_000_000)
+    i, f = divmod(a, 10_000_000)
+    d = (COS_TAB[min(i + 1, 90)] - COS_TAB[i]) * f
+    return COS_TAB[i] + (d // 10_000_000 if d >= 0 else -(-d // 10_000_000))
+
+
+def mm_per_degree(cos):
+    """src/nav/math.rs mm_per_degree: (meridian, parallel) mm per degree at cos x 65536 (WGS84 series, Snyder /
+    en.wikipedia.org/wiki/Latitude#Length_of_a_degree_of_latitude), shifts as Rust's (arithmetic)."""
+    c2 = ((2 * cos * cos) >> 16) - 65536
+    c4 = ((2 * c2 * c2) >> 16) - 65536
+    c3 = ((4 * cos * cos * cos) >> 32) - 3 * cos
+    return 111_132_954 + ((-559_822 * c2 + 1175 * c4) >> 16), (111_412_840 * cos - 93_500 * c3) >> 16
 
 
 def tile_f(lat, lon):
@@ -124,11 +137,10 @@ class Net:
 
 
 def metres(x, y):
-    """A place x metres east and y north of the origin, in 1e-7 degrees (src/ui/map.rs's plane)."""
+    """A place x metres east and y north of the origin, in 1e-7 degrees (src/nav/math.rs's plane)."""
     lat0, lon0 = round(LAT0 * 1e7), round(LON0 * 1e7)
-    lat = lat0 + round(y * 1e6 / 11132)
-    cos = cos_q16(lat0) / 65536
-    return lat, lon0 + round(x * 1e6 / (11132 * cos))
+    north, east = mm_per_degree(cos_q16(lat0))
+    return lat0 + round(y * 1e10 / north), lon0 + round(x * 1e10 / east)
 
 
 def main_elev(s):

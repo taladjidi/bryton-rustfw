@@ -82,7 +82,7 @@ impl App {
     /// The sensor line's value and its colour: the live reading, or SEARCHING.
     fn quick_value(&self, kind: Kind) -> (Line<16>, u16) {
         let mut l = Line::<16>::new();
-        let fresh = self.radio.heard_ms.get(kind as usize).is_some_and(|&ms| ms < sensors::STALE_MS);
+        let fresh = self.radio.heard(kind);
         let with = |l: &mut Line<16>, f: Field, unit: &str| {
             l.push_str(self.field_text(f).as_str());
             l.push_str(unit);
@@ -195,7 +195,7 @@ impl App {
 
     /// ZERO can be pressed: the meter is heard, no ride runs, no request is out.
     fn quick_zero_ok(&self) -> bool {
-        self.power_heard() && self.ride.state() != ride::State::Running && !self.powercal.asking()
+        self.radio.paired_heard(Kind::Power) && self.ride.state() != ride::State::Running && !self.powercal.asking()
     }
 
     /// Box `i`'s text and colour, for the text boxes.

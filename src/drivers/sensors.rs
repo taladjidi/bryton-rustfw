@@ -317,6 +317,10 @@ fn set_half_percent(live: &mut Live, m: Metric, b: u8) {
 /// A value older than this is dropped (the sensor stopped or went out of range).
 pub const STALE_MS: u32 = 5000;
 
+/// The most a power meter's page may say (W): real sprint peaks are 2 000 to 2 600 W. The trainer's own limit
+/// ([`crate::trainer::MAX_W`], the ERG target ceiling) applies to its readings only.
+pub const METER_MAX_W: u16 = 4000;
+
 /// The latest value of each [`Metric`], and its age.
 #[derive(Default)]
 pub struct Live {
@@ -502,6 +506,11 @@ pub fn speed_x10(rpm100: u32, wheel_mm: u16) -> u16 {
 }
 
 impl Decoders {
+    /// A crank faster than this (rpm x 100) is a glitch, not a rider; the wheel has its own, [`Revs::MAX_RPM_X100`].
+    pub const MAX_CAD_X100: u32 = 25_000;
+    /// A heart rate above this (bpm) is a glitch frame.
+    pub const MAX_HR: u8 = 250;
+
     /// `kind`'s sensor was silent (stale): its next broadcast starts a new series (its counters may have moved on
     /// by any amount meanwhile).
     pub fn restart(&mut self, kind: Kind) {
@@ -577,7 +586,8 @@ impl Decoders {
             // computed heart rate in byte 7; 0 means no reading. Page 7: the battery in percent in byte 1
             Kind::Hr => {
                 self.beats.update(d);
-                if d[7] > 0 {
+                // past MAX_HR is a glitch frame, dropped (inferred: the profile gives no ceiling)
+                if d[7] > 0 && d[7] <= Self::MAX_HR {
                     live.set(Metric::Hr, u16::from(d[7]));
                 }
                 if d[0] & 0x7f == 7
@@ -593,13 +603,13 @@ impl Decoders {
                 }
             }
             Kind::Cadence => {
-                if let Some(r) = self.cadence.update(u16_at(4), u16_at(6)) {
+                if let Some(r) = self.cadence.update(u16_at(4), u16_at(6)).filter(|&r| r <= Self::MAX_CAD_X100) {
                     live.set(Metric::Cadence, rpm(r));
                 }
             }
             // cadence time, cadence count, speed time, wheel count
             Kind::SpeedCadence => {
-                if let Some(r) = self.sc_cadence.update(u16_at(0), u16_at(2)) {
+                if let Some(r) = self.sc_cadence.update(u16_at(0), u16_at(2)).filter(|&r| r <= Self::MAX_CAD_X100) {
                     live.set(Metric::Cadence, rpm(r));
                 }
                 if let Some(r) = self.sc_speed.update(u16_at(4), u16_at(6)) {
@@ -609,11 +619,18 @@ impl Decoders {
             // ponytail: the standard power-only page (0x10) only, which every power meter sends; torque pages
             // (0x11, 0x12) when a meter that needs them shows up
             Kind::Power if d[0] == 0x10 => {
+                // A power past METER_MAX_W is a glitch frame (inferred: D00001086 gives page 0x10 no invalid value, and 0xffff
+                // is 65 535 W): the whole page is dropped and the second has no power, not the previous one held (the
+                // recorder then writes none for it, as for a dropout). Sprint peaks of 2 000 to 2 600 W are real.
+                if u16_at(6) > METER_MAX_W {
+                    live.clear(Metric::Power);
+                    return;
+                }
                 live.set(Metric::Power, u16_at(6));
                 if d[2] != 0xff && d[2] & 0x80 != 0 && d[2] & 0x7f <= 100 {
                     live.set(Metric::Balance, u16::from(d[2] & 0x7f));
                 }
-                if d[3] != 0xff {
+                if d[3] != 0xff && u32::from(d[3]) * 100 <= Self::MAX_CAD_X100 {
                     live.set(Metric::Cadence, u16::from(d[3]));
                 }
             }
@@ -939,5 +956,24 @@ mod tests {
         assert_eq!(live.get(Metric::Balance), Some(52), "right pedal 52 %");
         live.tick(STALE_MS + 1);
         assert_eq!(live.get(Metric::Hr), None, "stale");
+    }
+
+    #[test]
+    fn implausible_values_are_no_reading() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        dec.decode(Kind::Power, [0x10, 1, 0xff, 90, 0, 0, 0xd0, 0x07], 2105, &mut live);
+        assert_eq!((live.get(Metric::Power), live.get(Metric::Cadence)), (Some(2000), Some(90)));
+        dec.decode(Kind::Power, [0x10, 1, 0x80 | 50, 91, 0, 0, 0xff, 0xff], 2105, &mut live);
+        assert_eq!(live.get(Metric::Power), None, "65535 W: no reading, the 2000 W not held");
+        assert_eq!((live.get(Metric::Balance), live.get(Metric::Cadence)), (None, Some(90)), "the whole page skipped");
+        dec.decode(Kind::Power, [0x10, 1, 0xff, 250, 0, 0, 0xa0, 0x0f], 2105, &mut live);
+        assert_eq!((live.get(Metric::Power), live.get(Metric::Cadence)), (Some(4000), Some(250)), "the caps are in");
+        dec.decode(Kind::Hr, [4, 0, 0, 0, 0, 0, 0, 255], 2105, &mut live);
+        assert_eq!(live.get(Metric::Hr), None, "255 bpm");
+        // 20 turns in 1 s is 1200 rpm: a wheel could, a crank not
+        let mut c = Live::default();
+        dec.decode(Kind::Cadence, [0; 8], 2105, &mut c);
+        dec.decode(Kind::Cadence, [0, 0, 0, 0, 0, 4, 20, 0], 2105, &mut c);
+        assert_eq!(c.get(Metric::Cadence), None);
     }
 }

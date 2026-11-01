@@ -139,9 +139,9 @@ impl App {
                 let Some(p) = self.rx.push(byte) else { continue };
                 let mut phone = false;
                 if let Some(r) = nrf::adv_report(p) {
-                    title |= self.radio.nearby.add(&r);
-                    self.list_dirty = true;
-                    self.list_dirty |= self.ftms.found(&r);
+                    let listed = self.radio.nearby.add(&r);
+                    title |= listed;
+                    self.list_dirty |= listed | self.ftms.found(&r);
                 } else if let Some((ch, data)) = nrf::ant_broadcast(p)
                     && let Some(kind) = Kind::from_channel(ch)
                 {

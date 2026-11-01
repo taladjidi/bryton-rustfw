@@ -1,6 +1,7 @@
 //! The phone's side of the link, pure logic: the formats of HID over GATT (media keys), Apple's notification and
 //! media services (ANCS, AMS), the Current Time Service, and the bond kept on the card. The radio and the GATT
-//! procedures are in app/phone.rs and drivers/ble.rs.
+//! procedures are in app/phone.rs and drivers/ble.rs. The bond's LTK, ediv and rand are stored in clear in
+//! `\Rustfw\ble.bin` on the volume a computer can read (the unit's side of the bond only).
 //!
 //! Sources (AGENTS.md, look it up):
 //! - ANCS: Apple, "Apple Notification Center Service (ANCS) Specification" (developer.apple.com/library/archive,

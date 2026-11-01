@@ -52,7 +52,7 @@ use crate::fat::{self, Disk, Fat, File, Seek};
 use crate::fonts::PIXEL;
 use crate::ign;
 use crate::map::{Rect, View, rot_cs};
-use crate::math::{atanh, cos, cos_q16, sin};
+use crate::math::{atanh, cos, cos_q16, mm_per_degree, sin};
 use crate::osm;
 use crate::text::{self, Align, Line};
 use crate::ui::{self, Canvas};
@@ -86,9 +86,6 @@ const FALLBACK: u8 = 3;
 /// A tile is drawn at least this wide (pixels): a tile of 512 pixels, as stock draws them, give or take 1.4x;
 /// so at most 2 x 2 tiles cover the map.
 const TILE_PX: f64 = 362.0;
-/// Metres per 1e-7 degree of latitude, as map.rs.
-const M_PER_E7: f64 = 0.011_132;
-
 /// RGB565 of 8-bit red, green, blue.
 const fn rgb(r: u32, g: u32, b: u32) -> u16 {
     ((r >> 3) << 11 | (g >> 2) << 5 | b >> 3) as u16
@@ -1046,6 +1043,8 @@ struct Frame {
     scale: f64,
     /// Metres per degree x 1e-7 east (with map.rs's cosine) and north.
     east: f64,
+    /// Metres per 1e-7 degree of latitude at the origin.
+    north_m: f64,
     lon0: f64,
     /// The origin's latitude, its sine and cosine, its Mercator ordinate (radians).
     phi0: f64,
@@ -1067,7 +1066,8 @@ struct Frame {
 
 impl Frame {
     fn new(view: View, (lat0, lon0): (i32, i32), w: i32, h: i32) -> Frame {
-        let east = M_PER_E7 * cos_q16(lat0) as f64 / 65_536.0;
+        let (north_mm, east_mm) = mm_per_degree(cos_q16(lat0));
+        let (north_m, east) = (north_mm as f64 / 1e10, east_mm as f64 / 1e10); // metres per 1e-7 degree
         let phi0 = f64::from(lat0) * 1e-7 * core::f64::consts::PI / 180.0;
         let (sin0, cos0) = (sin(phi0), cos(phi0));
         let scale = 16.0 / view.mpp16 as f64;
@@ -1083,6 +1083,7 @@ impl Frame {
         Frame {
             scale,
             east,
+            north_m,
             lon0: f64::from(lon0),
             phi0,
             sin0,
@@ -1103,7 +1104,7 @@ impl Frame {
     fn north(&self, psi: f64) -> f64 {
         let (s, c, d) = (self.sin0, self.cos0, psi - self.psi0);
         let dphi = c * d - 0.5 * s * c * d * d - (c * c - s * s) * c * d * d * d / 6.0;
-        dphi * 180.0 / core::f64::consts::PI * 1e7 * M_PER_E7
+        dphi * 180.0 / core::f64::consts::PI * 1e7 * self.north_m
     }
 
     /// Tile (`x`, `y`) of zoom `z` to area pixels.
@@ -1132,7 +1133,7 @@ impl Frame {
     fn centre_tile(&self, z: u8) -> (u32, u32) {
         let n = f64::from(1u32 << z);
         let lon = self.lon0 + self.cx / self.east;
-        let phi = self.phi0 + self.cy / (1e7 * M_PER_E7) * core::f64::consts::PI / 180.0;
+        let phi = self.phi0 + self.cy / (1e7 * self.north_m) * core::f64::consts::PI / 180.0;
         let x = (lon + 1.8e9) / 3.6e9 * n;
         let y = (1.0 - atanh(sin(phi)) / core::f64::consts::PI) / 2.0 * n;
         // not f64::clamp: its assertion message formats floats, which pulls in 8 KB of core::fmt
