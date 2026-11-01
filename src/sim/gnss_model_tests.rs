@@ -351,3 +351,17 @@ fn a_long_pass_loses_the_epochs_after_the_timeout_and_the_app_recovers() {
     assert!(app.gps.pvt.is_some_and(|p| p.good()) && app.gps.pvt_ms < 1500, "fixes again: {}", app.gps.pvt_ms);
     sim.gnss.assert_reads(3631, 3);
 }
+
+/// Idle, with a fix: the firmware reads at least every 0.8 s (GNSS_PVT_WAIT_MS), inside the stream time-out (G2),
+/// before and after the start-up traffic ends (Renode's GNSS run, from 17 s, showed 2.5 s: its virtual time runs
+/// 3.1 times the firmware's timer, docs/devloop.md).
+#[test]
+fn an_idle_minute_is_read_at_least_every_800_ms() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.classic_pages();
+    sim.gnss.fix = Some(7000);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 60_000);
+    assert!(sim.gnss.violations.is_empty(), "{:?}", sim.gnss.violations);
+    sim.gnss.assert_reads(880, 0);
+}
