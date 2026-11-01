@@ -127,6 +127,12 @@ pub fn rot_cs(rot: u8) -> (i32, i32) {
 /// A rectangle in screen pixels, signed so shapes may start off it: x, y, width, height.
 pub type Rect = (i32, i32, i32, i32);
 
+/// The point (`x`, `y`) is in `r` (the one hit-test of the map's signed boxes; [`crate::ui::Rect::contains`] is the
+/// panel's).
+pub fn inside(r: Rect, x: i32, y: i32) -> bool {
+    (r.0..r.0 + r.2).contains(&x) && (r.1..r.1 + r.3).contains(&y)
+}
+
 /// A course drawn under the track ([`crate::course`]): its points in its own plane, the bounding box of each
 /// [`Route::CHUNK`] of them (so a dirty box draws only the chunks it touches), where its plane's origin is on the
 /// track's plane, and its id (a new course fits the map again).
@@ -418,7 +424,7 @@ impl View {
         let Some(p) = track.pos else { return true };
         let (x, y) = self.px(area, p);
         let (mx, my) = (area.2 / 5, area.3 / 5);
-        x >= area.0 + mx && x < area.0 + area.2 - mx && y >= area.1 + my && y < area.1 + area.3 - my
+        inside((area.0 + mx, area.1 + my, area.2 - 2 * mx, area.3 - 2 * my), x, y)
     }
 
     /// The position is still well inside the map and clear of the buttons ([`under_buttons`]): no need to fit
@@ -427,10 +433,7 @@ impl View {
         let Some(p) = track.pos else { return true };
         let (x, y) = self.px(area, p);
         !under_buttons(area, (x, y))
-            && x >= area.0 + MARGIN
-            && x < area.0 + area.2 - MARGIN
-            && y >= area.1 + MARGIN
-            && y < area.1 + area.3 - MARGIN
+            && inside((area.0 + MARGIN, area.1 + MARGIN, area.2 - 2 * MARGIN, area.3 - 2 * MARGIN), x, y)
     }
 }
 
@@ -562,7 +565,7 @@ pub fn buttons(area: Rect) -> Option<[Rect; 2]> {
 /// (no buttons drawn).
 pub fn button_at(area: Rect, shown: &Shown, x: i32, y: i32) -> Option<Button> {
     let [plus, minus] = buttons(area).filter(|_| shown.view.is_some())?;
-    let inside = |r: Rect| (r.0..r.0 + r.2).contains(&x) && (r.1..r.1 + r.3).contains(&y);
+    let inside = |r: Rect| inside(r, x, y);
     if inside(plus) {
         Some(Button::In)
     } else if inside(minus) {
@@ -1280,7 +1283,7 @@ mod tests {
                 assert!(!refit(area, &t, &shown, None, None, false), "a fresh fit keeps at {s} s");
             }
             let (x, y) = shown.view.unwrap().px(area, t.pos().unwrap());
-            let inside = |r: Rect| (r.0..r.0 + r.2).contains(&x) && (r.1..r.1 + r.3).contains(&y);
+            let inside = |r: Rect| super::inside(r, x, y);
             under += u32::from(inside(plus) || inside(minus));
         }
         assert_eq!(under, 0, "seconds with the arrow under a button");

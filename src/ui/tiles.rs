@@ -198,7 +198,7 @@ struct Ign {
     dir: Option<Option<File>>,
     packs: [Pack; 4],
     next: usize,
-    /// The tiles held (Slot::feats unused), and the clock of their use.
+    /// The tiles held, and the clock of their use.
     tiles: [Slot; RASTERS],
     tick: u32,
 }

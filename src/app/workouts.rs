@@ -528,6 +528,32 @@ impl App {
         }
     }
 
+    /// A gauge's value text ("--" without a reading), its colour (against the band, `tint` adjusting the in-band
+    /// one; the power's zone colour with no band) and its marker in a bar of `cols` columns.
+    pub(crate) fn gauge_head(
+        &self,
+        kind: storage::workout_file::Kind,
+        reading: Option<u16>,
+        band: Option<(u16, u16)>,
+        cols: u32,
+        tint: impl Fn(u16) -> u16,
+    ) -> (Line<8>, u16, Option<u32>) {
+        let mut value = Line::new();
+        match reading {
+            Some(v) => value.push_u32(u32::from(v)),
+            None => value.push_str("--"),
+        }
+        let color = match (reading, band) {
+            (Some(v), Some(b)) => tint(workout::gauge_color(v, b)),
+            (Some(w), None) => self.settings.zones().power_color(w),
+            (None, _) => ui::WHITE,
+        };
+        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        let marker =
+            reading.zip(band).map(|(v, b)| workout::gauge_x(v, workout::gauge_scale(kind, b, ftp, max_hr), cols));
+        (value, color, marker)
+    }
+
     /// What the workout gauge in a box with `cols` bar columns shows now: the step's reading (power over the window
     /// set in the menu, heart rate, cadence), coloured by how far it is from the band ([`workout::gauge_color`]); with
     /// no band (no workout, an open step) the power in its zone's colour.
@@ -542,21 +568,8 @@ impl App {
             Kind::Cadence => self.live.get(Metric::Cadence),
             _ => self.power.rolling(avg),
         };
-        let mut value = Line::new();
-        match reading {
-            Some(v) => value.push_u32(u32::from(v)),
-            None => value.push_str("--"),
-        }
-        let color = match (reading, band) {
-            (Some(v), Some(b)) => {
-                step.map_or(workout::gauge_color(v, b), |s| self.with_second(s, workout::gauge_color(v, b)))
-            }
-            (Some(w), None) => self.settings.zones().power_color(w),
-            (None, _) => ui::WHITE,
-        };
-        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
-        let marker =
-            reading.zip(band).map(|(v, b)| workout::gauge_x(v, workout::gauge_scale(kind, b, ftp, max_hr), cols));
+        let (value, color, marker) =
+            self.gauge_head(kind, reading, band, cols, |c| step.map_or(c, |s| self.with_second(s, c)));
         let second = step.and_then(|s| Some((s.target2.kind, s.target2.range(&self.settings.zones())?)));
         GaugeShown { kind, avg, band, step: step.is_some(), second, pace: None, value, color, marker }
     }

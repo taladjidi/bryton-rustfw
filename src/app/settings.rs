@@ -413,8 +413,6 @@ pub struct Settings {
     pub female: bool,
     /// BIRTH YEAR (ME): 0 until set (data 146, u16).
     pub birth_year: u16,
-    /// HEIGHT (ME), cm: 0 until set (data 148, a byte).
-    pub height_cm: u16,
     /// MAX HR was worked out from BORN (data 149, a byte); a manual MAX HR edit clears it.
     pub max_hr_age: bool,
 }
@@ -708,7 +706,6 @@ impl Settings {
             zone_up: [0; 10],
             female: false,
             birth_year: 0,
-            height_cm: 0,
             max_hr_age: false,
         };
         match w >> 24 {
@@ -961,8 +958,8 @@ impl Settings {
             Setting::Zone(n) => l.push_u32(u32::from(self.zones().upper().get(usize::from(n)).copied().unwrap_or(0))),
             Setting::ZonesReset => l.push_str(if self.zone_custom { "CUSTOM" } else { "DEFAULT" }),
             Setting::Sex => l.push_str(if self.female { "FEMALE" } else { "MALE" }),
-            Setting::BirthYear | Setting::Height if self.number_get(s) == 0 => l.push_str("--"),
-            Setting::BirthYear | Setting::Height => l.push_u32(u32::from(self.number_get(s))),
+            Setting::BirthYear if self.number_get(s) == 0 => l.push_str("--"),
+            Setting::BirthYear => l.push_u32(u32::from(self.number_get(s))),
             Setting::PowerSmooth => {
                 l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
                 l.push_str(" S");
@@ -1089,7 +1086,7 @@ impl Settings {
                 if v == 0 { l.push_str("OFF") } else { l.push_u32(u32::from(v)) }
             }
             Setting::Limit(n) => match self.limits.get(usize::from(n)) {
-                Some(&v) if v > 0 && n == 10 => {
+                Some(&v) if v > 0 && n == alerts::LIM_DFA => {
                     // DFA a1 in hundredths
                     l.push_u32(u32::from(v / 100));
                     l.push_str(".");
@@ -1097,7 +1094,7 @@ impl Settings {
                     l.push_u32(u32::from(v % 10));
                 }
                 // the speed limits are kept in km/h and shown in mph when UNITS is IMPERIAL
-                Some(&v) if v > 0 && matches!(n, 4 | 5) && self.imperial => {
+                Some(&v) if v > 0 && matches!(n, alerts::LIM_SPEED_HIGH | alerts::LIM_SPEED_LOW) && self.imperial => {
                     l.push_u32((u32::from(v) * 6214 + 5000) / 10_000)
                 }
                 Some(&v) if v > 0 => l.push_u32(u32::from(v)),
@@ -1221,11 +1218,21 @@ impl Settings {
         if let Setting::Zone(n) = s {
             return self.step_zone(usize::from(n), up);
         }
-        // a birth year or a height not set yet starts from a typical one, not from the bottom of its range
-        if let (Setting::BirthYear | Setting::Height, Some(v)) = (s, self.number_mut(s))
+        // a birth year not set yet starts from a typical one, not from the bottom of its range
+        if let (Setting::BirthYear, Some(v)) = (s, self.number_mut(s))
             && *v == 0
         {
-            *v = if s == Setting::Height { 170 } else { 1985 };
+            *v = 1985;
+            return;
+        }
+        // the speed limits are kept in km/h: under IMPERIAL they step in the shown mph, so each press changes it
+        if self.imperial && matches!(s, Setting::Limit(alerts::LIM_SPEED_HIGH | alerts::LIM_SPEED_LOW)) {
+            let max = s.number().map_or(0, |(r, _)| u32::from(*r.end()));
+            if let Some(v) = self.number_mut(s) {
+                let mph = (u32::from(*v) * 6214 + 5000) / 10_000;
+                let mph = if up { mph + 1 } else { mph.saturating_sub(1) };
+                *v = ((mph * 10_000 + 3107) / 6214).min(max) as u16;
+            }
             return;
         }
         if s == Setting::TimeZone && self.tz == 0 {
@@ -1309,7 +1316,6 @@ impl Settings {
             Setting::Ftp => Some(&mut self.ftp),
             Setting::Lthr => Some(&mut self.lthr),
             Setting::BirthYear => Some(&mut self.birth_year),
-            Setting::Height => Some(&mut self.height_cm),
             Setting::Weight => Some(&mut self.weight_kg),
             Setting::BikeWeight => Some(&mut self.bike_hg),
             Setting::WPrime => Some(&mut self.wprime_j),
@@ -1555,5 +1561,24 @@ mod tests {
             let speeds: usize = name[6..8].parse().unwrap();
             assert_eq!(teeth.len(), speeds, "{name} length");
         }
+    }
+
+    /// Under IMPERIAL the speed limits (kept in km/h) step by one shown mph: every press changes what the menu shows.
+    #[test]
+    fn imperial_speed_limits_step_in_mph() {
+        let k = Setting::Limit(alerts::LIM_SPEED_HIGH);
+        let mut s = Settings { imperial: true, ..Settings::from_word(0) };
+        s.limits[usize::from(alerts::LIM_SPEED_HIGH)] = 20;
+        for want in ["12", "13", "14", "15", "16", "17", "18", "19", "20"] {
+            let mut l = Line::<12>::new();
+            s.text(k, &mut l);
+            assert_eq!(l.as_str(), want);
+            s.step(k, true);
+        }
+        s.step(k, false);
+        s.step(k, false);
+        let mut l = Line::<12>::new();
+        s.text(k, &mut l);
+        assert_eq!(l.as_str(), "19");
     }
 }

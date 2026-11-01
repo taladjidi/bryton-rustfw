@@ -199,7 +199,7 @@ fn perf_budgets() {
         if screen != PAGES {
             app.press(&mut sim, Press::Short(Key::Start));
             app.screen = Screen::Ride(screen); // the page measured (a course loaded opens the course page)
-            app.map_zoom = zoom;
+            app.map_view.zoom = zoom;
             app.show(&mut sim);
         }
         run(&mut sim, &mut app, 120_000); // settled: the map fitted, the graph full

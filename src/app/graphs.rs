@@ -52,6 +52,13 @@ pub(crate) struct WorkoutShown {
     pub(crate) rider: Option<u32>,
 }
 
+/// The height of a profile column: `v` in `lo..hi` (dm, a range of 30 m at least so a flat road stays flat) over
+/// `h` pixels, one at least.
+fn scaled_column(v: i32, lo: i32, hi: i32, h: u32) -> u32 {
+    let hi = hi.max(lo + 300);
+    (i64::from(v - lo) * i64::from(h)).checked_div(i64::from(hi - lo)).unwrap_or(0).max(1).min(i64::from(h)) as u32
+}
+
 /// The columns to redraw when the rider's column moves from `old` to `new` (both, and those between: done or not;
 /// from or to none: from the first column, which the marker's edge may have touched).
 fn moved_rider(old: Option<u32>, new: Option<u32>) -> core::ops::Range<u32> {
@@ -382,12 +389,7 @@ impl App {
         let Some((alt, grade, climb)) = c.course.column(p.start, p.span, a.2, k) else { return (0, ui::BLACK) };
         // the whole course's range, 30 m at least, so a flat course stays flat
         let (lo, hi) = c.course.range_dm();
-        let hi = hi.max(lo + 300);
-        let h = (i64::from(alt - lo) * i64::from(a.3))
-            .checked_div(i64::from(hi - lo))
-            .unwrap_or(0)
-            .max(1)
-            .min(i64::from(a.3)) as u32;
+        let h = scaled_column(alt, lo, hi, a.3);
         let color = match (p.rider.is_some_and(|r| k < r), climb) {
             (true, _) => ui::DARK,
             (false, true) => ui::grade_color(grade),
@@ -423,12 +425,7 @@ impl App {
             return (0, ui::BLACK);
         };
         let grade = (h1 - h0) * 100 / g1.saturating_sub(g0).clamp(1, i32::MAX as u32) as i32;
-        let hi = hi.max(lo + 300);
-        let h = (i64::from(m - lo) * i64::from(a.3))
-            .checked_div(i64::from(hi - lo))
-            .unwrap_or(0)
-            .max(1)
-            .min(i64::from(a.3)) as u32;
+        let h = scaled_column(m, lo, hi, a.3);
         ui::progress_column(p.rider, k, a.3, (h, ui::grade_color(grade)))
     }
 

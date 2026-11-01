@@ -239,9 +239,10 @@ pub struct App {
     auto_themes: [ui::Theme; 2],
     /// The menus' input state and what they have drawn (app/menus.rs, app/input.rs).
     menu: MenuInput,
-    /// The screens under this one, the latest last: Back returns to them, with their selection. At most six now (a
-    /// page, the ride menu, ALL SETTINGS, PAGES, a page, its field groups, under a group), so eight is room to spare.
-    under: [Screen; 8],
+    /// The screens under this one, the latest last: Back returns to them, with their selection. The deepest path is
+    /// eight levels under the last screen (Main, MENU, PAGES, the page list, a page, the editor, its BOX menu, FIELDS,
+    /// a group: `back_returns_level_by_level_from_the_deepest_path`), so ten leaves room.
+    under: [Screen; 10],
     depth: usize,
     /// The ride pages (the first `page_count`), then the overview's fields ([`OVERVIEW`]).
     pages: [page::Page; PAGES + 1],
@@ -325,24 +326,14 @@ pub struct App {
     pub(crate) bars: core::cell::Cell<u32>,
     /// The ride's track, from the good fixes.
     track: map::Track,
-    /// The map's zoom level set by its "+" and "-" ([`map::mpp16`]); None: fitted to the track (per power-up).
-    map_zoom: Option<u32>,
-    /// Zoomed in and panned by hand: the map's centre (metres on the track's plane); None: it follows the rider.
-    map_centre: Option<(i32, i32)>,
-    /// The crosshair with a course followed showed the whole route ([`map::View::fit`]) instead of the default view.
-    map_whole: bool,
+    /// The map's zoom, centre and view, set by hand.
+    map_view: MapView,
     /// The eMMC, for the basemap and the dev link (identified at first use, never at boot).
     emmc: emmc::Emmc,
     /// Roads and water under the first map field of a page, drawn once per view.
     basemap: tiles::Basemap,
-    /// The touch controller answered at the start; the gestures from its points.
-    touch_ok: bool,
-    touch: touch::Recogniser,
-    /// A gesture that ended during a USB drive command, acted on after it ([`App::touch`]).
-    touch_pending: Option<Input>,
-    /// The panel was sampled during a drive command: the main loop's next `dt_ms` (its sleep since its own last
-    /// read) is time those samples already counted.
-    touch_sampled: bool,
+    /// The touch panel and its gestures.
+    touch: TouchState,
     /// The scan of stock's rides (the stock data menu, the overview's totals), over its cache when main.rs gives
     /// it one ([`App::set_scan_cache`]). 13 KB in its own cell beside the app in AXI SRAM (main.rs `make_stock_scan`),
     /// so the app stays under its size budget and its copy on the stack at start-up shrinks with it.
@@ -388,14 +379,8 @@ pub struct App {
     bikes: Option<&'static mut BikeStore>,
     /// The climb pacer's plan (app/pace.rs).
     pace: PaceState,
-    /// The road ahead: climbs found with no course followed (memory from main.rs: [`App::set_ahead_memory`]).
-    ahead: Option<(&'static mut climbs_ahead::Ahead, &'static mut [u16])>,
-    /// The last and the longest tile load of the road ahead, and the longest slice, us ([`App::ahead_tile_us`]).
-    ahead_us: AheadUs,
-    /// The steep descent said last: its place on the ride's odometer, m ([`App::descent_second`]).
-    descent_said: Option<i32>,
-    /// The time spent so far on the tile being loaded, us.
-    ahead_acc: u32,
+    /// The road ahead: climbs found with no course followed.
+    ahead: AheadState,
     /// Where the CPU's time goes, by section of the pass (link/prof.rs; the dev link's `prof`).
     prof: prof::Prof,
     /// The USB drive (msc.rs): the medium is in while the card is lent ([`emmc::Emmc::lend`], app/drive.rs).
@@ -492,7 +477,7 @@ impl App {
             theme: ui::Theme::DARK,
             auto_themes: [ui::Theme::OUTDOOR, ui::Theme::DARK],
             menu: MenuInput::new(),
-            under: [Screen::Main; 8],
+            under: [Screen::Main; 10],
             depth: 0,
             pages,
             page_count,
@@ -535,15 +520,10 @@ impl App {
             #[cfg(test)]
             bars: core::cell::Cell::new(0),
             track: map::Track::new(),
-            map_zoom: None,
-            map_centre: None,
-            map_whole: false,
+            map_view: MapView::new(),
             emmc: emmc::Emmc::new(),
             basemap: tiles::Basemap::new(),
-            touch_ok: touch::init(b),
-            touch: touch::Recogniser::default(),
-            touch_pending: None,
-            touch_sampled: false,
+            touch: TouchState::new(touch::init(b)),
             stock,
             awake_at: 0,
             dt_ms: POLL_MS,
@@ -562,10 +542,7 @@ impl App {
             pace: PaceState::new(),
             thresholds: None,
             bikes: None,
-            ahead: None,
-            ahead_us: AheadUs::default(),
-            descent_said: None,
-            ahead_acc: 0,
+            ahead: AheadState::new(),
             drive: msc::Drive::new(),
             restart: false,
             phone: Phone::default(),
@@ -685,7 +662,6 @@ impl App {
             let w = b.backup_read(FAULT_BKP);
             b.backup_write(FAULT_BKP, if self.fault_due.is_some() { w & !0xff } else { 0 });
         }
-        self.gps.note_fix();
         let was = self.strip.rec;
         self.strip.rec = self.rec.mark(&self.ride, self.card_writable);
         if self.strip.rec == Rec::NotSaving && matches!(was, Rec::Running | Rec::Paused) {

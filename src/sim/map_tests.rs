@@ -284,16 +284,16 @@ fn map_zoom_buttons() {
         assert_consistent(sim, app);
     };
     let fit = app.map_view(0).unwrap();
-    assert_eq!(app.map_zoom, None);
+    assert_eq!(app.map_view.zoom, None);
     sim.save("map_zoom_fit");
     tap(&mut sim, &mut app, plus);
-    let first = app.map_zoom.expect("zoomed in");
+    let first = app.map_view.zoom.expect("zoomed in");
     assert_eq!(mpp16(first + 1), fit.mpp16, "one level finer than the fit");
     assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(first));
     for _ in 0..20 {
         tap(&mut sim, &mut app, plus);
     }
-    assert_eq!(app.map_zoom, Some(MIN_LEVEL), "no finer than 1.5 m a pixel");
+    assert_eq!(app.map_view.zoom, Some(MIN_LEVEL), "no finer than 1.5 m a pixel");
     assert_eq!(app.map_view(0).unwrap().mpp16, 24);
     sim.save("map_zoom_in");
     // riding on, zoomed in: the view follows, centred again only when the arrow leaves the middle part
@@ -321,13 +321,13 @@ fn map_zoom_buttons() {
     for _ in MIN_LEVEL..fit_level + 2 {
         tap(&mut sim, &mut app, minus);
     }
-    assert_eq!(app.map_zoom, Some(fit_level + 2), "coarser than the fit, by hand");
+    assert_eq!(app.map_view.zoom, Some(fit_level + 2), "coarser than the fit, by hand");
     assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(fit_level + 2));
     // the crosshair: back to the fit
     let centre = (minus.0, minus.1 + minus.3 + 4, minus.2, minus.3);
     sim.save("map_zoom_out");
     tap(&mut sim, &mut app, centre);
-    assert_eq!(app.map_zoom, None, "back to the fit");
+    assert_eq!(app.map_view.zoom, None, "back to the fit");
     let shown = map::Shown::of(&app.track, area, None, None, true);
     assert_eq!(app.map_view(0), shown.view, "the default view");
     // a hold on the map opens the page editor (no ride recording), even on a button
@@ -342,10 +342,10 @@ fn map_zoom_buttons() {
     app.show(&mut sim);
     let half = map::area(ui::field_box(2, ui::RIDE_H, 0).unwrap());
     assert_eq!(map::buttons(half), None);
-    app.map_zoom = Some(MIN_LEVEL + 1); // as if zoomed in on the full page: "+" or "-" there would change it
+    app.map_view.zoom = Some(MIN_LEVEL + 1); // as if zoomed in on the full page: "+" or "-" there would change it
     for b in [plus, minus] {
         tap(&mut sim, &mut app, b);
-        assert_eq!(app.map_zoom, Some(MIN_LEVEL + 1), "no buttons, no zoom");
+        assert_eq!(app.map_view.zoom, Some(MIN_LEVEL + 1), "no buttons, no zoom");
     }
     sim.save("map_zoom_half");
 }
@@ -383,7 +383,7 @@ fn map_crosshair_toggles_the_route() {
     let whole = View::fit(&app.track, area, app.route().as_ref()).unwrap();
     assert_eq!(app.map_view(0), Some(whole), "the whole route");
     assert_ne!(whole.mpp16, default);
-    assert_eq!(app.map_zoom, None, "not a zoom by hand");
+    assert_eq!(app.map_view.zoom, None, "not a zoom by hand");
     tap(&mut sim, &mut app);
     assert_eq!(app.map_view(0).unwrap().mpp16, default, "the default view again");
 }
@@ -411,7 +411,7 @@ fn map_default_view_without_a_fix() {
     assert!((700..=1400).contains(&span), "the default view {span} m across");
     app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
     assert_consistent(&sim, &app);
-    let level = app.map_zoom.expect("zoomed in by hand");
+    let level = app.map_view.zoom.expect("zoomed in by hand");
     assert!(mpp16(level) < v.mpp16, "\"+\" goes finer than the default");
     assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(level));
 }
@@ -434,14 +434,14 @@ fn map_zoom_ends_with_the_ride() {
     let [plus, _] = crate::map::buttons(area).unwrap();
     app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
     app.input(&mut sim, Input::Touch(Gesture::Drag(100, 200, 30, 0)));
-    assert!(app.map_zoom.is_some() && app.map_centre.is_some(), "zoomed and panned");
+    assert!(app.map_view.zoom.is_some() && app.map_view.centre.is_some(), "zoomed and panned");
     // the ride ended, a new one started
     app.press(&mut sim, Press::Short(Key::Start));
     save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
     back(&mut sim, &mut app);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.map_zoom, app.map_centre), (None, None), "the new ride's map fitted");
+    assert_eq!((app.map_view.zoom, app.map_view.centre), (None, None), "the new ride's map fitted");
     app.screen = Screen::Ride(2);
     app.show(&mut sim);
     run(&mut sim, &mut app, 200_000);
@@ -449,11 +449,11 @@ fn map_zoom_ends_with_the_ride() {
     assert_consistent(&sim, &app);
     // zoomed again, then a course followed: fitted to it
     app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
-    assert!(app.map_zoom.is_some());
+    assert!(app.map_view.zoom.is_some());
     app.set_course_memory(crate::storage::course_file::tests::memory());
     app.open_courses(&mut sim);
     app.follow_course(hill(&app));
-    assert_eq!((app.map_zoom, app.map_centre), (None, None), "a course: the map fitted");
+    assert_eq!((app.map_view.zoom, app.map_view.centre), (None, None), "a course: the map fitted");
 }
 
 /// A course followed, the map zoomed in: the course drawn under the track as at the fit, the view following the
@@ -487,7 +487,7 @@ fn map_zoom_with_a_course() {
     for _ in 0..5 {
         app.input(&mut sim, Input::Touch(Gesture::Tap((minus.0 + 20) as u16, (minus.1 + 20) as u16)));
     }
-    let level = app.map_zoom.expect("zoomed in");
+    let level = app.map_view.zoom.expect("zoomed in");
     let mut views = 0;
     // ten minutes on the course, then on past its end (course_route, 8 m/s) until the view follows the rider: the
     // view that follows holds a pixel of the course or none, by when in its second the fix is read (2026-10-31)
@@ -554,7 +554,7 @@ fn map_pan() {
     assert_eq!(app.screen(), Screen::Ride(0), "swipe left: the next page");
     drag(&mut sim, &mut app, (80, 200), (80, 0));
     assert_eq!(app.screen(), Screen::Ride(2), "swipe right: the map again");
-    assert_eq!(app.map_centre, None);
+    assert_eq!(app.map_view.centre, None);
     tap(&mut sim, &mut app, plus);
     tap(&mut sim, &mut app, plus);
     let v0 = app.map_view(0).unwrap();
@@ -565,7 +565,7 @@ fn map_pan() {
     assert_eq!(app.screen(), Screen::Ride(2), "the drag panned, no page change");
     let v = app.map_view(0).unwrap();
     assert_eq!((v.cx, v.cy), (v0.cx - m(60), v0.cy - m(40)), "moved by the finger's vector");
-    assert_eq!(app.map_centre, Some((v.cx, v.cy)));
+    assert_eq!(app.map_view.centre, Some((v.cx, v.cy)));
     assert_consistent(&sim, &app);
     sim.save("map_pan");
     std::println!("a pan: {} px drawn in {} ms", sim.pixels - px, sim.ms - t0);
@@ -598,7 +598,7 @@ fn map_pan() {
     sim.save("map_pan_far");
     // re-centre: following the rider again, the button gone
     tap(&mut sim, &mut app, centre_button);
-    assert_eq!(app.map_centre, None);
+    assert_eq!(app.map_view.centre, None);
     let v = app.map_view(0).unwrap();
     let (x, y) = v.px(area, app.track.pos().unwrap());
     assert!(x >= area.2 / 5 && x < area.2 * 4 / 5 && y >= area.1 + area.3 / 5, "the rider in the middle: {x},{y}");
@@ -643,10 +643,10 @@ fn pan_after_zoom_in_moves_with_the_finger() {
     assert_consistent(&sim, &app);
     // a gloved tap sliding 12 px on "-" is "-": a level out, the panned centre kept, not a pan
     let [_, minus] = map::buttons(area).unwrap();
-    let (zoom, centre) = (app.map_zoom, app.map_centre);
+    let (zoom, centre) = (app.map_view.zoom, app.map_view.centre);
     drag(&mut sim, &mut app, (minus.0 + 14, minus.1 + 20), (12, 0));
-    assert_eq!(app.map_zoom.map(|z| z + 1), zoom.map(|z| z + 2), "one level out");
-    assert_eq!(app.map_centre, centre, "not panned");
+    assert_eq!(app.map_view.zoom.map(|z| z + 1), zoom.map(|z| z + 2), "one level out");
+    assert_eq!(app.map_view.centre, centre, "not panned");
     assert_consistent(&sim, &app);
 }
 
@@ -755,15 +755,15 @@ fn map_pinch_zooms() {
     let left = 99_000 - sim.ms;
     run(&mut sim, &mut app, left);
     let v0 = app.map_view(0).unwrap();
-    assert_eq!(app.map_zoom, None);
+    assert_eq!(app.map_view.zoom, None);
     run(&mut sim, &mut app, 3000); // fingers 60 to 100 apart: 1.67 times
-    let level = app.map_zoom.expect("apart: zoomed in");
+    let level = app.map_view.zoom.expect("apart: zoomed in");
     assert_eq!(crate::map::mpp16(level + 1), v0.mpp16, "one level finer");
     assert_eq!(app.screen(), Screen::Ride(2), "no tap, no page change");
     assert_consistent(&sim, &app);
     sim.save("map_pinch_in");
     run(&mut sim, &mut app, 5000); // 100 to 40: 0.4 times, two pinches of 1.5 times
-    assert_eq!(app.map_zoom, Some(level + 2), "together: two levels coarser");
+    assert_eq!(app.map_view.zoom, Some(level + 2), "together: two levels coarser");
     assert_eq!(app.screen(), Screen::Ride(2));
     assert_consistent(&sim, &app);
 }

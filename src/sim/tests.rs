@@ -2194,3 +2194,29 @@ fn backup_indexes_fit_the_rtc_registers() {
     used.extend(crate::Kind::ALL.iter().map(|k| k.backup()));
     assert!(used.iter().all(|&n| n < 32), "backup index out of the 32 registers: {used:?}");
 }
+
+/// The deepest path (Main > MENU > PAGES > PageList > Page > Edit > BOX menu > Fields > Group) is nine screens: Back
+/// returns level by level, none skipped (the stack held eight, so the last open replaced a screen without a push).
+#[test]
+fn back_returns_level_by_level_from_the_deepest_path() {
+    let mut sim = Sim::new(12, 34, 56);
+    let mut app = App::start(&mut sim, None);
+    let path = [
+        Screen::Main,
+        Screen::Menu(Menu::Main, 1),
+        Screen::Menu(Menu::Main, 2),
+        Screen::Menu(Menu::Main, 3),
+        Screen::Menu(Menu::Main, 4),
+        Screen::Menu(Menu::Main, 5),
+        Screen::Menu(Menu::Main, 6),
+        Screen::Menu(Menu::Main, 7),
+        Screen::Menu(Menu::Main, 8),
+    ];
+    for &s in &path[1..] {
+        app.open(s);
+    }
+    for &want in path.iter().rev().skip(1) {
+        app.close();
+        assert_eq!(app.screen(), want);
+    }
+}

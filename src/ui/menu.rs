@@ -2,6 +2,10 @@
 //! row is ([`Row`]) and the settings rows change ([`Setting`]). The app draws and acts on a row by its kind, never
 //! by its position, so a menu grows by adding a row to its table.
 
+use crate::alerts::{
+    LIM_CAD_HIGH, LIM_CAD_LOW, LIM_DFA, LIM_EACH_KCAL, LIM_EACH_KJ, LIM_EACH_KM, LIM_HR_LOW, LIM_POWER_HIGH,
+    LIM_POWER_LOW, LIM_SPEED_HIGH, LIM_SPEED_LOW,
+};
 use crate::{Key, Menu, Press, power, ride, touch::Gesture};
 
 /// What the user asked for. Screens act on these, never on keys, so a key, a touch gesture or the dev link reach the
@@ -94,8 +98,6 @@ pub enum Setting {
     Sex,
     /// BIRTH YEAR: 0 until set; sets the maximum heart rate (220 minus the age) while that is still the default.
     BirthYear,
-    /// HEIGHT, cm: 0 until set (kept for formulas that need it; none does yet).
-    Height,
     // power.rs
     /// Rider weight (a number), for W/kg.
     Weight,
@@ -336,7 +338,6 @@ impl Setting {
             Setting::ZonesReset => "RESET",
             Setting::Sex => "SEX",
             Setting::BirthYear => "BORN",
-            Setting::Height => "HEIGHT",
             Setting::PowerSmooth => "POWER SMOOTH",
             Setting::AutoLap => "AUTO LAP",
             Setting::SunsetAlert => "SUNSET",
@@ -374,12 +375,13 @@ impl Setting {
         match self {
             Setting::Wheel => " MM",
             Setting::Light => "%",
-            Setting::MaxHr | Setting::HrAlert | Setting::Lthr | Setting::Limit(6) | Setting::Zone(0..=3) => " BPM",
+            Setting::MaxHr | Setting::HrAlert | Setting::Lthr | Setting::Limit(LIM_HR_LOW) | Setting::Zone(0..=3) => {
+                " BPM"
+            }
             Setting::Zone(_) => " W",
-            Setting::Height => " CM",
-            Setting::Limit(0 | 1) => " W",
-            Setting::Limit(2 | 3) => " RPM",
-            Setting::Limit(4 | 5) => " KMH",
+            Setting::Limit(LIM_POWER_HIGH | LIM_POWER_LOW) => " W",
+            Setting::Limit(LIM_CAD_HIGH | LIM_CAD_LOW) => " RPM",
+            Setting::Limit(LIM_SPEED_HIGH | LIM_SPEED_LOW) => " KMH",
             Setting::Ftp => " W",
             Setting::Weight | Setting::BikeWeight => " KG",
             Setting::WPrime => " KJ",
@@ -394,7 +396,7 @@ impl Setting {
     /// [`Setting::unit`] with the speed limits in mph when `imperial` (they are kept in km/h).
     pub fn unit_in(self, imperial: bool) -> &'static str {
         match self {
-            Setting::Limit(4 | 5) if imperial => " MPH",
+            Setting::Limit(LIM_SPEED_HIGH | LIM_SPEED_LOW) if imperial => " MPH",
             _ => self.unit(),
         }
     }
@@ -408,20 +410,19 @@ impl Setting {
             Setting::Zone(0..=3) => Some((ZONE_HR_MIN..=ZONE_HR_MAX, 1)),
             Setting::Zone(_) => Some((1..=ZONE_PW_MAX, 5)),
             Setting::BirthYear => Some((1920..=2020, 1)),
-            Setting::Height => Some((100..=230, 1)),
             Setting::Ftp => Some((FTP_RANGE, 5)),
             Setting::Weight => Some((WEIGHT_RANGE, 1)),
             Setting::WPrime => Some((WPRIME_RANGE, 500)),
             Setting::BikeWeight => Some((BIKE_RANGE, 1)),
             Setting::Eat | Setting::Drink => Some((0..=120, 5)),
             Setting::HrAlert => Some((0..=230, 5)),
-            Setting::Limit(0 | 1) => Some((0..=999, 10)),
-            Setting::Limit(2 | 3) => Some((0..=250, 5)),
-            Setting::Limit(4 | 5) => Some((0..=100, 1)),
-            Setting::Limit(6) => Some((0..=230, 5)),
-            Setting::Limit(7) => Some((0..=99, 1)),
-            Setting::Limit(8 | 9) => Some((0..=990, 10)),
-            Setting::Limit(10) => Some((0..=100, 5)),
+            Setting::Limit(LIM_POWER_HIGH | LIM_POWER_LOW) => Some((0..=999, 10)),
+            Setting::Limit(LIM_CAD_HIGH | LIM_CAD_LOW) => Some((0..=250, 5)),
+            Setting::Limit(LIM_SPEED_HIGH | LIM_SPEED_LOW) => Some((0..=100, 1)),
+            Setting::Limit(LIM_HR_LOW) => Some((0..=230, 5)),
+            Setting::Limit(LIM_EACH_KM) => Some((0..=99, 1)),
+            Setting::Limit(LIM_EACH_KCAL | LIM_EACH_KJ) => Some((0..=990, 10)),
+            Setting::Limit(LIM_DFA) => Some((0..=100, 5)),
             // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 1 m steps (a known height to the metre; a held key repeats)
             Setting::Altitude => Some((0..=9500, 1)),
             Setting::LapKm => Some((1..=50, 1)),
@@ -905,7 +906,7 @@ pub const SETTINGS: [Row; 5] = [
 ];
 
 /// ME: the rider's numbers the metrics are computed from.
-pub const ME: [Row; 10] = [
+pub const ME: [Row; 9] = [
     Row::Set(Setting::MaxHr),
     Row::Set(Setting::Lthr),
     Row::Set(Setting::ZonesBy),
@@ -915,7 +916,6 @@ pub const ME: [Row; 10] = [
     Row::Set(Setting::WPrime),
     Row::Set(Setting::Sex),
     Row::Set(Setting::BirthYear),
-    Row::Set(Setting::Height),
 ];
 
 /// ZONES (ME > ZONES): the top of each heart-rate zone 1 to 4 and power zone 1 to 6 (zone 5 and 7 have none), each edited
@@ -938,18 +938,18 @@ pub const ZONES: [Row; 11] = [
 pub const ALERTS: [Row; 16] = [
     Row::Set(Setting::Eat),
     Row::Set(Setting::Drink),
-    Row::Set(Setting::Limit(7)),
-    Row::Set(Setting::Limit(8)),
-    Row::Set(Setting::Limit(9)),
+    Row::Set(Setting::Limit(LIM_EACH_KM)),
+    Row::Set(Setting::Limit(LIM_EACH_KCAL)),
+    Row::Set(Setting::Limit(LIM_EACH_KJ)),
     Row::Set(Setting::HrAlert),
-    Row::Set(Setting::Limit(6)),
-    Row::Set(Setting::Limit(0)),
-    Row::Set(Setting::Limit(1)),
-    Row::Set(Setting::Limit(2)),
-    Row::Set(Setting::Limit(3)),
-    Row::Set(Setting::Limit(4)),
-    Row::Set(Setting::Limit(5)),
-    Row::Set(Setting::Limit(10)),
+    Row::Set(Setting::Limit(LIM_HR_LOW)),
+    Row::Set(Setting::Limit(LIM_POWER_HIGH)),
+    Row::Set(Setting::Limit(LIM_POWER_LOW)),
+    Row::Set(Setting::Limit(LIM_CAD_HIGH)),
+    Row::Set(Setting::Limit(LIM_CAD_LOW)),
+    Row::Set(Setting::Limit(LIM_SPEED_HIGH)),
+    Row::Set(Setting::Limit(LIM_SPEED_LOW)),
+    Row::Set(Setting::Limit(LIM_DFA)),
     Row::Set(Setting::SunsetAlert),
     Row::Set(Setting::SteepDescent),
 ];

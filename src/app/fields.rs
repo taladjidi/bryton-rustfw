@@ -683,8 +683,9 @@ impl App {
             Field::MaxPower => (p.max().map(u32::from), false),
             Field::MaxHr => (r.max_hr().map(u32::from), false),
             Field::AvgCadence => (r.avg_cadence().map(u32::from), false),
-            Field::BalanceAvg => {
-                match r.balance_right() {
+            Field::BalanceAvg | Field::Balance => {
+                let right = if f == Field::Balance { self.live.get(Metric::Balance) } else { r.balance_right() };
+                match right {
                     Some(right) => {
                         l.push_u32(u32::from(100u16.saturating_sub(right)));
                         l.push_str("/");
@@ -702,17 +703,6 @@ impl App {
                 match self.live.get(Metric::SmoothC) {
                     Some(c) => l.push_u32(u32::from(c / 2)),
                     None => pair_text(&mut l, self.live.get(Metric::SmoothL), self.live.get(Metric::SmoothR)),
-                }
-                return l;
-            }
-            Field::Balance => {
-                match self.live.get(Metric::Balance) {
-                    Some(right) => {
-                        l.push_u32(u32::from(100u16.saturating_sub(right)));
-                        l.push_str("/");
-                        l.push_u32(u32::from(right));
-                    }
-                    None => l.push_str("--"),
                 }
                 return l;
             }

@@ -352,23 +352,8 @@ impl App {
         if !self.card_writable || !self.sensors_store.dirty || !self.ride_settled() {
             return; // a build that may not write the card reads the file, never writes it
         }
-        let (local, _) = self.rec_time();
         let sector = sensors::sector(self.sensors_store.trainer, self.sensors_store.bt, self.sensors_store.bt_fec);
-        let mut d = emmc::Volume(&mut self.emmc, b);
-        let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
-            let t = fat::write::dos_time(local);
-            let dir = fat.ensure_own_dir(&mut d, fat.root(), recorder::DIR, t)?;
-            let mut h = match fat.locate(&mut d, dir, sensors::SENSORS_FILE) {
-                Err(fat::Error::NotFound) => fat.create(&mut d, dir, sensors::SENSORS_FILE, t)?,
-                other => other?,
-            };
-            fat.write_sectors(&mut d, &mut h, 0, &sector)?;
-            if h.size != 512 {
-                fat.set_size(&mut d, &mut h, 512, t)?;
-            }
-            Ok(())
-        });
-        if r.is_ok() {
+        if self.write_sector_file(b, sensors::SENSORS_FILE, &sector) {
             self.sensors_store.dirty = false;
             // the file holds it: the register goes back to the shifting system (an earlier build's word only)
             if Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())).is_some() {

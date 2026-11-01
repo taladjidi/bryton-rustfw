@@ -61,6 +61,7 @@ pub(crate) use climbs_done::ClimbsDone;
 #[cfg(test)]
 pub(crate) use climbs_done::MAX as CLIMBS_MAX;
 pub use clock::*;
+#[cfg(test)]
 pub(crate) use courses::push_grade;
 pub use device::*;
 pub(crate) use editor::*;

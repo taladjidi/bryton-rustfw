@@ -154,10 +154,8 @@ impl App {
             }
         };
         match i {
-            Input::Next | Input::NextHeld => change(self, false),
-            Input::Prev | Input::PrevHeld => change(self, true),
-            Input::Touch(Gesture::Swipe(Dir::Up)) => change(self, false),
-            Input::Touch(Gesture::Swipe(Dir::Down)) => change(self, true),
+            Input::Next | Input::NextHeld | Input::Touch(Gesture::Swipe(Dir::Up)) => change(self, false),
+            Input::Prev | Input::PrevHeld | Input::Touch(Gesture::Swipe(Dir::Down)) => change(self, true),
             Input::Select | Input::Touch(Gesture::Tap(..)) if at + 1 < NAME_CHARS => self.sw.rename = Some((n, at + 1)),
             _ => {
                 self.sw.rename = None;

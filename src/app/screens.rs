@@ -409,7 +409,7 @@ impl App {
     /// A page's map follows the rider at the default level (no zoom set by hand): outdoors, and unless the crosshair
     /// showed the whole route. Indoors, the fit.
     pub(crate) fn page_follow(&self) -> bool {
-        !self.indoors() && !self.map_whole
+        !self.indoors() && !self.map_view.whole
     }
 
     /// `f`, but a 3 / 10 / 30 s power field as the window chosen by a tap (its label).
@@ -456,7 +456,7 @@ impl App {
 
     /// The map's zoom set by hand, if any.
     pub(crate) fn zoom(&self) -> Option<map::Zoom> {
-        self.map_zoom.map(|level| map::Zoom { level, centre: self.map_centre })
+        self.map_view.zoom.map(|level| map::Zoom { level, centre: self.map_view.centre })
     }
 
     /// The page's (first) map: its area and how it is drawn.
@@ -474,7 +474,7 @@ impl App {
         let (area, m) = self.page_map()?;
         let (level, centre) = match map::button_at(area, &m, i32::from(x), i32::from(y))? {
             map::Button::Centre => (None, None),
-            b => (map::zoom(&m, b == map::Button::In), self.map_centre),
+            b => (map::zoom(&m, b == map::Button::In), self.map_view.centre),
         };
         Some(level.map(|level| map::Zoom { level, centre }))
     }
@@ -483,9 +483,7 @@ impl App {
     pub(crate) fn pans_at(&self, x: u16, y: u16) -> bool {
         let (x, y) = (i32::from(x), i32::from(y));
         matches!(self.screen, Screen::Ride(_))
-            && self
-                .page_map()
-                .is_some_and(|(a, m)| m.zoomed() && (a.0..a.0 + a.2).contains(&x) && (a.1..a.1 + a.3).contains(&y))
+            && self.page_map().is_some_and(|(a, m)| m.zoomed() && map::inside(a, x, y))
     }
 
     /// The page's map's centre after a drag of (`dx`, `dy`) pixels ([`map::pan`]); None when it does not pan.

@@ -136,19 +136,7 @@ impl App {
         let target = plan.watts.first().copied().filter(|&w| w > 0 && plan.n > 0 && self.pace.on);
         let band = target.map(|w| (w - w * BAND_PCT / 100, w.saturating_add(w * BAND_PCT / 100)));
         let reading = self.power.rolling(avg);
-        let mut value = Line::new();
-        match reading {
-            Some(v) => value.push_u32(u32::from(v)),
-            None => value.push_str("--"),
-        }
-        let color = match (reading, band) {
-            (Some(v), Some(b)) => workout::gauge_color(v, b),
-            (Some(w), None) => self.settings.zones().power_color(w),
-            (None, _) => ui::WHITE,
-        };
-        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
-        let scale = |b| workout::gauge_scale(storage::workout_file::Kind::Power, b, ftp, max_hr);
-        let marker = reading.zip(band).map(|(v, b)| workout::gauge_x(v, scale(b), cols));
+        let (value, color, marker) = self.gauge_head(storage::workout_file::Kind::Power, reading, band, cols, |c| c);
         let ridden = if self.pace.on { self.ride.timer_s().saturating_sub(self.pace.made_s) } else { 0 };
         let pace = Some(plan.total_s.saturating_sub(ridden).min(u32::from(u16::MAX)) as u16);
         GaugeShown {

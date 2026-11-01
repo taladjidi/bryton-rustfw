@@ -166,7 +166,7 @@ impl SettingsCopy {
         }
         put(&[u8::from(s.female)]);
         put(&s.birth_year.to_le_bytes());
-        put(&[s.height_cm as u8, u8::from(s.max_hr_age)]);
+        put(&[0, u8::from(s.max_hr_age)]); // byte 148 was HEIGHT: reserved, so older files still load
         put(&[u8::from(s.start_reminder), u8::from(s.ready_check)]);
         put(&[u8::from(s.climbs_medium), u8::from(s.climb_page), s.date_fmt as u8]);
         put(&[s.sunset_alert as u8]);
@@ -287,8 +287,8 @@ impl SettingsCopy {
         s.female = flag(data.next(), false);
         let year = data.next().zip(data.next()).map_or(0, |(a, b)| u16::from_le_bytes([a, b]));
         s.birth_year = Some(year).filter(|y| (1920..=2020).contains(y)).unwrap_or(0);
-        s.height_cm = data.next().map(u16::from).filter(|h| (100..=230).contains(h)).unwrap_or(0);
-        // MAX HR from age (a byte after HEIGHT): a file without it reads off
+        data.next(); // byte 148: HEIGHT, retired
+        // MAX HR from age (a byte after the retired HEIGHT): a file without it reads off
         s.max_hr_age = flag(data.next(), false);
         // REMINDER and READY CHECK (after MAX HR from age): a file without them reads both ON
         s.start_reminder = flag(data.next(), d.start_reminder);
@@ -827,7 +827,6 @@ mod day_night_file_tests {
             zone_up: up,
             female: true,
             birth_year: 1984,
-            height_cm: 178,
             lthr: 165,
             ..Settings::from_word(0)
         };
@@ -836,13 +835,13 @@ mod day_night_file_tests {
         assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
         let back = SettingsCopy::from_sector(&sec).unwrap().settings;
         assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
-        assert_eq!((back.birth_year, back.height_cm), (1984, 178));
+        assert_eq!(back.birth_year, 1984);
         for len in [44u16, 66, 99, 123] {
             let mut old = sec;
             old[6..8].copy_from_slice(&len.to_le_bytes());
             recrc(&mut old);
             let o = SettingsCopy::from_sector(&old).unwrap().settings;
-            assert_eq!((o.zone_custom, o.zones_lthr, o.female, o.birth_year, o.height_cm), (false, false, false, 0, 0));
+            assert_eq!((o.zone_custom, o.zones_lthr, o.female, o.birth_year), (false, false, false, 0));
             let want = ride::Zones::computed(o.ftp, o.max_hr, o.lthr, ride::ZonesBy::MaxHr);
             assert_eq!(o.zones(), want, "a {len}-byte file");
         }

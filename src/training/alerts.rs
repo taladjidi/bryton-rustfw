@@ -28,6 +28,30 @@ pub const LIMIT_EVERY_S: u32 = 60;
 /// alert (hundredths, under it).
 pub const LIMITS: usize = 11;
 
+// The index of each limit in `Settings::limits` and the number of `Setting::Limit(n)` (the menu's table follows it).
+/// Power high.
+pub const LIM_POWER_HIGH: u8 = 0;
+/// Power low.
+pub const LIM_POWER_LOW: u8 = 1;
+/// Cadence high.
+pub const LIM_CAD_HIGH: u8 = 2;
+/// Cadence low.
+pub const LIM_CAD_LOW: u8 = 3;
+/// Speed high, km/h.
+pub const LIM_SPEED_HIGH: u8 = 4;
+/// Speed low, km/h.
+pub const LIM_SPEED_LOW: u8 = 5;
+/// Heart rate low.
+pub const LIM_HR_LOW: u8 = 6;
+/// The reminder each so many km.
+pub const LIM_EACH_KM: u8 = 7;
+/// The reminder each so many kcal.
+pub const LIM_EACH_KCAL: u8 = 8;
+/// The reminder each so many kJ.
+pub const LIM_EACH_KJ: u8 = 9;
+/// The DFA a1 alert, hundredths (under it).
+pub const LIM_DFA: u8 = 10;
+
 /// What the limits and the reminders are checked against, one second of a moving ride.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Reading {
@@ -267,17 +291,17 @@ impl Alerts {
         let v = |o: Option<u16>| o.map(u32::from);
         // a reading of 0 is no reading for the low limits: coasting or a standstill does not alert
         let nz = |o: Option<u16>| o.filter(|&x| x > 0).map(u32::from);
-        let l = |i: usize, k: u32| set.get(i).map_or(0, |&x| u32::from(x) * k);
+        let l = |i: u8, k: u32| set.get(usize::from(i)).map_or(0, |&x| u32::from(x) * k);
         // (reading, limit, high, alert) for each band
         let checks = [
-            (v(r.power), l(0, 1), true, Alert::PowerHigh),
-            (nz(r.power), l(1, 1), false, Alert::PowerLow),
-            (v(r.cadence), l(2, 1), true, Alert::CadHigh),
-            (nz(r.cadence), l(3, 1), false, Alert::CadUnder),
-            (v(r.speed_x10), l(4, 10), true, Alert::SpeedHigh),
-            (nz(r.speed_x10), l(5, 10), false, Alert::SpeedLow),
-            (v(r.hr), l(6, 1), false, Alert::HrLow),
-            (v(r.dfa_x100), l(10, 1), false, Alert::DfaLow),
+            (v(r.power), l(LIM_POWER_HIGH, 1), true, Alert::PowerHigh),
+            (nz(r.power), l(LIM_POWER_LOW, 1), false, Alert::PowerLow),
+            (v(r.cadence), l(LIM_CAD_HIGH, 1), true, Alert::CadHigh),
+            (nz(r.cadence), l(LIM_CAD_LOW, 1), false, Alert::CadUnder),
+            (v(r.speed_x10), l(LIM_SPEED_HIGH, 10), true, Alert::SpeedHigh),
+            (nz(r.speed_x10), l(LIM_SPEED_LOW, 10), false, Alert::SpeedLow),
+            (v(r.hr), l(LIM_HR_LOW, 1), false, Alert::HrLow),
+            (v(r.dfa_x100), l(LIM_DFA, 1), false, Alert::DfaLow),
         ];
         for (band, (val, limit, high, alert)) in self.bands.iter_mut().zip(checks) {
             if band.step(val, limit, high) {
@@ -286,7 +310,7 @@ impl Alerts {
         }
         let now = [r.dist_m / 1000, r.kcal, r.kj];
         for (k, alert) in [Alert::Dist, Alert::Kcal, Alert::Kj].into_iter().enumerate() {
-            let step = l(7 + k, 1);
+            let step = l(LIM_EACH_KM + k as u8, 1);
             let (Some(prev), Some(&n)) = (self.prev.get_mut(k), now.get(k)) else { continue };
             if self.primed && step > 0 && n / step > *prev / step {
                 q.push(Some(alert));

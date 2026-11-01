@@ -15,14 +15,14 @@ impl App {
     /// The last tile of the road ahead read, inflated and decoded (all its slices), the longest so far, and the
     /// longest single call on a tile, in microseconds of CPU ([`prof::Clock::us`]; `tools/dev.py info`).
     pub fn ahead_tile_us(&self) -> (u32, u32, u32) {
-        (self.ahead_us.last, self.ahead_us.max, self.ahead_us.slice)
+        (self.ahead.us.last, self.ahead.us.max, self.ahead.us.slice)
     }
 
     /// Gives the road ahead its memory (main.rs: about 110 KB in AXI SRAM) and the buffer map tiles are inflated
     /// into (64 KB or more of the map's SDRAM); without them there are no climbs ahead.
     pub fn set_ahead_memory(&mut self, mem: &'static mut climbs_ahead::Ahead, scratch: &'static mut [u16]) {
         mem.preset_medium(self.settings.climbs_medium);
-        self.ahead = Some((mem, scratch));
+        self.ahead.road = Some((mem, scratch));
     }
 
     /// Climbs ahead are on: switched on, a ride (paused too: the trace and the climb said are kept, the work waits),
@@ -52,7 +52,7 @@ impl App {
         });
         let mtb = self.mtb();
         let medium = self.settings.climbs_medium;
-        let Some((a, _)) = self.ahead.as_mut() else { return };
+        let Some((a, _)) = self.ahead.road.as_mut() else { return };
         a.set_trails(mtb);
         a.set_medium(medium);
         if let Some(c) = a.second(on, fix) {
@@ -67,7 +67,7 @@ impl App {
         if self.ride.state() != ride::State::Running {
             return; // paused: what is half done waits
         }
-        let Some((a, mem)) = self.ahead.as_mut().filter(|(a, _)| a.busy()) else { return };
+        let Some((a, mem)) = self.ahead.road.as_mut().filter(|(a, _)| a.busy()) else { return };
         let t0 = self.prof.clock.us(b);
         for _ in 0..Self::AHEAD_STEPS {
             let (tiles, loading, t1) = (a.io().0, a.loading(), self.prof.clock.us(b));
@@ -76,12 +76,12 @@ impl App {
             if loading || a.loading() || a.io().0 != tiles {
                 // a slice of a tile: the longest one, and the tile's whole (tools/dev.py info says how long)
                 let (total, max, slice) =
-                    (self.ahead_acc.saturating_add(spent), self.ahead_us.max, self.ahead_us.slice);
-                self.ahead_us.slice = slice.max(spent);
-                self.ahead_acc = total;
+                    (self.ahead.acc.saturating_add(spent), self.ahead.us.max, self.ahead.us.slice);
+                self.ahead.us.slice = slice.max(spent);
+                self.ahead.acc = total;
                 if !a.loading() {
-                    self.ahead_us = AheadUs { last: total, max: max.max(total), slice: self.ahead_us.slice };
-                    self.ahead_acc = 0;
+                    self.ahead.us = AheadUs { last: total, max: max.max(total), slice: self.ahead.us.slice };
+                    self.ahead.acc = 0;
                 }
             }
             if !more || self.prof.clock.us(b).wrapping_sub(t0) >= Self::AHEAD_US {
@@ -94,30 +94,12 @@ impl App {
     /// is no climb ahead on it.
     pub(crate) fn ahead_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
-        let ahead = self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road());
+        let ahead = self.ahead.road.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road());
         let here = ahead.and_then(|a| Some((a, a.climb_at(a.along_m())?)));
         match (f, here) {
-            // on a climb: what is left of it and the grade ahead; before it: its length and grade
-            (Field::Climb, Some((a, (k, on)))) => {
-                let d = a.along_m();
-                let (m, g) = match on {
-                    true => (k.end_m().saturating_sub(d), a.grade_ahead(d).unwrap_or(0)),
-                    false => (k.len_m, k.grade_x10() as i32),
-                };
-                if m < 10_000 {
-                    crate::push_trip(&mut l, m, false);
-                } else {
-                    l.push_u32(m / 1000);
-                }
-                l.push_str("K|");
-                push_grade(&mut l, g);
+            (Field::Climb | Field::ClimbGain, Some((a, (k, on)))) => {
+                crate::app::courses::climb_text(&mut l, f, k, on, a.along_m(), |m| a.grade_ahead(m), |m| a.alt_at(m));
             }
-            (Field::ClimbGain, Some((a, (k, true)))) => {
-                let d = a.along_m();
-                let top = a.alt_at(k.end_m()).zip(a.alt_at(d)).map_or(0, |(t, h)| (t - h).max(0) / 10);
-                l.push_u32(top as u32);
-            }
-            (Field::ClimbGain, Some((_, (k, false)))) => l.push_u32(k.gain_m),
             _ => l.push_str("--"),
         }
         l
@@ -125,7 +107,7 @@ impl App {
 
     /// CLIMB's edge bar from the road ahead, by the grade of the climb running or the next; BLACK elsewhere.
     pub(crate) fn ahead_bar(&self, f: Field) -> u16 {
-        let Some(a) = self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| f == Field::Climb && a.on_road()) else {
+        let Some(a) = self.ahead.road.as_ref().map(|(a, _)| &**a).filter(|a| f == Field::Climb && a.on_road()) else {
             return ui::BLACK;
         };
         let d = a.along_m();

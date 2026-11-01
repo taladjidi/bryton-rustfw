@@ -146,8 +146,6 @@ pub(crate) struct Gps {
     pub(crate) off: bool,
     /// The RTC's offset from UTC and the last position, as kept in backup registers.
     pub(crate) aid: gnss::Aid,
-    /// The GPS had a good fix since power-on.
-    pub(crate) had_fix: bool,
     /// GPS POWER AUTO's choice ([`gnss::Adaptive`]).
     pub(crate) auto: gnss::Adaptive,
     /// Between rides (app/gps.rs `gnss_idle`): the time since the receiver was switched on or a screen needed it, a
@@ -181,19 +179,12 @@ impl Gps {
             wait: 0,
             off: false,
             aid,
-            had_fix: false,
             auto: gnss::Adaptive::default(),
             quiet_ms: 0,
             fixed: false,
             slept: false,
             map_on: None,
         }
-    }
-
-    /// Remembers that a good fix was seen (no notice: the strip's GPS says it, and a notice stayed after the fix was
-    /// lost).
-    pub(crate) fn note_fix(&mut self) {
-        self.had_fix |= self.pvt.is_some_and(|p| p.good());
     }
 
     /// The strip's bars: None without a fix, 0 for a poor one.
@@ -774,5 +765,61 @@ impl RideStart {
     /// A date and a time of day.
     pub(crate) fn new(date: (u16, u8, u8), time: (u8, u8)) -> Self {
         RideStart { date, time }
+    }
+}
+
+/// The touch panel: the controller's answer at start, the gesture recogniser and what a drive command left over.
+pub(crate) struct TouchState {
+    /// The touch controller answered at the start.
+    pub(crate) ok: bool,
+    /// The gestures from the panel's points.
+    pub(crate) rec: touch::Recogniser,
+    /// A gesture that ended during a USB drive command, acted on after it ([`App::touch`]).
+    pub(crate) pending: Option<Input>,
+    /// The panel was sampled during a drive command: the main loop's next `dt_ms` (its sleep since its own last
+    /// read) is time those samples already counted.
+    pub(crate) sampled: bool,
+}
+
+impl TouchState {
+    /// With the controller's answer (`ok`), nothing pending.
+    pub(crate) fn new(ok: bool) -> Self {
+        TouchState { ok, rec: touch::Recogniser::default(), pending: None, sampled: false }
+    }
+}
+
+/// The ride page's map view, set by hand (app/screens.rs).
+pub(crate) struct MapView {
+    /// The zoom level set by "+" and "-" ([`map::mpp16`]); None: fitted to the track (per power-up).
+    pub(crate) zoom: Option<u32>,
+    /// Zoomed in and panned by hand: the centre (metres on the track's plane); None: it follows the rider.
+    pub(crate) centre: Option<(i32, i32)>,
+    /// The crosshair with a course followed showed the whole route ([`map::View::fit`]) instead of the default view.
+    pub(crate) whole: bool,
+}
+
+impl MapView {
+    /// Fitted to the track.
+    pub(crate) const fn new() -> Self {
+        MapView { zoom: None, centre: None, whole: false }
+    }
+}
+
+/// The road ahead (app/ahead.rs): climbs found with no course followed.
+pub(crate) struct AheadState {
+    /// Its memory from main.rs ([`App::set_ahead_memory`]); None until given.
+    pub(crate) road: Option<(&'static mut climbs_ahead::Ahead, &'static mut [u16])>,
+    /// The last and the longest tile load, and the longest slice ([`App::ahead_tile_us`]).
+    pub(crate) us: AheadUs,
+    /// The time spent so far on the tile being loaded, us.
+    pub(crate) acc: u32,
+    /// The steep descent said last: its place on the ride's odometer, m ([`App::descent_second`]).
+    pub(crate) descent_said: Option<i32>,
+}
+
+impl AheadState {
+    /// No road yet.
+    pub(crate) fn new() -> Self {
+        AheadState { road: None, us: AheadUs::default(), acc: 0, descent_said: None }
     }
 }

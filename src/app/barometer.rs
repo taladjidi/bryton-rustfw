@@ -184,24 +184,30 @@ impl App {
             return;
         }
         let Some(cal) = self.alt.take_dirty() else { return };
-        let (local, _) = self.rec_time();
-        let sector = cal.to_sector();
-        let mut d = emmc::Volume(&mut self.emmc, b);
-        let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
-            let t = fat::write::dos_time(local);
-            let dir = fat.ensure_own_dir(&mut d, fat.root(), recorder::DIR, t)?;
-            let mut h = match fat.locate(&mut d, dir, ALT_FILE) {
-                Err(fat::Error::NotFound) => fat.create(&mut d, dir, ALT_FILE, t)?,
-                other => other?,
-            };
-            fat.write_sectors(&mut d, &mut h, 0, &sector)?;
-            if h.size != 512 {
-                fat.set_size(&mut d, &mut h, 512, t)?;
-            }
-            Ok(())
-        });
-        if r.is_err() {
+        if !self.write_sector_file(b, ALT_FILE, &cal.to_sector()) {
             self.notice("ALTITUDE NOT SAVED");
         }
+    }
+
+    /// Writes `name` in `\Rustfw\` as one sector (creating the folder and the file, fixing the size at 512);
+    /// false when the card refuses. The caller has checked `card_writable` and `ride_settled`.
+    pub(crate) fn write_sector_file(&mut self, b: &mut impl Board, name: &str, sector: &[u8; 512]) -> bool {
+        let (local, _) = self.rec_time();
+        let mut d = emmc::Volume(&mut self.emmc, b);
+        fat::Fat::mount(&mut d)
+            .and_then(|mut fat| {
+                let t = fat::write::dos_time(local);
+                let dir = fat.ensure_own_dir(&mut d, fat.root(), recorder::DIR, t)?;
+                let mut h = match fat.locate(&mut d, dir, name) {
+                    Err(fat::Error::NotFound) => fat.create(&mut d, dir, name, t)?,
+                    other => other?,
+                };
+                fat.write_sectors(&mut d, &mut h, 0, sector)?;
+                if h.size != 512 {
+                    fat.set_size(&mut d, &mut h, 512, t)?;
+                }
+                Ok(())
+            })
+            .is_ok()
     }
 }

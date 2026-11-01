@@ -531,23 +531,8 @@ impl App {
         }
         if self.card_writable && self.phone.save && self.ride_settled() {
             self.phone.save = false;
-            let (local, _) = self.rec_time();
             let sector = self.phone.stored.to_sector();
-            let mut d = emmc::Volume(&mut self.emmc, b);
-            let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
-                let t = fat::write::dos_time(local);
-                let dir = fat.ensure_own_dir(&mut d, fat.root(), recorder::DIR, t)?;
-                let mut h = match fat.locate(&mut d, dir, BOND_FILE) {
-                    Err(fat::Error::NotFound) => fat.create(&mut d, dir, BOND_FILE, t)?,
-                    other => other?,
-                };
-                fat.write_sectors(&mut d, &mut h, 0, &sector)?;
-                if h.size != 512 {
-                    fat.set_size(&mut d, &mut h, 512, t)?;
-                }
-                Ok(())
-            });
-            if r.is_err() {
+            if !self.write_sector_file(b, BOND_FILE, &sector) {
                 self.notice("BOND NOT SAVED");
             }
         }

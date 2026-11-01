@@ -251,9 +251,10 @@ impl App {
             Menu::Segments => {
                 let s = self.segments();
                 let (n, k) = (s.map_or(0, Segments::indexed), i.checked_sub(FIXED_ROWS));
-                match (i, k) {
-                    (0, _) => Some(Row::Set(menu::Setting::LiveSegments)),
-                    (1, _) => Some(Row::Set(menu::Setting::SegTarget)),
+                // the fixed rows first (FIXED_ROWS of them), then one per segment
+                const FIXED: [menu::Setting; FIXED_ROWS] = [menu::Setting::LiveSegments, menu::Setting::SegTarget];
+                match (FIXED.get(i), k) {
+                    (Some(&s), _) => Some(Row::Set(s)),
                     (_, Some(0)) if n == 0 => {
                         Some(Row::Empty(if s.is_some_and(Segments::ready) { "NONE ON CARD" } else { "READING CARD" }))
                     }

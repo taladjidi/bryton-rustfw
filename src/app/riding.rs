@@ -27,7 +27,7 @@ impl App {
                 track.seed(p.lat, p.lon);
             }
             self.track = track;
-            (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false); // a new map: fitted until "+" (review)
+            (self.map_view.zoom, self.map_view.centre, self.map_view.whole) = (None, None, false); // a new map: fitted until "+" (review)
             self.new_ride = true;
             self.tlink.pm = power_match::PowerMatch::new();
             let now = self.now_s();

@@ -247,7 +247,7 @@ fn ahead_route(ms: u64) -> (i32, i32, i32) {
 fn an_mtb_ride_follows_trails_ahead() {
     let (mut sim, mut app) = started();
     app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
-    let trails = |app: &App| app.ahead.as_ref().unwrap().0.trails();
+    let trails = |app: &App| app.ahead.road.as_ref().unwrap().0.trails();
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 2000);
     assert!(!trails(&app), "road: off");
@@ -291,7 +291,7 @@ fn climbs_ahead_ride() {
     let gain: u32 = f[1].parse().unwrap();
     assert!((115..=125).contains(&gain), "its gain: {f:?}");
     assert_eq!((app.field_bar(Climb), app.field_color(Climb)), (ui::grade_color(57), ui::WHITE), "5.7 %");
-    let (tiles, bytes) = app.ahead.as_ref().unwrap().0.io();
+    let (tiles, bytes) = app.ahead.road.as_ref().unwrap().0.io();
     std::println!("climbs ahead: {tiles} tiles read, {bytes} bytes, at {} s", (sim.ms - t0) / 1000);
     assert!(tiles >= 3 && bytes > 1000, "the tiles of the first km: {tiles}");
     assert_consistent(&sim, &app);
@@ -328,11 +328,11 @@ fn climbs_ahead_ride() {
     assert!(fields(&app)[0].ends_with("%"));
     // the trace is made again as the ride reaches the end of the last (x = 2700, 1500 m from its end), the climb not
     // said twice
-    let traces = app.ahead.as_ref().unwrap().0.traces;
+    let traces = app.ahead.road.as_ref().unwrap().0.traces;
     while sim.ms - t0 < 330_000 {
         run(&mut sim, &mut app, 1000);
     }
-    let (a, _) = app.ahead.as_ref().unwrap();
+    let (a, _) = app.ahead.road.as_ref().unwrap();
     assert!(a.traces > traces && a.on_road(), "traced again: {} -> {}", traces, a.traces);
     assert_eq!(sim.tones[tones..].iter().filter(|&&t| t == 2000).count(), 1, "said once: one beep of a climb");
     // at 3.2 km the road bends and a straight branch goes on: the rider keeps straight on, off the road traced, and
@@ -341,7 +341,7 @@ fn climbs_ahead_ride() {
     while sim.ms - t0 < 430_000 {
         run(&mut sim, &mut app, 1000);
     }
-    let (a, _) = app.ahead.as_ref().unwrap();
+    let (a, _) = app.ahead.road.as_ref().unwrap();
     assert!(
         a.traces > traces && a.on_road() && a.end() == crate::climbs_ahead::End::Stop,
         "on the branch: {}",
@@ -385,7 +385,7 @@ fn climbs_ahead_without_a_map() {
         let b0 = sim.emmc.bytes_read;
         run(&mut sim, &mut app, 100_000);
         assert_eq!(app.field_text(Climb).as_str(), "--");
-        assert_eq!(app.ahead.as_ref().unwrap().0.io(), (0, 0));
+        assert_eq!(app.ahead.road.as_ref().unwrap().0.io(), (0, 0));
         assert_consistent(&sim, &app);
         sim.emmc.bytes_read - b0
     };
@@ -1193,7 +1193,7 @@ fn climb_page_off_is_skipped() {
         assert!(!app.page_on(crate::CLIMB), "skipped at {}", sim.ms - t0);
         assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "never opened at {}", sim.ms - t0);
     }
-    let (a, _) = app.ahead.as_ref().unwrap();
+    let (a, _) = app.ahead.road.as_ref().unwrap();
     assert!(!a.climbs().is_empty(), "the climbs ahead are still found");
 }
 
@@ -1214,7 +1214,7 @@ fn climbs_medium_keeps_only_medium_plus() {
         run(&mut sim, &mut app, 3000);
         app.press(&mut sim, Press::Short(Key::Start));
         run(&mut sim, &mut app, 120_000);
-        let (a, _) = app.ahead.as_ref().unwrap();
+        let (a, _) = app.ahead.road.as_ref().unwrap();
         a.climbs().len()
     };
     assert_eq!(found(false), 1, "ALL keeps the climb");

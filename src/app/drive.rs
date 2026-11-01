@@ -95,10 +95,10 @@ impl App {
     pub fn drive_packet(&mut self, b: &mut impl Board, cbw: &[u8], pipe: &mut impl msc::Pipe) {
         let mut media = Touching {
             lent: emmc::Lent(&mut self.emmc, b),
-            touch: &mut self.touch,
-            ok: self.touch_ok,
-            pending: &mut self.touch_pending,
-            sampled: &mut self.touch_sampled,
+            touch: &mut self.touch.rec,
+            ok: self.touch.ok,
+            pending: &mut self.touch.pending,
+            sampled: &mut self.touch.sampled,
         };
         let ev = self.drive.packet(cbw, pipe, &mut media);
         if ev == msc::Event::Ejected && self.emmc.lent() {

@@ -494,13 +494,13 @@ impl App {
             }
             // the crosshair with a course followed: the whole route, then the default view again
             (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y)))
-                if self.map_zoom.is_none()
+                if self.map_view.zoom.is_none()
                     && self.route().is_some()
                     && self.page_map().is_some_and(|(a, m)| {
                         map::button_at(a, &m, i32::from(x), i32::from(y)) == Some(map::Button::Centre)
                     }) =>
             {
-                self.map_whole = !self.map_whole;
+                self.map_view.whole = !self.map_view.whole;
                 return self.update_page(b);
             }
             // a pinch on a ride page with a full-size map zooms it a level as "+" and "-" do (fingers apart: in)
@@ -508,7 +508,7 @@ impl App {
                 if let Some(level) =
                     self.page_map().and_then(|(a, m)| map::buttons(a).and_then(|_| map::zoom(&m, apart)))
                 {
-                    self.map_zoom = Some(level);
+                    self.map_view.zoom = Some(level);
                     return self.update_page(b);
                 }
                 return;
@@ -516,14 +516,14 @@ impl App {
             // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
             (Screen::Ride(_), Input::Touch(Gesture::Tap(..))) if zoom.is_some() => {
                 if let Some(z) = zoom {
-                    (self.map_zoom, self.map_centre) = (z.map(|z| z.level), z.and_then(|z| z.centre));
+                    (self.map_view.zoom, self.map_view.centre) = (z.map(|z| z.level), z.and_then(|z| z.centre));
                 }
                 return self.update_page(b);
             }
             // a drag on the zoomed map pans it (App::touch makes it from the drag released; else it is a swipe)
             (Screen::Ride(_), Input::Touch(Gesture::Drag(_, _, dx, dy))) => {
                 if let Some(c) = self.pan(dx, dy) {
-                    self.map_centre = Some(c);
+                    self.map_view.centre = Some(c);
                     return self.update_page(b);
                 }
                 return;
@@ -698,7 +698,6 @@ impl App {
             (Screen::RampResult, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
             (Screen::RampResult, Input::Select) => return self.start_key(b),
             (Screen::RampResult, Input::Prev) => return self.lap(),
-            (Screen::RampResult, _) => return,
             _ => return,
         }
         self.reshow(b, shown);
@@ -882,7 +881,7 @@ impl App {
     pub fn touch(&mut self, b: &mut impl Board, dt_ms: u32) -> Option<Input> {
         let i = self.touch_gesture(b, dt_ms);
         // a drag that starts on the map zoomed in pans it, whatever gesture it made (a swipe, or one too short)
-        match self.touch.take_drag() {
+        match self.touch.rec.take_drag() {
             // a gloved tap that slides a little on a button is that button's tap, not a pan (review of 6de15ed)
             Some(((x, y), (dx, dy)))
                 if self.pans_at(x, y) && dx.abs() < 24 && dy.abs() < 24 && self.zoom_at(x, y).is_some() =>
@@ -896,14 +895,14 @@ impl App {
 
     /// The gesture waiting, or the one this sample ends ([`App::touch`]).
     fn touch_gesture(&mut self, b: &mut impl Board, dt_ms: u32) -> Option<Input> {
-        if let Some(i) = self.touch_pending.take() {
+        if let Some(i) = self.touch.pending.take() {
             self.light.idle_ms = 0;
             return Some(i);
         }
         // after a drive command sampled the panel, the sleep since the main loop's last read is time counted already:
         // charged again, a tap still down at the command's end was a hold (review)
-        let dt_ms = if core::mem::take(&mut self.touch_sampled) { 0 } else { dt_ms };
-        let (g, finger) = sample_touch(b, &mut self.touch, self.touch_ok, false, dt_ms);
+        let dt_ms = if core::mem::take(&mut self.touch.sampled) { 0 } else { dt_ms };
+        let (g, finger) = sample_touch(b, &mut self.touch.rec, self.touch.ok, false, dt_ms);
         if self.strip.locked {
             return None; // locked: a finger neither acts nor keeps the light on
         }
@@ -929,7 +928,7 @@ impl App {
 
     /// A finger is on the panel (sample it every [`TOUCH_MS`]), or a gesture waits.
     pub fn touching(&self) -> bool {
-        self.touch.down() || self.touch_pending.is_some()
+        self.touch.rec.down() || self.touch.pending.is_some()
     }
 }
 

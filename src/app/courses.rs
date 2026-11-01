@@ -16,6 +16,40 @@ pub(crate) fn push_grade(l: &mut Line<8>, g: i32) {
     }
 }
 
+/// The climb fields (a course's and the road ahead's alike): on a climb, what is left of it and the grade ahead
+/// ("--" when the profile has no sample there); before it, its length and grade. `ClimbGain` is the rise left or the
+/// whole gain. `grade_ahead` and `alt_at` are the source's profile.
+pub(crate) fn climb_text(
+    l: &mut Line<8>,
+    f: Field,
+    k: crate::course::Climb,
+    on: bool,
+    d: u32,
+    grade_ahead: impl Fn(u32) -> Option<i32>,
+    alt_at: impl Fn(u32) -> Option<i32>,
+) {
+    if f == Field::ClimbGain {
+        if on {
+            let top = alt_at(k.end_m()).zip(alt_at(d)).map_or(0, |(t, h)| (t - h).max(0) / 10);
+            l.push_u32(top as u32);
+        } else {
+            l.push_u32(k.gain_m);
+        }
+        return;
+    }
+    let m = if on { k.end_m().saturating_sub(d) } else { k.len_m };
+    if m < 10_000 {
+        crate::push_trip(l, m, false);
+    } else {
+        l.push_u32(m / 1000);
+    }
+    l.push_str("K|"); // the grade small after the length: the box's scale for the length
+    match if on { grade_ahead(d) } else { Some(k.grade_x10() as i32) } {
+        Some(g) => push_grade(l, g),
+        None => l.push_str("--"),
+    }
+}
+
 impl App {
     // -----------------------------------------------------------------------------------------------------------
     // Courses (storage/course_file.rs: the files; course.rs: the model, where the rider is, the climbs)
@@ -55,7 +89,7 @@ impl App {
         let Some(c) = self.courses.as_deref_mut() else { return };
         // another map (the course in or out of the fit): fitted until "+", not a zoom from before that waited for
         // the fit to grow (review)
-        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
+        (self.map_view.zoom, self.map_view.centre, self.map_view.whole) = (None, None, false);
         if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) && !c.ride_it {
             return self.stop_course();
         }
@@ -129,7 +163,7 @@ impl App {
     pub(crate) fn stop_course(&mut self) {
         let Some(c) = self.courses.as_deref_mut().filter(|c| c.on.is_some()) else { return };
         (c.on, c.base_m) = (None, None);
-        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
+        (self.map_view.zoom, self.map_view.centre, self.map_view.whole) = (None, None, false);
         self.say("COURSE OFF");
     }
 
@@ -138,7 +172,7 @@ impl App {
         let Some(c) = self.courses.as_deref_mut().filter(|c| c.on.is_some()) else { return };
         c.course.reverse();
         c.at = course::Tracker::new();
-        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
+        (self.map_view.zoom, self.map_view.centre, self.map_view.whole) = (None, None, false);
         self.say("COURSE REVERSED");
     }
 
@@ -158,7 +192,7 @@ impl App {
         }
         // no file behind it: a cluster no file has
         (c.on, c.at) = (Some(fat::File { cluster: 0, size: 0, dir: false }), course::Tracker::new());
-        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
+        (self.map_view.zoom, self.map_view.centre, self.map_view.whole) = (None, None, false);
         self.say("BACK TO START");
     }
 
@@ -315,25 +349,9 @@ impl App {
             (Field::ToGo, _) => crate::push_trip(&mut l, c.len_m().saturating_sub(d), false),
             (Field::OffCourse, _) => l.push_u32(at.off_m.unwrap_or(0).min(9999)),
             (Field::UpToGo, _) => l.push_u32(c.ascent_left(at)),
-            // on a climb: what is left of it and the grade ahead; before it: its length and grade
-            (Field::Climb, Some((k, on))) => {
-                let (m, g) = match on {
-                    true => (k.end_m().saturating_sub(d), c.grade_ahead(d).unwrap_or(0)),
-                    false => (k.len_m, k.grade_x10() as i32),
-                };
-                if m < 10_000 {
-                    crate::push_trip(&mut l, m, false);
-                } else {
-                    l.push_u32(m / 1000);
-                }
-                l.push_str("K|"); // the grade small after the length: the box's scale for the length
-                push_grade(&mut l, g);
+            (Field::Climb | Field::ClimbGain, Some((k, on))) => {
+                climb_text(&mut l, f, k, on, d, |m| c.grade_ahead(m), |m| c.alt_at(m));
             }
-            (Field::ClimbGain, Some((k, true))) => {
-                let top = c.alt_at(k.end_m()).zip(c.alt_at(d)).map_or(0, |(t, h)| (t - h).max(0) / 10);
-                l.push_u32(top as u32);
-            }
-            (Field::ClimbGain, Some((k, false))) => l.push_u32(k.gain_m),
             _ => l.push_str("--"),
         }
         l

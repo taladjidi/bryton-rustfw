@@ -251,24 +251,13 @@ pub enum Align {
 /// Draws `s` in `style` with its cells' top at `y`, and returns its width. Callers keep it on screen.
 #[inline(never)]
 pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s: &str) -> u32 {
-    let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
-    let face = c.face();
     let width = style.width(s);
-    let mut x = match align {
+    let x = match align {
         Align::Left => x,
         Align::Centre => x.saturating_sub(width / 2),
         Align::Right => x.saturating_sub(width),
     };
-    let mut palette = [bg; 16];
-    for (a, p) in palette.iter_mut().enumerate() {
-        *p = blend(fg, bg, a as u8);
-    }
-    for ch in s.chars() {
-        let (font, g, k) = pick(style, face, ch);
-        let w = u32::from(g.advance) * k;
-        blit_glyph(c, (&font, &g, k), (x, y, w, style.height()), (0, 0), &palette);
-        x += w;
-    }
+    draw_clipped(c, style, x, y, u32::MAX, s);
     width
 }
 

@@ -16,7 +16,7 @@ impl App {
     /// The descents of the course followed, else of the road ahead, and the rider's place on them, m.
     fn descents_here(&self) -> Option<(impl Iterator<Item = Descent> + '_, u32)> {
         // two iterator types: the course's, else the road ahead's (a place on neither gives nothing)
-        let (c, a) = (self.on_course(), self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road()));
+        let (c, a) = (self.on_course(), self.ahead.road.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road()));
         let d = c.map(|(_, at)| at.along_m).or(a.map(|a| a.along_m()))?;
         let (ci, ai) = (c.map(|(c, _)| c.descents()), c.is_none().then_some(a).flatten().map(|a| a.descents()));
         Some((ci.into_iter().flatten().chain(ai.into_iter().flatten()), d))
@@ -44,7 +44,7 @@ impl App {
     pub(crate) fn descent_second(&mut self) {
         let pct = STEEP_DESCENT_PCT.get(self.settings.steep_descent).copied().unwrap_or(0);
         if self.ride.state() == ride::State::Idle {
-            self.descent_said = None;
+            self.ahead.descent_said = None;
         }
         if pct == 0 || self.ride.state() != ride::State::Running {
             return;
@@ -56,10 +56,10 @@ impl App {
         let to = k.start_m - d;
         // where it starts on the ride's odometer: the same wherever the road is traced from
         let at = self.ride.dist_m() as i32 + to as i32;
-        if to > Self::STEEP_AHEAD_M || self.descent_said.is_some_and(|s| (s - at).abs() < Self::SAME_DESCENT_M) {
+        if to > Self::STEEP_AHEAD_M || self.ahead.descent_said.is_some_and(|s| (s - at).abs() < Self::SAME_DESCENT_M) {
             return;
         }
-        self.descent_said = Some(at);
+        self.ahead.descent_said = Some(at);
         let mut l = Line::<20>::new();
         l.push_str("STEEP ");
         l.push_u32((k.max_x10 + 5) / 10);

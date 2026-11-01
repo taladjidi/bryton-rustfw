@@ -92,7 +92,7 @@ impl App {
         if let Some((c, at)) = self.on_course() {
             return c.climb_at(at.along_m).is_some_and(|(_, on)| on);
         }
-        let ahead = self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road() && !self.indoors());
+        let ahead = self.ahead.road.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road() && !self.indoors());
         ahead.and_then(|a| {
             a.climb_at(a.along_m()).map(|(k, on)| on || a.along_m() + climbs_ahead::ANNOUNCE_M >= k.start_m)
         }) == Some(true)
@@ -116,7 +116,7 @@ impl App {
             let climb = *c.climbs().get(c.climb_at(at.along_m)?.0)?;
             return Some(ClimbNow { climb, along: at.along_m, course: true, seg: None, ghost: None });
         }
-        let a = self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road() && !self.indoors())?;
+        let a = self.ahead.road.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road() && !self.indoors())?;
         let climb = a.climb_at(a.along_m())?.0;
         Some(ClimbNow { climb, along: a.along_m(), course: false, seg: None, ghost: None })
     }
@@ -126,7 +126,7 @@ impl App {
         match (n.seg, n.course) {
             (Some(_), _) => self.segments()?.alt_at(d),
             (None, true) => self.courses.as_deref()?.course.alt_at(d),
-            (None, false) => self.ahead.as_ref()?.0.alt_at(d),
+            (None, false) => self.ahead.road.as_ref()?.0.alt_at(d),
         }
     }
 
@@ -207,7 +207,7 @@ impl App {
                 Screen::Status => true, // over a ride page of the rider's: dropped below
                 _ => false,
             };
-        let ready = self.ride.state() == ride::State::Running && !self.touch.down() && !self.keys.any_down();
+        let ready = self.ride.state() == ride::State::Running && !self.touch.rec.down() && !self.keys.any_down();
         let mut open = false;
         if self.climb.seg {
             if !can {

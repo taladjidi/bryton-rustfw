@@ -246,7 +246,7 @@ impl App {
             && self.rec.clean.fails() == 0
             && self.rec.full.fails() == 0
             && self.courses.as_deref().is_none_or(|c| !c.loading())
-            && self.ahead.as_ref().is_none_or(|(a, _)| !a.busy())
+            && self.ahead.road.as_ref().is_none_or(|(a, _)| !a.busy())
             && !self.tlink.up
             && self.ftms.conn.is_none()
     }
