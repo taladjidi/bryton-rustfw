@@ -184,7 +184,7 @@ fn gestures(sim: &mut Sim, app: &mut App, ms: u64) -> Vec<Input> {
     while sim.ms < end {
         app.step(sim);
         for _ in 0..POLL_MS / TOUCH_MS {
-            sim.delay_ms(TOUCH_MS);
+            sim.sleep_ms(TOUCH_MS);
             if let Some(i) = app.touch(sim, TOUCH_MS) {
                 out.push(i);
                 app.input(sim, i);

@@ -171,11 +171,9 @@ fn a_damaged_stream_is_recovered_from() {
             sim.nordic.channels[0].open
         );
         super::budget_tests::print_gap_breakdown(&sim, "damaged stream");
-        // measured after the non-blocking chip reset: longest gap 1802 ms (the same 1803 ms after the app clock
-        // counted the DMA waits, 2026-11-01). Past the receiver's 1.5 s time-out, so whether an epoch is lost is where
-        // the 1 Hz report falls in the gap: one of the 5 seeds lost one once the reads moved in phase. The gap is the
-        // chip reset's, not the clock's. Bound: measured + 10 %, one epoch.
-        sim.gnss.assert_reads(1983, 1);
+        // measured with the app clock counting the waits (2026-11-02): longest gap 1751 ms over the 5 seeds, no epoch
+        // lost (1802 before; bound: measured + 10 %)
+        sim.gnss.assert_reads(1930, 0);
         ride_ok(&app, t0, &sim);
     }
     assert!(resyncs > 20, "{resyncs} resyncs reached");

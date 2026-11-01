@@ -87,7 +87,7 @@ fn pass(
 fn passes(sim: &mut Sim, app: &mut App, worst: &mut (u64, &'static str), what: &'static str, ms: u64) {
     for _ in 0..ms / u64::from(POLL_MS) {
         pass(sim, app, worst, what, |sim, app| app.step(sim));
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
     }
 }
 
@@ -353,7 +353,7 @@ fn gnss_read_waits_for_the_next_pvt() {
             app.step(&mut sim);
             oldest = oldest.max(app.gps.pvt_ms);
             app.prof().clock.sleep = (pass, 0);
-            sim.delay_ms(pass);
+            sim.sleep_ms(pass);
         }
         let spi = (sim.gnss.got.len() - g) as f64 / 32.0 / 60.0;
         std::println!("{pass} ms passes: {spi:.1} GNSS transfers/s, fix at most {oldest} ms old");

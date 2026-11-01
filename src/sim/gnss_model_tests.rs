@@ -345,9 +345,9 @@ fn a_long_pass_loses_the_epochs_after_the_timeout_and_the_app_recovers() {
     run(&mut sim, &mut app, 5000);
     assert!(app.gps.pvt.is_some_and(|p| p.good()));
     let at = sim.gnss.violations.len();
-    sim.delay_ms(2500); // the pass
+    sim.delay_ms(2500); // the pass (its time past MAX_PASS_MS is repaid at twice the speed: the age bound below is 2 s)
     run(&mut sim, &mut app, 2000);
     assert!(sim.gnss.lost_epochs >= 1 && sim.gnss.violations.len() > at, "{}", sim.gnss.lost_epochs);
-    assert!(app.gps.pvt.is_some_and(|p| p.good()) && app.gps.pvt_ms < 1500, "fixes again: {}", app.gps.pvt_ms);
+    assert!(app.gps.pvt.is_some_and(|p| p.good()) && app.gps.pvt_ms < 2000, "fixes again: {}", app.gps.pvt_ms);
     sim.gnss.assert_reads(3631, 3);
 }

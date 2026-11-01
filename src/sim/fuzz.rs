@@ -1486,7 +1486,7 @@ fn map_zoom_taps() {
         assert!(app.map_view(0).is_none_or(|v| v.mpp16 >= 24), "no finer than 1.5 m a pixel");
         for _ in 0..usize::from(next() % 8) {
             app.step(&mut sim);
-            sim.delay_ms(POLL_MS);
+            sim.sleep_ms(POLL_MS);
         }
         if k % 50 == 0 {
             super::tests::assert_consistent(&sim, &app);
@@ -2202,7 +2202,7 @@ fn menu_touch_and_keys() {
             asks += u32::from(app.menu.confirm.is_some());
             for _ in 0..usize::from(b % 4) {
                 app.step(&mut sim);
-                sim.delay_ms(POLL_MS);
+                sim.sleep_ms(POLL_MS);
             }
             if from_storage && app.screen() == Screen::Past {
                 storage[2] += 1;
@@ -2483,14 +2483,14 @@ fn menu_tree_by_chance(part: u32) {
                 let page = app.screen();
                 for _ in 0..22_000 / POLL_MS {
                     app.step(&mut sim);
-                    sim.delay_ms(POLL_MS);
+                    sim.sleep_ms(POLL_MS);
                 }
                 *reached.entry("auto scrolled".into()).or_default() += u32::from(app.screen() != page);
             }
             for _ in 0..1 + b % 3 {
                 // one pass at least: a banner said by the input is drawn by the pass after it
                 app.step(&mut sim);
-                sim.delay_ms(POLL_MS);
+                sim.sleep_ms(POLL_MS);
             }
             if k % 250 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) {
                 // the course list's lengths come in while it shows and are drawn at the next list redraw
@@ -2499,7 +2499,7 @@ fn menu_tree_by_chance(part: u32) {
                 if matches!(app.screen(), Screen::Menu(Menu::Courses | Menu::Stock, _)) {
                     for _ in 0..LIST_REDRAW_MS / POLL_MS + 1 {
                         app.step(&mut sim);
-                        sim.delay_ms(POLL_MS);
+                        sim.sleep_ms(POLL_MS);
                     }
                 }
                 super::tests::assert_consistent(&sim, &app);
@@ -2607,7 +2607,7 @@ fn history_by_chance() {
             }
             for _ in 0..1 + r % 3 {
                 app.step(&mut sim);
-                sim.delay_ms(POLL_MS);
+                sim.sleep_ms(POLL_MS);
             }
         }
     }
@@ -2948,7 +2948,7 @@ fn page_editor_inputs() {
             app.input(&mut sim, i);
             for _ in 0..1 + usize::from(b % 3) {
                 app.step(&mut sim);
-                sim.delay_ms(POLL_MS);
+                sim.sleep_ms(POLL_MS);
             }
             added += usize::from(app.view_count() > count);
             deleted += usize::from(app.view_count() < count);
@@ -3072,7 +3072,7 @@ fn barometric_altitude() {
 fn run_a_bit(sim: &mut super::Sim, app: &mut crate::App) {
     for _ in 0..100 {
         app.step(sim);
-        crate::Board::delay_ms(sim, crate::POLL_MS);
+        sim.sleep_ms(crate::POLL_MS);
     }
 }
 
@@ -3101,7 +3101,7 @@ fn end_ride_screen_by_chance() {
         let pass = |sim: &mut Sim, app: &mut App, ms: u32| {
             for _ in 0..ms / POLL_MS {
                 app.step(sim);
-                sim.delay_ms(POLL_MS);
+                sim.sleep_ms(POLL_MS);
             }
         };
         pass(&mut sim, &mut app, 2000);
@@ -3238,7 +3238,7 @@ fn keys_chord() {
 #[test]
 fn random_pass_lengths() {
     use super::tests::STRAP;
-    use crate::{App, Board, Key, Kind, Press, SEARCH_REST_MS, Screen};
+    use crate::{App, Key, Kind, Press, SEARCH_REST_MS, Screen};
     static MELODY: [(u32, u32); 2] = [(1000, 300), (2000, 300)];
     for seed in 1..=6u32 {
         let mut sim = super::Sim::new(9, 0, 0);
@@ -3258,7 +3258,7 @@ fn random_pass_lengths() {
             let pass = 5 + (r.next().unwrap_or(0) << 8 | r.next().unwrap_or(0)) % 996;
             app.step(&mut sim);
             app.prof().clock.sleep = (pass, 0);
-            sim.delay_ms(pass);
+            sim.sleep_ms(pass);
             worst = worst.max(u64::from(pass));
             let t = sim.ms - t0;
             banner_gone |= t > 5000 && app.notes.ms.is_none();
@@ -5929,7 +5929,7 @@ fn storage_glue_on_a_damaged_card() {
             }
             for _ in 0..(b % 4) as usize {
                 app.step(&mut sim);
-                sim.delay_ms(POLL_MS);
+                sim.sleep_ms(POLL_MS);
             }
             if pending && app.screen() == Screen::Past {
                 opened += 1;

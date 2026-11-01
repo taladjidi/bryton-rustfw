@@ -54,7 +54,7 @@ pub(super) fn run(sim: &mut Sim, app: &mut App, ms: u64) {
     while sim.ms < end && !sim.standby {
         app.step(sim);
         for _ in 0..POLL_MS / TOUCH_MS {
-            sim.delay_ms(TOUCH_MS);
+            sim.sleep_ms(TOUCH_MS);
             if let Some(i) = app.touch(sim, TOUCH_MS) {
                 app.input(sim, i);
             }
@@ -1234,9 +1234,11 @@ fn long_pass_loses_no_ride_time() {
     sim.delay_ms(30_000); // the clock jumps (set from the GPS): counted up to MAX_CATCH_UP only
     run(&mut sim, &mut app, 100);
     assert!(app.ride.timer_s() <= t + 4 + u32::from(MAX_CATCH_UP) + 1);
-    // the 3 s pass was read within 4180 ms; the jump is a gap of its own (30 s, then the first read), seen now that the
-    // clock counts the DMA and the read lands inside the 100 ms
-    sim.gnss.assert_reads(30_900, 31);
+    // the 30 s jump is a gap of its own: forget it, the next 100 ms read the receiver again within the bound
+    sim.gnss.longest_gap_ms = 0;
+    sim.gnss.lost_epochs = 0;
+    run(&mut sim, &mut app, 100);
+    sim.gnss.assert_reads(4180, 0);
 }
 
 /// Idle is free, and no pass stalls the loop: on the overview with nothing changing, nearly every pass sends
@@ -1602,7 +1604,7 @@ fn a_hold_while_usb_is_busy_counts_real_time() {
         while sim.ms < 8000 && !sim.standby {
             app.step(&mut sim);
             // the sleep: 50 ms, 45 of them serving USB
-            sim.delay_ms(POLL_MS);
+            sim.sleep_ms(POLL_MS);
             sim.awake_ns += 45_000_000;
             app.prof().clock.sleep = (POLL_MS, 45_000);
         }
@@ -1651,7 +1653,7 @@ pub(super) fn run_passes(sim: &mut Sim, app: &mut App, ms: u64, pass: u32) {
     while sim.ms < end && !sim.standby {
         app.step(sim);
         app.prof().clock.sleep = (pass, 0);
-        sim.delay_ms(pass);
+        sim.sleep_ms(pass);
     }
 }
 

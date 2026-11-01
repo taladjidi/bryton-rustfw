@@ -182,7 +182,6 @@ impl Rig {
             sim.gnss.fix = Some(8000);
             sim.work_ns_per_byte = 430;
             sim.cost = s.cost;
-            sim.count_waits = true;
             prep(sim);
         });
         app.screen = Screen::Main;
@@ -583,7 +582,7 @@ fn a_five_second_blocking_pass_fails_the_nordic_check() {
     );
 }
 
-/// The app's clock (`up_ms`: the ride timer, the checkpoint cadence, every time-out) keeps real time even when the
+/// The app's clock (`up_ms`: the time-outs and the cadences counted in ms) keeps real time even when the
 /// pass waits for the panel's DMA (the cycle counter stops in WFI): an hour of full-screen redraws, 2026-11-01.
 #[test]
 fn the_app_clock_counts_the_waits_of_the_work() {
@@ -604,7 +603,6 @@ fn the_app_clock_counts_the_waits_of_the_work() {
 #[test]
 fn the_loop_keeps_real_time_through_all_its_waits() {
     let (mut sim, mut app) = radio_unit(70, board_wait_us(), crate::fat::tests::image(), true, |sim| {
-        sim.count_waits = true;
         // a tap on the strip every 7 s: the touch path (a read and a gesture) runs between slices
         sim.touch.set_finger(|ms| (ms % 7000 < 120).then_some((120, 5)));
     });
@@ -623,7 +621,7 @@ fn the_loop_keeps_real_time_through_all_its_waits() {
 }
 
 /// A pass longer than MAX_PASS_MS (a save, a card stall) is spread over the next passes, not lost: after a 1.7 s
-/// pass the clock (and the checkpoint cadence that counts it) is back on real time within a few passes.
+/// pass the clock is back on real time within a few passes (repaid at most a pass's length a pass).
 #[test]
 fn a_long_pass_is_owed_to_the_clock_not_dropped() {
     let mut r = Rig::new(crate::fat::tests::image(), settings()[0]);
@@ -635,4 +633,48 @@ fn a_long_pass_is_owed_to_the_clock_not_dropped() {
     r.run(60_000);
     let (up, real) = (u64::from(r.app.up_ms) - up0, r.sim.ms - real0);
     assert!(real.abs_diff(up) <= 60, "app clock {up} ms against real {real} ms after a 1.7 s pass");
+}
+
+/// A cable in and a busy drive (each poll sleeps in a drive command, which takes SysTick over): the delays count once
+/// in the clock, not again as the slice's elapsed time.
+#[test]
+fn a_busy_usb_drive_is_not_counted_twice() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let link = SimLink::default();
+    link.0.borrow_mut().busy_ms = 3;
+    (sim.main.link, sim.main.vbus) = (Some(link), true);
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..50 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up0, real0) = (u64::from(app.up_ms), sim.ms);
+    while sim.ms < real0 + 600_000 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (u64::from(app.up_ms) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
+}
+
+/// After a 60 s stall the clock catches up at twice real speed at most: a banner (4 s) does not vanish at once.
+#[test]
+fn a_stall_is_repaid_at_most_at_twice_real_speed() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the stall is on purpose
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    sim.delay_ms(60_000); // the stall, inside the work
+    app.say("BANNER");
+    let t0 = sim.ms;
+    while app.notes.ms.is_some() {
+        app.step(&mut sim);
+        sim.sleep_ms(POLL_MS);
+        assert!(sim.ms - t0 < 10_000, "the banner never went");
+    }
+    let real = sim.ms - t0;
+    // the stalled pass counts MAX_PASS_MS at once, the rest of the banner runs at twice real speed at most
+    assert!(
+        real >= u64::from(BANNER_MS - MAX_PASS_MS) / 2 - 100,
+        "a {BANNER_MS} ms banner lasted {real} ms of real time"
+    );
 }

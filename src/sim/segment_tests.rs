@@ -146,7 +146,7 @@ fn index_is_capped_and_sliced() {
     while !app.segments().unwrap().ready() && total < 400 {
         let before = sim.emmc.bytes_read;
         app.step(&mut sim);
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
         let read = sim.emmc.bytes_read - before;
         if sim.ms >= from {
             (worst, passes) = (worst.max(read), passes + u32::from(read > 0));
@@ -643,7 +643,7 @@ fn approach_read_cost() {
     for _ in 0..4000 {
         let before = sim.emmc.bytes_read;
         app.step(&mut sim);
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
         if app.notes.ms.is_some() && app.notes.text.as_str().ends_with("300 M") {
             read = sim.emmc.bytes_read - before;
             break;
@@ -747,7 +747,7 @@ fn end_until_settled(sim: &mut Sim, app: &mut App) -> [u8; 12] {
             return name;
         }
         app.step(sim);
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
     }
     panic!("the ride never saved");
 }

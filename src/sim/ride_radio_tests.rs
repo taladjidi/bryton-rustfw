@@ -98,7 +98,7 @@ fn ride_with(
             burst(&mut sim);
         }
         app.step(&mut sim);
-        sim.delay_ms(pass_ms);
+        sim.sleep_ms(pass_ms);
     }
     let heard = app.radio_counts().1;
     let d = |k: Kind| heard[k as usize] - heard0[k as usize];

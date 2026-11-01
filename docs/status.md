@@ -18,8 +18,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **A stall over MAX_CATCH_UP (10 s) loses the seconds beyond it from the ride record** (older behaviour, found
+  2026-11-02): the ride's seconds come from the RTC through `catch_up_seconds`, at most `MAX_CATCH_UP` a pass. The
+  checkpoint cadence is on the recorded seconds too (recorder `CHECKPOINT_S`), not on the app clock.
+
 - **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel
-  DMA, `delay_ms`) now count in `up_ms`, uptime, the ride timer and the checkpoint cadence. Silent check: read
+  DMA, `delay_ms`) now count in `up_ms` and the uptime (time-outs, cadences counted in ms). Silent check: read
   `tools/dev.py info` (uptime) and the RTC time, wait 10 min on a screen that redraws (the main page), read both
   again; the two differences must agree within a second (before the fix the uptime lagged by the redraw share).
 - **The ride's hang, reproduced in the model (2026-11-01, `ride_radio_tests.rs` `the_bursts_of_a_ride_...`):** after the

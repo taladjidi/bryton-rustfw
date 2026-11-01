@@ -341,7 +341,7 @@ fn a_dead_chip_costs_a_bounded_time() {
         let t = s.ms;
         app.step(&mut s);
         pass = pass.max(s.ms - t);
-        s.delay_ms(50);
+        s.sleep_ms(50);
         s.nordic.hung = true; // dead for ever, whatever a reset does
     }
     std::println!("dead chip: one call {call} ms, worst pass {pass} ms");
@@ -478,7 +478,7 @@ fn a_radio_reset_never_blocks_the_main_loop() {
         app.step(&mut s);
         worst = worst.max(s.ms - t);
         passes += 1;
-        s.delay_ms(POLL_MS);
+        s.sleep_ms(POLL_MS);
         assert!(s.ms - t0 < 5000, "the restart finishes");
     }
     std::println!("radio reset: {passes} passes over {} ms, worst pass {worst} ms", s.ms - t0);
@@ -586,7 +586,7 @@ fn a_chip_dying_mid_restart_costs_one_time_out_a_pass() {
                 longest = longest.max(s.ms - t);
                 assert!(s.ms - t < 700, "ant command {at}: a restart pass took {} ms", s.ms - t);
             }
-            s.delay_ms(POLL_MS);
+            s.sleep_ms(POLL_MS);
         }
     }
     std::println!("chip dying mid-restart: longest restart pass {longest} ms");
@@ -600,7 +600,7 @@ fn a_broken_link_is_not_a_trainer_refusal() {
     app.rx.broken = true;
     for _ in 0..80 {
         app.step(&mut s);
-        s.delay_ms(POLL_MS);
+        s.sleep_ms(POLL_MS);
         assert!(!app.tlink.no_control, "control off by a mis-framed link");
     }
     assert!(app.notes.list.iter().all(|n| !n.as_str().contains("TRAINER CONTROL FAILED")));

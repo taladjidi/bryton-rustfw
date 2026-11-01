@@ -173,8 +173,8 @@ pub struct Sim {
     pub awake_ns: u64,
     /// Time slept in a transfer's wait (the panel's DMA) not yet taken by [`Board::waited_us`], ns.
     waited_ns: u64,
-    /// In-pass `delay_ms` calls count as waits of the work, as on the unit. Off by default: most tests sleep with
-    /// `delay_ms` themselves; the clock tests and the budget rig sleep with [`Sim::sleep_ms`] and turn it on.
+    /// In-pass `delay_ms` calls count as waits of the work, as on the unit; the loop helpers sleep with
+    /// [`Sim::sleep_ms`], which does not.
     pub count_waits: bool,
     /// What each transfer costs in time ([`Cost`]); the sub-millisecond rest of it is in `cost_rem`.
     pub cost: Cost,
@@ -1337,7 +1337,7 @@ impl Sim {
             long_gnss_gaps: (0, [0; 6]),
             awake_ns: 0,
             waited_ns: 0,
-            count_waits: false,
+            count_waits: true,
             cycles: 0,
             cycles_step: 0,
             adc_calls: [0; 4],
@@ -1752,7 +1752,7 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
     let end = sim.ms + ms;
     while sim.ms < end {
         app.step(sim);
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
     }
 }
 
