@@ -250,6 +250,12 @@ impl App {
             }
             // refused before anything moved, or put back: nothing pending (trash.rs `delete`)
             Err(fat::Error::Refused) => self.alarm_notice("CARD FULL"),
+            // not in \Activities by its chain: a computer renamed or moved it (trash.rs `delete`); left there, so
+            // the history keeps it. A pending move a missing \Activities kept is finished later, as below
+            Err(fat::Error::NotFound) => {
+                self.trash_check = true;
+                self.alarm_notice("RIDE MOVED BY PC");
+            }
             Err(_) => {
                 self.trash_check = true; // a move the failure left midway, finished at the next scan or lending
                 self.alarm_notice("DELETE FAILED");
