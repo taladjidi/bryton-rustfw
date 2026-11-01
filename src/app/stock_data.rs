@@ -252,6 +252,11 @@ impl App {
             Err(fat::Error::Refused) => self.alarm_notice("CARD FULL"),
             // not in \Activities by its chain: a computer renamed or moved it (trash.rs `delete`); left there, so
             // the history keeps it. A pending move a missing \Activities kept is finished later, as below
+            // its chain shorter than its size (trash.rs `moves`: left named), or a damaged volume: a computer to mend it
+            Err(fat::Error::Corrupt) => {
+                self.trash_check = true;
+                self.alarm_notice("RIDE DAMAGED");
+            }
             Err(fat::Error::NotFound) => {
                 self.trash_check = true;
                 self.alarm_notice("RIDE MOVED BY PC");
