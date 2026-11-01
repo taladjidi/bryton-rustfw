@@ -6,6 +6,7 @@ Needs sudo (libusb must take the device from the OS disk driver): sudo python3 t
   sudo python3 iaprecover.py --write-vanilla            write vanilla IMG.raw to the OS area, verify every chunk
   sudo python3 iaprecover.py --write out/IMG.bin        write a bryton-rustfw image (tools/pack.py output) the same way
   sudo python3 iaprecover.py --boot-sum                 compare the unit's bootloader with iap.bin (its byte sum, read-only)
+  ... --write... --boot-sum-is 0xNNNNNNNN               write to a bootloader whose sum is NOT R039's (one --boot-sum showed)
   python3 iaprecover.py selftest                        the checks against fakes, no USB (check.sh)
 
 Put the unit in bootloader USB mode first: USB plugged in, press all four buttons to reboot, keep holding Page
@@ -24,12 +25,16 @@ reads every chunk back and stops at the first mismatch. Only the SHA256SUMS-veri
 written, or with --write an IMG.bin that passes the checks tools/pack.py and the stock updater make (bryton-rustfw).
 Uses libusb through ctypes (no pyusb). sudo is needed so libusb can detach macOS's mass-storage driver.
 
-Before any write the device must be the bootloader: VID:PID 0483:5720 (bryton-S510-mods docs/how-it-works.md,
-"Bootloader USB mode") AND its sub 0x04 byte sum must be R039 iap.bin's 0x00548f3c (same doc, seen on the unit
-2026-10-22; BOARD.md 2). The PID alone proves nothing: 0x5720 is ST's stock mass-storage PID, and what stock's own
-USB drive mode uses is not recorded (inferred: the same VID, maybe the same PID). There a "sub 0x04" READ(10) is a
-plain read of sector 0 of the BRYTON volume, whose first 4 bytes (EB 58 90 4D) are not that sum, and a WRITE(10)
-would land on the FAT volume's first sectors.
+Before any write the device must be the bootloader. VID:PID 0483:5720 (bryton-S510-mods docs/how-it-works.md,
+"Bootloader USB mode") keeps out this firmware's own 1209:0001 and other ST devices, but NOT stock's USB drive:
+stock's OS uses the same 0483:5720 (bryton ghidra/recovered_src/boot/iap_boot.c:94, the bootloader's device
+descriptor at 0x0800db7e, "same as the OS's own USB mode"). There a WRITE(10) would land on the BRYTON FAT volume's
+first sectors. So the sub 0x04 probe decides: its byte sum must be R039 iap.bin's 0x00548f3c (same doc, seen on the
+unit 2026-10-22; BOARD.md 2), or the value typed with --boot-sum-is, and a reply that looks like a FAT or MBR
+sector (EB ?? 90 at the start, 55 AA at 510) is refused in every case.
+The probe itself is safe (inferred): it is a READ(10) opcode at LBA 0 for 4 blocks, which a standard mass-storage
+stack answers with sector 0 or fails (a failure exits, nothing written), and sub 0x04 is a read-only loop over the
+bootloader's flash in its own table (docs/s810.md, the sub-command table, 0x04).
 """
 import ctypes, ctypes.util, hashlib, os, struct, sys
 
@@ -130,9 +135,18 @@ def read_chunk(h, k, tag):
     return command(h, k, tag)
 
 
+def probe(h):
+    """The sub 0x04 reply (2 KB): the bootloader's byte sum in its first 4 bytes, or on stock's drive its sector 0.
+    A short or failed reply exits before anything is written."""
+    try:
+        return command(h, 0, 1, sub=0x04)
+    except SystemExit as e:
+        sys.exit(f'bootloader sum probe failed ({e.code}), nothing written; re-enter Engineer Mode')
+
+
 def boot_sum(h):
-    """The bootloader's byte sum (sub 0x04); on anything else, whatever its LBA 0 holds."""
-    return int.from_bytes(command(h, 0, 1, sub=0x04)[:4], 'little')
+    """The bootloader's byte sum (sub 0x04)."""
+    return int.from_bytes(probe(h)[:4], 'little')
 
 
 def sums(path=SUMS):
@@ -163,12 +177,19 @@ def check_image(img):
         sys.exit(f'vector table not sane: SP {sp:#x}, reset {reset:#x}')
 
 
-def write_unit(h, img, label):
-    """Write img only to the bootloader: its byte sum must be R039 iap.bin's, or nothing is written."""
-    got = boot_sum(h)
-    if got != IAP_SUM:
-        sys.exit(f'bootloader byte sum {got:#010x}, not R039 iap.bin\'s {IAP_SUM:#010x}: this is not the bootloader '
-                 'in Engineer Mode (stock\'s USB drive answers with its volume\'s sector 0); nothing written')
+def write_unit(h, img, label, want=IAP_SUM):
+    """Write img only to the bootloader: the probe's byte sum must be want (R039 iap.bin's unless --boot-sum-is)
+    and its reply no FAT or MBR sector, or nothing is written."""
+    reply = probe(h)
+    got = int.from_bytes(reply[:4], 'little')
+    if reply[510:512] == b'\x55\xaa' or (reply[0] == 0xeb and reply[2] == 0x90):
+        sys.exit(f'the sum probe read back a FAT or MBR sector (first bytes {reply[:4].hex()}): this is stock\'s USB '
+                 'drive (same 0483:5720), not the bootloader in Engineer Mode; nothing written')
+    if got != want:
+        sys.exit(f'bootloader byte sum {got:#010x}, not {want:#010x} '
+                 + ('(R039 iap.bin)' if want == IAP_SUM else '(--boot-sum-is)')
+                 + ': nothing written. If the bootloader itself was updated, check its sum with --boot-sum and pass '
+                 '--boot-sum-is with that value.')
     write_chunks(h, img, label)
 
 
@@ -190,12 +211,12 @@ def selftest():
     """check_image, SHA256SUMS and the device checks against fakes: no USB, no libusb."""
     import builtins, tempfile
 
-    def refused(f, *a):
+    def refused(f, *a):     # the exit message, or None when f returned
         try:
             f(*a)
-        except SystemExit:
-            return True
-        return False
+        except SystemExit as e:
+            return str(e.code)
+        return None
 
     def packed(sp=0x20020000, reset=0xd0000401, tag=b'R001'):   # as tools/pack.py makes one
         raw = bytearray(0x100000)
@@ -221,15 +242,15 @@ def selftest():
         open(p, 'w').write(f'\n{"0" * 64}  img.bin\n\n{h}  IMG.raw\n')
         require_hash(b'img', 'IMG.raw', sums(p))                        # blank lines skipped, match
 
-    stock_drive = (VID, 0xa0c1)                                         # inferred: any other PID of the same VID
-    assert refused(pick, [stock_drive])
+    assert refused(pick, [(0x1209, 0x0001)])                            # this firmware's own USB
+    assert refused(pick, [(VID, 0x5740)])                               # another ST device
     assert refused(pick, [(VID, PID), (VID, PID)])
     assert refused(pick, [])
     assert pick([(0x05ac, 0x8104), (VID, PID)]) == 1
 
-    class Unit:     # command() against a fake device: its sub 0x04 answer, its OS area; drop loses one write
-        def __init__(self, boot, drop=None):
-            self.boot, self.drop, self.area, self.writes = boot, drop, {}, 0
+    class Unit:     # command() against a fake 0483:5720: its sub 0x04 reply, its OS area; drop loses one write
+        def __init__(self, reply, drop=None):
+            self.reply, self.drop, self.area, self.writes = reply, drop, {}, 0
 
         def __call__(self, h, k, tag, write=None, sub=0x0d):
             if write:
@@ -238,20 +259,39 @@ def selftest():
                     self.area[k] = write
                 return write
             if sub == 0x04:
-                return self.boot.to_bytes(4, 'little') + bytes(CHUNK - 4)
+                if self.reply is None:
+                    sys.exit('chunk 0: bad reply (sig b\'\', tag 0/1, status 1)')
+                return self.reply
             return self.area.get(k, bytes(CHUNK))
+
+    def summed(v):
+        return v.to_bytes(4, 'little') + bytes(CHUNK - 4)
+
+    sector = bytearray(CHUNK)
+    sector[510:512] = b'\x55\xaa'
+    mbr = bytes(sector)                                                 # sum field 0, 55 AA at 510
+    sector[:11] = b'\xebX\x90MSDOS5.0'
+    fat = bytes(sector)                                                 # stock's drive: the BRYTON volume's sector 0
 
     real, ask = globals()['command'], builtins.input
     builtins.input = lambda _: 'write'
     try:
         img = bytes((i * 7 + 1) & 0xff for i in range(5 * CHUNK + 7))   # no zero chunk: a lost write shows
-        for boot in (int.from_bytes(b'\xebX\x90M', 'little'), IAP_SUM ^ 1):  # stock's drive (FAT sector 0), wrong sum
-            globals()['command'] = u = Unit(boot)
-            assert refused(write_unit, None, img, 'x') and u.writes == 0
-        globals()['command'] = u = Unit(IAP_SUM)
+        fat_sum = int.from_bytes(fat[:4], 'little')
+        for reply, want in ((fat, IAP_SUM), (fat, fat_sum), (mbr, 0), (fat[:510] + bytes(CHUNK - 510), fat_sum),
+                            (summed(IAP_SUM ^ 1), IAP_SUM), (summed(IAP_SUM), 0x12345678)):
+            globals()['command'] = u = Unit(reply)      # a FAT or MBR sector is refused even when --boot-sum-is says so
+            assert refused(write_unit, None, img, 'x', want) and u.writes == 0, (reply[:4], want)
+        globals()['command'] = u = Unit(None)            # a failed probe: says so, writes nothing
+        assert 'probe failed' in refused(write_unit, None, img, 'x') and u.writes == 0
+        assert 'probe failed' in refused(boot_sum, None)
+        globals()['command'] = u = Unit(summed(0x12345678))   # an updated bootloader, its sum typed by the owner
+        write_unit(None, img, 'x', 0x12345678)
+        assert u.writes == 6
+        globals()['command'] = u = Unit(summed(IAP_SUM))
         write_unit(None, img, 'x')
         assert u.writes == 6 and b''.join(u.area[k] for k in range(6)) == img + bytes(-len(img) % CHUNK)
-        globals()['command'] = u = Unit(IAP_SUM, drop=3)
+        globals()['command'] = u = Unit(summed(IAP_SUM), drop=3)
         assert refused(write_unit, None, img, 'x') and u.writes == 4  # stops at the chunk that did not read back
     finally:
         globals()['command'], builtins.input = real, ask
@@ -273,6 +313,7 @@ def main():
     if '--write-vanilla' in args:
         require_hash(van, 'IMG.raw', sums())
         check_image(van)
+    want = int(args[args.index('--boot-sum-is') + 1], 0) if '--boot-sum-is' in args else IAP_SUM
     h = open_unit()
     if '--boot-sum' in args:
         try:
@@ -286,9 +327,10 @@ def main():
     if '--write-vanilla' in args or img is not None:
         try:
             if img is not None:
-                write_unit(h, img, f'{args[args.index("--write") + 1]} sha256 {hashlib.sha256(img).hexdigest()[:12]}')
+                write_unit(h, img, f'{args[args.index("--write") + 1]} sha256 {hashlib.sha256(img).hexdigest()[:12]}',
+                           want)
             else:
-                write_unit(h, van, 'vanilla R039')
+                write_unit(h, van, 'vanilla R039', want)
         finally:
             close(h)
         print('done; now run without options for a full independent readback')

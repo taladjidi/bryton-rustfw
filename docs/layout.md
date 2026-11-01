@@ -376,7 +376,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/review.py`: the per-branch review report (cargo-mutants on the diff, new jscpd clones, lint; `--base REF`, `--quick`
   (mutants only under src/storage/), `selftest`, which check.sh runs; the report itself is not in check.sh; config `.cargo/mutants.toml`).
 - `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo). A
-  write needs the one 0483:5720 device and the bootloader byte sum of R039 iap.bin (0x00548f3c); `--write-vanilla`
+  write needs the one 0483:5720 device (stock's drive shares it) and the bootloader byte sum of R039 iap.bin
+  (0x00548f3c, or `--boot-sum-is`), never a FAT or MBR sector in the probe's reply; `--write-vanilla`
   needs IMG.raw's SHA256SUMS line; `selftest` (check.sh, fakes only, no USB).
 - `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
   commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored
