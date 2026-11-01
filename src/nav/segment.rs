@@ -529,7 +529,7 @@ fn byte_at(b: &[u8], at: usize) -> Result<u8, Error> {
 }
 
 fn u32_at(b: &[u8], at: usize) -> Result<u32, Error> {
-    le::<4>(b, at).map(u32::from_le_bytes)
+    crate::storage::bytes::le32(b, at).ok_or(Error::Short)
 }
 
 fn f32_at(b: &[u8], at: usize) -> Result<f32, Error> {
@@ -1129,7 +1129,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "reads the .seg files of $SEGMENTS_DIR"]
     fn built_files_parse() {
-        let dir = std::env::var("SEGMENTS_DIR").expect("SEGMENTS_DIR");
+        let dir = std::env::var("SEGMENTS_DIR").expect("SEGMENTS_DIR not set (tools/real.sh)");
         let (mut ok, mut bad) = (0, std::vec::Vec::new());
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let b = std::fs::read(e.path()).unwrap();

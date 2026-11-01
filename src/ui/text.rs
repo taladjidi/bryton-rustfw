@@ -22,6 +22,79 @@ pub struct Glyph {
     pub at: u32,
 }
 
+/// Most alpha bytes any glyph of any font has (a test checks it against [`crate::fonts`]).
+const INK_MAX: usize = 1200;
+/// Alpha bytes of a small glyph (the pixel font's, a digit has 24): its own small buffer, so that zero-filling does not
+/// cost more than the SDRAM reads it saves.
+const INK_SMALL: usize = 64;
+
+/// One glyph's alpha bytes copied from the font (SDRAM, uncached) to the stack once, so the per-pixel reads of a blit
+/// hit DTCM.
+struct Ink<const N: usize> {
+    g: Glyph,
+    alpha: [u8; N],
+}
+
+impl<const N: usize> Ink<N> {
+    fn new(font: &Font, g: &Glyph) -> Self {
+        let mut alpha = [0; N];
+        let at = g.at as usize;
+        let n = ((usize::from(g.w) * usize::from(g.h)).div_ceil(2)).min(N);
+        if let (Some(src), Some(dst)) = (font.alpha.get(at..at + n), alpha.get_mut(..n)) {
+            dst.copy_from_slice(src);
+        }
+        Ink { g: *g, alpha }
+    }
+
+    /// Coverage 0..=15 of pixel (`px`, `py`) of the glyph's cell.
+    fn coverage(&self, px: u32, py: u32) -> u8 {
+        let g = &self.g;
+        let (x, y) = (px.wrapping_sub(u32::from(g.x)), py.wrapping_sub(u32::from(g.y)));
+        if x >= u32::from(g.w) || y >= u32::from(g.h) {
+            return 0;
+        }
+        let n = y * u32::from(g.w) + x;
+        let byte = self.alpha.get((n >> 1) as usize).copied().unwrap_or(0);
+        if n & 1 == 0 { byte >> 4 } else { byte & 0xf }
+    }
+}
+
+/// Blits glyph `g` at scale `k` in the window (x, y, w, h), its cell's pixel (`off`.0, `off`.1) first. Not inlined,
+/// so the buffer is in this leaf's frame only, not in a caller's (Basemap::render's is near its budget).
+#[inline(never)]
+fn blit_ink<const N: usize>(
+    c: &mut impl Canvas,
+    (font, g, k): (&Font, &Glyph, u32),
+    win: (u32, u32, u32, u32),
+    off: (u32, u32),
+    palette: &[u16; 16],
+) {
+    let ink = Ink::<N>::new(font, g);
+    c.blit(win.0, win.1, win.2, win.3, &mut |px, py| {
+        palette.get(usize::from(ink.coverage(per(px + off.0, k), per(py + off.1, k)))).copied().unwrap_or(0)
+    });
+}
+
+/// [`blit_ink`] with the smallest buffer that holds the glyph.
+fn blit_glyph(
+    c: &mut impl Canvas,
+    f: (&Font, &Glyph, u32),
+    win: (u32, u32, u32, u32),
+    off: (u32, u32),
+    palette: &[u16; 16],
+) {
+    if usize::from(f.1.w) * usize::from(f.1.h) <= INK_SMALL * 2 {
+        blit_ink::<INK_SMALL>(c, f, win, off, palette)
+    } else {
+        blit_ink::<INK_MAX>(c, f, win, off, palette)
+    }
+}
+
+/// `v / k` for a scale `k` (1 almost always: no division).
+fn per(v: u32, k: u32) -> u32 {
+    if k == 1 { v } else { v.checked_div(k).unwrap_or(0) }
+}
+
 /// A font: printable ASCII (0x20..=0x7e), then glyphs for control codes from 1 on (the pixel font's arrows); other
 /// characters are drawn as `?`.
 #[derive(Clone, Copy)]
@@ -48,17 +121,6 @@ impl Font {
             Some(g) => g,
             None => self.glyphs.get(usize::from(b'?' - 0x20)).unwrap_or(&BLANK),
         }
-    }
-
-    /// Coverage 0..=15 of pixel (`px`, `py`) of glyph `g`'s cell.
-    fn coverage(&self, g: &Glyph, px: u32, py: u32) -> u8 {
-        let (x, y) = (px.wrapping_sub(u32::from(g.x)), py.wrapping_sub(u32::from(g.y)));
-        if x >= u32::from(g.w) || y >= u32::from(g.h) {
-            return 0;
-        }
-        let n = y * u32::from(g.w) + x;
-        let byte = self.alpha.get((g.at + n / 2) as usize).copied().unwrap_or(0);
-        if n % 2 == 0 { byte >> 4 } else { byte & 0xf }
     }
 
     /// Width of `s` in pixels.
@@ -187,6 +249,7 @@ pub enum Align {
 }
 
 /// Draws `s` in `style` with its cells' top at `y`, and returns its width. Callers keep it on screen.
+#[inline(never)]
 pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s: &str) -> u32 {
     let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
     let face = c.face();
@@ -202,14 +265,8 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     }
     for ch in s.chars() {
         let (font, g, k) = pick(style, face, ch);
-        let g = &g;
         let w = u32::from(g.advance) * k;
-        c.blit(x, y, w, style.height(), &mut |px, py| {
-            palette
-                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
-                .copied()
-                .unwrap_or(0)
-        });
+        blit_glyph(c, (&font, &g, k), (x, y, w, style.height()), (0, 0), &palette);
         x += w;
     }
     width
@@ -217,6 +274,7 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
 
 /// Draws `s` from `x` as [`draw`] does, but nothing at or right of `right`: the last glyph's cell is cut there (its
 /// blank columns, when the text was laid out by its ink). Returns where the text drawn ends.
+#[inline(never)]
 pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s: &str) -> u32 {
     let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
     let face = c.face();
@@ -236,12 +294,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
         if w == 0 {
             break;
         }
-        c.blit(x, y, w, style.height(), &mut |px, py| {
-            palette
-                .get(usize::from(font.coverage(g, px.checked_div(k).unwrap_or(0), py.checked_div(k).unwrap_or(0))))
-                .copied()
-                .unwrap_or(0)
-        });
+        blit_glyph(c, (&font, g, k), (x, y, w, style.height()), (0, 0), &palette);
         x += w;
     }
     x
@@ -250,6 +303,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
 /// Character `old` drawn at (`x`, `y`) in `style` becomes `new`: only the box that holds either one's ink is sent,
 /// not the whole cell (the rest of the cell is the background in both). A digit of the pixel font is 5 x 7 of its
 /// 6 x 10 cell: 58 % of the pixels. Nothing at or right of `right`.
+#[inline(never)]
 pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32, u32), old: char, new: char) {
     let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
     let face = c.face();
@@ -272,17 +326,7 @@ pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32,
     for (a, p) in palette.iter_mut().enumerate() {
         *p = blend(fg, bg, a as u8);
     }
-    let g = &g;
-    c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
-        palette
-            .get(usize::from(font.coverage(
-                g,
-                (px + x0).checked_div(k).unwrap_or(0),
-                (py + y0).checked_div(k).unwrap_or(0),
-            )))
-            .copied()
-            .unwrap_or(0)
-    });
+    blit_glyph(c, (&font, &g, k), (left, y + y0, w, y1 - y0), (x0, y0), &palette);
 }
 
 /// Draws `s` in a box `w` wide from `x` (aligned inside it) and paints the rest of the box with the background, so a
@@ -418,6 +462,18 @@ mod tests {
     use crate::fonts::PIXEL;
     use crate::ui::tests::Frame;
     use crate::ui::{BLACK, WHITE};
+
+    #[test]
+    fn ink_buffer_holds_every_glyph() {
+        let most = (2..=8)
+            .filter_map(|k| crate::fonts::smooth(Face::Barlow, k))
+            .chain([&PIXEL])
+            .flat_map(|f| f.glyphs.iter())
+            .map(|g| (usize::from(g.w) * usize::from(g.h)).div_ceil(2))
+            .max();
+        assert!(most.is_some_and(|m| m <= INK_MAX), "{most:?}");
+        assert!(most.is_some_and(|m| m + 100 > INK_MAX), "INK_MAX is {INK_MAX}, the most is {most:?}");
+    }
 
     const PIX2: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
     const PIX4: Style = Style { font: &PIXEL, scale: 4, fg: WHITE, bg: BLACK };

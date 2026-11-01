@@ -1953,8 +1953,7 @@ pub(crate) mod tests {
     #[ignore]
     fn every_cached_tile() {
         let Ok(root) = std::env::var("BRYTON_TILES") else {
-            std::println!("BRYTON_TILES not set: skipped");
-            return;
+            panic!("BRYTON_TILES not set (tools/real.sh)");
         };
         let mut mem = vec![0u16; SLOT_WORDS];
         let mut px = vec![0u16; PIXELS];

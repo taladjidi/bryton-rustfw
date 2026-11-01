@@ -730,6 +730,145 @@ fn fit_files() {
     }
 }
 
+/// What [`fit_structured`] built: how often each path the reader has was asked for.
+#[derive(Default)]
+struct FitMade {
+    big: u32,
+    dev: u32,
+    redefined: u32,
+    compressed: u32,
+    odd_sizes: u32,
+    globals: [u32; 5],
+}
+
+/// A FIT file made of definitions the reader picks from: globals 18, 19, 20, 32 and 249 with their real field
+/// numbers, sizes 1, 2, 4 and the odd 3 and 8, developer fields, a local type defined again, big-endian
+/// definitions, compressed timestamp headers, and data messages (some invalid, all ones) on them; a valid size and CRC.
+fn fit_structured(seed: u32, made: &mut FitMade) -> Vec<u8> {
+    const GLOBALS: [u16; 5] = [18, 19, 20, 32, 249];
+    // (field number, natural size) per global
+    const FIELDS: [&[(u8, u8)]; 5] = [
+        &[(253, 4), (2, 4), (8, 4), (9, 4), (16, 1), (20, 2), (21, 2), (22, 2)],
+        &[(253, 4), (8, 4), (9, 4), (13, 2), (110, 4), (19, 2), (15, 1)],
+        &[(253, 4), (3, 1), (5, 4), (7, 2), (0, 4), (1, 4), (2, 2), (78, 4)],
+        &[(253, 4), (2, 4), (3, 4), (5, 1), (4, 4)],
+        &[(253, 4), (1, 4), (2, 4), (3, 4)],
+    ];
+    let mut rnd = xorshift(seed);
+    let mut body = Vec::new();
+    let mut sizes = [None::<usize>; 16]; // data message size per local type defined
+    let mut local_def = [false; 16];
+    for _ in 0..2 + rnd() % 6 {
+        let local = (rnd() % 16) as usize;
+        let k = (rnd() % 5) as usize;
+        let (big, dev) = (rnd().is_multiple_of(3), rnd().is_multiple_of(3));
+        let mut fields = Vec::new();
+        for &(num, size) in FIELDS[k] {
+            if !rnd().is_multiple_of(4) || num == 253 {
+                let size = match rnd() % 8 {
+                    0 => 1,
+                    1 => 2,
+                    2 => 3,
+                    3 => 8,
+                    _ => size,
+                };
+                made.odd_sizes += u32::from(matches!(size, 3 | 8));
+                fields.push((num, size));
+            }
+        }
+        let devs: Vec<(u8, u8)> =
+            if dev { (0..1 + rnd() % 3).map(|i| (i as u8, 1 + (rnd() % 4) as u8)).collect() } else { Vec::new() };
+        made.big += u32::from(big);
+        made.dev += u32::from(dev);
+        made.redefined += u32::from(local_def[local]);
+        local_def[local] = true;
+        made.globals[k] += 1;
+        body.push(0x40 | local as u8 | if dev { 0x20 } else { 0 });
+        body.push(0);
+        body.push(u8::from(big));
+        let g = GLOBALS[k];
+        body.extend(if big { g.to_be_bytes() } else { g.to_le_bytes() });
+        body.push(fields.len() as u8);
+        for &(n, sz) in &fields {
+            body.extend([n, sz, 0x86]);
+        }
+        if dev {
+            body.push(devs.len() as u8);
+            for &(n, sz) in &devs {
+                body.extend([n, sz, 0]);
+            }
+        }
+        let size = fields.iter().map(|f| usize::from(f.1)).sum::<usize>()
+            + devs.iter().map(|f| usize::from(f.1)).sum::<usize>();
+        sizes[local] = Some(size);
+        // data messages on it, in the same stretch or after another definition
+        for _ in 0..1 + rnd() % 6 {
+            let l = (rnd() % 16) as usize;
+            let l = if rnd().is_multiple_of(2) { local } else { l };
+            let Some(size) = sizes[l] else { continue };
+            let compressed = l < 4 && rnd().is_multiple_of(3);
+            made.compressed += u32::from(compressed);
+            body.push(if compressed { 0x80 | (l as u8) << 5 | (rnd() % 32) as u8 } else { l as u8 });
+            let ones = rnd().is_multiple_of(5); // invalid values
+            body.extend((0..size).map(|_| if ones { 0xff } else { (rnd() >> 8) as u8 }));
+        }
+    }
+    let mut f = std::vec![14, 0x20, 0, 0];
+    f.extend((body.len() as u32).to_le_bytes());
+    f.extend(*b".FIT");
+    f.extend([0, 0]);
+    f.extend(body);
+    let crc = crate::fit::crc(0, &f);
+    f.extend(crc.to_le_bytes());
+    f
+}
+
+/// Structured FIT: every definition shape the reader has, through `push` and `push_slice`, equal output.
+#[test]
+fn fit_structure() {
+    use crate::fitread::{Msg, Reader};
+    let mut made = FitMade::default();
+    let (mut kinds, mut whole, mut files) = ([0u32; 4], 0u32, 0u32);
+    for seed in 1..=3000u32 {
+        let file = fit_structured(seed.wrapping_mul(2654435761), &mut made);
+        for (position, alpha1) in [(true, false), (false, true)] {
+            let new = || if position { Reader::with_position() } else { Reader::with_alpha1() };
+            let (mut a, mut b) = (new(), new());
+            let (mut one, mut many) = (Vec::new(), Vec::new());
+            file.iter().for_each(|&x| one.extend(a.push(x)));
+            // the same file in pieces of any size
+            let cut = 1 + (seed as usize * 7 + usize::from(alpha1)) % 50;
+            let mut at = 0;
+            while at < file.len() {
+                let n = b.push_slice(&file[at..file.len().min(at + cut)], |m| many.push(m));
+                if n == 0 {
+                    break;
+                }
+                at += n;
+            }
+            assert_eq!((one.clone(), a.result()), (many, b.result()), "seed {seed}: push and push_slice differ");
+            files += 1;
+            whole += u32::from(a.result() == Some(Ok(())));
+            for m in one {
+                kinds[match m {
+                    Msg::Record(_) => 0,
+                    Msg::Session(_) => 1,
+                    Msg::Lap(_) => 2,
+                    Msg::CoursePoint { .. } => 3,
+                }] += 1;
+            }
+        }
+    }
+    std::println!(
+        "fit structure: {files} files, {whole} whole, messages {kinds:?}, made {:?}",
+        (made.big, made.dev, made.redefined, made.compressed, made.odd_sizes, made.globals)
+    );
+    assert!(kinds.iter().all(|&k| k > 50), "every message kind reached: {kinds:?}");
+    assert!(whole > files / 2, "{whole} of {files} read whole");
+    assert!(made.big > 500 && made.dev > 500 && made.redefined > 500 && made.compressed > 500 && made.odd_sizes > 500);
+    assert!(made.globals.iter().all(|&g| g > 500), "{:?}", made.globals);
+}
+
 /// Random power curves into the critical power fit (power_curve.rs `fit_cp`): bests from 0 to 2000 W, some missing,
 /// some shaped like a rider's; the fit must get past its checks often (the envelope found) and give a CP, W' and
 /// quality in range, never a panic.
@@ -1027,7 +1166,7 @@ fn turn_finder_shapes() {
 /// no panic, and what comes out is in range (a page's layout holds its fields, the reminders on the menu's steps).
 #[test]
 fn ini_files() {
-    const SECTIONS: [&str; 12] = [
+    const SECTIONS: [&str; 19] = [
         "Page1",
         "Page2",
         "Page3",
@@ -1039,9 +1178,16 @@ fn ini_files() {
         "Reminder6",
         "FTP",
         "MHR",
-        "Sensor1",
+        "HRSensor1",
+        "SPDSensor2",
+        "CADSensor1",
+        "COMSensor3",
+        "PWRSensor1",
+        "ESSSensor1",
+        "DI2Sensor1",
+        "TRNSensor4",
     ];
-    const KEYS: [&str; 20] = [
+    const KEYS: [&str; 28] = [
         "type",
         "isEnabled",
         "name",
@@ -1062,16 +1208,74 @@ fn ini_files() {
         "Weight_kg",
         "ID",
         "Wheel",
+        "HWType",
+        "active",
+        "Wbalance",
+        "Alt_P0",
+        "leftpress",
+        "rightpress",
+        "leftlongpress",
+        "rightlongpress",
     ];
-    let mut reached = [0usize; 2];
+    let mut reached = [0usize; 6];
     for seed in 1..=2000u32 {
         // many short files (a lookup takes a section's first copy), of sections and key = value lines (an INI's structure), each value one of: a small number, a list of field
         // ids, a huge number, raw bytes
         let mut t = Vec::new();
         let mut v = bytes(seed, 600);
+        if seed % 2 == 0 {
+            // first, as stock writes them (a lookup takes a section's first copy): sensor blocks (an ANT+ type,
+            // active, an id some past 20 bits, a wheel, the buttons), W' and the pressure at sea level
+            let mut r = xorshift(seed);
+            for k in 0..1 + r() % 4 {
+                let id = if r().is_multiple_of(4) { r() >> 12 << 4 } else { r() % 100_000 };
+                t.extend_from_slice(
+                    std::format!(
+                        "[{}]\r\nHWType={}\r\nactive=1\r\nID={id}\r\nWheel={}\r\nleftpress={}\r\nrightpress={}\r\n",
+                        SECTIONS[11 + (r() as usize + k as usize) % 8],
+                        u32::from(r() % 7 == 6),
+                        900 + r() % 2500,
+                        r() % 6,
+                        r() % 6
+                    )
+                    .as_bytes(),
+                );
+            }
+            t.extend_from_slice(
+                std::format!(
+                    "[UserProfile]\r\nWbalance={}\r\n[DeviceSys]\r\nAlt_P0={}\r\n",
+                    r() % 40_000,
+                    8000 + r() % 4000
+                )
+                .as_bytes(),
+            );
+        }
+        if seed % 3 == 0 {
+            // data pages and reminders as stock writes them, for the first-copy lookups
+            let mut r = xorshift(seed ^ 0x55);
+            for n in 1..=1 + r() % 3 {
+                let (count, ids) =
+                    (1 + r() % 9, (0..9).map(|_| std::format!("{}", r() % 70)).collect::<Vec<_>>().join(","));
+                t.extend_from_slice(
+                    std::format!("[Page{n}]\r\ntype={count}\r\nisEnabled={}\r\nGrid{count}={ids}\r\n", 1 + r() % 2)
+                        .as_bytes(),
+                );
+            }
+            t.extend_from_slice(
+                std::format!(
+                    "[Reminder1]\r\nstatus=1\r\nWhichReminder=0\r\nReminderFreq=2\r\nReminderType={}\r\nTimer={}\r\n",
+                    r() % 2,
+                    r() % 9000
+                )
+                .as_bytes(),
+            );
+            t.extend_from_slice(
+                std::format!("[Reminder2]\r\nstatus=1\r\nWhichReminder=5\r\nHR={}\r\n", r() % 260).as_bytes(),
+            );
+        }
         while let (Some(a), Some(b), Some(c)) = (v.next(), v.next(), v.next()) {
             if a % 5 == 0 {
-                t.extend_from_slice(std::format!("[{}]\r\n", SECTIONS[usize::from(b) % SECTIONS.len()]).as_bytes());
+                t.extend_from_slice(std::format!("[{}]\r\n", SECTIONS[usize::from(b) % 11]).as_bytes());
                 continue;
             }
             t.extend_from_slice(KEYS[usize::from(b) % KEYS.len()].as_bytes());
@@ -1100,8 +1304,14 @@ fn ini_files() {
         assert!(i.hr_alert.is_none_or(|h| (100..=230).contains(&h)));
         reached[0] += i.pages.iter().flatten().count();
         reached[1] += [i.eat_min, i.drink_min, i.hr_alert].iter().flatten().count();
+        reached[2] += i.sensors.iter().flatten().count();
+        reached[3] += usize::from(i.remote.is_some());
+        reached[4] += usize::from(i.wheel_mm.is_some());
+        reached[5] += usize::from(i.w_prime.is_some()) + usize::from(i.alt_p0_dhpa.is_some());
+        assert!(i.sensors.iter().flatten().all(|s| s.device > 0 || s.trans > 0), "an id above 0");
     }
-    std::println!("ini fuzz reached {} pages, {} reminders", reached[0], reached[1]);
+    std::println!("ini fuzz reached {reached:?} (pages, reminders, sensors, remotes, wheels, W' and Alt_P0)");
+    assert!(reached.iter().all(|&n| n > 100), "every path reached: {reached:?}");
     assert!(reached[0] > 0 && reached[1] > 0, "the fuzz reaches the pages and the reminders");
 }
 
@@ -3609,8 +3819,74 @@ fn gzip_streams() {
             }] += 1;
         }
     }
-    std::println!("gzip fuzz: {ok} real streams, errors truncated / bad / too big / crc: {kinds:?}");
+    // gzip built to spec with the optional header parts (FEXTRA up to 600 bytes, FNAME, FCOMMENT, FHCRC) and stored
+    // blocks: whole, they come out as the payload; cut, they are refused
+    let crc32 = |d: &[u8]| {
+        let mut c = !0u32;
+        for &b in d {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = (c >> 1) ^ (0xedb8_8320 & (c & 1).wrapping_neg());
+            }
+        }
+        !c
+    };
+    let (mut flags_seen, mut stored, mut refused) = ([0u32; 4], 0u32, 0u32);
+    for _ in 0..3000 {
+        let flags = (next() % 16) as u8; // one bit each for FHCRC, FEXTRA, FNAME, FCOMMENT
+        let (hcrc, extra, name, comment) = (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0, flags & 8 != 0);
+        let mut gz = std::vec![
+            0x1f,
+            0x8b,
+            8,
+            u8::from(hcrc) << 1 | u8::from(extra) << 2 | u8::from(name) << 3 | u8::from(comment) << 4
+        ];
+        gz.extend([0, 0, 0, 0, 0, 3]);
+        if extra {
+            let n = if next().is_multiple_of(8) { 600 } else { next() as usize % 20 };
+            gz.extend((n as u16).to_le_bytes());
+            gz.extend((0..n).map(|_| next() as u8));
+        }
+        for (on, k) in [(name, 1), (comment, 2)] {
+            if on {
+                gz.extend((0..next() % 12).map(|_| 1 + (next() % 255) as u8));
+                gz.push(0);
+                flags_seen[k] += 1;
+            }
+        }
+        if hcrc {
+            gz.extend([next() as u8, next() as u8]);
+            flags_seen[3] += 1;
+        }
+        flags_seen[0] += u32::from(extra);
+        let mut payload = Vec::new();
+        let blocks = 1 + next() % 3;
+        for b in 0..blocks {
+            let part: Vec<u8> = (0..next() % 100).map(|_| next() as u8).collect();
+            let len = part.len() as u16;
+            gz.push(u8::from(b == blocks - 1)); // BFINAL, BTYPE 0 (stored), then the byte boundary
+            gz.extend(len.to_le_bytes());
+            gz.extend((!len).to_le_bytes());
+            gz.extend(&part);
+            payload.extend(part);
+            stored += 1;
+        }
+        gz.extend(crc32(&payload).to_le_bytes());
+        gz.extend((payload.len() as u32).to_le_bytes());
+        assert_eq!(run(&gz, &mut mem, Some(&payload)), Ok(payload.len()), "{flags:#x}");
+        // cut
+        let mut bad = gz.clone();
+        bad.truncate(1 + next() as usize % gz.len().saturating_sub(1).max(1));
+        refused += u32::from(run(&bad, &mut mem, None).is_err());
+    }
+    std::println!(
+        "gzip fuzz: {ok} real streams, errors truncated / bad / too big / crc: {kinds:?}; built: extra / name / comment / fhcrc {flags_seen:?}, {stored} stored blocks, {refused} cut refused"
+    );
     assert!(kinds.iter().all(|&n| n > 20), "{kinds:?}");
+    assert!(
+        flags_seen.iter().all(|&n| n > 500) && stored > 3000 && refused > 1000,
+        "{flags_seen:?} {stored} {refused}"
+    );
 }
 
 /// Tile messages built from random parts (the base, deltaBits, transport, nodes with random keys, elevations, ways and
@@ -5646,16 +5922,16 @@ fn lap_lists() {
         let mut defs: [Option<(Vec<u8>, bool)>; 4] = [None, None, None, None];
         for _ in 0..4 + rnd() % 40 {
             let local = (rnd() % 4) as usize;
-            if rnd() % 5 == 0 || defs[local].is_none() {
-                let big = mode == 0 || rnd() % 3 == 0;
+            if rnd().is_multiple_of(5) || defs[local].is_none() {
+                let big = mode == 0 || rnd().is_multiple_of(3);
                 let global: u16 = [19, 19, 19, 20, 18, 21, 49][(rnd() % 7) as usize];
-                let mut fields: Vec<(u8, u8)> = LAP.iter().copied().filter(|_| rnd() % 3 != 0).collect();
+                let mut fields: Vec<(u8, u8)> = LAP.iter().copied().filter(|_| !rnd().is_multiple_of(3)).collect();
                 for f in &mut fields {
-                    if rnd() % 6 == 0 {
+                    if rnd().is_multiple_of(6) {
                         f.1 = 1 + (rnd() % 8) as u8; // a size the type does not have
                     }
                 }
-                let dev = mode == 1 || rnd() % 4 == 0;
+                let dev = mode == 1 || rnd().is_multiple_of(4);
                 body.extend([0x40 | local as u8 | if dev { 0x20 } else { 0 }, 0, big as u8]);
                 body.extend(if big { global.to_be_bytes() } else { global.to_le_bytes() });
                 body.push(fields.len() as u8);
@@ -5678,18 +5954,18 @@ fn lap_lists() {
                     _ => rnd() as u8,
                 }));
             }
-            if rnd() % 9 == 0 {
+            if rnd().is_multiple_of(9) {
                 body.push(3 << 4 | 0x0f); // data on a local type with no definition, or a compressed header
             }
         }
         let mut f = std::vec![14u8, 0x10, 0, 0];
-        let declared = if rnd() % 8 == 0 { rnd() % 4000 } else { body.len() as u32 };
+        let declared = if rnd().is_multiple_of(8) { rnd() % 4000 } else { body.len() as u32 };
         f.extend(declared.to_le_bytes());
         f.extend(b".FIT");
         f.extend(crate::fit::crc(0, &f).to_le_bytes());
         f.extend(&body);
         f.extend(crate::fit::crc(0, &f).to_le_bytes());
-        if rnd() % 4 == 0 {
+        if rnd().is_multiple_of(4) {
             f.truncate(14 + rnd() as usize % (f.len() - 14));
             cut_files += 1;
         }
@@ -6212,4 +6488,65 @@ fn osm_renders_over_damaged_packs() {
         with_features += u32::from(features > 0);
     }
     assert!(by_osm > 10 && by_stock > 10 && with_features > 10, "{by_osm} {by_stock} {with_features}");
+}
+
+/// `trash::kept_by_a_repair` (trash.rs) over folders a computer's repair makes (the final review of the B1a
+/// follow-up: a new input path): random `FOUND.nnn`, `LOST.DIR` and other folders, root files (`.CHK`, `.REC`,
+/// others), some on the ride's chain; the answer is true exactly when a root file or a file of a repair folder is on
+/// it, and both answers are reached over the seeds.
+#[test]
+fn repair_folders() {
+    use crate::fat::Fat;
+    use crate::fat::tests::Ram;
+    use crate::fat::write::Handle;
+    const T: (u16, u16) = (0x5b58, 0x6000);
+    let base = crate::fat::tests::image();
+    let ride = {
+        let mut d = Ram(base.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        fat.open(&mut d, "Activities/261020080000.fit").unwrap()
+    };
+    let (mut yes, mut no) = (0, 0);
+    for seed in 1..60u32 {
+        let mut rnd = xorshift(seed);
+        let mut d = Ram(base.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let on = Handle { first: ride.cluster, size: ride.size, ..Handle::default() };
+        let mut want = false;
+        for k in 0..1 + rnd() % 4 {
+            let (folder, counts) = match rnd() % 4 {
+                0 => (std::format!("FOUND.{:03}", k), true),
+                1 => (std::string::String::from("LOST.DIR"), true),
+                2 => (std::format!("found{k}"), false), // no dot: not a repair's folder
+                _ => (std::format!("Photos{k}"), false),
+            };
+            let Ok(dir) = fat.ensure_dir(&mut d, root, &folder, T) else { continue };
+            for n in 0..rnd() % 4 {
+                let name = std::format!("FILE{n:04}.CHK");
+                if rnd().is_multiple_of(3) {
+                    if fat.link(&mut d, dir, &name, &on, T).is_ok() {
+                        want |= counts;
+                    }
+                } else {
+                    let _ = fat.create(&mut d, dir, &name, T);
+                }
+            }
+        }
+        for n in 0..rnd() % 3 {
+            let name =
+                if rnd().is_multiple_of(2) { std::format!("FILE{n:04}.CHK") } else { std::format!("FSCK{n:04}.REC") };
+            if rnd().is_multiple_of(3) {
+                if fat.link(&mut d, root, &name, &on, T).is_ok() {
+                    want = true;
+                }
+            } else {
+                let _ = fat.create(&mut d, root, &name, T);
+            }
+        }
+        let got = crate::trash::kept_by_a_repair(&mut fat, &mut d, ride.cluster);
+        assert_eq!(got, Ok(want), "seed {seed}");
+        if want { yes += 1 } else { no += 1 }
+    }
+    assert!(yes > 10 && no > 10, "{yes} named by a repair, {no} not");
 }

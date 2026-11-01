@@ -1887,7 +1887,7 @@ fn main() -> ! {
     app.prof().reset();
     app.prof().overhead = overhead;
     if let Some(mem) = hw::map_memory() {
-        // zeroes all of link.x MAP (2560 KB of SDRAM) once: about 15 to 40 ms (inferred), before the first map. The
+        // zeroes all of link.x MAP (2688 KB of SDRAM) once: about 15 to 40 ms (inferred), before the first map. The
         // basemap takes the first words; the rest (link.x MAP has room for it) is the buffer the map tiles of the road
         // ahead are inflated into
         match mem.split_at_mut_checked(bryton_rustfw::tiles::MEM_WORDS) {

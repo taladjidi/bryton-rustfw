@@ -432,16 +432,21 @@ impl Reader {
         None
     }
 
-    fn def_field(&mut self, b: u8, left: u8) {
+    /// Takes one byte of a 3-byte field description (a definition's, or a developer field's); the three once whole.
+    fn field3(&mut self, b: u8) -> Option<[u8; 3]> {
         if let Some(t) = self.tmp.get_mut(self.at as usize) {
             *t = b;
         }
         self.at += 1;
         if self.at < 3 {
-            return;
+            return None;
         }
         self.at = 0;
-        let (num, size) = (self.tmp[0], self.tmp[1]);
+        Some([self.tmp[0], self.tmp[1], self.tmp[2]])
+    }
+
+    fn def_field(&mut self, b: u8, left: u8) {
+        let Some([num, size, _]) = self.field3(b) else { return };
         let d = &mut self.building;
         if let Some(s) = slot(d.global, num, self.position)
             && matches!(size, 1 | 2 | 4)
@@ -477,16 +482,8 @@ impl Reader {
     }
 
     fn dev_field(&mut self, b: u8, left: u8) {
-        if let Some(t) = self.tmp.get_mut(self.at as usize) {
-            *t = b;
-        }
-        self.at += 1;
-        if self.at < 3 {
-            return;
-        }
-        self.at = 0;
         // (number, size, developer data index): only the size matters, but for the full copy's Alpha1 and ArtPct
-        let (num, size, index) = (self.tmp[0], self.tmp[1], self.tmp[2]);
+        let Some([num, size, index]) = self.field3(b) else { return };
         let d = &mut self.building;
         let slot = match (d.global, num, size, index) {
             (20, 0, 4, 0) => Some(ALPHA1_SLOT),
@@ -634,7 +631,9 @@ impl Reader {
                     .map(f32::from_bits)
                     .filter(|a| *a > 0.0 && *a < 10.0) // NaN and the infinities fail too
                     .map(|a| (a * 1000.0 + 0.5) as u16);
-                let (power, hr, dist_cm) = (u16_(3), u8_(1), get(2));
+                // above the meters' ceiling a power is a glitch, as the sensor drivers have it
+                let power = u16_(3).filter(|&p| p <= crate::sensors::METER_MAX_W);
+                let (hr, dist_cm) = (u8_(1), get(2));
                 Some(Msg::Record(Record { time, hr, dist_cm, power, pos, alt_dm, alpha1_milli }))
             }
             32 => {
@@ -844,11 +843,11 @@ mod tests {
     #[test]
     #[ignore]
     fn parse_speed() {
-        let Ok(dir) = std::env::var("BRYTON_RIDES") else { return };
+        let dir = std::env::var("BRYTON_RIDES").expect("BRYTON_RIDES not set (tools/real.sh)");
         let Some(f) = std::fs::read_dir(dir).ok().and_then(|d| {
             d.filter_map(|e| e.ok().map(|e| e.path())).find(|p| p.extension().is_some_and(|e| e == "fit"))
         }) else {
-            return;
+            panic!("BRYTON_RIDES holds no .fit file");
         };
         let data = std::fs::read(f).unwrap();
         for slices in [false, true] {

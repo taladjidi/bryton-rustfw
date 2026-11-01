@@ -38,31 +38,17 @@ const BLOB_MAX: u32 = 1 + 512 + 65_536 + 65_536 / 255 + 16;
 
 /// The pack holding tile (`z`, `x`, `y`): `IGN<z>_<x / 32>_<y / 32>.PAK`.
 pub fn name(z: u8, x: u32, y: u32) -> Line<32> {
-    let mut l = Line::new();
-    l.push_str("IGN");
-    l.push_u32(u32::from(z));
-    l.push_str("_");
-    l.push_u32(x / BLOCK);
-    l.push_str("_");
-    l.push_u32(y / BLOCK);
-    l.push_str(".PAK");
-    l
+    super::pack_name("IGN", BLOCK, z, x, y)
 }
 
 /// The header is a version 1 pack of tile (`z`, `x`, `y`)'s block.
 pub fn header_ok(h: &[u8; HEAD as usize], z: u8, x: u32, y: u32) -> bool {
-    let u32_at = |i: usize| u32::from_le_bytes(super::take(h, i));
-    h[..4] == *b"IGNP"
-        && h[4..6] == [1, 0]
-        && h[6] == z
-        && u32::from(h[7]) == BLOCK
-        && u32_at(8) == x / BLOCK * BLOCK
-        && u32_at(12) == y / BLOCK * BLOCK
+    super::pack_header_ok(h, b"IGNP", BLOCK, z, x, y)
 }
 
 /// Where tile (`x`, `y`)'s index entry is in its pack.
 pub fn entry_at(x: u32, y: u32) -> u32 {
-    HEAD + 8 * ((y % BLOCK) * BLOCK + x % BLOCK)
+    super::pack_entry_at(8, BLOCK, x, y)
 }
 
 /// The tile's (offset, length) from its index entry in a pack of `size` bytes; None: no tile there, or an entry
@@ -288,8 +274,7 @@ pub(crate) mod tests {
     #[ignore]
     fn every_packed_tile() {
         let Ok(dir) = std::env::var("IGN_PACKS") else {
-            std::println!("IGN_PACKS not set: skipped");
-            return;
+            panic!("IGN_PACKS not set (tools/real.sh)");
         };
         let mut out = std::vec![0u16; TILE];
         let (mut n, mut bytes, mut t) = (0u64, 0u64, std::time::Duration::ZERO);

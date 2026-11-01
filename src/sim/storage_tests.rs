@@ -87,7 +87,7 @@ fn about_has_the_notices() {
             "BARLOW, SIL OFL 1.1"
         ]
     );
-    sim.save("about");
+    sim.save("about_storage");
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Menu(Menu::System, row_of(Row::About)), "Back returns to SYSTEM");
 }

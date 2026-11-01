@@ -32,17 +32,18 @@ use crate::inflate::{Inflater, Scratch};
 use crate::text::Line;
 
 /// Nodes the graph holds at most (20 bytes each). A real tile has 445 at the median and 2868 at most in the
-/// mountain region measured; a tile that does not fit is skipped.
-pub const NODES: usize = 2560;
-/// Edges the graph holds at most (9 bytes each): two or three a node.
-pub const EDGES: usize = 5120;
+/// mountain region measured (review 2026-11-01: 2560 was below it); a tile that does not fit is skipped.
+pub const NODES: usize = 3072;
+/// Edges the graph holds at most (9 bytes each). Not measured for the 2868-node tile (the owner's route file is not
+/// in the repository: `real_file` prints it); 2 a node as the first 2560 nodes had it, 5120 of 2560.
+pub const EDGES: usize = 6144;
 /// Tiles remembered at most, the ones with no data too.
 pub const TILES: usize = 16;
 /// The elevation of a node that has none.
 pub const NO_ELEV: i16 = i16::MIN;
-/// The words of buffer a tile is inflated into (96 KB: the inflated tile of a full graph, about 36 bytes a node);
-/// main.rs takes them from the map's SDRAM, behind the basemap's (link.x MAP).
-pub const SCRATCH_WORDS: usize = 48 * 1024;
+/// The words of buffer a tile is inflated into (160 KB: the largest inflated tile seen is 150 KB); main.rs takes
+/// them from the map's SDRAM, behind the basemap's (link.x MAP).
+pub const SCRATCH_WORDS: usize = 80 * 1024;
 /// Edges kept for a node at most (the real maximum seen is 9).
 const MAX_EDGES: usize = 15;
 /// Tiles a z9 file spans a side: 2^(14 - 9).
@@ -1473,8 +1474,7 @@ pub(crate) mod tests {
     #[ignore]
     fn real_file() {
         let Ok(path) = std::env::var("BRYTON_ROUTE_DAT") else {
-            std::println!("BRYTON_ROUTE_DAT not set: skipped");
-            return;
+            panic!("BRYTON_ROUTE_DAT not set (tools/real.sh)");
         };
         let bytes = std::fs::read(&path).unwrap();
         let name = std::string::String::from(std::path::Path::new(&path).file_name().unwrap().to_str().unwrap());

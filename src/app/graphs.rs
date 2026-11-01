@@ -6,6 +6,8 @@ use crate::*;
 
 /// A box: left, top, width, height.
 type Box4 = (u32, u32, u32, u32);
+/// The zones and the W' a graph's bars are coloured by ([`App::graph_ctx`]).
+pub(crate) type GraphCtx = (ride::Zones, u16);
 
 /// What a graph field shows on screen: its plot, over the last minutes or the whole ride, the bars up to `n`
 /// ([`ride::History::len`] or [`ride::History::whole_len`]), the whole ride's halvings and the scale (low, high, in
@@ -220,9 +222,14 @@ impl App {
         if count == 0 { 0 } else { (sum / count) as u16 }
     }
 
+    /// What every bar's colour needs, taken once per draw: the zones and W' (building them is not free).
+    pub(crate) fn graph_ctx(&self) -> GraphCtx {
+        (self.settings.zones(), self.cp_model().1)
+    }
+
     /// Column `i` of a graph of `cols` columns `h` high showing `g`: the bar's height and colour (a bar of a reading
     /// is at least 1 high).
-    pub(crate) fn graph_bar(&self, g: GraphShown, cols: u32, h: u32, i: u32) -> (u32, u16) {
+    pub(crate) fn graph_bar(&self, cx: &GraphCtx, g: GraphShown, cols: u32, h: u32, i: u32) -> (u32, u16) {
         use ride::Plot;
         #[cfg(test)]
         self.bars.set(self.bars.get() + 1);
@@ -231,9 +238,9 @@ impl App {
             return (0, ui::BLACK);
         }
         let color = match g.plot {
-            Plot::Power => self.settings.zones().power_color(v),
-            Plot::Hr => self.settings.zones().hr_color(v),
-            Plot::Wbal => power::wbal_color(i32::from(v) * 10, self.cp_model().1),
+            Plot::Power => cx.0.power_color(v),
+            Plot::Hr => cx.0.hr_color(v),
+            Plot::Wbal => power::wbal_color(i32::from(v) * 10, cx.1),
             Plot::Dfa => ride::dfa_color(v),
             Plot::Alt => ui::GREY,
         };
@@ -301,6 +308,7 @@ impl App {
         // against 1987 in 113). The whole ride grows to the right instead: a new bar changes one column.
         const STEP: u32 = 5;
         let a = ui::graph_area(bx);
+        let cx = self.graph_ctx();
         let now = self.graph_now(old.plot, a.2);
         let step = if now.whole { 1 } else { STEP };
         let mut p = Panel(b, self.area(), self.look());
@@ -314,10 +322,10 @@ impl App {
         if !same {
             // another scale, a halved whole ride, or another plot or span: all of it
             self.draw_graph_axes(&mut p, bx, now);
-            ui::draw_graph(&mut p, a, &|k| self.graph_bar(now, a.2, a.3, k));
+            ui::draw_graph(&mut p, a, &|k| self.graph_bar(&cx, now, a.2, a.3, k));
         } else {
             for k in 0..a.2 {
-                let (was, is) = (self.graph_bar(old, a.2, a.3, k), self.graph_bar(now, a.2, a.3, k));
+                let (was, is) = (self.graph_bar(&cx, old, a.2, a.3, k), self.graph_bar(&cx, now, a.2, a.3, k));
                 ui::draw_graph_column(&mut p, a, k, was, is);
             }
         }

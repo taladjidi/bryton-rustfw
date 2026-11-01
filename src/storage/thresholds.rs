@@ -116,7 +116,10 @@ impl Scan {
             }
             return fat::SECTOR as u32 / 16; // a 32-byte entry
         };
-        let n = fat.read_from(d, file, *offset, io, seek).unwrap_or(0);
+        let Ok(n) = fat.read_from(d, file, *offset, io, seek) else {
+            self.file = None; // a read error: the ride is dropped, not counted as the part that was read
+            return 1;
+        };
         *offset = offset.saturating_add(n as u32);
         let ride = &mut self.ride;
         self.reader.push_slice(io.get(..n).unwrap_or(&[]), |m| {
@@ -222,7 +225,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore]
     fn real_rides() {
-        let files = std::env::var("HRVT_FILES").unwrap_or_default();
+        let files = std::env::var("HRVT_FILES").expect("HRVT_FILES not set (tools/real.sh)");
         for path in files.split(':').filter(|p| !p.is_empty()) {
             let data = std::fs::read(path).unwrap();
             let (mut r, mut fit, mut with) = (Reader::with_alpha1(), hrvt::RideFit::new(), 0);

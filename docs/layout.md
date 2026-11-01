@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::new_with`, `App::step`). The app's cell is <!-- n:app -->41 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->49 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::new_with`, `App::step`). The app's cell is <!-- n:app -->41 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->29 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -21,14 +21,14 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `settings_file.rs`: `\Rustfw\settings.bin`, the settings' file (`SettingsCopy`: two copies, magic, version,
     length, sequence number, CRC-32; read with the pages' file, written between rides; which wins over the
     registers; the migration from them).
-  - `screenshot.rs`: SYSTEM > SCREENSHOT (the menus left, the screen under them written at the next pass, never with a
-    ride open). `faultlog.rs`: the fault marker found at the start, its line appended once the card is quiet.
+  - `src/app/screenshot.rs`: SYSTEM > SCREENSHOT (the menus left, the screen under them written at the next pass, never with a
+    ride open). `src/app/faultlog.rs`: the fault marker found at the start, its line appended once the card is quiet.
   - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input` (global arms, then one `input_<screen>` per screen), `touch`.
   - `editor.rs`: the page editor on the page (`Screen::Edit`, its actions, keep or drop), pages added and deleted,
     and `\Rustfw\pages.bin` (read after the start, written between rides, the backup registers after it).
   - `pagemeta.rs`: the page switches (SHOW, MOVE UP / DOWN, RENAME, the road set's names and OFF mask in `pages.bin`) and AUTO SCROLL.
   - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
-    the ride card, the basemap, `render_row` (screenshots). `fields.rs`: a ride field's text and colour, number
+    the ride card, the basemap, `render_row` (screenshots). `src/app/fields.rs`: a ride field's text and colour, number
     formatting. `graphs.rs`: the graph fields and the course profile.
   - `more.rs`: MORE, a denser variant of each ride page (swipe up shows it, swipe down or Back returns): the rider's own
     (the editor edits it, kept in `pages.bin` after the first CRC) or `Page::more_of`; "MORE" in the strip.
@@ -38,7 +38,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     a quiet link that does not answer a probe), drain and resync, else reset the chip and start ANT and the phone
     link again, with backoff; the count is in the dev link's `info`. Tests: `src/sim/link_tests.rs`.
   - `radio.rs`: the ANT+ channels (`Sensor`), `poll_nrf`, pairing. `gps.rs`: `poll_gnss`, the aiding.
-  - `phone.rs`: the phone link over BLE: the GATT server set up (HID, battery, device information), advertising,
+  - `src/app/phone.rs`: the phone link over BLE: the GATT server set up (HID, battery, device information), advertising,
     bonding and the bond in `\Rustfw\ble.bin`, the BLE events, the GATT client of the phone (ANCS, AMS, CTS
     discovered one procedure at a time, then its operations queued), media keys, the call and media screens.
   - `notifs.rs`: the phone's last notifications kept (`phone::Inbox`), the NOTIFICATIONS list (a tap on the overview's
@@ -66,7 +66,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     Nordic byte wakes (`App::radio_pass`), the input, the pass counted; against `LoopBoard` (the board's primitives:
     timer, WFI, edges, reset) and `UsbLink` (usb.rs `Link`).
   - `profile.rs`: the ride profile (ROAD, INDOOR or MTB), chosen from the trainer heard or set by hand, given up when the trainer goes silent.
-  - `quick.rs`: the quick panel (`Screen::Quick`, a swipe down): what the rider wants first, top to bottom.
+  - `src/app/quick.rs`: the quick panel (`Screen::Quick`, a swipe down): what the rider wants first, top to bottom.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
     use refused), when it may be (no ride running or unsaved), taken back on eject, a restart after the computer
     wrote.
@@ -74,7 +74,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
   `Rect` (`contains`, `grown`) is the one hit-test: a touch is tested against a `Rect`, never with its own range checks.
   Its parts are re-exported whole, so paths stay `ui::X`: `src/ui/strip.rs` (the status strip, whole and as changes),
-  `ui/fields.rs` (a ride field's box, value, layouts, frames, zone bars, the graphs' axes and columns), `src/ui/gauge.rs`
+  `src/ui/fields.rs` (a ride field's box, value, layouts, frames, zone bars, the graphs' axes and columns), `src/ui/gauge.rs`
   (the workout gauge field), `src/ui/dial.rs` (the ring and bar gauge fields: drawn with the box, then only the arc or columns that moved) and `src/ui/overview.rs` (the overview: date, TODAY card, cog, notices, workout list rows).
 - `src/ui/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
   `Row` (what a menu row is: a submenu, a setting, a sensor, a reading, a page field) and each menu's table,
@@ -226,7 +226,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   saved to `\Rustfw\Activities`), which never holds the clean one up
   (`App::step_full`, docs/sync.md). A ride discarded at its end goes through the same save into
   `\Rustfw\Discarded` (`Discarded\Full`), its records saying so, so no cut puts it in `\Activities`.
-  `src/storage/recorder/rec.rs`: the recovery record (`Rec`, one sector of `ride.rec`) and the ride names; `recorder/tests.rs`: its tests.
+  `src/storage/recorder/rec.rs`: the recovery record (`Rec`, one sector of `ride.rec`) and the ride names; `src/storage/recorder/tests.rs`: its tests.
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
@@ -282,7 +282,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   2.0, ghidra/recovered_src/ride/route_climb.c): the snap to the nearest road (heading-aware), the trace (same way, else
   same class, else the smallest turn under 110 degrees, tiles asked for as it goes), stock's 9-tap smoothing, and the
   climbs by the course's own Garmin definition (`Course::climbs_of`), the rider placed on the trace each second, the
-  climb said once. About <!-- n:ahead -->106 KB<!-- /n --> in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
+  climb said once. About <!-- n:ahead -->126 KB<!-- /n --> in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
   `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
   beep at a climb's start and the CLIMB fields when no course is followed.
 - `src/nav/segment.rs`: a live segment file, `\Rustfw\Segments\<id>.seg` (stock's live segment package unzipped; docs/segments.md,
@@ -376,11 +376,14 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/progress.py`: a progress bar when tqdm is installed, nothing otherwise (cosmetic).
 - `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
   SHA256SUMS before saving anything (then by rename); `selftest` (check.sh, a fake download).
-- `tools/stack_check.py`: the firmware's stack frames against their budgets, the stack's size (from the canary
-  to the top; check.sh, after the build).
-- `tools/panics.py` (`--max N`: exit 1 above N sites; check.sh runs `--max 0`): every panic site of the release ELF (bounds, unwrap, overflow, explicit) with its source line (src/ or a
+- `tools/real.sh`: the `#[ignore]` tests that read the owner's real data (rides, drive, tiles, routes, segments), with
+  the variables from the gitignored `tools/real.env`; each panics when its variable is unset (docs/devloop.md).
+- `tools/stack_check.py [ELF]`: the firmware's stack frames against their budgets, the stack's size (from the canary
+  to the top), and the longest static call chain (a longest path over the `bl` graph condensed into its strongly connected components,
+  calls through a register named) against the stack minus 8 KB (check.sh, after the build, on the default and the ride build).
+- `tools/panics.py` (`--max N`: exit 1 above N sites; check.sh runs `--max 0`): every panic site of the release ELF (any branch to a panic / `_fail` / unwrap / expect entry; bounds, unwrap, overflow, explicit, other) with its source line (src/ or a
   patched crate's vendor/), per file and folder, and the bounds sites in files that deny `clippy::indexing_slicing`; the
-  panic handler's own sites (hw.rs's reset loop) are left out and counted on their own line (a report, exit 0; `selftest`).
+  panic handler's own reset loop (hw.rs, a branch to itself) is left out and counted on their own line (a report, exit 0; `selftest`).
 - `tools/numbers.py`: the live numbers of the docs (image, AXI SRAM free, the cells' sizes, the tests, lines of Rust): `--write`
   rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after tools/pack.py), `--check` lists the stale ones, `selftest`.
 - `tools/lint.py`: the checks reviewers did by hand (pub items only tests use, dashes, licensed keys in tracked files, dead
