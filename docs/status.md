@@ -18,6 +18,14 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **The radio chip's reset no longer blocks the main loop (2026-11-01, app/nrf_watch.rs `restart_step`, `Board::nrf_hold`).**
+  A reset used to hold the pass for about 1 s (PA6 low 150 ms, 800 ms of boot, then the start's commands): the GNSS went
+  unread for 2 to 3 s, the screen froze and keys were late. It is a state machine over the passes now; the simulator's
+  worst pass during a live chip's reset is under 1 ms of its time (was 950 ms and more), a dead chip's 520 ms (one
+  command time-out; was 1470 ms). To see on the unit: `tools/dev.py info` `radio resets` after forcing one, the screen
+  and keys alive meanwhile, the sensors back about 1.2 s after the reset began. Also: a truncated frame resets at
+  once (first break of a calm period), the power-off resets a mis-framed chip first (about 1 s more before standby).
+
 - **The Nordic send path (2026-11-01, `nrf::send` and main.rs `nrf_send`): a frame is never cut short.** `nrf_send` used to
   give up after 10 ms on one byte (the chip holding CTS) and return mid-frame, which hangs the chip for ever; it now returns
   how many bytes the TX FIFO took, and `nrf::send` reads the chip's bytes while CTS is held, bounded by 500 ms without a byte either way, each wait a 1 ms sleep, and a frame that went out partly marks the link broken so the watchdog resets the chip at once. ANT events that arrive during a command are kept for the next pass (`Rx::keep_last`), not dropped. The simulator

@@ -145,14 +145,20 @@ impl App {
         let mut title = false;
         let mut buf = [0; 64];
         let mut ev = [0; nrf::KEPT];
+        // the events kept while a command waited are older than the stream's: handled first, in arrival order
+        self.kept_events(b, &mut title);
         for _ in 0..64 {
             let n = b.nrf_recv(&mut buf);
             for &byte in buf.get(..n).unwrap_or(&[]) {
                 let Some(p) = self.rx.push(byte) else { continue };
+                let answer = if let [nrf::RESP, o, ..] = *p { Some(o) } else { None };
                 // a copy: the packet's handling borrows the app whole (every packet it handles fits KEPT)
                 let Some(dst) = ev.get_mut(..p.len()) else { continue };
                 dst.copy_from_slice(p);
                 let len = p.len();
+                if self.rx.swallow(answer) {
+                    continue; // the late answer of a call that timed out: not an event
+                }
                 if self.nrf_packet(ev.get(..len).unwrap_or(&[]), &mut title) {
                     self.rx.keep_last(); // acted on below, the stream read
                 }
@@ -161,23 +167,27 @@ impl App {
                 break;
             }
         }
-        // the phone's events: those kept while a command waited, and those just read; acting on them may send
-        // commands, whose waits keep more
-        for _ in 0..32 {
-            let Some(n) = self.rx.pop(&mut ev) else { break };
-            let p = ev.get(..n).unwrap_or(&[]);
-            // ANT events that arrived while a command waited (broadcasts, channel closes) are handled as they would
-            // have been; a BLE event is the phone's
-            if self.nrf_packet(p, &mut title) {
-                self.phone_event(b, p);
-            }
-        }
+        // the phone's events just read (kept above); acting on them may send commands, whose waits keep more
+        self.kept_events(b, &mut title);
         if title && self.screen == Screen::Nearby {
             ui::draw_nearby(&mut Panel(b, self.area(), self.look()), self.radio.nearby.count(), self.radio.scanning);
         }
         // a shifter's presses, once the stream is read (a media key sends a command): one per side
         for p in core::mem::take(&mut self.decoders.press).into_iter().flatten() {
             self.remote(b, p);
+        }
+    }
+
+    /// The events kept (while a command waited, or by the stream read), oldest first: ANT events (broadcasts, channel
+    /// closes) are handled as they would have been; a BLE event is the phone's.
+    fn kept_events(&mut self, b: &mut impl Board, title: &mut bool) {
+        let mut ev = [0; nrf::KEPT];
+        for _ in 0..32 {
+            let Some(n) = self.rx.pop(&mut ev) else { break };
+            let p = ev.get(..n).unwrap_or(&[]);
+            if self.nrf_packet(p, title) {
+                self.phone_event(b, p);
+            }
         }
     }
 

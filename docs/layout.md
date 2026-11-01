@@ -193,7 +193,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/drivers/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
 - `src/drivers/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
-  `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `src/sim/mod.rs` has a model of the chip (`Nordic`). BLE
+  `Board` byte primitives `nrf_hold` (PA6, one edge) / `nrf_send` / `nrf_recv`; `src/sim/mod.rs` has a model of the chip (`Nordic`). BLE
   events that arrive while a command waits are kept (`Rx::pop`); the main loop acts on events only once the bytes
   read are framed (a command sent mid-read would take the rest of the stream out of order).
 - `src/drivers/ble.rs`: the SoftDevice API v5 calls of the phone link (GAP peripheral, GATT server and client), the

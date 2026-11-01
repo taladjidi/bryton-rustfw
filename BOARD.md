@@ -429,6 +429,11 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
      PD5 TX      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\_/ first command
                     |<- 150 ms -->|<----------- 800 ms ----------->|
                     USART2 up     released                 drop one glitch byte, clear errors
+  The firmware does not wait inside a pass: the board has one primitive per edge (`Board::nrf_hold(true / false)`,
+  main.rs `nrf_hold` / `nrf_release`), and the library times the two waits across the main loop's passes
+  (`nrf::RESET_HOLD_MS` 150, `nrf::BOOT_MS` 800, app/nrf_watch.rs `restart_step`: Held, Boot, then the configuration,
+  the ANT channels and the phone link, one stage a pass). Only the start at boot and the power-off of a mis-framed
+  chip use the blocking `Board::nrf_reset` sequence.
 - **Framing:** a 2-byte little-endian length, then the payload. No delimiter, no checksum, no handshake and no
   resync: after a bad frame, reset the chip. (SLIP is only the DFU bootloader's, at 115200 baud.)
 - **Frame on the wire:**
@@ -558,7 +563,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   - *Security contexts:* 8, taken by `sd_ble_gap_sec_params_reply` (accepting), freed by BLE_GAP_EVT_AUTH_STATUS or
     DISCONNECTED; a 9th hangs the app.
   - *A hung chip* never sends again, takes 2 to 6 more bytes (4 in the model) and holds CTS until a reset.
-  - *Our USART2 setup* (main.rs `nrf_reset`): `USART_CR1` FIFOEN (bit 29) is set, so both FIFOs are on (16 bytes each, RM0399
+  - *Our USART2 setup* (main.rs `nrf_hold`): `USART_CR1` FIFOEN (bit 29) is set, so both FIFOs are on (16 bytes each, RM0399
     USART FIFO mode), and `USART_CR3` has RTSE (bit 8) and CTSE (bit 9) set: hardware RTS drops when the RX FIFO is full
     and the transmitter waits while CTS is high (RM0399 USART, hardware flow control).
   - *Our `nrf_send`* (main.rs) returns at once how many bytes the TX FIFO took (no spinning). Until 2026-11-01 it gave

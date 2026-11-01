@@ -1540,6 +1540,56 @@ impl Sim {
     }
 }
 
+impl Sim {
+    /// The chip's reset: what the model keeps across it, and a new life.
+    fn chip_reset(&mut self) {
+        if let Some(x) = &mut self.nrf_ext {
+            x.reset();
+            return;
+        }
+        let sensors = std::mem::take(&mut self.nordic.sensors);
+        let mut phone = self.nordic.phone.take();
+        if let Some(p) = &mut phone {
+            p.hang_up();
+        }
+        let mut ftms = self.nordic.ftms.take();
+        if let Some(t) = &mut ftms {
+            t.hang_up();
+        }
+        let no_mem = self.nordic.no_mem;
+        let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
+        let trainer = std::mem::take(&mut self.nordic.trainer);
+        let meter = std::mem::take(&mut self.nordic.meter);
+        let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
+        let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
+        let (limits, hangs, high_water) = (self.nordic.limits, self.nordic.hangs, self.nordic.high_water);
+        let (expect_hang, table_only) = (self.nordic.expect_hang, self.nordic.table_only);
+        resets.push(self.ms);
+        self.nordic = Nordic {
+            dead,
+            refuse,
+            ant_refuse,
+            sensors,
+            trainer,
+            meter,
+            ack_model,
+            ack_silent,
+            phone,
+            ftms,
+            no_mem,
+            reset: true,
+            resets,
+            chaos,
+            limits,
+            hangs,
+            high_water,
+            expect_hang,
+            table_only,
+            ..Nordic::default()
+        };
+    }
+}
+
 impl Board for Sim {
     const CPU_HZ: u32 = 200_000_000; // main.rs's: cycle maths is tested at the unit's clock
     fn panel_power_on(&mut self) {
@@ -1629,52 +1679,11 @@ impl Board for Sim {
         self.standby = true;
     }
 
-    fn nrf_reset(&mut self) {
-        if let Some(x) = &mut self.nrf_ext {
-            x.reset();
-            return;
+    /// The chip resets as the line is released (the library holds it 150 ms and waits 800 ms of boot meanwhile).
+    fn nrf_hold(&mut self, held: bool) {
+        if !held {
+            self.chip_reset();
         }
-        let sensors = std::mem::take(&mut self.nordic.sensors);
-        let mut phone = self.nordic.phone.take();
-        if let Some(p) = &mut phone {
-            p.hang_up();
-        }
-        let mut ftms = self.nordic.ftms.take();
-        if let Some(t) = &mut ftms {
-            t.hang_up();
-        }
-        let no_mem = self.nordic.no_mem;
-        let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
-        let trainer = std::mem::take(&mut self.nordic.trainer);
-        let meter = std::mem::take(&mut self.nordic.meter);
-        let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
-        let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
-        let (limits, hangs, high_water) = (self.nordic.limits, self.nordic.hangs, self.nordic.high_water);
-        let (expect_hang, table_only) = (self.nordic.expect_hang, self.nordic.table_only);
-        resets.push(self.ms);
-        self.nordic = Nordic {
-            dead,
-            refuse,
-            ant_refuse,
-            sensors,
-            trainer,
-            meter,
-            ack_model,
-            ack_silent,
-            phone,
-            ftms,
-            no_mem,
-            reset: true,
-            resets,
-            chaos,
-            limits,
-            hangs,
-            high_water,
-            expect_hang,
-            table_only,
-            ..Nordic::default()
-        };
-        self.ms += 950;
     }
 
     fn nrf_send(&mut self, data: &[u8]) -> usize {

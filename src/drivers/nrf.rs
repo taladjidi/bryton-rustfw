@@ -125,6 +125,16 @@ impl Rx {
         (self.kept_n, self.head, self.late, self.broken) = (0, 0, None, false);
     }
 
+    /// The last packet answered op `answer` (a response's op): true, and the swallow cleared, if that is the late
+    /// answer of a call that timed out. Every reader of the stream asks (a send's drain, the main read).
+    pub fn swallow(&mut self, answer: Option<u8>) -> bool {
+        let late = answer.is_some() && answer == self.late;
+        if late {
+            self.late = None;
+        }
+        late
+    }
+
     /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report, or an ANT event,
     /// and fits ([`KEPT_N`] at most). When full, room is made by the oldest ANT broadcast (a newer one is on its way,
     /// and a lost one is a missed beat); failing that the oldest notification ([`EVT_HVX`]) makes room for another
@@ -136,7 +146,13 @@ impl Rx {
         let id = event_id(p);
         let broadcast = ant_broadcast(p).is_some();
         if p.first() == Some(&ANT_EVT) {
-            // kept
+            // only what the app acts on: a broadcast, a close, a failed or completed acknowledged message (the
+            // rest, RX_FAIL and the like, would push a close or a disconnection out of a full ring)
+            let handled =
+                broadcast || ant_closed(p).is_some() || ant_tx_failed(p).is_some() || ant_tx_completed(p).is_some();
+            if !handled {
+                return;
+            }
         } else if id.is_none_or(|id| id == EVT_ADV_REPORT) {
             return;
         }
@@ -287,9 +303,7 @@ const MAX_CMD: usize = 384;
 fn rx_byte(rx: &mut Rx, x: u8) {
     let Some(p) = rx.push(x) else { return };
     let answer = if let [RESP, o, ..] = *p { Some(o) } else { None };
-    if answer.is_some() && answer == rx.late {
-        rx.late = None;
-    } else {
+    if !rx.swallow(answer) {
         rx.keep_last();
     }
 }
@@ -298,7 +312,7 @@ fn rx_byte(rx: &mut Rx, x: u8) {
 /// went before `limit_ms` without progress.
 fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u32) -> Result<(), usize> {
     let total = data.len();
-    let (mut idle_ms, mut moved) = (0, 0u32);
+    let mut stall = Stall::default();
     loop {
         let took = b.nrf_send(data);
         data = data.get(took..).unwrap_or(&[]);
@@ -310,18 +324,40 @@ fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u
         if let Some(rx) = rx.as_deref_mut() {
             buf.get(..n).unwrap_or(&[]).iter().for_each(|&x| rx_byte(rx, x));
         }
-        moved += (took + n) as u32;
-        if took + n > 0 {
-            idle_ms = 0;
-        } else {
-            b.delay_ms(1); // sleep, not spin: the chip needs the host's reads, not its time
-            idle_ms += 1;
-        }
-        if idle_ms >= limit_ms || moved >= 0x1_0000 {
-            return Err(total - data.len());
+        match stall.note(took, n, limit_ms) {
+            Ok(true) => b.delay_ms(1), // sleep, not spin: the chip needs the host's reads, not its time
+            Ok(false) => {}
+            Err(()) => return Err(total - data.len()),
         }
     }
 }
+
+/// How long a put has made no progress: time is counted in the 1 ms sleeps taken with nothing moving either way, and
+/// only a sent byte clears it (a flood of the chip's events, a scan's, read while CTS is held is not progress of
+/// ours); a generous byte cap bounds a flood that leaves no time to count.
+#[derive(Default)]
+struct Stall {
+    idle_ms: u32,
+    flood: u32,
+}
+
+impl Stall {
+    /// A pass took `took` bytes in and read `n` bytes: `Ok(true)` to sleep 1 ms, `Ok(false)` to go on, `Err` to give up.
+    fn note(&mut self, took: usize, n: usize, limit_ms: u32) -> Result<bool, ()> {
+        let idle = took + n == 0;
+        if took > 0 {
+            (self.idle_ms, self.flood) = (0, 0);
+        } else if idle {
+            self.idle_ms += 1;
+        } else {
+            self.flood = self.flood.saturating_add(n as u32);
+        }
+        if self.idle_ms >= limit_ms || self.flood >= FLOOD_BYTES { Err(()) } else { Ok(idle) }
+    }
+}
+
+/// Bytes read with nothing sent before a put gives up: 256 KB is 2.6 s of the chip talking at 1 Mbaud.
+const FLOOD_BYTES: u32 = 0x4_0000;
 
 /// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of silence, or
 /// 64 KB of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
@@ -348,6 +384,9 @@ fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T
 /// and returns their length. Packets that arrive meanwhile are dropped, BLE events but advertising reports kept
 /// ([`Rx::pop`]).
 pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
+    if rx.broken {
+        return Err(Error::Timeout); // no frame goes to a mis-framed chip; the watchdog resets it (not a time-out)
+    }
     // a failed send leaves `rx.late` as the drain left it (an answer swallowed there stays swallowed)
     let sent = send(b, rx, payload);
     let op = payload.get(1).copied();
@@ -433,6 +472,27 @@ pub fn start(b: &mut impl Board) -> Result<Version, Error> {
 /// `level` 1: the links, 0: the chip's defaults.
 fn start_as(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     b.nrf_reset();
+    configure(b, level)
+}
+
+/// PA6 held low, ms (BOARD.md 11: stock's 150 ms, USART2 up meanwhile).
+pub const RESET_HOLD_MS: u32 = 150;
+/// The chip's boot after PA6 is released, ms (BOARD.md 11: stock waits 800 ms).
+pub const BOOT_MS: u32 = 800;
+
+/// Reads and drops what is pending (at most 16 reads): the glitch byte at a reset's release.
+pub fn flush(b: &mut impl Board) {
+    let mut buf = [0; 16];
+    for _ in 0..16 {
+        if b.nrf_recv(&mut buf) == 0 {
+            break;
+        }
+    }
+}
+
+/// The part of the start after the reset and its boot time: the configuration at `level`, BLE enabled, the version
+/// read ([`start`]). `App` runs the reset itself across passes (app/nrf_watch.rs) and calls this when the boot is over.
+pub fn configure(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     let mut rx = Rx::new();
     let mut out = [0; 8];
     if level > 0 {
@@ -452,7 +512,17 @@ fn start_as(b: &mut impl Board, level: u8) -> Result<Version, Error> {
 }
 
 /// Powers the chip down until its next reset (stock's power-off; the next start's reset pulse wakes it).
-pub fn system_off(b: &mut impl Board) {
+pub fn system_off(b: &mut impl Board, rx: &mut Rx) {
+    if rx.broken || rx.timeouts > 0 {
+        // a mis-framed or silent chip would read the command as the rest of a frame: reset it first (bounded: the
+        // two waits, 1 s; the unit is going off)
+        b.nrf_hold(true);
+        b.delay_ms(RESET_HOLD_MS);
+        b.nrf_hold(false);
+        b.delay_ms(BOOT_MS);
+        flush(b);
+        rx.reset();
+    }
     // one put, short: power goes off next, so a chip that holds CTS is not worth waiting for
     let _ = put(b, None, &[2, 0, CMD, SD_POWER_SYSTEM_OFF], 20);
 }
@@ -985,6 +1055,43 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, KEPT_N);
+    }
+
+    #[test]
+    fn events_nothing_handles_never_push_out_a_close_or_a_disconnection() {
+        let mut rx = Rx::new();
+        let mut fail = [0u8; 44];
+        (fail[0], fail[42], fail[43]) = (ANT_EVT, 2, 3); // EVENT_RX_FAIL
+        for _ in 0..KEPT_N + 2 {
+            keep(&mut rx, &fail);
+        }
+        assert_eq!(rx.pop(&mut [0; KEPT]), None, "an event nothing handles is not kept");
+        let mut closed = [0u8; 44];
+        (closed[0], closed[42], closed[43]) = (ANT_EVT, EVENT_CHANNEL_CLOSED, 3);
+        keep(&mut rx, &closed);
+        for _ in 0..KEPT_N + 2 {
+            keep(&mut rx, &fail);
+        }
+        keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]);
+        let mut out = [0; KEPT];
+        let n = rx.pop(&mut out).expect("the close");
+        assert_eq!(ant_closed(&out[..n]), Some(3));
+        let n = rx.pop(&mut out).expect("the disconnection");
+        assert_eq!(event_id(&out[..n]), Some(0x11));
+    }
+
+    #[test]
+    fn a_flood_of_received_bytes_is_no_stall_while_the_sending_progresses() {
+        let mut st = Stall::default();
+        for i in 0..100_000u32 {
+            // 16 bytes read per pass, one byte sent every 1000 passes: 1.6 MB read, never a stall
+            assert_eq!(st.note(usize::from(i % 1000 == 0), 16, 500), Ok(false));
+        }
+        let mut st = Stall::default();
+        assert!((0..100_000).any(|_| st.note(0, 16, 500).is_err()), "a flood with nothing sent is bounded");
+        let mut st = Stall::default();
+        assert_eq!((0..500).filter(|_| st.note(0, 0, 500) == Ok(true)).count(), 499, "500 ms of silence is bounded");
+        assert!(st.note(0, 0, 500).is_err());
     }
 
     #[test]

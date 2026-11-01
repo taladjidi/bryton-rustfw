@@ -87,8 +87,22 @@ pub trait Board {
     }
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
-    /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands.
-    fn nrf_reset(&mut self);
+    /// Nordic chip's reset line PA6 (BOARD.md 11), one edge and no wait: `true` brings USART2 up and pulls the line low,
+    /// `false` releases it. The waits are the library's (`nrf::RESET_HOLD_MS`, `nrf::BOOT_MS`): the radio watchdog
+    /// resets the chip across passes (app/nrf_watch.rs) so the main loop never blocks on it.
+    fn nrf_hold(&mut self, held: bool);
+    /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands. Blocks
+    /// about a second: the start at boot only.
+    fn nrf_reset(&mut self)
+    where
+        Self: Sized,
+    {
+        self.nrf_hold(true);
+        self.delay_ms(nrf::RESET_HOLD_MS);
+        self.nrf_hold(false);
+        self.delay_ms(nrf::BOOT_MS);
+        nrf::flush(self);
+    }
     /// Bytes to the Nordic chip, in order; returns at once how many the TX FIFO took. The chip's flow control (CTS) may
     /// hold them: the caller keeps the rest and offers it again after reading and sleeping ([`nrf::send`]).
     fn nrf_send(&mut self, data: &[u8]) -> usize;

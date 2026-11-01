@@ -334,7 +334,7 @@ impl App {
         self.hold_pages(b); // pages changed and not in the file yet: the registers keep them (app/editor.rs)
         if self.ble.is_some() {
             self.release_trainer(b); // not left at the last target until its own time-out
-            nrf::system_off(b);
+            nrf::system_off(b, &mut self.rx);
         }
         b.gnss_power(false);
         play(b, &BEEP_OFF);

@@ -221,7 +221,7 @@ fn a_chip_that_holds_cts_for_ever_fails_the_send_in_bounded_time() {
     assert_eq!(nrf::send(&mut s, &mut rx, &WRITE20), Err(nrf::Error::Timeout));
     assert!(s.ms - t0 <= u64::from(nrf::TIMEOUT_MS) + 5, "{} ms", s.ms - t0);
     assert_eq!(nrf::call(&mut s, &mut rx, &[0, 0x65, 1], &mut [0; 8]), Err(nrf::Error::Timeout));
-    assert_eq!(rx.timeouts, 1);
+    assert_eq!(rx.timeouts, 0, "a broken link counts no time-out (the reset is the watchdog's)");
 }
 
 /// Nine pairings in a row in the app's real flow (the phone asks, the app accepts, the chip ends the pairing with
@@ -283,8 +283,10 @@ fn a_truncated_frame_has_the_watchdog_reset_the_chip_at_once() {
     assert_eq!(nrf::send(&mut s, &mut app.rx, &[0, 0x65, 1]), Err(nrf::Error::Timeout));
     assert_eq!((s.nordic.got.len(), s.ms), (got, t0), "nothing sent, no time spent");
     app.step(&mut s);
-    assert_eq!(s.nordic.resets.len(), resets + 1, "reset on the next pass");
-    assert!(!app.rx.broken && !s.nordic.hung);
+    assert_eq!(format!("{:?}", app.watch.reset), "Held", "PA6 goes low on the next pass");
+    run(&mut s, &mut app, 3000);
+    assert_eq!(s.nordic.resets.len(), resets + 1, "and the chip is reset, once");
+    assert!(!app.rx.broken && !s.nordic.hung && app.radio_up());
 }
 
 /// The most a dead chip costs: one call, and a whole pass of the main loop (a probe, then the restart), ms.
@@ -344,4 +346,117 @@ fn the_search_timeouts_of_all_channels_together_stay_under_the_hang_limit() {
     std::println!("search timeout burst: high-water {}", s.nordic.high_water);
     assert!(!s.nordic.hung, "{:?}", s.nordic.hang_reason);
     assert!(s.nordic.high_water < 48, "{}", s.nordic.high_water);
+}
+
+/// A broadcast frame (44 bytes) for channel `ch` with `data`.
+fn broadcast(ch: u8, data: [u8; 8]) -> Vec<u8> {
+    let mut p = vec![8, 9, 0x4e, ch];
+    p.extend(data);
+    p.resize(42, 0);
+    p.extend([0x80, ch]);
+    p
+}
+
+/// Feeds a frame into the app's reader as a command's wait does: framed, then kept.
+fn keep_in(app: &mut App, payload: &[u8]) {
+    for &b in (payload.len() as u16).to_le_bytes().iter().chain(payload) {
+        if app.rx.push(b).is_some() {
+            app.rx.keep_last();
+        }
+    }
+}
+
+/// Review 2, finding 1: a truncated frame is certain proof of a mis-framed chip, and it resets at once even inside
+/// the wait after a resync (the first break since the last calm period).
+#[test]
+fn a_truncated_frame_resets_inside_the_wait_after_a_resync() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    app.watch.wait_ms = 5_000; // a resync just happened
+    s.nordic.hung = true;
+    let resets = s.nordic.resets.len();
+    assert_eq!(nrf::send(&mut s, &mut app.rx, &WRITE20), Err(nrf::Error::Timeout));
+    assert!(app.rx.broken);
+    run(&mut s, &mut app, 3000); // the reset, then the chip's start (non-blocking), well inside the 5 s
+    assert_eq!(s.nordic.resets.len(), resets + 1, "reset inside the wait");
+    assert!(!app.rx.broken && app.radio_up());
+}
+
+/// Review 2, finding 2: a late answer that arrives in the main stream read clears the swallow.
+#[test]
+fn a_late_answer_in_the_stream_read_clears_the_swallow() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    app.rx.late = Some(0x7f);
+    s.nordic.queue(&[1, 0x7f, 5, 0, 0, 0]);
+    s.delay_ms(5);
+    app.poll_nrf(&mut s);
+    assert_eq!(app.rx.late, None);
+}
+
+/// Review 2, finding 3: a mis-framed chip is reset before the power-off goes to it, so the command arrives whole.
+#[test]
+fn power_off_resets_a_broken_link_first() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    s.nordic.hung = true;
+    assert_eq!(nrf::send(&mut s, &mut app.rx, &WRITE20), Err(nrf::Error::Timeout));
+    assert!(app.rx.broken);
+    let resets = s.nordic.resets.len();
+    app.power_off(&mut s);
+    assert_eq!(s.nordic.resets.len(), resets + 1, "reset before the power-off");
+    assert!(!s.nordic.hung);
+    assert_eq!(s.nordic.got.last().map(Vec::as_slice), Some(&[nrf::CMD, nrf::SD_POWER_SYSTEM_OFF][..]));
+}
+
+/// Review 2, finding 5: the events kept while a command waited are older than the stream's: they are handled first.
+#[test]
+fn kept_events_are_handled_before_the_stream_read() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    let ch = crate::sensors::Kind::Hr.channel();
+    keep_in(&mut app, &broadcast(ch, [0, 0, 0, 0, 0, 0, 0, 100]));
+    s.nordic.queue(&broadcast(ch, [0, 0, 0, 0, 0, 0, 0, 140]));
+    s.delay_ms(5);
+    app.poll_nrf(&mut s);
+    assert_eq!(app.live.get(crate::Metric::Hr), Some(140), "the newer broadcast is the last decoded");
+}
+
+/// Part 2: a radio reset runs across passes. The loop keeps its period (the GNSS is read, the keys and the screen
+/// served), PA6 is low for 150 ms and the chip boots for 800 ms (BOARD.md 11), and the restart still succeeds.
+#[test]
+fn a_radio_reset_never_blocks_the_main_loop() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    s.nordic.hung = true;
+    assert_eq!(nrf::send(&mut s, &mut app.rx, &WRITE20), Err(nrf::Error::Timeout));
+    let (resets, t0, mut worst, mut passes) = (s.nordic.resets.len(), s.ms, 0, 0);
+    while s.nordic.resets.len() == resets || !app.radio_up() || format!("{:?}", app.watch.reset) != "None" {
+        let t = s.ms;
+        app.step(&mut s);
+        worst = worst.max(s.ms - t);
+        passes += 1;
+        s.delay_ms(POLL_MS);
+        assert!(s.ms - t0 < 5000, "the restart finishes");
+    }
+    std::println!("radio reset: {passes} passes over {} ms, worst pass {worst} ms", s.ms - t0);
+    assert!(worst < 100, "{worst} ms");
+    assert!(s.ms - t0 >= u64::from(nrf::RESET_HOLD_MS + nrf::BOOT_MS), "the boot time is kept");
+    assert_eq!(s.nordic.resets.len(), resets + 1);
+    assert!(!app.rx.broken && app.radio_up());
+}
+
+/// Review 2, finding 7: a call on a broken link returns at once and counts neither a time-out nor a failure.
+#[test]
+fn a_call_on_a_broken_link_counts_nothing() {
+    let mut s = chip();
+    let mut rx = nrf::Rx::new();
+    rx.broken = true;
+    assert_eq!(nrf::call(&mut s, &mut rx, &[0, 0x65, 1], &mut [0; 8]), Err(nrf::Error::Timeout));
+    assert_eq!((rx.timeouts, rx.failed), (0, None));
 }
