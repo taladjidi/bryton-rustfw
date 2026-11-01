@@ -1448,6 +1448,9 @@ pub(crate) mod tests {
             let mut d = Bad(Ram(img.clone(), 0), n);
             let r = delete(&mut d, &ride, T);
             assert!(r.is_ok() || r == Err(Error::Io), "read {n}: {r:?}");
+            if r.is_ok() {
+                assert!(file(&d.0.0, RIDE).is_none(), "read {n}: Ok, the ride moved"); // an error swallowed left it
+            }
             d.1 = u32::MAX;
             finish(&mut d, T).unwrap();
             if file(&d.0.0, RIDE).is_some() {
