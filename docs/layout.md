@@ -337,16 +337,13 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   check the simulated chip runs on every command it receives: what it cannot decode hangs it, and a test that did not
   expect that panics with the reason) and `chip_table_tests.rs` (every command rustfw builds, with boundary arguments,
   against the table; one test per fatal rule).
-<<<<<<< HEAD
   `gnss_model.rs` (the GNSS receiver, strict like the Nordic table: its rules G1 to G10 with their sources, ACK / NAK and
   MGA-ACK answers, the 1.5 s stream time-out, MAXFF, the 4 kB buffer; a test that provokes a rule sets `gnss.expect`) and
   `gnss_model_tests.rs` (each rule, every frame `gnss.rs` builds against the table, the retry of a refused configuration).
-=======
   `chip_link.rs` (the link's transport and queues in the simulated chip, on for every sim test: the 16-byte RX and TX
   FIFOs byte by byte at 10 us, RTS and CTS, the 15 us frame gap, the response behind an event frame in flight and the CTS
   hold it causes, the 96-slot queue with its pull rule, the ANT queue of 32, the security contexts, the hung chip) and
   `chip_link_tests.rs` (each fatal condition hangs the model, the holds, the 2026-11-01 deadlock of `nrf::send`).
->>>>>>> worktree-agent-a22b8c483cc211b62
   `loop_model.rs` (not tests: the `Sim`'s side of the main loop, `LoopBoard` on the simulated clock, and `SimLink`, a
   scripted USB link that logs what the pass asks; `tests.rs` `run_loop` drives lib `MainLoop::pass`, the unit's own code).
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).

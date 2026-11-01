@@ -895,6 +895,8 @@ fn nrf_hold() {
     wr(U_CR3, (1 << 9) | (1 << 8)); // CTSE, RTSE
     // FIFOEN, RXFNEIE (a byte pends IRQ 38, enabled in the NVIC only for an idle sleep: wake_on_io), TE, RE, UE
     wr(U_CR1, (1 << 29) | (1 << 5) | (1 << 3) | (1 << 2) | 1);
+    // TXFRQ and RXFRQ (RM0399 USART_RQR): a byte of a command left in the TX FIFO would reach the chip at its boot
+    wr(U_RQR, (1 << 4) | (1 << 3));
 }
 
 /// The second half: PA6 released. (A glitch byte at the release is dropped by `nrf::flush`, and `nrf_recv` clears the

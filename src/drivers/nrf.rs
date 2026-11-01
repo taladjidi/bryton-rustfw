@@ -334,11 +334,13 @@ fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u
 
 /// How long a put has made no progress: time is counted in the 1 ms sleeps taken with nothing moving either way, and
 /// only a sent byte clears it (a flood of the chip's events, a scan's, read while CTS is held is not progress of
-/// ours); a generous byte cap bounds a flood that leaves no time to count.
+/// ours). Two bounds that no sent byte resets: the bytes read since the last sent one ([`FLOOD_BYTES`]), and the
+/// whole put's time (sleeps and reads at 10 us a byte), twice the idle limit.
 #[derive(Default)]
 struct Stall {
     idle_ms: u32,
     flood: u32,
+    total_us: u32,
 }
 
 impl Stall {
@@ -352,12 +354,18 @@ impl Stall {
         } else {
             self.flood = self.flood.saturating_add(n as u32);
         }
-        if self.idle_ms >= limit_ms || self.flood >= FLOOD_BYTES { Err(()) } else { Ok(idle) }
+        let us = if idle { 1000 } else { 10 * (took + n) as u32 };
+        self.total_us = self.total_us.saturating_add(us);
+        if self.idle_ms >= limit_ms || self.flood >= FLOOD_BYTES || self.total_us >= limit_ms.saturating_mul(2000) {
+            Err(())
+        } else {
+            Ok(idle)
+        }
     }
 }
 
-/// Bytes read with nothing sent before a put gives up: 256 KB is 2.6 s of the chip talking at 1 Mbaud.
-const FLOOD_BYTES: u32 = 0x4_0000;
+/// Bytes read with nothing sent before a put gives up: 64 KB (0.65 s of the chip talking at 1 Mbaud).
+const FLOOD_BYTES: u32 = 0x1_0000;
 
 /// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of silence, or
 /// 64 KB of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
@@ -1083,12 +1091,15 @@ mod tests {
     #[test]
     fn a_flood_of_received_bytes_is_no_stall_while_the_sending_progresses() {
         let mut st = Stall::default();
-        for i in 0..100_000u32 {
-            // 16 bytes read per pass, one byte sent every 1000 passes: 1.6 MB read, never a stall
-            assert_eq!(st.note(usize::from(i % 1000 == 0), 16, 500), Ok(false));
+        for i in 0..2000u32 {
+            // 16 bytes read per pass, one byte sent every 100 passes: no stall within the put's time
+            assert_eq!(st.note(usize::from(i % 100 == 0), 16, 500), Ok(false));
         }
+        // no sent byte resets the put's total time: 1 s for a 500 ms limit
+        assert!((2000..100_000u32).any(|i| st.note(usize::from(i % 100 == 0), 16, 500).is_err()), "a put is bounded");
         let mut st = Stall::default();
-        assert!((0..100_000).any(|_| st.note(0, 16, 500).is_err()), "a flood with nothing sent is bounded");
+        let passes = (1..=100_000).find(|_| st.note(0, 16, 500).is_err()).unwrap();
+        assert!(passes <= 4096, "a flood with nothing sent stops at 64 KB ({passes} passes)");
         let mut st = Stall::default();
         assert_eq!((0..500).filter(|_| st.note(0, 0, 500) == Ok(true)).count(), 499, "500 ms of silence is bounded");
         assert!(st.note(0, 0, 500).is_err());

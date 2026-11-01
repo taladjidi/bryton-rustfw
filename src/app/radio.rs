@@ -77,6 +77,10 @@ impl App {
     /// of each counted as a shift, and register 14, so pairing one overwrote the other while the menu showed both;
     /// no register is free for a second one).
     pub(crate) fn set_sensor(&mut self, b: &mut impl Board, kind: Kind, want: Sensor) {
+        if self.watch.reset != Reset::None {
+            *self.watch.later.at_mut(kind) = Some(want); // the chip is not ready: after the restart
+            return;
+        }
         if kind.network() == 1 && !self.di2 {
             return; // no channel without Shimano's key
         }

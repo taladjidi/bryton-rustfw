@@ -64,9 +64,9 @@ pub struct Watch {
     /// The configuration being tried by this reset (1: two links, 0: the chip's defaults; as `nrf::start`).
     level: u8,
     /// The PAIR window was open when the reset began.
-    pairing: bool,
+    pub(crate) pairing: bool,
     /// The wait after the last chip reset (0: none yet in this calm).
-    delay_ms: u32,
+    pub(crate) delay_ms: u32,
     /// Since the last recovery.
     calm_ms: u32,
     /// Chip resets since the start (shown by the dev link's `info`).
@@ -77,6 +77,8 @@ pub struct Watch {
     told: bool,
     /// Channels a restart could not reopen: asked for again at the next one (a restart on a damaged link).
     pub(crate) owed: [Sensor; Kind::ALL.len()],
+    /// What the rider chose during a restart (a chip not yet ready): set when it is over, never lost.
+    pub(crate) later: [Option<Sensor>; Kind::ALL.len()],
     /// The phone link's setup got no answer at a restart (a refusal is not this: it would be refused again).
     phone_owed: bool,
     /// ANT, or a channel, was refused with an error code: the chip answers, so it is no broken link, and a reset
@@ -106,6 +108,7 @@ impl Watch {
             resyncs: 0,
             told: false,
             owed: [Sensor::Off; Kind::ALL.len()],
+            later: [None; Kind::ALL.len()],
             phone_owed: false,
             refused: false,
             refusal,
@@ -219,7 +222,7 @@ impl App {
     /// rest, a stage a pass. As at boot (`App::new_with`) every channel that was open is opened again and the phone
     /// link set up again; what the sensors showed goes stale by itself ("--") and comes back with their data.
     #[inline(never)] // its buffers in its own frame
-    fn restart_begin(&mut self, b: &mut impl Board) {
+    pub(crate) fn restart_begin(&mut self, b: &mut impl Board) {
         let mut open = self.radio.sensors;
         for (s, owed) in open.iter_mut().zip(self.watch.owed) {
             if *s == Sensor::Off {
@@ -240,6 +243,8 @@ impl App {
         self.strip.radio = false;
         self.ant = false;
         self.di2 = false;
+        // nothing goes to the chip until its boot is over (`call` / `send` return at once); the hold flushes our TX FIFO
+        self.rx.broken = true;
         b.nrf_hold(true);
         (self.watch.reset, self.watch.reset_ms, self.watch.level) = (Reset::Held, 0, 1);
     }
@@ -247,12 +252,20 @@ impl App {
     /// A chip reset restarted by hand and run to its end, for the tests that need the chip back at once.
     #[cfg(test)]
     pub(crate) fn radio_restart(&mut self, b: &mut impl Board) {
-        self.restart_begin(b);
+        if self.watch.reset == Reset::None {
+            self.restart_begin(b);
+        }
         for _ in 0..16 {
             if self.watch.reset == Reset::None {
                 break;
             }
-            self.restart_step(b, 1000);
+            let ms = match self.watch.reset {
+                Reset::Held => nrf::RESET_HOLD_MS,
+                Reset::Boot => nrf::BOOT_MS,
+                _ => 0,
+            };
+            b.delay_ms(ms);
+            self.restart_step(b, ms);
         }
     }
 
@@ -275,6 +288,7 @@ impl App {
                 match nrf::configure(b, level) {
                     Err(nrf::Error::Code(_)) if level > 0 => {
                         (self.watch.level, self.watch.reset, self.watch.reset_ms) = (0, Reset::Held, 0);
+                        self.rx.broken = true;
                         b.nrf_hold(true);
                     }
                     r => {
@@ -289,8 +303,9 @@ impl App {
                 self.watch.reset = Reset::Channels;
             }
             Reset::Channels => {
+                self.watch.reset = Reset::None; // the phone setup is the restart's own: not deferred
                 self.restart_phone(b);
-                self.watch.reset = Reset::None;
+                self.apply_later(b);
             }
             _ => {}
         }
@@ -323,7 +338,7 @@ impl App {
                 && match nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id) {
                     Ok(()) => true,
                     Err(nrf::Error::Code(_)) if self.refusal() => false,
-                    Err(_) => continue, // owed: asked for again
+                    Err(_) => break, // owed: asked for again; the rest too, so one pass is one time-out at most
                 };
             if opened {
                 *self.radio.sensors.at_mut(kind) = want;
@@ -338,6 +353,15 @@ impl App {
         }
     }
 
+    /// The sensors the rider chose during the restart are set now, the restart being over.
+    fn apply_later(&mut self, b: &mut impl Board) {
+        for kind in Kind::ALL {
+            if let Some(want) = self.watch.later.at_mut(kind).take() {
+                self.set_sensor(b, kind, want);
+            }
+        }
+    }
+
     /// The phone link set up again, its pairing window reopened if it was open (the last stage).
     fn restart_phone(&mut self, b: &mut impl Board) {
         let pairing = self.watch.pairing;
@@ -345,7 +369,7 @@ impl App {
         if self.ble.is_some() {
             self.rx.failed = None;
             self.phone_up(b);
-            if pairing {
+            if pairing && self.phone.ready {
                 self.phone_pair(b); // the PAIR window was open: it goes on (the screen still says so)
             }
             self.watch.phone_owed = self.phone.link() == Link::NoBle && matches!(self.rx.failed, Some((_, u32::MAX)));

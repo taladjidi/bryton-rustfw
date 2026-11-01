@@ -73,6 +73,13 @@ pub struct Sim {
     pub nordic: Nordic,
     /// Replaces [`Sim::nordic`] when set.
     pub nrf_ext: Option<Box<dyn NrfExt>>,
+    /// PA6 is low (the chip is in reset), and when the chip has booted after the release (BOARD.md 11): a byte the host
+    /// sends before that, or left in its TX FIFO at the release, is lost on the hardware, so it fails the test.
+    chip_held: bool,
+    chip_boot_until: u64,
+    /// A test that provokes the violation sets this: the bytes are counted in `reset_bytes` and dropped instead.
+    pub expect_reset_bytes: bool,
+    pub reset_bytes: u32,
     /// Times the RTC was set.
     pub rtc_sets: u32,
     /// RTC backup registers (they survive an app restart, as on the unit).
@@ -621,6 +628,9 @@ pub struct Nordic {
     pub reset: bool,
     /// Hung: no answer, no event, until the next reset (unlike `dead`, which a reset does not cure).
     pub hung: bool,
+    /// Hangs at this ANT command (1 is the first) after each reset, 0 never (survives resets).
+    pub die_at_ant: u8,
+    ant_cmds: u8,
     /// Resets so far, and the simulated time (ms) of each.
     pub resets: Vec<u64>,
     /// Damage to the chip's stream: bytes dropped, added or flipped (xorshift state, per mille of the bytes).
@@ -1146,6 +1156,13 @@ impl Nordic {
 
     fn take(&mut self, p: &[u8], now: u64) {
         self.got.push(p.to_vec());
+        if p.first() == Some(&6) {
+            self.ant_cmds = self.ant_cmds.saturating_add(1);
+            if self.die_at_ant != 0 && self.ant_cmds >= self.die_at_ant {
+                self.hung = true; // dies after BLE is enabled, in the ANT setup; a reset cures it
+                return;
+            }
+        }
         if p == [0, 0x32] {
             return; // sd_power_system_off: no response
         }
@@ -1322,6 +1339,10 @@ impl Sim {
             dirty: false,
             nordic: Nordic::default(),
             nrf_ext: None,
+            chip_held: false,
+            chip_boot_until: 0,
+            expect_reset_bytes: false,
+            reset_bytes: 0,
             rtc_sets: 0,
             backup: core::array::from_fn(|i| if i == 18 { 5 << 28 | 1 << 22 } else { 0 }), // AUTO OFF off: tests idle long
             battery_mv: Some(3900),
@@ -1456,6 +1477,7 @@ impl Sim {
         }
         let no_mem = self.nordic.no_mem;
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
+        let die_at_ant = self.nordic.die_at_ant;
         let trainer = std::mem::take(&mut self.nordic.trainer);
         let meter = std::mem::take(&mut self.nordic.meter);
         let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
@@ -1464,6 +1486,7 @@ impl Sim {
         let (expect_hang, table_only) = (self.nordic.expect_hang, self.nordic.table_only);
         resets.push(self.ms);
         self.nordic = Nordic {
+            die_at_ant,
             dead,
             refuse,
             ant_refuse,
@@ -1579,8 +1602,20 @@ impl Board for Sim {
 
     /// The chip resets as the line is released (the library holds it 150 ms and waits 800 ms of boot meanwhile).
     fn nrf_hold(&mut self, held: bool) {
-        if !held {
-            self.chip_reset();
+        self.chip_held = held;
+        if held {
+            self.nordic.txq.clear(); // TXFRQ, as main.rs
+            return;
+        }
+        // our TX FIFO is not flushed by the peer's reset (RM0399: only a USART reset or TXFRQ does): what it holds
+        // reaches the fresh chip, which is booting
+        let stale = std::mem::take(&mut self.nordic.txq);
+        self.chip_reset();
+        self.chip_boot_until = self.ms + 800;
+        if !stale.is_empty() {
+            self.reset_bytes += stale.len() as u32;
+            assert!(self.expect_reset_bytes, "{} bytes left in the TX FIFO reach the chip at its reset", stale.len());
+            self.nordic.txq = stale;
         }
     }
 
@@ -1590,6 +1625,11 @@ impl Board for Sim {
             return data.len();
         }
         assert!(self.nordic.reset, "bytes to the Nordic chip before its reset");
+        if !data.is_empty() && (self.chip_held || self.ms < self.chip_boot_until) {
+            self.reset_bytes += data.len() as u32;
+            assert!(self.expect_reset_bytes, "{} bytes sent to the Nordic chip while it resets or boots", data.len());
+            return data.len();
+        }
         self.nordic.send(data, self.ms)
     }
 

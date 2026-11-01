@@ -18,14 +18,17 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
-<<<<<<< HEAD
+- **Review 3 of the chip's reset (2026-11-01):** nothing is sent while PA6 is low or the chip boots (the TX FIFO is flushed
+  at the hold: USART_RQR TXFRQ, main.rs `nrf_hold`; to see: no `resyncs` after forcing a reset mid-command), the rider's
+  sensor choice and the PAIR window during a reset are applied after it, the switch-off during a reset ends with the chip
+  in system off (current in standby, as after a normal switch-off), a put is bounded to 1 s whatever the chip floods.
+
 - **The receiver's answers and its SPI limits (2026-11-01, BOARD.md 13 "The receiver's rules"):** with `tools/gnss.py`, read
   back (VALGET) the four CFG-SIGNAL keys after the start-up and CFG-SPI-MAXFF / CFG-SPI-EXTENDEDTIMEOUT; MON-COMMS
   (txErrors, tx buffer usage) after a ride; a deliberate 2 s gap between reads to see the stream stop (in the simulator the
   longest unread gap is 2.2 to 3.3 s in the link, recorder and segment tests and 6.1 s in the 20 us hang test: the Nordic
   reset's 950 ms, the start-up after it, against the receiver's 1.5 s time-out, so one to three NAV-PVT epochs go missing); the MGA-ACK info codes for
   ANO with CFG-NAVSPG-ACKAIDING on. Until then G1 to G4 and G6 are inferred.
-=======
 - **The radio chip's reset no longer blocks the main loop (2026-11-01, app/nrf_watch.rs `restart_step`, `Board::nrf_hold`).**
   A reset used to hold the pass for about 1 s (PA6 low 150 ms, 800 ms of boot, then the start's commands): the GNSS went
   unread for 2 to 3 s, the screen froze and keys were late. It is a state machine over the passes now; the simulator's
@@ -43,7 +46,6 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 - **The ANT search time-out stays at 30 s (2026-11-01):** after a chip reset every channel times out together; the
   simulator's burst (8 channels, SEARCH_TIMEOUT and CHANNEL_CLOSED each, on a queue already at 22) peaks at 37 of the 48
   the chip's pull rule allows (`the_search_timeouts_of_all_channels_together_stay_under_the_hang_limit`), a margin of 11.
->>>>>>> worktree-agent-a22b8c483cc211b62
 - **The radio receive's wait (main.rs `nrf_recv`): the short wait of finding 8 (2026-10-31) was taken out on 2026-11-01**,
   back to 200 us after every byte. The chip's app needs more than 20 us (inferred) to pull and encode its next event, so the
   20 us wait ended each read after one frame; the drain fell behind a ride's events and the chip's 96-slot queue

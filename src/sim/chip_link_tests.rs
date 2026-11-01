@@ -460,3 +460,111 @@ fn a_call_on_a_broken_link_counts_nothing() {
     assert_eq!(nrf::call(&mut s, &mut rx, &[0, 0x65, 1], &mut [0; 8]), Err(nrf::Error::Timeout));
     assert_eq!((rx.timeouts, rx.failed), (0, None));
 }
+
+const STRAP: crate::SensorId = crate::SensorId { device: 25126, trans: 0xf1 };
+
+fn riding_app(sensors: &[crate::sensors::Kind]) -> (Sim, App) {
+    let mut s = Sim::new(9, 0, 0);
+    for &k in sensors {
+        s.backup[k.backup()] = k.to_word(STRAP);
+    }
+    let mut app = App::start(&mut s, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+    run(&mut s, &mut app, 2000);
+    (s, app)
+}
+
+/// Finding 1: while the chip is in reset or booting nothing reaches it (the strict model panics on a byte), a sensor
+/// chosen then is set once the restart is over, and the phone's PAIR window opens by the restart itself.
+#[test]
+fn nothing_is_sent_during_a_reset_and_the_riders_choice_is_kept() {
+    use crate::sensors::Kind;
+    for stage in 0..3 {
+        let (mut s, mut app) = riding_app(&[]);
+        app.restart_begin(&mut s);
+        if stage > 0 {
+            s.delay_ms(nrf::RESET_HOLD_MS);
+            app.restart_step(&mut s, nrf::RESET_HOLD_MS);
+        }
+        if stage > 1 {
+            s.delay_ms(nrf::BOOT_MS);
+            app.restart_step(&mut s, nrf::BOOT_MS); // configured
+        }
+        let sent = s.nordic.got.len();
+        app.set_sensor(&mut s, Kind::Hr, Sensor::Paired(STRAP));
+        app.phone_pair(&mut s);
+        assert_eq!(s.nordic.got.len(), sent, "stage {stage}: nothing went to the chip");
+        assert_eq!(s.reset_bytes, 0);
+        app.radio_restart(&mut s);
+        run(&mut s, &mut app, 3000);
+        assert_eq!(app.radio.sensors[Kind::Hr as usize], Sensor::Paired(STRAP), "stage {stage}: applied after");
+        assert_eq!(app.phone.link(), Link::Pairing, "stage {stage}: pairing");
+    }
+}
+
+/// Finding 2: the switch-off during the hold or the boot waits them out and powers the chip down.
+#[test]
+fn power_off_during_a_reset_ends_in_system_off() {
+    for boot in [false, true] {
+        let (mut s, mut app) = riding_app(&[]);
+        app.restart_begin(&mut s);
+        if boot {
+            s.delay_ms(nrf::RESET_HOLD_MS);
+            app.restart_step(&mut s, nrf::RESET_HOLD_MS);
+        }
+        let t0 = s.ms;
+        app.power_off(&mut s);
+        assert!(s.ms - t0 < 2500, "bounded: {} ms", s.ms - t0);
+        assert_eq!(s.nordic.got.last().map(Vec::as_slice), Some(&[nrf::CMD, nrf::SD_POWER_SYSTEM_OFF][..]), "{boot}");
+    }
+}
+
+/// The level-0 fallback (the chip refuses the two-link configuration): a second hold and boot, still no byte early.
+#[test]
+fn the_fallback_to_the_defaults_keeps_the_boot_time() {
+    let (mut s, mut app) = riding_app(&[]);
+    s.nordic.no_mem = true;
+    let resets = s.nordic.resets.len();
+    app.restart_begin(&mut s);
+    app.radio_restart(&mut s);
+    assert_eq!(s.nordic.resets.len(), resets + 2, "reset twice");
+    assert!(app.radio_up() && s.nordic.cfg.is_empty(), "started on the defaults");
+    assert_eq!(s.reset_bytes, 0);
+}
+
+/// Finding 4: a chip that dies after BLE is enabled, at any ANT command of the restart: no pass of the restart goes
+/// past one command time-out (500 ms) by much.
+#[test]
+fn a_chip_dying_mid_restart_costs_one_time_out_a_pass() {
+    use crate::sensors::Kind;
+    let mut longest = 0;
+    for at in 1..=8 {
+        let (mut s, mut app) = riding_app(&[Kind::Hr, Kind::Power, Kind::Cadence]);
+        s.gnss.expect = Some("stream time-out"); // the dead chip's time-outs: 500 ms a command
+        s.nordic.die_at_ant = at;
+        s.nordic.hung = true;
+        for _ in 0..(120_000 / POLL_MS) {
+            let (t, resetting) = (s.ms, app.watch.reset != Reset::None);
+            app.step(&mut s);
+            if resetting {
+                longest = longest.max(s.ms - t);
+                assert!(s.ms - t < 700, "ant command {at}: a restart pass took {} ms", s.ms - t);
+            }
+            s.delay_ms(POLL_MS);
+        }
+    }
+    std::println!("chip dying mid-restart: longest restart pass {longest} ms");
+}
+
+/// Finding 7: a mis-framed link is no trainer refusal.
+#[test]
+fn a_broken_link_is_not_a_trainer_refusal() {
+    let (mut s, mut app) = super::trainer_tests::unit();
+    (app.watch.wait_ms, app.watch.delay_ms) = (1_000_000, 15_000); // a break inside a backoff: no reset before the send
+    app.rx.broken = true;
+    for _ in 0..80 {
+        app.step(&mut s);
+        s.delay_ms(POLL_MS);
+        assert!(!app.tlink.no_control, "control off by a mis-framed link");
+    }
+    assert!(app.notes.list.iter().all(|n| !n.as_str().contains("TRAINER CONTROL FAILED")));
+}

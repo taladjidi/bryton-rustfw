@@ -118,11 +118,18 @@ fn repeated_failures_back_off() {
     sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.nordic.dead = true;
     let mut app = App::start(&mut sim, Some(KEY));
-    run(&mut sim, &mut app, 9 * 60 * 1000);
+    let (end, mut seen, mut begins) = (sim.ms + 9 * 60 * 1000, 0, Vec::new());
+    while sim.ms < end {
+        run(&mut sim, &mut app, 100);
+        if app.watch.resets != seen {
+            seen = app.watch.resets;
+            begins.push(sim.ms); // the pass a reset began in
+        }
+    }
     let t = &sim.nordic.resets;
     assert!((5..=8).contains(&t.len()), "{} resets: {t:?}", t.len());
-    let gaps: Vec<_> = t.windows(2).map(|w| w[1] - w[0]).collect();
-    assert!(gaps.windows(2).all(|g| g[1] + 1000 >= g[0]), "gaps only grow: {gaps:?}");
+    let gaps: Vec<_> = begins.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.windows(2).all(|g| g[1] + 300 >= g[0]), "gaps only grow: {gaps:?}");
     assert!(*gaps.last().unwrap() >= 120_000, "{gaps:?}");
     assert_eq!(said(&app), 1);
     // the chip comes back: the next attempt starts it
