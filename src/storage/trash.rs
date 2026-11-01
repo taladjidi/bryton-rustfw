@@ -499,7 +499,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::fat::Disk;
     use crate::fat::tests::{Ram, read_all};
-    use crate::fat::write::tests::fsck;
+    use crate::fat::write::tests::{fsck, stock, stock_kept};
     use std::vec::Vec;
 
     const T: (u16, u16) = (0x5b58, 0x6000);
@@ -639,6 +639,9 @@ pub(crate) mod tests {
     fn cut_every_sector(img: Vec<u8>, grows: bool) {
         let (clean, full) = (file(&img, RIDE).unwrap(), file(&img, "Rustfw/Activities/261020080000.fit").unwrap());
         let ride = cluster(&img, RIDE);
+        // stock's files but the ride moved (the review of 2026-11-01, finding 4): bytes, entries, chains
+        let st = stock(&img);
+        let kept = |img: &[u8], at: &str| stock_kept(&st, img, &[], &[RIDE]).unwrap_or_else(|e| panic!("{at}: {e}"));
         let mut whole = Cut(img.clone(), u64::MAX);
         delete(&mut whole, &ride, T).unwrap();
         let writes = u64::MAX - whole.1;
@@ -662,6 +665,7 @@ pub(crate) mod tests {
             };
             let (a, b) = places(&d.0);
             assert!(a <= 1 && b <= 1, "cut after {budget}: never in two places");
+            kept(&d.0, &std::format!("cut after {budget}"));
             assert!(lost > 0 || (a, b) == (1, 1), "cut after {budget}: a copy out of sight is a lost chain");
             // the next start
             d.1 = u64::MAX;
@@ -679,6 +683,7 @@ pub(crate) mod tests {
             // a cut while a folder or the record's file was made (no record yet) leaves its cluster lost: harmless
             let lost = fsck(&d.0).unwrap_or_else(|e| panic!("cut after {budget}: {e}"));
             assert!(lost == 0 || (!finished || grows) && lost == 1, "cut after {budget}: {lost} lost");
+            kept(&d.0, &std::format!("cut after {budget}, then the start"));
         }
     }
 
@@ -894,7 +899,8 @@ pub(crate) mod tests {
         let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
         fat.remove(&mut d, &other).unwrap(); // the name in the way gone: the move can finish
         assert_eq!(finish(&mut d, T), Ok(true));
-        assert_eq!(fsck(&d.0), Ok(1), "one name on the chain (lost: the cluster of the file removed by hand)");
+        // the file removed by hand was made empty: no cluster (`Fat::create`), none lost
+        assert_eq!(fsck(&d.0), Ok(0), "one name on the chain");
         assert!(file(&d.0, RIDE).is_none() && file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some());
         assert!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit").is_some_and(|f| !f.is_empty()));
     }
@@ -918,10 +924,10 @@ pub(crate) mod tests {
             } else {
                 let full = fat.open(&mut d, TO[1]).unwrap();
                 let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
-                fat.remove(&mut d, &other).unwrap(); // the move can finish (its cluster lost: fsck counts 1)
+                fat.remove(&mut d, &other).unwrap(); // the move can finish (an empty file: no cluster lost)
             }
             assert_eq!(finish(&mut d, T), Ok(!full), "full {full}");
-            assert_eq!(fsck(&d.0), Ok(u32::from(!full)), "full {full}: one name on the chain");
+            assert_eq!(fsck(&d.0), Ok(0), "full {full}: one name on the chain");
             let names = ["Activities/261020080000-1.fit", RIDE, "Rustfw/Deleted/261020080000.fit"];
             assert_eq!(names.iter().filter(|p| file(&d.0, p).is_some()).count(), 1, "full {full}");
             assert_eq!(finish(&mut d, T), Ok(false), "full {full}: nothing pending");
@@ -1095,6 +1101,7 @@ pub(crate) mod tests {
         let clean = [RIDE, "Rustfw/Deleted/261020080000.fit", "Rustfw/Deleted/261020080000-1.fit"];
         let full = ["Rustfw/Activities/261020080000.fit", "Rustfw/Deleted/Full/261020080000-1.fit"];
         for (what, img) in states {
+            let st = stock(&img); // stock's files but the ride put back
             let mut whole = Cut(img.clone(), u64::MAX);
             assert_eq!(finish(&mut whole, T), Ok(false), "{what}");
             let writes = u64::MAX - whole.1;
@@ -1108,6 +1115,7 @@ pub(crate) mod tests {
                 assert_eq!(fsck(&d.0).map_err(|e| std::format!("{at}: {e}")), Ok(0));
                 assert_eq!((count(&d.0, &clean), count(&d.0, &full)), (1, 1), "{at}");
                 assert!(file(&d.0, RIDE).is_some(), "{at}: put back");
+                stock_kept(&st, &d.0, &[], &[RIDE]).unwrap_or_else(|e| panic!("{at}: {e}"));
                 assert_eq!(finish(&mut d, T), Ok(false), "{at}: nothing pending");
             }
         }

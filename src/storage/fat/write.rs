@@ -11,13 +11,15 @@
 //! - **a new cluster:** marked end of chain first, then linked from the chain's last, each its own write even when
 //!   both are in one FAT sector (the usual case: two writes per FAT copy, so a sector torn by a cut on a card without
 //!   reliable write never holds the link without the end); each FAT sector is written to FAT 1, then FAT 2;
-//! - **a file grows:** clusters first, then the data, then the size in its entry ([`Fat::set_size`]);
+//! - **a file grows:** clusters first, then the data, then the size in its entry ([`Fat::set_size`]; a new file's
+//!   first cluster with it, in the same write);
 //! - **a file shrinks** (only after a resume): the size first, then the chain cut and the rest freed;
-//! - **a new entry:** its cluster is taken first; the entry (long name pieces and the 8.3 entry) always lands in
-//!   one sector, written in one write, so a cut leaves all of it or none. When the free slots at the end of the
-//!   directory are too few in that sector, the entry goes into the next sector (a new cluster, zeroed, when the
-//!   directory has no next sector) and then the slots left before it are marked deleted (0xe5), which is the write
-//!   that makes it visible (the directory ends at the first 0x00 entry);
+//! - **a new entry:** a folder's cluster is taken first (a file has none until its first write: [`Fat::create`]);
+//!   the entry (long name pieces and the 8.3 entry) always lands in one sector, written in one write, so a cut
+//!   leaves all of it or none. When the free slots at the end of the directory are too few in that sector, the
+//!   entry goes into the next sector (a new cluster, zeroed, when the directory has no next sector) and then the
+//!   slots left before it are marked deleted (0xe5), which is the write that makes it visible (the directory ends
+//!   at the first 0x00 entry);
 //! - **a move:** room for the new entry made first ([`Fat::make_room`]: a zeroed cluster linked to the folder if it
 //!   needs one, so the last step takes no cluster), the old entry marked deleted, then the new one written. A cut
 //!   between leaves the chain lost (the recorder's recovery record names it and finishes the move); the other order
@@ -356,14 +358,12 @@ impl Fat {
             let from = if h.clusters == 0 { self.hint(d)? } else { h.last + 1 };
             let c = self.find_free(d, from)?;
             if h.clusters == 0 {
+                // a file with no cluster yet (just made, or emptied as a computer leaves one): its entry gets the
+                // chain with its size, in one write ([`Fat::set_size`]): a cut before leaves a lost chain, never a
+                // size on cluster 0 (2026-10-25 review) nor an empty file on a cluster (fsck_msdos: "too many
+                // clusters allocated", the review of 2026-11-01, 84)
                 self.set_entries(d, &[(c, EOC)])?;
                 h.first = c;
-                if h.entry_lba != 0 {
-                    // a file with no cluster yet (as a computer leaves an emptied one): its entry gets the chain,
-                    // after the chain ends (a cut before leaves a lost cluster, never a size on cluster 0;
-                    // 2026-10-25 review)
-                    self.set_first(d, h)?;
-                }
             } else {
                 // two writes even in one FAT sector: a torn write of both could land the link without the end
                 self.set_entries(d, &[(c, EOC)])?;
@@ -372,15 +372,6 @@ impl Fat {
             (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1);
         }
         Ok(())
-    }
-
-    /// Writes `h`'s first cluster into its entry.
-    fn set_first(&self, d: &mut impl DiskWrite, h: &Handle) -> Result<(), Error> {
-        let mut s = [0u8; SECTOR];
-        self.read(d, h.entry_lba, &mut s)?;
-        let e = s.as_chunks_mut::<32>().0.get_mut(usize::from(h.slot)).ok_or(Error::Corrupt)?;
-        set_cluster(e, h.first);
-        self.write(d, h.entry_lba, &s)
     }
 
     /// Writes `buf` (whole sectors) to `h`'s sectors from `sector` on, taking clusters as needed; one disk write
@@ -426,8 +417,9 @@ impl Fat {
         self.read(d, self.lba(c) + sector.checked_rem(self.spc).unwrap_or(0), buf)
     }
 
-    /// Sets `h`'s size and write time in its entry; then, if the chain is longer than the size needs (a resume
-    /// cut the file back), cuts it there and frees the rest (the size first: never a size past the chain).
+    /// Sets `h`'s size, first cluster (a file's first write took it: `take`) and write time in its entry; then, if
+    /// the chain is longer than the size needs (a resume cut the file back), cuts it there and frees the rest (the
+    /// size first: never a size past the chain).
     pub fn set_size(
         &mut self,
         d: &mut impl DiskWrite,
@@ -435,9 +427,8 @@ impl Fat {
         size: u32,
         time: (u16, u16),
     ) -> Result<(), Error> {
-        let need = self.clusters_for(size);
-        if need > h.clusters {
-            return Err(Error::Corrupt);
+        if size > 0 && self.clusters_for(size) > h.clusters {
+            return Err(Error::Corrupt); // never a size past the chain (size 0 on no cluster: a file just made)
         }
         let mut s = [0u8; SECTOR];
         self.read(d, h.entry_lba, &mut s)?;
@@ -446,6 +437,7 @@ impl Fat {
         e[24..26].copy_from_slice(&time.0.to_le_bytes());
         e[18..20].copy_from_slice(&time.0.to_le_bytes());
         e[28..32].copy_from_slice(&size.to_le_bytes());
+        set_cluster(e, h.first);
         self.write(d, h.entry_lba, &s)?;
         h.size = size;
         self.trim(d, h, size)
@@ -697,12 +689,11 @@ impl Fat {
         Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster })
     }
 
-    /// Creates file `name` in `dir`, empty, with one cluster taken (so its entry never changes cluster).
+    /// Creates file `name` in `dir`, empty, on cluster 0 (no cluster taken): the first [`Fat::write_sectors`] takes
+    /// one and puts it in the entry (`take`). An empty file with a cluster is one fsck_msdos rejects ("too many
+    /// clusters allocated"), and a cut right after a create left one (the review of 2026-11-01, 84).
     pub fn create(&mut self, d: &mut impl DiskWrite, dir: File, name: &str, time: (u16, u16)) -> Result<Handle, Error> {
-        self.check_new(d, dir, name)?;
-        let mut h = Handle::default();
-        self.grow(d, &mut h, 1)?;
-        self.add_named(d, dir, name, ARCHIVE, (h.first, 0), time)
+        self.add_named(d, dir, name, ARCHIVE, (0, 0), time)
     }
 
     /// Creates folder `name` in `dir`: its cluster written (`.`, `..`, zeros), taken, then its entry.
@@ -741,6 +732,11 @@ impl Fat {
     /// empty folder, its cluster lost at worst): marked deleted (0xe5, never zeroed), then the name looked for again
     /// (a real entry further on is found) and made if missing. A few such entries at most, then Corrupt. Never for
     /// stock's folders (`\Activities`): its rides would be orphaned there, for a computer's fsck to free.
+    ///
+    /// The same entry left by something other than a torn mkdir (a full folder's entry damaged on the card) is mended
+    /// the same way: `\Rustfw` made again empty, its old chain (`ride.rec` and the kept files with it) named by
+    /// nothing. Nothing is lost by the repair itself, since nothing could reach that chain any more; a computer's fsck
+    /// may still recover it (FILE0000.CHK).
     pub fn ensure_own_dir(
         &mut self,
         d: &mut impl DiskWrite,
@@ -1408,6 +1404,130 @@ pub(crate) mod tests {
         }
     }
 
+    /// What a volume holds outside `\Rustfw` (stock's: AGENTS.md, "Share the storage with stock"), as byte runs of
+    /// the volume, each with its file's path: every entry (its 8.3 entry and the long name pieces before it in its
+    /// cluster) where it is, and each file's chain, its entry in both FATs and its clusters' bytes. A folder's own
+    /// clusters are not in it (a ride saved into `\Activities` adds entries there).
+    pub struct Stock(Vec<(std::string::String, usize, Vec<u8>)>);
+
+    /// [`Stock`] of volume `img`.
+    pub fn stock(img: &[u8]) -> Stock {
+        let mut d = Ram(img.to_vec(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let (bytes, mut runs) = (fat.cluster_bytes() as usize, Vec::new());
+        let mut dirs = std::vec![(fat.root(), std::string::String::new())];
+        while let Some((dir, path)) = dirs.pop() {
+            let mut c = fat.cursor(dir).unwrap();
+            while let Some((e, long)) = fat.next_raw(&mut d, &mut c).unwrap() {
+                if e[0] == b'.' {
+                    continue;
+                }
+                let name: std::string::String = if long {
+                    c.lfn.iter().take_while(|&&u| u != 0 && u != 0xffff).map(|&u| char::from(u as u8)).collect()
+                } else {
+                    let s =
+                        |b: &[u8]| -> std::string::String { std::string::String::from_utf8_lossy(b).trim_end().into() };
+                    let ext = s(&e[8..11]);
+                    if ext.is_empty() { s(&e[..8]) } else { s(&e[..8]) + "." + &ext }
+                };
+                if path.is_empty() && name.eq_ignore_ascii_case(crate::recorder::DIR) {
+                    continue;
+                }
+                let p = path.clone() + &name;
+                let start = fat.lba(c.cluster) as usize * SECTOR;
+                let mut at = start + c.sector as usize * SECTOR + (c.entry - 1) * 32;
+                runs.push((p.clone(), at, img[at..at + 32].to_vec()));
+                while at > start && img[at - 32 + 11] == 0x0f && img[at - 32 + 13] == short_sum(&e) {
+                    at -= 32;
+                    runs.push((p.clone(), at, img[at..at + 32].to_vec()));
+                }
+                let Ok(f) = fat.file_of(&e) else { continue }; // a torn entry: no chain to follow
+                if f.dir {
+                    dirs.push((f, p + "/"));
+                    continue;
+                }
+                let mut k = f.cluster;
+                while fat.valid(k) {
+                    for copy in 0..fat.fats {
+                        let o = (fat.fat_start + copy * fat.fat_size) as usize * SECTOR + k as usize * 4;
+                        runs.push((p.clone(), o, img[o..o + 4].to_vec()));
+                    }
+                    let o = fat.lba(k) as usize * SECTOR;
+                    runs.push((p.clone(), o, img[o..(o + bytes).min(img.len())].to_vec())); // zeros past the end
+                    k = fat.entry(&mut d, k).unwrap();
+                }
+            }
+        }
+        Stock(runs)
+    }
+
+    /// [`Stock`] of the test volume (tools/fat_image.py), made once.
+    pub fn base_stock() -> &'static Stock {
+        static S: std::sync::OnceLock<Stock> = std::sync::OnceLock::new();
+        S.get_or_init(|| stock(&image()))
+    }
+
+    /// Every run of `s` the same on volume `img`, but those of the files in `gone` (a ride a HISTORY delete moved:
+    /// its path, any case) and the entries and FAT entries in a sector of `torn` (left torn by a cut on a card
+    /// without reliable write: a directory sector of a folder stock shares, such as the root or `\Activities`). Err
+    /// names the first run changed.
+    pub fn stock_kept(s: &Stock, img: &[u8], torn: &[u32], gone: &[&str]) -> Result<(), std::string::String> {
+        for (path, at, bytes) in &s.0 {
+            if gone.iter().any(|g| g.eq_ignore_ascii_case(path)) {
+                continue;
+            }
+            if bytes.len() <= 32 && torn.contains(&((at / SECTOR) as u32)) {
+                continue;
+            }
+            if img.get(*at..at + bytes.len()) != Some(&bytes[..]) {
+                let what = if bytes.len() == 4 {
+                    "a FAT entry"
+                } else if bytes.len() == 32 {
+                    "an entry"
+                } else {
+                    "data"
+                };
+                return Err(std::format!("stock's {path}: {what} at byte {at} changed"));
+            }
+        }
+        Ok(())
+    }
+
+    /// The snapshot holds stock's ride in progress, its recovery file and its settings, and sees a change to each:
+    /// its bytes, its entry, its chain.
+    #[test]
+    fn stock_kept_sees_every_change() {
+        let img = image();
+        let s = base_stock();
+        let paths: std::collections::BTreeSet<&str> = s.0.iter().map(|r| r.0.as_str()).collect();
+        // (an 8.3 name as stored: upper case)
+        for p in ["Activities/tmp.fit", "System/tmp0.fit", "System/Sensor.ini", "Activities/261020080000.fit"] {
+            assert!(paths.iter().any(|q| q.eq_ignore_ascii_case(p)), "{p} in the snapshot");
+        }
+        assert!(!paths.iter().any(|p| p.to_ascii_lowercase().starts_with("rustfw")));
+        assert_eq!(stock_kept(s, &img, &[], &[]), Ok(()));
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let sys = fat.open(&mut d, "System").unwrap();
+        let h = fat.locate(&mut d, sys, "tmp0.fit").unwrap();
+        let fat_at = fat.fat_start as usize * SECTOR + h.first as usize * 4;
+        let entry_at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32;
+        for (at, what) in
+            [(fat.lba(h.first) as usize * SECTOR + 700, "data"), (entry_at + 28, "an entry"), (fat_at, "a FAT")]
+        {
+            let mut bad = img.clone();
+            bad[at] ^= 1;
+            assert!(
+                stock_kept(s, &bad, &[], &[]).is_err_and(|e| e.to_ascii_lowercase().contains("tmp0.fit")),
+                "{what}"
+            );
+            assert_eq!(stock_kept(s, &bad, &[], &["system/TMP0.FIT"]), Ok(()), "{what}: gone");
+        }
+        let mut bad = img.clone();
+        bad[entry_at] ^= 1;
+        assert_eq!(stock_kept(s, &bad, &[h.entry_lba], &[]), Ok(()), "a torn directory sector");
+    }
+
     const T: (u16, u16) = (0x5b58, 0x6000);
 
     fn read_all(fat: &mut Fat, d: &mut Ram, path: &str) -> Vec<u8> {
@@ -1519,10 +1639,8 @@ pub(crate) mod tests {
         assert_eq!(fsck(&d.0), Ok(0));
     }
 
-    /// The writer's inputs, pseudo-random (seeded: a failure reproduces): names, offsets, sizes, on a good volume
-    /// and on damaged ones. Errors, never a panic, a hang, or a write outside the volume's data and FATs.
     /// A disk whose power goes after `.1` more sector writes.
-    struct Cut(Ram, u32);
+    pub struct Cut(pub Ram, pub u32);
 
     impl Disk for Cut {
         fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
@@ -1592,6 +1710,8 @@ pub(crate) mod tests {
         assert_eq!(fat.locate(&mut d, root, "Rustfw").err(), Some(Error::Refused));
     }
 
+    /// The writer's inputs, pseudo-random (seeded: a failure reproduces): names, offsets, sizes, on a good volume
+    /// and on damaged ones. Errors, never a panic, a hang, or a write outside the volume's data and FATs.
     #[test]
     fn fuzz_writer() {
         let img = image();
@@ -1716,7 +1836,8 @@ pub(crate) mod tests {
         let mut d = Ram(image(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let root = fat.root();
-        let h = fat.create(&mut d, root, "A.BIN", T).unwrap();
+        let mut h = fat.create(&mut d, root, "A.BIN", T).unwrap();
+        fat.write_sectors(&mut d, &mut h, 0, &[1; SECTOR]).unwrap();
         let before = d.0.clone();
         let mut bare = Handle { first: h.first, size: 0, ..Handle::default() };
         assert_eq!(fat.write_sectors(&mut d, &mut bare, 0, &[1; SECTOR]), Err(Error::Corrupt));
@@ -1792,6 +1913,109 @@ pub(crate) mod tests {
         assert_eq!(f.find(&mut d, dir, "261020080000.fit"), Err(Error::NotFound));
         assert_eq!(f.revive(&mut d, dir, "261020080000.fit", h.first, 100), Ok(true), "taken up");
         assert!(d.0 == live, "as before the remove");
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// The review of 2026-11-01 (84): a file made takes no cluster, and its first write's cluster goes into its entry
+    /// with its size, in one write. A cut after any sector of a create, a write and its size leaves the entry empty
+    /// on no cluster or whole, never an empty file on a cluster ("too many clusters allocated", which fsck_msdos
+    /// rejects) nor a size on cluster 0; check.sh runs fsck_msdos on the cut right after the create
+    /// (target/fat/cut_after_create.img).
+    #[test]
+    fn a_cut_after_a_create_leaves_an_empty_entry_or_a_whole_file() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.ensure_dir(&mut d, fat.root(), "Rustfw", T).unwrap();
+        let img = d.0;
+        let run = |c: &mut Cut| -> Result<Handle, Error> {
+            let mut fat = Fat::mount(c)?;
+            let mut h = fat.create(c, dir, "261024134531.fit", T)?;
+            fat.write_sectors(c, &mut h, 0, &[5; 3 * SECTOR])?;
+            fat.set_size(c, &mut h, 1000, T)?;
+            Ok(h)
+        };
+        let mut whole = Cut(Ram(img.clone(), 0), u32::MAX);
+        run(&mut whole).unwrap();
+        let writes = u32::MAX - whole.1;
+        let (mut empty, mut made) = (0, 0);
+        for k in 0..=writes {
+            let mut c = Cut(Ram(img.clone(), 0), k);
+            let done = run(&mut c).is_ok();
+            assert_eq!(done, k == writes, "cut after {k}");
+            let mut m = c.0;
+            let at_cut = m.0.clone();
+            let mut fat = Fat::mount(&mut m).unwrap();
+            fat.sync_fats(&mut m).unwrap(); // the boot's
+            let got = fat.open(&mut m, "Rustfw/261024134531.fit").map(|f| (f.cluster != 0, f.size));
+            assert!(matches!(got, Err(Error::NotFound) | Ok((false, 0)) | Ok((true, 1000))), "cut after {k}: {got:?}");
+            assert!(fsck(&m.0).is_ok_and(|lost| lost <= 1), "cut after {k}: {:?}", fsck(&m.0));
+            if got == Ok((false, 0)) {
+                if empty == 0 {
+                    assert_eq!(fsck(&at_cut), Ok(0), "right after the create: nothing taken, the FATs equal");
+                    super::super::tests::dump("cut_after_create", &at_cut);
+                }
+                empty += 1;
+            }
+            made += usize::from(got.is_ok_and(|g| g.0));
+        }
+        assert!(empty >= 3 && made == 1, "{empty} empty, {made} whole of {writes} writes");
+    }
+
+    /// An entry `name` in `dir` written as it is, no name check (as stock, a computer or a torn write may leave it):
+    /// a folder (or a file, `attr`) on `cluster`, its 8.3 name `OWN<k>`.
+    pub fn raw_entry(fat: &mut Fat, d: &mut Ram, dir: File, name: &str, attr: u8, cluster: u32, k: u8) {
+        let (e, n) =
+            dir_entries(name, (*b"OWN0       ").map(|c| if c == b'0' { b'0' + k } else { c }), attr, cluster, 0, T);
+        fat.add_entries(d, dir, &e[..n]).unwrap();
+    }
+
+    /// [`Fat::ensure_own_dir`]'s repair (B1b-1's re-check): only a folder entry on cluster 0 is mended (marked
+    /// deleted), never a folder whose cluster is in its high word alone (found as it is when valid, Corrupt when not,
+    /// nothing written), never a file of that name (Refused); a real folder after a torn entry is found, not made
+    /// again; four torn entries at most a call, the rest left to the next.
+    #[test]
+    fn ensure_own_dir_mends_only_a_folder_on_cluster_0() {
+        let base = image();
+        let with = |entries: &[(u8, u32)]| {
+            let mut d = Ram(base.clone(), 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let root = fat.root();
+            for (&(attr, cluster), k) in entries.iter().zip(0..) {
+                raw_entry(&mut fat, &mut d, root, "Own", attr, cluster, k);
+            }
+            (d, fat, root)
+        };
+        // the cluster in the high word only: 0x10000 is a cluster of the volume (found), 0xffff0000 is not
+        let (mut d, mut fat, root) = with(&[(DIR, 0x1_0000)]);
+        let before = d.0.clone();
+        assert_eq!(fat.ensure_own_dir(&mut d, root, "Own", T).map(|f| f.cluster), Ok(0x1_0000));
+        assert!(d.0 == before, "found as it is");
+        let (mut d, mut fat, root) = with(&[(DIR, 0xffff_0000)]);
+        let before = d.0.clone();
+        assert_eq!(fat.ensure_own_dir(&mut d, root, "Own", T), Err(Error::Corrupt));
+        assert!(d.0 == before, "never mended");
+        // a file of that name: on a cluster, on cluster 0 (Refused), on no cluster of the volume (Corrupt)
+        for (cluster, want) in [(2, Error::Refused), (0, Error::Refused), (0xffff_0000, Error::Corrupt)] {
+            let (mut d, mut fat, root) = with(&[(ARCHIVE, cluster)]);
+            let before = d.0.clone();
+            assert_eq!(fat.ensure_own_dir(&mut d, root, "Own", T), Err(want), "a file on {cluster:#x}");
+            assert!(d.0 == before, "a file on {cluster:#x}: nothing written");
+        }
+        // a torn entry, then the real folder: found, the torn one marked deleted, nothing made
+        let (mut d, mut fat, root) = with(&[(DIR, 0)]);
+        let real = fat.mkdir(&mut d, root, "Own2", T).unwrap();
+        raw_entry(&mut fat, &mut d, root, "Own", DIR, real.cluster, 9);
+        let free = free_counts(&d.0).0;
+        assert_eq!(fat.ensure_own_dir(&mut d, root, "Own", T), Ok(real), "the real one");
+        assert_eq!(free_counts(&d.0).0, free, "nothing made");
+        assert_eq!(fat.find(&mut d, root, "Own"), Ok(real), "the torn one gone");
+        // five torn entries: four marked a call, then Corrupt; the next call marks the fifth and makes the folder
+        let (mut d, mut fat, root) = with(&[(DIR, 0); 5]);
+        assert_eq!(fat.ensure_own_dir(&mut d, root, "Own", T), Err(Error::Corrupt));
+        assert_eq!(fat.find(&mut d, root, "Own"), Err(Error::Corrupt), "the fifth left");
+        let made = fat.ensure_own_dir(&mut d, root, "Own", T).unwrap();
+        assert!(made.dir && made.cluster != 0);
+        assert_eq!(fat.find(&mut d, root, "Own"), Ok(made));
         assert_eq!(fsck(&d.0), Ok(0));
     }
 }

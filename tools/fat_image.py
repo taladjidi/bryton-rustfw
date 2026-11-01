@@ -213,6 +213,9 @@ def rides(m):
     for name, text in ini.items():
         with open(os.path.join(s, name), 'wb') as f:
             f.write(text.encode())
+    # stock's recovery file of its ride in progress: never touched (the recorder's cut tests check its bytes)
+    with open(os.path.join(s, 'tmp0.fit'), 'wb') as f:
+        f.write(bytes((i * 11 + 5) & 0xff for i in range(3 * 512)))
     subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
 
 

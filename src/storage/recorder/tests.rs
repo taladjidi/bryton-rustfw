@@ -3,7 +3,7 @@
 extern crate std;
 use super::*;
 use crate::fat::Disk;
-use crate::fat::write::tests::{fill, free_counts, fsck, fsck_cut, fsck_torn};
+use crate::fat::write::tests::{base_stock, fill, free_counts, fsck, fsck_cut, fsck_torn, stock, stock_kept};
 use crate::fit::RECORD_LEN;
 use crate::fitread::{Msg, Reader};
 use crate::ride::Profile;
@@ -27,6 +27,8 @@ struct Card {
     cut_at: u32,
     /// The ride second `ride` was at (the cut's, once the card died).
     now: u32,
+    /// Sectors read.
+    reads: u64,
 }
 
 impl Disk for Card {
@@ -34,6 +36,7 @@ impl Disk for Card {
         if self.dead {
             return Err(Error::Io);
         }
+        self.reads += (buf.len() / SECTOR) as u64;
         for (i, b) in buf.iter_mut().enumerate() {
             *b = self.img.get(lba as usize * SECTOR + i).copied().unwrap_or(0);
         }
@@ -282,6 +285,13 @@ fn laps_match_records(img: &[u8], name: &str, what: &str) -> usize {
 const SAVED: &str = "Activities/261023100000.fit";
 const SAVED_FULL: &str = "Rustfw/Activities/261023100000.fit";
 
+/// Stock's files (everything outside `\Rustfw` on the test volume, tools/fat_image.py: its ride in progress
+/// `\Activities\tmp.fit`, its recovery file `\System\tmp0.fit`, its settings) as they were: bytes, entries, chains
+/// (the review of 2026-11-01, finding 4). `torn`: sectors a cut tore, whose entries are left out.
+fn stock_same(img: &[u8], torn: &[u32], what: &str) {
+    stock_kept(base_stock(), img, torn, &[]).unwrap_or_else(|e| panic!("{what}: {e}"));
+}
+
 fn check_clean(img: &[u8], what: &str) -> u32 {
     let lost = fsck(img).unwrap_or_else(|e| panic!("{what}: {e}"));
     let (free, info) = free_counts(img);
@@ -430,6 +440,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
         // its size (a cut between a checkpoint's data and its size: the boot's recovery trims it)
         let c = fsck_cut(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert!(c.apart <= 1, "{what}: {} FAT sectors apart", c.apart);
+        stock_same(&d.img, &[], &what);
         // the ride's chain as the recovery finds it: its record's cluster (not its name: none before the create)
         let mine = newest_rec(&d.img).map_or(0, |r| r.cluster);
         assert!(
@@ -447,6 +458,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
             Recorder::new().recover(&mut twice, local(SECS + 5));
             let mut again = card(twice.img);
             let o = Recorder::new().recover(&mut again, local(SECS + 6));
+            stock_same(&again.img, &[], &what);
             // a cut save may be finished by the first reboot already: then nothing is left to do
             let same = o == outcome || (matches!(outcome, Outcome::Saved(_)) && o == Outcome::Nothing);
             assert!(same, "{what}, reboot cut at {k}: {o:?}, not {outcome:?}");
@@ -493,6 +505,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
             }
         }
         assert_eq!(r.phase(), Phase::Done, "{what}");
+        stock_same(&d.img, &[], &what);
         max_lost = max_lost.max(check_clean(&d.img, &what));
     }
     std::println!(
@@ -599,6 +612,7 @@ fn torn_cuts(prefix: bool, part: u64) {
         let cut_lba = d.cut_at;
         let had = all.iter().filter(|&&a| a <= T0 + d.now).count(); // the seconds recorded when the power went
         let cut_img = d.img;
+        stock_same(&cut_img, &[cut_lba], &what);
         let mut d = card(cut_img.clone());
         let mut r = Recorder::new();
         let outcome = r.recover(&mut d, local(SECS + 5));
@@ -612,8 +626,10 @@ fn torn_cuts(prefix: bool, part: u64) {
         for k in 0..d.written {
             let mut twice = torn_card(cut_img.clone(), k, prefix, cut + k);
             Recorder::new().recover(&mut twice, local(SECS + 5));
+            let torn2 = twice.cut_at;
             let mut again = card(twice.img);
             let o = Recorder::new().recover(&mut again, local(SECS + 6));
+            stock_same(&again.img, &[cut_lba, torn2], &what);
             // a cut save may be finished by the first reboot already: then nothing is left to do; and a resume torn
             // in the ride's directory sector (its size) leaves the record alone naming it: saved from there
             let same = o == outcome
@@ -656,6 +672,7 @@ fn torn_cuts(prefix: bool, part: u64) {
                 let mut d2 = torn_card(d2.img, at, prefix, cut + at);
                 assert!(ride(&mut r2, &mut d2, from_of(w)).is_none(), "{what}: the card died");
                 let had2 = all.iter().filter(|&&a| a <= T0 + d2.now).count();
+                let torn2 = d2.cut_at;
                 let mut d3 = card(d2.img);
                 let mut r3 = Recorder::new();
                 match r3.recover(&mut d3, local(SECS + 7)) {
@@ -666,6 +683,7 @@ fn torn_cuts(prefix: bool, part: u64) {
                     o => panic!("{what}: {o:?}, the ride lost"),
                 }
                 assert!(check(&d3.img, had2, &what), "{what}: not saved");
+                stock_same(&d3.img, &[cut_lba, torn2], &what);
                 fsck_torn(&d3.img).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert_eq!(free_counts(&d3.img).0, free_counts(&d3.img).1, "{what}: FSInfo's free count");
                 second_cuts += 1;
@@ -677,6 +695,7 @@ fn torn_cuts(prefix: bool, part: u64) {
         // (a folder whose entry the first start's cut tore inside it, on cluster 0: made again by the next Start)
         let lost = fsck_torn(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert_eq!(free_counts(&d.img).0, free_counts(&d.img).1, "{what}: FSInfo's free count");
+        stock_same(&d.img, &[cut_lba], &what);
         if lost > 2 {
             // only a torn sector of the root directory (making \Rustfw or \Activities), or of \Rustfw's while
             // its folders are made, before the first record (no ride yet): its other entries lost
@@ -739,6 +758,7 @@ fn a_write_that_lands_and_still_fails_at_every_sector() {
         // a cluster lost at worst: a grow whose FAT write landed, seen failed, the retry taking the next one (FSInfo
         // then one over: the writer never counted it taken)
         let lost = fsck(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+        stock_same(&d.img, &[], &what);
         let (free, info) = free_counts(&d.img);
         assert!(lost <= 1 && free <= info && info - free <= lost, "{what}: {lost} lost, FSInfo {info}, {free} free");
         lost_one += lost;
@@ -763,7 +783,8 @@ fn a_write_that_lands_and_still_fails_at_every_sector() {
 }
 
 fn card(img: Vec<u8>) -> Card {
-    Card { img, budget: None, written: 0, dead: false, torn: false, prefix: None, fails_at: None, cut_at: 0, now: 0 }
+    let (budget, prefix, fails_at) = (None, None, None);
+    Card { img, budget, written: 0, dead: false, torn: false, prefix, fails_at, cut_at: 0, now: 0, reads: 0 }
 }
 
 /// The first sector of file `path` on the volume `img`.
@@ -1103,6 +1124,8 @@ fn two_copies_cut_torn(torn: bool, part: u64) {
         let what = std::format!("torn {torn}, cut {cut} of {total} (sector {})", d.cut_at);
         let had = all.iter().filter(|&&a| a <= T0 + d.now).count();
         let d_now = d.now;
+        let torn_at: &[u32] = if torn { &[d.cut_at] } else { &[] };
+        stock_same(&d.img, torn_at, &what);
         let mut d = card(d.img);
         let mut rs = pair();
         let o = [rs[0].recover(&mut d, local(SECS + 5)), rs[1].recover(&mut d, local(SECS + 5))];
@@ -1166,6 +1189,7 @@ fn two_copies_cut_torn(torn: bool, part: u64) {
         // the next ride: both copies
         let out = ride_all(&mut pair(), &mut d, 0).unwrap_or_else(|| panic!("{what}: the next ride"));
         assert!(matches!(out[..], [Outcome::Saved(a), Outcome::Saved(b)] if a == b), "{what}: {out:?}");
+        stock_same(&d.img, torn_at, &what);
         let lost = if torn { fsck_torn(&d.img) } else { fsck(&d.img) }.unwrap_or_else(|e| panic!("{what}: {e}"));
         if !torn {
             max_lost = max_lost.max(lost);
@@ -1330,6 +1354,58 @@ fn stocks_activities_on_cluster_0_is_never_mended() {
     assert!(root_bytes(&d.img) == before, "the root directory written");
 }
 
+/// B1b-1's re-check (c): while stock's `\Activities` stays torn (on cluster 0, never mended), a Start's setup never
+/// finds the volume whole; it synced both FATs (read whole) at every Start, now at the first of a boot only.
+#[test]
+fn a_torn_activities_syncs_the_fats_once_a_boot() {
+    let mut d = card(crate::fat::tests::image());
+    ride(&mut Recorder::new(), &mut d, 0).unwrap(); // the folders and the app's files made
+    tear_folder_entry(&mut d.img, ACTIVITIES);
+    let fat = Fat::mount(&mut crate::fat::tests::Ram(d.img.clone(), 0)).unwrap().fat_sectors() as u64;
+    let reads = |r: &mut Recorder, d: &mut Card| {
+        let from = d.reads;
+        assert!(matches!(ride(r, d, 0), Some(Outcome::Kept(_))), "kept where it was recorded");
+        d.reads - from
+    };
+    let mut r = Recorder::new();
+    let (first, second) = (reads(&mut r, &mut d), reads(&mut r, &mut d));
+    let next_boot = reads(&mut Recorder::new(), &mut d);
+    assert!(first >= second + 2 * fat, "synced at the boot's first Start: {first} sectors read, then {second}");
+    assert!(next_boot >= second + 2 * fat, "and at the next boot's: {next_boot}");
+}
+
+/// B1b-1's re-check (d): a FILE named `Activities` in the root (a computer's, never removed) is let through as a
+/// torn `\Activities` is: every Start used to fail (`ensure_dir` Refused); the ride is recorded and kept where it was
+/// recorded, the file and the root directory untouched.
+#[test]
+fn a_file_named_activities_never_stops_a_ride() {
+    let mut d = card(crate::fat::tests::image());
+    ride(&mut Recorder::new(), &mut d, 0).unwrap(); // the folders made: the next Start writes no root entry
+    // \Activities' entry made a file's, sized to its chain (fsck stays clean)
+    let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let acts = fat.open(&mut ram, ACTIVITIES).unwrap().cluster;
+    let root = fat.lba(fat.root().cluster) as usize * SECTOR;
+    let cluster = |e: &[u8]| u32::from(e[20]) | u32::from(e[21]) << 8 | u32::from(e[26]) << 16 | u32::from(e[27]) << 24;
+    let at = (root..root + fat.cluster_bytes() as usize)
+        .step_by(32)
+        .find(|&a| d.img[a + 11] == 0x10 && cluster(&d.img[a..a + 32]).rotate_left(16) == acts && d.img[a] != 0xe5)
+        .unwrap();
+    d.img[at + 11] = 0x20;
+    d.img[at + 28..at + 32].copy_from_slice(&fat.cluster_bytes().to_le_bytes());
+    assert!(fat.open(&mut crate::fat::tests::Ram(d.img.clone(), 0), ACTIVITIES).is_ok_and(|f| !f.dir));
+    let lost = fsck(&d.img).unwrap(); // the rides that were in it, named by nothing now
+    let before = root_bytes(&d.img);
+    let mut r = Recorder::new();
+    // (its name free again: the first ride saved in the folder now named by nothing)
+    assert_eq!(ride(&mut r, &mut d, 0), Some(Outcome::Kept(NAME)));
+    assert_eq!(r.phase(), Phase::Done, "not stuck");
+    let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
+    assert_eq!(saved(&d.img, "Rustfw/Rides/261023100000.fit").map(|s| s.0 == all), Ok(true));
+    assert!(root_bytes(&d.img) == before, "the root directory written");
+    assert_eq!(check_clean(&d.img, "kept"), lost);
+}
+
 /// The golden rule through the discard: the power cut (the sector left whole, or torn) after every sector of a
 /// ride recorded by both copies and discarded. After the next start each copy is in exactly one place, its ride
 /// folder (resumed, paused, then discarded again) or `\Rustfw\Discarded`, never in `\Activities` or
@@ -1378,6 +1454,8 @@ fn a_discard_cut(part: u64) {
                 }
             };
             never_saved(&d.img, "the cut");
+            let torn_at: &[u32] = if torn { &[d.cut_at] } else { &[] };
+            stock_same(&d.img, torn_at, &what);
             let mut d = card(d.img);
             let mut rs = pair();
             let o = [rs[0].recover(&mut d, local(SECS + 5)), rs[1].recover(&mut d, local(SECS + 5))];
@@ -1419,6 +1497,7 @@ fn a_discard_cut(part: u64) {
             io_all(&mut rs[1], &mut d, SECS + 10);
             assert_eq!([rs[0].phase(), rs[1].phase()], [Phase::Done; 2], "{what}");
             never_saved(&d.img, "the discard");
+            stock_same(&d.img, torn_at, &what);
             for (k, p) in DISCARDED.iter().enumerate() {
                 // cut before the first record: nothing promised (its first second may stay in the ride folder,
                 // as with a save: never resumed, never in \Activities)
@@ -3071,6 +3150,7 @@ fn cut_every_sector<D: DiskWrite>(
     want_at: &str,
 ) -> (u64, u32, u32) {
     let (mut r, mut d) = setup();
+    let st = stock(&inner(&mut d).img); // stock's files as the path finds them
     let mine = {
         let mut ram = crate::fat::tests::Ram(inner(&mut d).img.clone(), 0);
         let mut fat = Fat::mount(&mut ram).unwrap();
@@ -3093,12 +3173,16 @@ fn cut_every_sector<D: DiskWrite>(
             let c = inner(&mut d);
             (c.budget, c.torn, c.prefix) = (Some(c.written + cut), torn, prefix);
             act(&mut r, &mut d);
-            if torn && prefix.is_none() && mine.contains(&inner(&mut d).cut_at) {
+            let at = inner(&mut d).cut_at;
+            let torn_at: &[u32] = if torn { &[at] } else { &[] };
+            stock_kept(&st, &inner(&mut d).img, torn_at, &[]).unwrap_or_else(|e| panic!("{what}: {e}"));
+            if torn && prefix.is_none() && mine.contains(&at) {
                 s7 += 1;
                 continue;
             }
             let mut b = card(inner(&mut d).img.clone());
             boot_and_settle(&mut b, &what);
+            stock_kept(&st, &b.img, torn_at, &[]).unwrap_or_else(|e| panic!("{what}, booted: {e}"));
             whole_once(&b.img, &want, &what);
             let l = if torn { fsck_torn(&b.img) } else { fsck(&b.img) }.unwrap_or_else(|e| panic!("{what}: {e}"));
             assert_eq!(free_counts(&b.img).0, free_counts(&b.img).1, "{what}: FSInfo's free count");
