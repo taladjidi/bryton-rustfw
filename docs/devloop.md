@@ -273,6 +273,40 @@ Renode against Bryton's real nRF52 app, not the simulator's `Nordic` model.
 - **Limits:** those of Renode above (no MPU, caches, real WFI wake, SPI or ULPI timing), and its CPU runs about one
   instruction per cycle with no flash or SDRAM wait states, so the firmware looks faster than on the unit.
 
+### Renode with the GNSS model (`renode/gnss_run.py`, 2026-11-02)
+
+The firmware's SPI4 code (`src/main.rs` `gnss_init`, `gnss_power`, `gnss_transfer`) and the driver (`src/drivers/gnss.rs`,
+`src/app/gps.rs`) run on Renode against the host simulator's own receiver, `src/sim/gnss_model.rs`: one source of the
+rules (G1 to G10, their sources in that file), not a second model.
+- **How:** `renode/GnssSpi.cs` replaces Renode's `spi4`. It starts the ignored test `src/sim/gnss_serve.rs` as a child
+  (the test binary, built by `cargo test-host --no-run`) and talks a small binary protocol over its pipe (power, chip
+  select low, four bytes exchanged, chip select high; each request carries the virtual time in ms, which is the model's
+  clock). PE4 (chip select, by hand in the firmware) is the bridge's GPIO 0, PI6 (supply) its GPIO 1. Registers
+  (RM0399 SPI): CR1, SR (RXP, TXP, TXC), TXDR (a 32-bit write is four 8-bit frames, low byte first), RXDR. The bytes go
+  to the model at once, so a word never takes the 8 us it takes at 4 MHz. The track is synthetic (a walk north from
+  `FIX_LAT`, 4.5 m/s), and so is the UTC.
+- **Run:** `python3 renode/gnss_run.py` (25 s virtual), `--fault nak` (the receiver refuses the first CFG-VALSET),
+  `--fault stall` (nothing from 15 s to 17 s). `--selftest` drives the served model without Renode, with the verdicts.
+  Log of the model: `target/renode/gnss_events.log` (a line per change of acks, naks, valsets, pvt, lost epochs and
+  violations), Renode's: `target/renode/gnss.log`. Not in check.sh; `skip:` without Renode or the release ELF.
+- **Proves:** the register code reaches the receiver (the right bytes, chip select framing, 0xff idle); normal: the
+  configuration is ACKed, NAV-PVT arrives about once a second, no rule of the model broken (a violation panics the
+  model, and the run fails on `gnss harness gone`); `nak`: the NAK is read and the VALSET sent again, then ACKed;
+  `stall`: the model records the lost epochs (G2) and the firmware reads NAV-PVT again afterwards.
+- **Cannot prove:** SPI timing (a word is exchanged when TXDR is written; MODF and the other mode-fault rules of the
+  controller are not modelled), that the firmware decoded the fixes (only the wire is seen: reading `gps.fixed` or the
+  answers counters needs the address of the app's fields in AXI SRAM, not done), the receiver itself (a model on both
+  sides, as the Nordic `Hang` rules were), and the limits of Renode above.
+- **What it showed (first runs, 2026-11-02):** the receiver is powered about 10 s of virtual time into the boot, the
+  CFG-VALSET and the second configuration message are ACKed (2 acks, 2 VALSET), NAV-PVT arrives and the firmware reads
+  every 0.6 s. `--fault nak`: the refused VALSET is sent again and ACKed (1 NAK, 4 VALSET in all, the configuration's
+  other messages included). `--fault stall`: 1 to 3 lost epochs recorded, NAV-PVT again after 17 s. **Finding:** from
+  about 17 s the firmware reads only every 2.5 s, so the model raises G2 (stream time-out, 1.5 s) in a plain run past
+  that point (`--fault record` shows it: gap 2516 ms, one lost epoch per read). Not yet explained: a long pass after the
+  first fix (a screen change), or an artifact of Renode (no real WFI wake). The default runs stop at 15 s for that
+  reason; to chase it, look at what the firmware does at 17 s (`tools/dev.py` profile on the unit shows a real pass
+  length).
+
 #### Assessment: next steps, and whether Renode's USART timing can test the drain rate
 
 - **Drain rate (the 2026-11-01 failure class: the firmware not emptying the chip's bytes fast enough):** Renode proves
