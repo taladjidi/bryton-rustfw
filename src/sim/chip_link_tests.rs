@@ -157,7 +157,8 @@ fn a_truncated_frame_hangs_the_chip() {
 }
 
 /// The chip holds CTS after a command's header exactly while the previous response waits for an event frame that
-/// waits for our RTS; it takes the header and our FIFO's 16 bytes, no more.
+/// waits for our RTS; it takes the header and its UART's 4 bytes, and our FIFO holds 16, no more. (The 4 were found by
+/// the differential test against the emulated app: nrf_diff_tests.rs, 11 bytes in all behind a 5-byte command.)
 #[test]
 fn cts_is_held_while_an_event_frame_keeps_the_response_waiting() {
     let mut s = chip();
@@ -166,19 +167,55 @@ fn cts_is_held_while_an_event_frame_keeps_the_response_waiting() {
     // cmd 1 is taken whole (the chip had read no header); its response waits behind the event frame in flight
     assert_eq!(s.nrf_send(&[3, 0, 0, 0x65, 1]), 5);
     assert_eq!(s.nordic.resp.len(), 1, "queued, not out");
-    // cmd 2: the header goes in, then CTS is held: 2 bytes to the chip and 16 in our FIFO
+    // cmd 2: the header goes in, then CTS is held: 2 bytes to the chip, 4 in its UART and 16 in our FIFO
     let two = [(WRITE20.len() as u16).to_le_bytes().as_slice(), &WRITE20].concat();
-    assert_eq!(s.nrf_send(&two), 18);
+    assert_eq!(s.nrf_send(&two), 22); // 2 + 4 + 16: cross-checked against the emulated app only by `--ignored nrf_diff`
     assert!(s.nordic.blocked());
     // reading the event frame releases the response, and CTS: cmd 2 goes through whole
     drain(&mut s);
     assert!(!s.nordic.blocked());
-    assert_eq!(s.nrf_send(&two[18..]), two.len() - 18);
+    assert_eq!(s.nrf_send(&two[22..]), two.len() - 22);
     assert_eq!(s.nordic.got.len(), 2);
     // no hold when no response waits
     let mut s = chip();
     assert_eq!(s.nrf_send(&two), two.len());
     assert_eq!(s.nordic.got.len(), 1);
+}
+
+/// The UART's 4-byte FIFO is not tied to the frame: behind a stalled event, the header of a command is read, then 4 bytes
+/// go in whatever they belong to. A 4-byte payload fills it exactly (the next command's header stays in our FIFO), a
+/// 3-byte one lets the next header's first byte in, a 5-byte one holds its last byte back. Cross-checked against the
+/// emulated app only by `cargo test-host -- --ignored nrf_diff` (nrf_diff_stall_by_payload_length).
+#[test]
+fn the_uart_fifo_takes_four_bytes_after_the_header_whatever_they_belong_to() {
+    // (the second command's whole frame, the bytes of the third command still in our FIFO)
+    let third = [3, 0, 0, 0x65, 1];
+    for (second, pending) in
+        [(&[3u8, 0, 0, 0x65, 1][..], 4), (&[4, 0, 6, 0xda, 0, 10][..], 5), (&[5, 0, 6, 0xc4, 0, 0, 0][..], 5 + 1)]
+    {
+        let mut s = chip();
+        ant(&mut s, 3);
+        s.delay_ms(1);
+        assert_eq!(s.nrf_send(&[3, 0, 0, 0x65, 1]), 5);
+        s.nrf_send(second);
+        s.nrf_send(&third);
+        // a 5-byte payload: its last byte is held back with the third command's five
+        assert_eq!(s.nordic.txq.len(), pending, "{second:02x?}");
+        assert!(s.nordic.blocked() || second.len() == 5, "{second:02x?}");
+    }
+}
+
+/// Events queued before a response go out before it (the emulated app does: nrf_diff_tests.rs, 4 Hz drained every
+/// 20 passes); one that comes after waits for it.
+#[test]
+fn a_response_waits_behind_the_events_already_queued() {
+    let mut s = chip();
+    ant(&mut s, 3);
+    s.delay_ms(1);
+    assert_eq!(s.nrf_send(&[3, 0, 0, 0x65, 1]), 5);
+    ant(&mut s, 1);
+    let kinds: Vec<u8> = drain(&mut s).iter().map(|f| f[0]).collect();
+    assert_eq!(kinds, [8, 8, 8, 1, 8], "three events, the response, then the late event");
 }
 
 /// A hung chip takes 4 bytes more, then holds CTS for ever.
@@ -317,10 +354,10 @@ fn a_dead_chip_costs_a_bounded_time() {
 #[test]
 fn cts_is_released_when_the_event_frame_in_flight_ends() {
     let mut s = chip();
-    ant(&mut s, 3);
+    ant(&mut s, 1); // none queued behind it: events queued before a response go out first
     s.delay_ms(1);
     assert_eq!(s.nrf_send(&[3, 0, 0, 0x65, 1]), 5);
-    assert_eq!(s.nrf_send(&[34, 0]), 2); // the next header: CTS is held from here
+    assert_eq!(s.nrf_send(&[34, 0, 0, 0, 0, 0]), 6); // the next header and the UART's 4 bytes: CTS is held from here
     assert!(s.nordic.blocked());
     let on_chip = s.nordic.out.len(); // what of the event frame is still in the chip's TX buffer
     let mut one = [0u8; 1];

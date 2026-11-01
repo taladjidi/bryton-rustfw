@@ -77,10 +77,26 @@ pub(super) fn radio_unit(
 /// A ride of `minutes` with the three sensors paired, the phone linked and 12 notifications every 20 s, the main loop
 /// passing every `pass_ms` and the receive waiting `wait_us`.
 fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
-    let (mut sim, mut app) = radio_unit(minutes, wait_us, crate::fat::tests::image(), false, |_| {});
+    ride_with(minutes, pass_ms, wait_us, |_| {}, |_| {})
+}
+
+/// [`ride`], with `burst` run on the simulator every 30 s: the events it queues reach the chip in one SoftDevice pass.
+fn ride_with(
+    minutes: u64,
+    pass_ms: u32,
+    wait_us: u32,
+    burst: impl Fn(&mut Sim),
+    prep: impl FnOnce(&mut Sim),
+) -> Outcome {
+    let (mut sim, mut app) = radio_unit(minutes, wait_us, crate::fat::tests::image(), false, prep);
     app.press(&mut sim, Press::Short(Key::Start)); // the ride
     let (start, resets0, heard0) = (sim.ms, sim.nordic.resets.len(), app.radio_counts().1);
+    let mut next_burst = start + 30_000;
     while sim.ms < start + minutes * 60_000 {
+        if sim.ms >= next_burst {
+            next_burst += 30_000;
+            burst(&mut sim);
+        }
         app.step(&mut sim);
         sim.delay_ms(pass_ms);
     }
@@ -125,21 +141,24 @@ fn a_four_hour_ride_never_overflows_the_chip() {
     assert_healthy(&ride(240, POLL_MS, board_wait_us()), 240);
 }
 
-/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (15 against 12 at the 50 ms
-/// pass with the transfers' time charged, 16 before it; `ChipLimits::parse_us` 20 between two reads: inferred, not measured); with the 100 ms pass (below) the
-/// ride's traffic overflows it.
+/// The 20 us receive wait of 2026-10-31 reads one frame a pass: the queue runs higher (13 against 12 at the 50 ms
+/// pass with the transfers' time charged; `ChipLimits::parse_us` 20 between two reads: inferred, not measured). Before
+/// the differential test (2026-11-01, `resp_ahead`: events queued before a response go out before it, as the emulated
+/// app does) the model said 15 against 12, and 100 ms with the 20 us wait overflowed it.
 #[test]
 fn the_20_us_wait_leaves_the_queue_higher() {
     let (slow, fast) = (ride(10, POLL_MS, 20), ride(10, POLL_MS, board_wait_us()));
-    assert!(slow.high_water >= fast.high_water + 3, "{} against {}", slow.high_water, fast.high_water);
+    assert!(slow.high_water > fast.high_water, "{} against {}", slow.high_water, fast.high_water);
 }
 
-/// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) is no better. Worst case for a short wait
-/// (ChipLimits): a direction, not the unit's exact numbers.
+/// A 100 ms pass with the one-frame wait (the ride pass of 2026-10-31) runs the queue far higher than the production
+/// wait does (70 against 12 on 2026-11-01). It no longer overflows the 96 slots in the model: that needed a response to
+/// overtake the queued events, which the emulated app does not do (nrf_diff_tests.rs). A direction, not the unit's
+/// numbers.
 #[test]
-fn a_100_ms_pass_with_the_20_us_wait_hangs_the_chip() {
-    let o = ride(10, 100, 20);
-    assert!(o.hangs > 0, "high-water {}", o.high_water);
+fn a_100_ms_pass_with_the_20_us_wait_runs_the_queue_high() {
+    let (slow, fast) = (ride(10, 100, 20), ride(10, 100, board_wait_us()));
+    assert!(slow.high_water >= fast.high_water + 30, "{} against {}", slow.high_water, fast.high_water);
 }
 
 /// The healthy-wait case for the slower pass: the 100 ms pass is gone from the firmware (2026-11-01); this records
@@ -149,4 +168,89 @@ fn a_100_ms_pass_with_the_200_us_wait() {
     let o = ride(10, 100, board_wait_us());
     assert_eq!(o.hangs, 0, "high-water {}", o.high_water);
     std::eprintln!("100 ms pass, production wait: high-water {}", o.high_water);
+}
+
+/// Every open ANT channel times out its search together after a chip reset: SEARCH_TIMEOUT and CHANNEL_CLOSED for each of
+/// the 8 channels (ant_parameters.h codes 1 and 7).
+fn search_timeouts(sim: &mut Sim) {
+    for ch in 0..8u8 {
+        sim.nordic.ant_event(&[3, 0x40, ch, 1, 1], 1, ch);
+        sim.nordic.ant_event(&[3, 0x40, ch, 1, 7], 7, ch);
+    }
+}
+
+/// The iPhone's ANCS / AMS traffic for 12 notifications at once: per notification the attribute fetch's four GATTC
+/// notifications (title, message, app id, date; sizes of the phone model, ble_sim.rs) in one pass, 48 events.
+fn phone_burst(sim: &mut Sim) {
+    for _ in 0..12 {
+        for n in [5u16, 11, 20, 15] {
+            let mut p = std::vec![2, 0x39, 0, 0, 0, 0, 0, 0, 0, 0x25, 0, 1];
+            p.extend(n.to_le_bytes());
+            p.extend((0..n).map(|i| i as u8));
+            sim.nordic.queue(&p);
+        }
+    }
+}
+
+/// The SoftDevice's ANT queue (32) held while the chip was suspended, then pulled in one pass: 32 broadcasts.
+fn ant_resume(sim: &mut Sim) {
+    for i in 0..32u8 {
+        sim.nordic.ant_event(&[&[9, 0x4e, i % 3][..], &[i; 8]].concat(), 0x80, i % 3);
+    }
+}
+
+/// An iPhone that connects with `n` notifications already on it: ANCS sends a Notification Source notification for every
+/// one when the unit subscribes (Apple ANCS spec), at the phone's connection interval. Inferred (not measured): 5 per
+/// 20 ms interval (the interval is 7.5 to 30 ms, 4 to 6 notifications fit one). The app fetches the attributes of each
+/// as it does for any notification (the phone model answers). Production configuration.
+#[test]
+fn a_phone_connecting_with_many_notifications_never_hangs_the_chip() {
+    for n in [32u32, 64, 128] {
+        let o = ride_with(
+            3,
+            POLL_MS,
+            board_wait_us(),
+            |_| {},
+            |sim| {
+                let script = (0..n).map(|i| (5_000 + u64::from(i / 5) * 20, Act::Notify(4, i, "Bob", "Lunch at 1?")));
+                if let Some(p) = &mut sim.nordic.phone {
+                    p.script = script.collect();
+                }
+            },
+        );
+        std::eprintln!("phone connecting with {n} notifications: high-water {}, hangs {}", o.high_water, o.hangs);
+        assert_eq!(o.hangs, 0, "{n} existing notifications hung the chip");
+    }
+}
+
+/// The 2026-11-01 ride, honestly: the old configuration (100 ms pass, 20 us wait) with the bursts a ride really has, and
+/// the production configuration under the same. Each burst arrives every 30 s on top of the ride's traffic. Which of
+/// them hang the old configuration is printed; the production one must never hang and keep 36 of the 96 slots free.
+#[test]
+fn the_bursts_of_a_ride_against_the_old_and_the_production_configuration() {
+    let bursts = [
+        ("search time-outs", search_timeouts as fn(&mut Sim)),
+        ("phone burst", phone_burst),
+        ("ANT resume", ant_resume),
+    ];
+    let (mut old_hangs, mut worst) = (std::vec::Vec::new(), 0);
+    for (name, burst) in bursts {
+        let old = ride_with(5, 100, 20, burst, |_| {});
+        let prod = ride_with(5, POLL_MS, board_wait_us(), burst, |_| {});
+        std::eprintln!(
+            "{name}: old config hangs {} (high-water {}), production hangs {} (high-water {})",
+            old.hangs,
+            old.high_water,
+            prod.hangs,
+            prod.high_water
+        );
+        if old.hangs > 0 {
+            old_hangs.push(name);
+        }
+        assert_eq!(prod.hangs, 0, "{name}: the production configuration hung");
+        assert!(prod.high_water <= 60, "{name}: production high-water {}", prod.high_water); // the burst itself is up to 48
+        worst = worst.max(prod.high_water);
+    }
+    std::eprintln!("bursts that hang the old configuration: {old_hangs:?}; production worst high-water {worst} of 96");
+    assert!(!old_hangs.is_empty(), "no realistic burst hangs the old configuration in the model: the trigger is open");
 }
