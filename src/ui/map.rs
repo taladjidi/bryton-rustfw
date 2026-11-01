@@ -10,8 +10,8 @@
 //!   step doubles, so a ride of any length fits, evenly spaced. No heap.
 //! - **Zoom:** with a position and no zoom set by hand, the view is the default one: the level whose pixel is nearest
 //!   1 km over the map's smaller side ([`default_mpp16`], 4 m a pixel on the full-page map, 960 m across), centred a
-//!   quarter of the map ahead of the rider as at a manual level ([`View::follow`]). It is drawn again (one full
-//!   redraw) only when the rider leaves the middle three fifths (`View::follows`), so a ride out redraws each time
+//!   third of the map ahead of the rider as at a manual level ([`View::follow`]). It is drawn again (one full
+//!   redraw) only when the rider leaves the middle four fifths (`View::follows`), so a ride out redraws each time
 //!   it does. With a course followed, the crosshair toggles between that view and the whole route (the fit) and back. Without a position (no fix
 //!   yet, indoors) the view fits the track in the middle two thirds of the map, at a scale of 2^k or 1.5 x 2^k metres
 //!   per pixel, and the course with it; a loop is drawn once there.
@@ -20,8 +20,8 @@
 //!   level ([`zoom`]) from the one shown, finer or coarser than the default alike (indoors the fit is already the
 //!   finest it takes, [`FIT_LEVEL`]: the owner's "+" and "-" did nothing, 2026-10-25), from [`MIN_LEVEL`] (1.5 m a
 //!   pixel: IGN's zoom 16 drawn about 1:1 in France) to [`MAX_LEVEL`]. At a manual level the view follows the rider
-//!   ([`View::follow`]): it is centred a quarter of the map ahead of them, and centred again only when the arrow
-//!   leaves the middle three fifths, so the basemap is drawn once per re-centre, not every second. The third
+//!   ([`View::follow`]): it is centred a third of the map ahead of them, and centred again only when the arrow
+//!   leaves the middle four fifths, so the basemap is drawn once per re-centre, not every second. The third
 //!   button, a crosshair under "-", shown at any manual level, goes back to the automatic view (with a course, to
 //!   the route and back, see above).
 //! - **Pan:** at a manual level, a drag on the map moves it with the finger ([`pan`]), once at the release (one
@@ -388,7 +388,7 @@ impl View {
     /// position.
     pub fn follow(track: &Track, area: Rect, mpp16: i64) -> Option<View> {
         let p = track.pos?;
-        let ahead = if track.stale { 0 } else { i64::from(area.2.min(area.3) / 4) * mpp16 / 16 };
+        let ahead = if track.stale { 0 } else { i64::from(area.2.min(area.3) / 3) * mpp16 / 16 };
         // heading up, "ahead" is the top of the map, which may lag the heading by a step
         let dir = if track.up { usize::from(track.rot) } else { Arrow::dir(track.heading) };
         let at = |s: i32| (i64::from(s) * ahead / 256) as i32;
@@ -419,11 +419,12 @@ impl View {
         (area.0 + area.2 / 2 + px(dx * c - dy * s), area.1 + area.3 / 2 - px(dx * s + dy * c))
     }
 
-    /// Zoomed in, the arrow is still in the middle three fifths of the map: no need to centre again.
+    /// Zoomed in, the arrow is still in the middle four fifths of the map: no need to centre again (each re-centre
+    /// is a whole basemap, review 2026-11-01 finding 60: the arrow travels 1.3x as far between two).
     pub(crate) fn follows(&self, area: Rect, track: &Track) -> bool {
         let Some(p) = track.pos else { return true };
         let (x, y) = self.px(area, p);
-        let (mx, my) = (area.2 / 5, area.3 / 5);
+        let (mx, my) = (area.2 / 10, area.3 / 10);
         inside((area.0 + mx, area.1 + my, area.2 - 2 * mx, area.3 - 2 * my), x, y)
     }
 
@@ -1090,7 +1091,7 @@ mod tests {
 
     /// The fitted view puts every point of the track inside the map, away from the edge.
     /// The default view in a box 75 pixels high follows a straight ride with about 1 km of height, and refits as the
-    /// rider leaves the middle three fifths (5 minutes at 8 m/s north).
+    /// rider leaves the middle four fifths (5 minutes at 8 m/s north).
     #[test]
     fn default_view_in_a_small_box_on_a_straight_ride() {
         let area = (0, 24, 240, 75);
