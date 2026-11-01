@@ -117,8 +117,7 @@ fn erg_workout_over_ble_is_recorded() {
 #[test]
 fn sim_follows_the_course_over_ble() {
     let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
-    pair(&mut sim, &mut app);
-    super::trainer_tests::course_ride(&mut sim, &mut app);
+    super::trainer_tests::course_ride(&mut sim, &mut app, pair);
     let t = trainer(&sim);
     assert_eq!(t.mode, 0x11);
     let last = t.got.iter().rev().find(|w| w[0] == 0x11).expect("simulation written");

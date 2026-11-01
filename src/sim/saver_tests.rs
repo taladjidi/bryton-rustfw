@@ -89,15 +89,20 @@ fn the_strip_tag_is_drawn() {
     assert_eq!(tag_pixels(&sim), 0, "and gone with the saver");
 }
 
-/// The strip's boxes, from ui/strip.rs (W 240, CELL 6): the saver's tag at x 181 to 187, y 10 to 20, the USB symbol
-/// at x 167 to 180, y 8 to 22. Green pixels in the tag's box.
+/// The strip's top row for the capitals (strip.rs), and the pixels of the box (x, width) from `top + dy`, `h` high.
+fn strip_box(sim: &Sim, (x, w): (u32, u32), dy: u32, h: u32) -> Vec<u16> {
+    let top = crate::ui::STRIP_H - crate::ui::LABEL.height() + dy;
+    (top..top + h).flat_map(|y| (x..x + w).map(move |x| sim.screen[(y * crate::ui::W + x) as usize])).collect()
+}
+
+/// Green pixels in the saver tag's box.
 fn tag_pixels(sim: &Sim) -> usize {
-    (10..20).flat_map(|y| (181..187).map(move |x| (x, y))).filter(|&(x, y)| sim.screen[y * 240 + x] == GREEN).count()
+    strip_box(sim, crate::ui::STRIP_SAVER, 2, 10).iter().filter(|&&p| p == GREEN).count()
 }
 
 /// The pixels of the USB symbol's box.
 fn usb_box(sim: &Sim) -> Vec<u16> {
-    (8..22).flat_map(|y| (167..181).map(move |x| sim.screen[y * 240 + x])).collect()
+    strip_box(sim, crate::ui::STRIP_USB, 0, 14)
 }
 
 /// A battery voltage the charge estimate calls `p` percent.

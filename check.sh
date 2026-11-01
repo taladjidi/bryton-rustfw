@@ -8,6 +8,7 @@
 # Each step prints its wall seconds; a lane writes target/check/<lane>.log, shown on failure.
 set -e
 cd "$(dirname "$0")"
+unset WALK_HASHES # a refresh run panics on purpose and must never count as a pass
 full=0; quick=0; verbose=0
 for a in "$@"; do
     case $a in

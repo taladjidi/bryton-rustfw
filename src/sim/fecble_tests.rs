@@ -105,8 +105,7 @@ fn erg_workout_over_fec_ble_is_recorded() {
 #[test]
 fn sim_follows_the_course_over_fec_ble() {
     let (mut sim, mut app) = unit_with(FtmsSim::new_fec(), None);
-    pair(&mut sim, &mut app);
-    super::trainer_tests::course_ride(&mut sim, &mut app);
+    super::trainer_tests::course_ride(&mut sim, &mut app, pair);
     let t = trainer(&sim);
     assert_eq!(t.mode, 0x11);
     assert!(t.got.iter().any(|p| p[0] == 0x33), "page 51 written");

@@ -137,6 +137,6 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 **Golden screens.** `walk_every_screen` (`src/sim/walk_tests.rs`) hashes every screen it visits (FNV-1a of the
 framebuffer) into `test-data/walk.hashes`, one `NNN-path hash` line each, and fails on any difference, naming the
 first ten. A screen change you meant: run `WALK_HASHES=write cargo test-host -- walk_every_screen`, read the diff of
-that file together with the screenshots in `target/sim/walk/`, and commit it with the change. A change you did not
+that file (the run panics on purpose: a write never counts as a pass; check.sh unsets the variable) together with the screenshots in `target/sim/walk/`, and commit it with the change. A change you did not
 mean is the bug the check exists for. The walk is deterministic (the simulator's clock and the synthetic state), so
 no frame is left out.

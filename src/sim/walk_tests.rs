@@ -331,7 +331,7 @@ fn check_hashes(now: &[String]) {
     let text = format!("{}\n", now.join("\n"));
     if std::env::var("WALK_HASHES").is_ok_and(|v| v == "write") {
         std::fs::write(&path, &text).unwrap();
-        return;
+        panic!("walk hashes refreshed: rerun without WALK_HASHES"); // a write run never counts as a pass
     }
     let old = std::fs::read_to_string(&path).unwrap_or_default();
     let diff: Vec<String> = text

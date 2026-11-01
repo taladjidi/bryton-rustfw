@@ -100,8 +100,9 @@ pub(super) fn workout_ride(sim: &mut Sim, app: &mut App, view: fn(&Sim) -> (u8, 
 }
 
 /// A course ridden indoors on a paired trainer: the hill chosen, SIM on, 200 s ridden. The caller checks the grade sent.
-pub(super) fn course_ride(sim: &mut Sim, app: &mut App) {
+pub(super) fn course_ride(sim: &mut Sim, app: &mut App, pair: fn(&mut Sim, &mut App)) {
     app.set_course_memory(crate::storage::course_file::tests::memory());
+    pair(sim, app);
     run(sim, app, 2000);
     app.press(sim, Press::Short(Key::Start));
     app.press(sim, Press::Long(Key::Page));
