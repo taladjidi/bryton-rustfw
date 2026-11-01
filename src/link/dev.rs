@@ -624,6 +624,28 @@ fn bench_reads(app: &mut App, b: &mut impl crate::Board, lba: u32, n: u32, count
     Ok(app.prof().clock.us(b).wrapping_sub(t))
 }
 
+/// Runs [`App::step`] `n` times back to back and times each ([`Effect::BenchStep`]). The loop's last sleep is zeroed
+/// before steps 2..n (no sleep happened, so no pass counts one), and the loop's sleep and the profiler's window are
+/// put back after, so the bench does not skew `prof` nor leave the idle timers ahead.
+#[inline(never)]
+fn bench_steps(app: &mut App, b: &mut impl crate::Board, n: usize) -> [u32; 16] {
+    let saved = app.prof.clone();
+    let mut us = [0u32; 16];
+    for (k, slot) in us.iter_mut().take(n).enumerate() {
+        if k > 0 {
+            app.prof.clock.slept(0, 0);
+        }
+        let t = app.prof.clock.us(b);
+        app.step(b);
+        *slot = app.prof.clock.us(b).wrapping_sub(t);
+    }
+    let (mut clock, sleep) = (app.prof.clock, saved.clock.sleep);
+    clock.slept(sleep.0, sleep.1);
+    app.prof = saved;
+    app.prof.clock = clock;
+    us
+}
+
 impl App {
     /// Answers the effect `session` asked for that needs the app and the board (the eMMC, the FAT reader, the
     /// benchmarks, the drive, the profiler), then flushes `h`. True when board work may have slept, which takes over
@@ -653,12 +675,7 @@ impl App {
                 send_bench(h, Ok(self.prof.clock.us(b).wrapping_sub(t)));
             }
             Effect::BenchStep(n) => {
-                let mut us = [0u32; 16];
-                for slot in us.iter_mut().take(n as usize) {
-                    let t = self.prof.clock.us(b);
-                    self.step(b);
-                    *slot = self.prof.clock.us(b).wrapping_sub(t);
-                }
+                let us = bench_steps(self, b, n as usize);
                 send_bench_step(h, us.get(..n as usize).unwrap_or_default());
             }
             Effect::BenchMap(level, dx, dy) => {
@@ -851,11 +868,15 @@ pub fn send_bench_step(h: &mut impl Host, us: &[u32]) {
     let rest = us.get(1..).unwrap_or_default();
     let sum: u64 = rest.iter().map(|&v| u64::from(v)).sum();
     // tenths of first / (sum / len) = first * len * 10 / sum
-    let t = (u64::from(us.first().copied().unwrap_or(0)) * rest.len() as u64 * 10).checked_div(sum).unwrap_or(0);
     h.send(b" ratio ");
-    h.send(decimal(t / 10, &mut [0; 20]));
-    h.send(b".");
-    h.send(decimal(t % 10, &mut [0; 20]));
+    match (u64::from(us.first().copied().unwrap_or(0)) * rest.len() as u64 * 10).checked_div(sum) {
+        Some(t) => {
+            h.send(decimal(t / 10, &mut [0; 20]));
+            h.send(b".");
+            h.send(decimal(t % 10, &mut [0; 20]));
+        }
+        None => h.send(b"n/a"),
+    }
     h.send(b"\n");
 }
 
