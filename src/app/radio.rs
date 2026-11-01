@@ -128,6 +128,21 @@ impl App {
         }
     }
 
+    /// The radio's part of a step alone, run by the main loop (app/main_loop.rs) when the Nordic chip's bytes wake an
+    /// idle sleep: the clock, the chip's events read, its watch, the sensors' silence, all at once as before, while
+    /// the rest of the step waits for the end of the sleep (review 2026-11-01, finding 57: a byte ran the whole step,
+    /// about 2.7 times a second idle). `since_step_ms` is the time since the last step: what earlier radio passes
+    /// counted is taken off, and the step counts the rest, so each part sees every ms once.
+    pub(crate) fn radio_pass(&mut self, b: &mut impl Board, since_step_ms: u32) {
+        let dt = since_step_ms.saturating_sub(core::mem::replace(&mut self.watch.ahead_ms, since_step_ms));
+        self.read_clock(b);
+        if self.ble.is_some() {
+            self.poll_nrf(b);
+        }
+        self.watch_radio(b, dt);
+        self.radio.tick(dt);
+    }
+
     /// Takes what the Nordic chip sent since the last pass: advertisers, sensor data, the scan's end, and the phone
     /// link's events (app/phone.rs), those kept while a command waited first.
     pub(crate) fn poll_nrf(&mut self, b: &mut impl Board) {

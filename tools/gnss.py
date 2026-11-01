@@ -10,12 +10,11 @@ nothing is written to the receiver's flash (no UBX-CFG with a flash layer, no fi
 SPI4 here runs on the HSI (64 MHz / 64 = 1 MHz, stock's rate), software chip select on PE4. Each 4 bytes cost a
 few USB round trips: slow, but enough for 1 Hz output.
 """
-import importlib.util, sys, time
+import sys, time
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location('dev', Path(__file__).resolve().parent / 'dev.py')
-dev = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(dev)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dev  # noqa: E402
 
 GPIOE, GPIOI = 0x58021000, 0x58022000
 MODER, PUPDR, BSRR, AFRL = 0x00, 0x0c, 0x18, 0x20
@@ -25,20 +24,7 @@ CR1, CR2, CFG1, CFG2, SR, IFCR, TXDR, RXDR = 0x00, 0x04, 0x08, 0x0c, 0x14, 0x18,
 RXP, TXP = 1 << 0, 1 << 1
 
 
-class Gnss:
-    def __init__(self, s):
-        self.s = s
-
-    def peek(self, a):
-        return int(dev.command(self.s, f'peek {a:#x}'), 16)
-
-    def poke(self, a, v):
-        assert dev.command(self.s, f'poke {a:#x} {v:#x}') == 'ok'
-
-    def field(self, base, reg, pin, bits, val):
-        mask = ((1 << bits) - 1) << (pin * bits)
-        self.poke(base + reg, (self.peek(base + reg) & ~mask) | (val << (pin * bits)))
-
+class Gnss(dev.Regs):
     def power(self, on):
         self.poke(GPIOI + BSRR, 1 << 6 if on else 1 << (16 + 6))
         self.field(GPIOI, MODER, 6, 2, 1)                                      # PI6 output

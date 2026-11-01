@@ -128,3 +128,267 @@ impl<B: Board> Canvas for Panel<'_, B> {
         &self.2
     }
 }
+
+/// Pixels in one SPI transfer at most: SPI1's TSIZE (RM0399 SPI_CR2) is 16 bits, 2 bytes a pixel.
+pub const TRANSFER_MAX: u32 = 0x7ffe;
+
+/// The SPI transfers a RAMWR of `count` pixels goes in (main.rs `lcd_ram`): [`TRANSFER_MAX`] each, the rest last.
+///
+/// ```
+/// use bryton_rustfw::panel::{TRANSFER_MAX, transfers};
+/// assert!(transfers(2 * TRANSFER_MAX + 1).eq([TRANSFER_MAX, TRANSFER_MAX, 1]));
+/// assert_eq!(transfers(0).count(), 0);
+/// ```
+pub fn transfers(count: u32) -> impl Iterator<Item = u32> {
+    let mut left = count;
+    core::iter::from_fn(move || {
+        let n = left.min(TRANSFER_MAX);
+        left -= n;
+        (n > 0).then_some(n)
+    })
+}
+
+/// The panel's DMA stream (main.rs: DMA1 stream 0 into SPI1, hw.rs `PanelDma`), as [`dma_fill`] and [`dma_blit`]
+/// drive it: two buffers of [`Stream::WORDS`] words, each 32-bit word two pixels.
+pub trait Stream {
+    /// Words in each buffer.
+    const WORDS: usize;
+    /// Buffer `i` (0 or 1), or None while the stream reads it.
+    fn buf(&mut self, i: usize) -> Option<&mut [u32]>;
+    /// Starts sending words 0..n of buffer `i`, or its word 0 `n` times when `repeat`; false if it did not start.
+    /// The SPI transfer runs afterwards either way, so the CPU can finish what the stream did not send.
+    fn go(&mut self, i: usize, n: usize, repeat: bool) -> bool;
+    /// Waits for what was started to be sent: false on an error or a timeout.
+    fn wait(&mut self) -> bool;
+    /// Stops the stream: the words it had not sent, or None when it will not stop.
+    fn stop(&mut self) -> Option<usize>;
+}
+
+/// `words` copies of `word` by the stream, as one repeat. Err gives the words still to send by the CPU (all of them
+/// when it did not start, what it had not sent on a failure); Err(None) when it will not stop: nothing more may be
+/// written to the SPI.
+pub fn dma_fill(d: &mut impl Stream, words: usize, word: u32) -> Result<(), Option<usize>> {
+    let Some(w0) = d.buf(0).and_then(|b| b.first_mut()) else { return Err(Some(words)) };
+    *w0 = word;
+    if !d.go(0, words, true) {
+        return Err(Some(words));
+    }
+    if d.wait() { Ok(()) } else { Err(d.stop().map(|rest| rest.min(words))) }
+}
+
+/// `words` words from `next` by the stream, double-buffered (the CPU fills one buffer while the stream sends the
+/// other). On a failure, whatever the stream had not sent of the words already taken from `next` goes by `cpu`, and
+/// Err gives the words of `next` still to send; Err(None) when the stream will not stop: nothing more may be written
+/// to the SPI (the transfer is left short: main.rs then takes SPI1 as dead).
+pub fn dma_blit<S: Stream>(
+    d: &mut S,
+    words: usize,
+    next: &mut impl FnMut() -> u32,
+    cpu: &mut impl FnMut(u32),
+) -> Result<(), Option<usize>> {
+    let mut left = words;
+    let mut flight: Option<(usize, usize)> = None; // buffer, words in it
+    let mut cur = 0;
+    loop {
+        // the next buffer, filled while the stream sends the one in flight
+        let k = left.min(S::WORDS);
+        let ready = match d.buf(cur) {
+            Some(b) if k > 0 => {
+                for w in b.iter_mut().take(k) {
+                    *w = next();
+                }
+                left -= k;
+                Some((cur, k))
+            }
+            _ => None,
+        };
+        if let Some((i, n)) = flight
+            && !d.wait()
+        {
+            let Some(rest) = d.stop().map(|rest| rest.min(n)) else { return Err(None) };
+            if let Some(b) = d.buf(i) {
+                b.get(n - rest..n).unwrap_or(&[]).iter().for_each(|&w| cpu(w));
+            }
+            if let Some((j, m)) = ready
+                && let Some(b) = d.buf(j)
+            {
+                b.iter().take(m).for_each(|&w| cpu(w));
+            }
+            return Err(Some(left));
+        }
+        let Some((i, n)) = ready else {
+            return if left == 0 { Ok(()) } else { Err(Some(left)) };
+        };
+        if !d.go(i, n, false) {
+            // not started (the stream is idle here, so not expected): these words by the CPU, and the rest
+            if let Some(b) = d.buf(i) {
+                b.iter().take(n).for_each(|&w| cpu(w));
+            }
+            return Err(Some(left));
+        }
+        flight = Some((i, n));
+        cur ^= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use core::cell::RefCell;
+    use std::vec::Vec;
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Op {
+        Buf,
+        Go,
+        Wait,
+    }
+
+    /// A stream of 4-word buffers that sends into `wire`, fails `fail`'s op at its nth call and, when `stuck`, will
+    /// not stop; a failed wait has sent all but `rest(n)` of its `n` words.
+    struct Fake<'a> {
+        bufs: [[u32; 4]; 2],
+        /// Started: buffer, words, repeat (still set after a failed wait, until the stop).
+        flight: Option<(usize, usize, bool)>,
+        unsent: usize,
+        wire: &'a RefCell<Vec<u32>>,
+        fail: Option<(Op, usize)>,
+        stuck: bool,
+        calls: [usize; 3],
+        rest: fn(usize) -> usize,
+    }
+
+    impl<'a> Fake<'a> {
+        fn new(wire: &'a RefCell<Vec<u32>>, fail: Option<(Op, usize)>, stuck: bool, rest: fn(usize) -> usize) -> Self {
+            Fake { bufs: [[0; 4]; 2], flight: None, unsent: 0, wire, fail, stuck, calls: [0; 3], rest }
+        }
+        fn fails(&mut self, op: Op) -> bool {
+            let n = &mut self.calls[op as usize];
+            *n += 1;
+            self.fail == Some((op, *n - 1))
+        }
+        fn send(&self, i: usize, n: usize, repeat: bool) {
+            let b = self.bufs[i];
+            self.wire.borrow_mut().extend((0..n).map(|k| if repeat { b[0] } else { b[k] }));
+        }
+    }
+
+    impl Stream for Fake<'_> {
+        const WORDS: usize = 4;
+        fn buf(&mut self, i: usize) -> Option<&mut [u32]> {
+            let reading = self.flight.is_some_and(|f| f.0 == i);
+            if self.fails(Op::Buf) || reading { None } else { Some(&mut self.bufs[i]) }
+        }
+        fn go(&mut self, i: usize, n: usize, repeat: bool) -> bool {
+            assert!(self.flight.is_none(), "started while the stream runs");
+            assert!(n > 0 && (repeat || n <= 4));
+            if self.fails(Op::Go) {
+                return false;
+            }
+            self.flight = Some((i, n, repeat));
+            true
+        }
+        fn wait(&mut self) -> bool {
+            let Some((i, n, repeat)) = self.flight else { return true };
+            if self.fails(Op::Wait) {
+                self.unsent = (self.rest)(n).min(n);
+                self.send(i, n - self.unsent, repeat);
+                return false;
+            }
+            self.send(i, n, repeat);
+            self.flight = None;
+            true
+        }
+        fn stop(&mut self) -> Option<usize> {
+            if self.stuck {
+                return None;
+            }
+            self.flight = None;
+            Some(core::mem::take(&mut self.unsent))
+        }
+    }
+
+    const RESTS: [fn(usize) -> usize; 4] = [|_| 0, |_| 1, |n| n / 2, |n| n];
+
+    /// The faults to try: none, then each op failed at each of its first calls.
+    fn faults() -> impl Iterator<Item = Option<(Op, usize)>> {
+        [None]
+            .into_iter()
+            .chain([Op::Buf, Op::Go, Op::Wait].into_iter().flat_map(|op| (0..12).map(move |n| Some((op, n)))))
+    }
+
+    /// Every op failed at each of its calls, for every split of a failed wait: the wire gets every word once, in
+    /// order, once the caller sends what Err gives by the CPU; or, the stream stuck (Err(None)), a prefix of them.
+    #[test]
+    fn blit_sends_every_word_once_whatever_fails() {
+        let mut stuck_seen = 0;
+        for words in [1, 3, 4, 5, 8, 9, 17] {
+            for rest in RESTS {
+                for fail in faults() {
+                    for stuck in [false, true] {
+                        let wire = RefCell::new(Vec::new());
+                        let mut d = Fake::new(&wire, fail, stuck, rest);
+                        let mut k = 0;
+                        let mut next = || {
+                            k += 1;
+                            k
+                        };
+                        let r = dma_blit(&mut d, words, &mut next, &mut |w| wire.borrow_mut().push(w));
+                        let want: Vec<u32> = (1..=words as u32).collect();
+                        match r {
+                            Ok(()) => assert_eq!(*wire.borrow(), want, "{words} {fail:?}"),
+                            Err(Some(left)) => {
+                                wire.borrow_mut().extend((0..left).map(|_| next()));
+                                assert_eq!(*wire.borrow(), want, "{words} {fail:?}");
+                            }
+                            Err(None) => {
+                                assert!(stuck && want.starts_with(&wire.borrow()), "{words} {fail:?}");
+                                stuck_seen += 1;
+                            }
+                        }
+                        if fail.is_none() {
+                            assert_eq!(r, Ok(()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(stuck_seen > 0);
+    }
+
+    #[test]
+    fn fill_sends_its_word_every_time_whatever_fails() {
+        for words in [1, 2, 300] {
+            for rest in RESTS {
+                for fail in faults() {
+                    for stuck in [false, true] {
+                        let wire = RefCell::new(Vec::new());
+                        let mut d = Fake::new(&wire, fail, stuck, rest);
+                        let r = dma_fill(&mut d, words, 0xabcd_1234);
+                        match r {
+                            Ok(()) => {}
+                            Err(Some(left)) => wire.borrow_mut().extend((0..left).map(|_| 0xabcd_1234)),
+                            Err(None) => assert!(stuck && fail == Some((Op::Wait, 0))),
+                        }
+                        let w = wire.borrow();
+                        assert!(w.iter().all(|&x| x == 0xabcd_1234) && w.len() <= words);
+                        if r != Err(None) {
+                            assert_eq!(w.len(), words, "{words} {fail:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transfers_cover_the_count() {
+        for count in [1, 2, TRANSFER_MAX - 1, TRANSFER_MAX, TRANSFER_MAX + 1, 240 * 320, u32::MAX] {
+            let t: Vec<u32> = transfers(count).collect();
+            assert_eq!(t.iter().map(|&n| u64::from(n)).sum::<u64>(), u64::from(count));
+            assert!(t.iter().all(|&n| (1..=TRANSFER_MAX).contains(&n)));
+            assert!(t.iter().rev().skip(1).all(|&n| n == TRANSFER_MAX), "only the last one short");
+        }
+    }
+}

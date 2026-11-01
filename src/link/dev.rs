@@ -4,7 +4,7 @@
 //! Commands, one per line:
 //! - `where`: `where TITLE|row/rows|LABEL` (row from 0) in a menu, else `where OVERVIEW`, `RIDE n` or
 //!   `SCREEN name`; read-only (tools/walk.py moves the cursor by name).
-//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending` (CPU awake in the app's work, last second).
+//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending, card writes yes|no` (CPU awake in the app's work, last second).
 //! - `bat`: the battery history, one line a minute, oldest first: millivolts, ` c` while charging; then `end`.
 //! - `shot`: `shot 240 320`, then 240 x 320 RGB565 pixels, big endian, row by row (what the app drew).
 //! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (tools/pack.py, without its
@@ -416,6 +416,8 @@ impl Session {
                 h.send(decimal(u64::from(app.auto_off_held()), &mut [0; 20]));
                 h.send(b", ride ");
                 h.send(app.ride_word());
+                h.send(b", card writes ");
+                h.send(app.card_writes_word());
                 h.send(b"\n");
             }
             Some(b"where") => {

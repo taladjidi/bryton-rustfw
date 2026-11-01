@@ -939,7 +939,8 @@ pub fn refit(
         return true;
     }
     let centre = zoom.and_then(|z| z.centre);
-    let zoomed = zoomed(area, View::fit(track, area, route), zoom);
+    // the fit is worked out only for a zoom (the automatic view needs none)
+    let zoomed = zoom.and_then(|z| zoomed(area, View::fit(track, area, route), Some(z)));
     // the fit stays north up; a followed or zoomed view turns to the track's step (one basemap per step)
     if v.rot != if zoomed.is_some() || follow { track.rot } else { 0 } {
         return true;
@@ -967,6 +968,22 @@ pub fn update(
     follow: bool,
 ) {
     let refit = refit(area, track, shown, route, zoom, follow);
+    update_as(c, area, track, shown, base, route, zoom, follow, refit);
+}
+
+/// [`update`] when the caller already asked [`refit`] (the page does, to draw the new view's basemap first).
+#[allow(clippy::too_many_arguments)] // [`update`]'s, and the answer
+pub fn update_as(
+    c: &mut dyn Canvas,
+    area: Rect,
+    track: &Track,
+    shown: &mut Shown,
+    base: Option<&Basemap>,
+    route: Option<&Route>,
+    zoom: Option<Zoom>,
+    follow: bool,
+    refit: bool,
+) {
     let Some(v) = shown.view.filter(|_| !refit) else {
         if refit {
             *shown = Shown::of(track, area, route, zoom, follow);

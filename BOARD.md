@@ -59,7 +59,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   execution priority 0 under PRIMASK); a no-access MPU region under the thread stack (on PSP, handlers on MSP)
   made an overflow's HardFault stack its frame into that region, and a fault on HardFault's entry is lockup
   (B1.5.15): no reset, no USB, a four-button restart. So the stack has no MPU guard: link.x `_stack_canary`, a
-  word checked every pass, turns an overflow that reaches it into a reset instead (main.rs `stack_check`).
+  word checked every pass, turns an overflow that reaches it into a reset instead (lib app/main_loop.rs `stack_ok`).
 - **Recovery mode ("Engineer Mode")**: USB plugged, restart with the four buttons while holding Page. The
   bootloader configures the Page pin itself and reads the real key, so no firmware can enter it by software.
   Recovery tools: github.com/taladjidi/bryton-S510-mods (`tools/iaprecover.py`, `docs/recovery.md`).
@@ -454,8 +454,9 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   on this side however long a pass; how much the chip itself queues meanwhile is not known. After a full FIFO is read,
   the chip's next byte came at most 4 us later (2026-10-31, desk traffic, 52 full-FIFO runs over two minutes); inside
   a burst not held by RTS, gaps over 20 us between bytes happen (22 a minute, up to 76 us). So while idle (passes of
-  250 ms) a byte ends the sleep at once: CR1.RXFNEIE pends USART2's IRQ 38, enabled in the NVIC only around that
-  sleep (main.rs `wake_on_io`), interrupts masked. A ride's 100 ms pass (`RIDE_POLL_MS`) does not wake on them
+  250 ms) a byte wakes the sleep at once: CR1.RXFNEIE pends USART2's IRQ 38, enabled in the NVIC only around that
+  sleep (main.rs `wake_on_io`), interrupts masked; the bytes are read by a radio pass and the sleep goes on (lib
+  `App::radio_pass`, app/main_loop.rs; review 2026-11-01, finding 57). A ride's 100 ms pass (`RIDE_POLL_MS`) does not wake on them
   (`LoopPolicy::begin_sleep`, `bytes`): they wait for the next pass.
 - **Power off:** `sd_power_system_off` (`00 32`), no response; stock sends nothing else first and leaves PA6 /
   PI4 as they are. The next start's reset pulse wakes the chip (nRF52 pin reset; inferred, to see on the unit).

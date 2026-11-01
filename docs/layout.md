@@ -59,7 +59,12 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `device.rs`: backlight, buzzer, status strip, switching off, AUTO OFF (`step_auto_off`) and the idle pass length (`pass_ms`). `clock.rs`: RTC decoding, dates, the shown clock (ZONE and SUMMER TIME: `local_time`, the EU and US rules).
   - `loop_policy.rs`: `LoopPolicy`, the main loop's rules, pure and tested on the host: the cable (start USB once,
     reset on an unplug outside a ride), the idle sleep's wake sources, the sleep slices (`TOUCH_MS` while touching),
-    what ends the pass's sleep (`Woke`), and the awake and CPU shares of `info`; main.rs keeps the primitives.
+    what ends the pass's sleep (`Woke`), and the awake and CPU shares of `info`.
+  - `main_loop.rs`: `MainLoop::pass`, the main loop's pass in order (main.rs runs it for ever, the simulator's tests
+    the same code): the stack checks, the cable, the sleep slices with the USB link and its effects (reset, the staged
+    image's run, the stack test, a key, the restart, the watch, the snapshot before the drop), the radio passes a
+    Nordic byte wakes (`App::radio_pass`), the input, the pass counted; against `LoopBoard` (the board's primitives:
+    timer, WFI, edges, reset) and `UsbLink` (usb.rs `Link`).
   - `profile.rs`: the ride profile (ROAD, INDOOR or MTB), chosen from the trainer heard or set by hand, given up when the trainer goes silent.
   - `src/app/quick.rs`: the quick panel (`Screen::Quick`, a swipe down): what the rider wants first, top to bottom.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
@@ -92,7 +97,11 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     (`smooth_fonts_share_the_pixel_cells`). `Canvas::smooth` carries the choice to every draw (`Panel`'s third field, filled from
     the settings; screenshot rows carry it in `Row`), so the screenshot equals the panel.
   - To change a glyph, edit `tools/pixel_font.py` and run `python3 tools/font.py` (needs PIL; `-o PATH` writes elsewhere; check.sh compares its output with this file).
-- `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
+- `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off), the
+  split of a RAMWR into SPI transfers and the panel DMA's double-buffer bookkeeping (`Stream`, `dma_fill`, `dma_blit`:
+  what the CPU sends after a DMA failure), tested against a fake stream that fails at each step.
+- `src/drivers/periph.rs`: the register values main.rs writes, computed and tested here: TIM1's clock and a tone's
+  PSC / ARR / CCR3, the backlight's LPTIM CMP, the RTC_TR / RTC_DR bits.
 - `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only), the GNSS SYSTEMS keys.
 - `src/drivers/mga.rs`: AssistNow Offline: the reader of `\Rustfw\mga.ubx` that picks today's UBX-MGA-ANO messages a sector at a time.
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
@@ -197,7 +206,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK), the full copy's
   developer fields included.
 - `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol: identification, EXT_CSD SEC_COUNT, block reads and writes
-  (writes refused at or past sector B, stock's reserved area), stock's layout; against the `Board` primitives
+  (writes refused at or past sector B, stock's reserved area), stock's layout, the controller's data-path arithmetic
+  main.rs uses (`data_error`: the SDMMC_STA flags' priority, `data_limit_ms`, `clkcr`); against the `Board` primitives
   `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `src/sim/mod.rs` has a model of the card
   (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
   basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at the first main loop pass, for the scan's cache of
@@ -322,6 +332,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
+  `loop_model.rs` (not tests: the `Sim`'s side of the main loop, `LoopBoard` on the simulated clock, and `SimLink`, a
+  scripted USB link that logs what the pass asks; `tests.rs` `run_loop` drives lib `MainLoop::pass`, the unit's own code).
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).
 - `src/sim/tests.rs` keeps the shared helpers (`run`, `assert_consistent`, `back`, `KEY`, `STRAP`...) and the boot, key, touch,
   banner, light and misc tests; the rest is by concern: `stock_tests.rs` (the overview's totals, STOCK DATA, fitness, ride

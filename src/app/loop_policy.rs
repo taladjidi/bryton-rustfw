@@ -1,8 +1,8 @@
-//! The main loop's policy (main.rs `main`): when USB starts and when an unplug resets the unit, which wake sources
-//! an idle sleep arms, how long each sleep slice is, what ends the pass's sleep, and how a pass is counted in the
-//! awake and CPU shares that the dev link's `info` reports. main.rs keeps the primitives (the cycle counter, SysTick,
-//! the NVIC and EXTI lines, WFI, the reset) and asks [`LoopPolicy`] what to do with what they measured, so the
-//! rules are tested on the host (docs/review-2026-10-29.md A8).
+//! The main loop's policy (app/main_loop.rs `MainLoop::pass`): when USB starts and when an unplug resets the unit,
+//! which wake sources an idle sleep arms, how long each sleep slice is, what ends the pass's sleep, and how a pass is
+//! counted in the awake and CPU shares that the dev link's `info` reports. The board keeps the primitives (the cycle
+//! counter, SysTick, the NVIC and EXTI lines, WFI, the reset) and the pass asks [`LoopPolicy`] what to do with what
+//! they measured, so the rules are tested on the host (docs/review-2026-10-29.md A8).
 
 use crate::dev::Stats;
 use crate::{IDLE_POLL_MS, POLL_MS, TOUCH_MS};
@@ -24,13 +24,14 @@ pub enum Cable {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Wake {
     /// A long sleep (the pass longer than [`POLL_MS`]): the key lines end it at once, and the Nordic chip's bytes
-    /// if `bytes` (main.rs `wake_on_io` around the sleep, `io_edge` in it). Never in a short one: a held key's flag
-    /// or a waiting byte would end every WFI.
+    /// wake it if `bytes` (`LoopBoard::wake_on_io` around the sleep). Never in a short one: a held key's flag or a
+    /// waiting byte would end every WFI.
     pub io: bool,
     /// The app reads the Nordic chip's bytes (`App::radio_up`). Otherwise main.rs flushes them, so a byte nobody
     /// reads neither ends every WFI nor waits stale for the next start.
     pub radio: bool,
-    /// The chip's bytes end the sleep: read, and an idle sleep ([`IDLE_POLL_MS`]). Not a ride's pass
+    /// The chip's bytes wake the sleep for a radio pass (`App::radio_pass`: read at once, the rest of the step at the
+    /// sleep's end): read, and an idle sleep ([`IDLE_POLL_MS`]). Not a ride's pass
     /// ([`crate::RIDE_POLL_MS`]): the sensors' broadcasts would end nearly every one; our side holds them (RTS and
     /// the RX FIFO); the chip's ANT event queue is 32 events (BOARD.md 11, the enable's 0x20), its BLE and
     /// serialization queues are not known.
@@ -44,8 +45,11 @@ pub struct Woke {
     pub touch: bool,
     /// The slice's SysTick period ran out.
     pub timer: bool,
-    /// A key or a byte from the Nordic chip, in an idle sleep ([`Wake::io`]).
+    /// A key went down, in an idle sleep ([`Wake::io`]).
     pub io: bool,
+    /// A byte from the Nordic chip waits, in an idle sleep that reads them ([`Wake::bytes`]): a radio pass, and the
+    /// sleep goes on.
+    pub bytes: bool,
     /// A key pressed over the dev link: it acts now, so the next command cannot replace it.
     pub key: bool,
     /// Board work done for the USB link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is
@@ -56,7 +60,7 @@ pub struct Woke {
 impl Woke {
     /// The wait ends: anything fired.
     pub fn any(&self) -> bool {
-        self.touch || self.timer || self.io || self.key || self.usb
+        self.touch || self.timer || self.io || self.bytes || self.key || self.usb
     }
 
     /// Read the panel after this slice: its INT fell or a finger is down (`App::touching`). Before the early end of
@@ -131,8 +135,9 @@ impl LoopPolicy {
     }
 
     /// Starts the pass's sleep: `pass_ms` is `App::pass_ms`, `radio_up` is `App::radio_up`. Idle (a longer sleep,
-    /// ended at once by a key or a byte from the Nordic chip, so neither waits for it; the chip's own buffers are not
-    /// known: it is read as soon as it sends, as before) when the pass is longer than [`POLL_MS`].
+    /// ended at once by a key, woken by a byte from the Nordic chip for a radio pass, so neither waits for it; the
+    /// chip's own buffers are not known: it is read as soon as it sends, as before) when the pass is longer than
+    /// [`POLL_MS`].
     pub fn begin_sleep(&mut self, pass_ms: u32, radio_up: bool) -> Wake {
         self.slept = 0;
         Wake { io: pass_ms > POLL_MS, radio: radio_up, bytes: radio_up && pass_ms >= IDLE_POLL_MS }
@@ -182,7 +187,7 @@ impl LoopPolicy {
     /// (all cycles run: CYCCNT stops in WFI, so the sleep's cycles are the time the CPU ran while it should have
     /// slept), per mille of the window.
     pub fn account(&mut self, pass_cycles: u32, sleep_cycles: u32) -> u32 {
-        let per_ms = self.cpu_hz / 1000;
+        let per_ms = (self.cpu_hz / 1000).max(1); // never 0: no division panic site (the rate is not a constant here)
         let worked = pass_cycles.wrapping_sub(sleep_cycles);
         self.awake = self.awake.saturating_add(worked);
         self.ran = self.ran.saturating_add(worked).saturating_add(sleep_cycles);
@@ -285,6 +290,8 @@ mod tests {
         for w in [Woke { io: true, ..none }, Woke { key: true, ..none }, Woke { usb: true, ..none }] {
             assert!(w.any() && w.ends_pass() && !w.read_touch(false));
         }
+        let bytes = Woke { bytes: true, ..none };
+        assert!(bytes.any() && !bytes.ends_pass() && !bytes.read_touch(false), "a radio pass, the sleep goes on");
     }
 
     #[test]

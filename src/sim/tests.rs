@@ -2,6 +2,7 @@
 //! time, checked on what the panel shows.
 
 use super::*;
+use crate::dev::{Effect, UsbWatch};
 use crate::text::Face;
 // Helpers that moved with their tests; the other test files still reach them as `tests::X`.
 pub(super) use super::course_tests::hill;
@@ -1856,35 +1857,22 @@ fn font_cycles_two_faces() {
     assert_eq!(faces, [Face::Barlow, Face::Pixel, Face::Barlow, Face::Pixel]);
 }
 
-/// main.rs's loop: a pass, then a sleep of [`App::pass_ms`] in [`TOUCH_MS`] slices, ended at once in a long one by a
-/// key going down (its EXTI line on the unit) or, in an idle one while the chip is read ([`App::radio_up`]), by a
-/// byte from it (USART2's line; [`crate::LoopPolicy::begin_sleep`]); the chip's bytes flushed while it is not.
-/// Returns when each pass started.
-fn run_main(sim: &mut Sim, app: &mut App, ms: u64) -> Vec<u64> {
-    let (end, mut passes) = (sim.ms + ms, Vec::new());
-    while sim.ms < end && !sim.standby {
+/// main.rs's loop for `ms`: the library's own pass (lib app/main_loop.rs [`crate::MainLoop::pass`]) on the
+/// simulator's side of the board (loop_model.rs), a new loop each call (the cable's state, the touch's time). Returns
+/// when each pass started, and the radio passes run in the sleeps. Stops at a switch-off or a reset.
+fn run_loop_radio(sim: &mut Sim, app: &mut App, ms: u64) -> (Vec<u64>, u32) {
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    let (end, mut passes, mut radio) = (sim.ms + ms, Vec::new(), 0);
+    while sim.ms < end && !sim.standby && sim.main.resets == 0 {
         passes.push(sim.ms);
-        app.step(sim);
-        let (idle, radio, mut slept, mut keys) = (app.pass_ms() > POLL_MS, app.radio_up(), 0, sim.keys_down());
-        let bytes = radio && app.pass_ms() >= IDLE_POLL_MS;
-        if !radio {
-            sim.nordic.out.clear();
-        }
-        while slept < app.pass_ms() {
-            sim.delay_ms(TOUCH_MS);
-            slept += TOUCH_MS;
-            if let Some(i) = app.touch(sim, TOUCH_MS) {
-                app.input(sim, i);
-            }
-            let now = sim.keys_down();
-            if idle && (now & !keys != 0 || bytes && !sim.nordic.out.is_empty()) {
-                break;
-            }
-            keys = now;
-        }
-        app.prof().clock.sleep = (slept, 0);
+        radio += main.pass(app, sim);
     }
-    passes
+    (passes, radio)
+}
+
+/// [`run_loop_radio`]'s pass starts.
+fn run_loop(sim: &mut Sim, app: &mut App, ms: u64) -> Vec<u64> {
+    run_loop_radio(sim, app, ms).0
 }
 
 /// Idle (no ride, no key for IDLE_AFTER_MS) the loop runs 4 passes a second instead of 20; a key wakes it at once
@@ -1894,20 +1882,20 @@ fn idle_loop_slows_and_a_key_wakes_it() {
     let mut sim = Sim::new(9, 0, 0).keys(|ms| if (45_000..45_120).contains(&ms) { Key::Page as u8 } else { 0 });
     let mut app = App::start(&mut sim, None);
     let left = 44_000 - sim.ms; // the key goes down at 45 s
-    let passes = run_main(&mut sim, &mut app, left);
+    let passes = run_loop(&mut sim, &mut app, left);
     let between = |a: u64, b: u64| passes.iter().filter(|&&t| (a..b).contains(&t)).count();
     assert!((95..=101).contains(&between(20_000, 25_000)), "20 passes/s before IDLE_AFTER_MS");
     assert!((19..=21).contains(&between(39_000, 44_000)), "4 passes/s idle: {}", between(39_000, 44_000));
     assert_eq!(app.pass_ms(), IDLE_POLL_MS);
     assert_eq!(app.screen(), Screen::Main);
-    let passes = run_main(&mut sim, &mut app, 2000);
+    let passes = run_loop(&mut sim, &mut app, 2000);
     let first = passes.iter().find(|&&t| t >= 45_000).copied().unwrap_or(u64::MAX);
     assert!(first <= 45_000 + u64::from(TOUCH_MS), "a pass {} ms after the key went down", first - 45_000);
     assert!(matches!(app.screen(), Screen::Ride(_)), "Page acted on: {:?}", app.screen());
     assert_eq!(app.pass_ms(), POLL_MS, "fast again after a key");
     // a ride keeps it from the idle rate, however long without a key: 10 passes a second once nothing is going on
     app.press(&mut sim, Press::Short(Key::Start));
-    run_main(&mut sim, &mut app, 60_000);
+    run_loop(&mut sim, &mut app, 60_000);
     assert_eq!(app.pass_ms(), RIDE_POLL_MS);
 }
 
@@ -1920,12 +1908,12 @@ fn a_quiet_ride_runs_ten_passes_a_second() {
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
-    run_main(&mut sim, &mut app, 5_000);
+    run_loop(&mut sim, &mut app, 5_000);
     app.press(&mut sim, Press::Short(Key::Start));
-    run_main(&mut sim, &mut app, 30_000); // the start's banner and tone gone
+    run_loop(&mut sim, &mut app, 30_000); // the start's banner and tone gone
     assert_eq!(app.pass_ms(), RIDE_POLL_MS);
     let (t0, timer0) = (sim.ms, app.ride.timer_s());
-    let passes = run_main(&mut sim, &mut app, 50_000);
+    let passes = run_loop(&mut sim, &mut app, 50_000);
     assert!((495..=505).contains(&passes.len()), "10 passes a second: {} in 50 s", passes.len());
     let timer = app.ride.timer_s() - timer0;
     assert!((49..=51).contains(&timer), "every second counted: {timer} s in {} ms", sim.ms - t0);
@@ -1933,11 +1921,11 @@ fn a_quiet_ride_runs_ten_passes_a_second() {
     assert_eq!((app.watch.resyncs, app.watch.resets), (0, 0));
     let screen = app.screen();
     let left = 97_000 - sim.ms; // the key goes down at 95 s
-    let passes = run_main(&mut sim, &mut app, left);
+    let passes = run_loop(&mut sim, &mut app, left);
     let first = passes.iter().find(|&&t| t >= 95_000).copied().unwrap_or(u64::MAX);
     assert!(first <= 95_000 + u64::from(TOUCH_MS), "a pass {} ms after the key went down", first - 95_000);
     assert_ne!(app.screen(), screen, "Page acted on");
-    run_main(&mut sim, &mut app, 3_000);
+    run_loop(&mut sim, &mut app, 3_000);
     assert_eq!(app.pass_ms(), RIDE_POLL_MS, "quiet again");
     app.tlink.up = true;
     assert_eq!(app.pass_ms(), POLL_MS, "a trainer heard: its commands go one a pass");
@@ -1968,12 +1956,12 @@ fn idle_loop_ignores_bytes_from_a_chip_not_started() {
     let mut sim = Sim::new(9, 0, 0);
     sim.nordic.dead = true;
     let mut app = App::start(&mut sim, Some(KEY));
-    run_main(&mut sim, &mut app, 40_000);
+    run_loop(&mut sim, &mut app, 40_000);
     assert!(!app.radio_up());
     let mut passes = 0;
     for _ in 0..40 {
         sim.nordic.stray(0x5a);
-        passes += run_main(&mut sim, &mut app, 250).len();
+        passes += run_loop(&mut sim, &mut app, 250).len();
     }
     assert!(passes <= 44, "{passes} passes in 10 s");
     assert!(sim.nordic.out.is_empty(), "flushed");
@@ -1984,19 +1972,136 @@ fn idle_loop_ignores_bytes_from_a_chip_not_started() {
 #[test]
 fn alert_beep_from_an_idle_pass_keeps_its_length() {
     let (mut sim, mut app) = started();
-    run_main(&mut sim, &mut app, 40_000);
+    run_loop(&mut sim, &mut app, 40_000);
     assert_eq!(app.pass_ms(), IDLE_POLL_MS);
     app.tones.play(&BEEP_ALERT);
     let n0 = sim.tones.len();
     let mut at = Vec::new(); // when each tone was set
     while at.len() < 2 && sim.ms < 50_000 {
         let n = sim.tones.len();
-        let t = run_main(&mut sim, &mut app, 1)[0];
+        let t = run_loop(&mut sim, &mut app, 1)[0];
         at.extend((n..sim.tones.len()).map(|_| t));
     }
     assert_eq!(sim.tones[n0..n0 + 2], [2500, 0]);
     let beep = at[1] - at[0];
     assert!((100..=100 + u64::from(POLL_MS)).contains(&beep), "first beep {beep} ms");
+}
+
+/// Idle, the sensors' broadcasts wake the sleep for a radio pass each, not a whole step (review 2026-11-01, finding
+/// 57: about 2.7 wakes a second ran the step): 4 full passes a second as with no sensor, the broadcasts read at once,
+/// and every ms counted once (a strap gone is silent for the time gone, not more: the radio passes and the step share
+/// it).
+#[test]
+fn idle_bytes_run_radio_passes_not_full_ones() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Power.backup()] = Kind::Power.to_word(SensorId { device: 7, trans: 5 });
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    let power = |_| [0x10, 1, 0xff, 85, 0, 0, 210, 0];
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power, network: 0, ack: &[] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run_loop(&mut sim, &mut app, 40_000);
+    assert_eq!(app.pass_ms(), IDLE_POLL_MS);
+    let (t0, up0) = (sim.ms, app.up_ms);
+    let (passes, radio) = run_loop_radio(&mut sim, &mut app, 10_000);
+    assert!((39..=41).contains(&passes.len()), "4 full passes a second: {}", passes.len());
+    assert!(radio >= 30, "the broadcasts read in radio passes: {radio} in 10 s");
+    let (wall, up) = (sim.ms - t0, u64::from(app.up_ms - up0));
+    assert!(up.abs_diff(wall) <= 20, "the app's clock {up} ms in {wall} ms");
+    assert_eq!((app.live.get(Metric::Hr), app.live.get(Metric::Power)), (Some(72), Some(210)));
+    assert_eq!((app.watch.resyncs, app.watch.resets), (0, 0));
+    // the strap gone (the last sensor): the meter's bytes go on waking radio passes, the strap's silence grows by the
+    // time gone
+    sim.nordic.sensors.pop();
+    let (t1, heard1) = (sim.ms, app.radio.heard_ms.at(Kind::Hr));
+    let (_, radio) = run_loop_radio(&mut sim, &mut app, 2000);
+    assert!(radio > 0);
+    let grown = u64::from(app.radio.heard_ms.at(Kind::Hr) - heard1);
+    assert!(grown.abs_diff(sim.ms - t1) <= 20, "silent {grown} ms in {} ms", sim.ms - t1);
+}
+
+/// A chip that always has a byte waiting (faster than a byte a ms) cannot hold an idle pass: every byte-ended slice
+/// counts at least 1 ms and the radio passes stop at [`crate::MAX_RADIO_PASSES`], so the pass ends and the next step
+/// runs well within its idle length (review of B4b: every slice was 0 ms, and the step never ran again).
+#[test]
+fn a_chip_that_never_stops_sending_cannot_hold_the_pass() {
+    let (mut sim, mut app) = started();
+    run_loop(&mut sim, &mut app, 40_000);
+    assert!(app.pass_ms() == IDLE_POLL_MS && app.radio_up());
+    sim.main.bytes_always = true;
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..3 {
+        let up = app.up_ms;
+        // the model's WFI never runs (a byte waits before it): the clock does not move in the sleep
+        assert_eq!(main.pass(&mut app, &mut sim), crate::MAX_RADIO_PASSES);
+        let slept = app.prof().clock.sleep.0;
+        assert!((crate::MAX_RADIO_PASSES..=IDLE_POLL_MS).contains(&slept), "slept {slept} ms");
+        main.pass(&mut app, &mut sim);
+        assert!(app.up_ms > up, "the next step ran");
+    }
+}
+
+/// A plugged-in unit and its scripted USB link (loop_model.rs), the link's answers given.
+fn plugged(effects: Vec<Effect>, watches: Vec<UsbWatch>) -> (Sim, App, SimLink, crate::MainLoop<SimLink>) {
+    let (mut sim, app) = started();
+    let link = SimLink::default();
+    {
+        let mut s = link.0.borrow_mut();
+        (s.effects, s.watches) = (effects.into(), watches.into());
+    }
+    (sim.main.link, sim.main.vbus) = (Some(link.clone()), true);
+    (sim, app, link, crate::MainLoop::new(<Sim as Board>::CPU_HZ, 80))
+}
+
+/// The USB link's effects as main.rs had them before the loop moved into the library (finding 31): the cable starts
+/// USB once; a reset, the staged image's run and the stack test linger first, the run disconnects after it, the stack
+/// test faults instead of resetting; a restart the app wants is taken after the effect's answer and before the watch.
+#[test]
+fn usb_effects_keep_their_order() {
+    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::Reset], vec![]);
+    main.pass(&mut app, &mut sim);
+    assert_eq!((sim.main.usb_starts, sim.main.resets), (1, 1));
+    assert_eq!(link.0.borrow().log, ["poll", "linger"]);
+    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::Run(4096)], vec![]);
+    main.pass(&mut app, &mut sim);
+    assert_eq!((sim.main.ran, sim.main.resets), (Some(4096), 0));
+    assert_eq!(link.0.borrow().log, ["poll", "linger", "disconnect"]);
+    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::StackFault], vec![]);
+    main.pass(&mut app, &mut sim);
+    assert_eq!((sim.main.faults, sim.main.resets), (1, 0), "the marker, not a plain reset");
+    assert_eq!(link.0.borrow().log, ["poll", "linger"]);
+    let (mut sim, mut app, link, mut main) = plugged(vec![], vec![]);
+    app.restart = true;
+    main.pass(&mut app, &mut sim);
+    assert_eq!(sim.main.resets, 1);
+    assert_eq!(link.0.borrow().log, ["poll", "linger"], "before the watch");
+    // a key from the link ends the sleep and acts at once
+    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::Key(Press::Short(Key::Page))], vec![]);
+    main.pass(&mut app, &mut sim); // the cable starts USB
+    let (t, screen) = (sim.ms, app.screen());
+    link.0.borrow_mut().effects.push_back(Effect::Key(Press::Short(Key::Page)));
+    main.pass(&mut app, &mut sim);
+    assert!(sim.ms - t < u64::from(app.pass_ms()) && app.screen() != screen, "{:?}", app.screen());
+    // the cable out, no ride: a reset
+    sim.main.vbus = false;
+    main.pass(&mut app, &mut sim);
+    assert_eq!((sim.main.usb_starts, sim.main.resets), (1, 1));
+}
+
+/// A drop's registers go into the backup registers before the drop is counted, so the snapshot's registers 0 and 31
+/// stay this drop's and the next drop counts again (app/device.rs `usb_dropped`).
+#[test]
+fn usb_snapshot_before_the_drop() {
+    let (mut sim, mut app, link, mut main) = plugged(vec![], vec![UsbWatch::Up, UsbWatch::Drop, UsbWatch::Drop]);
+    let snap =
+        crate::usbsnap::UsbSnap { event: crate::usbsnap::EVENT_DROP, gintsts: 0x0400_0020, ..Default::default() };
+    link.0.borrow_mut().snap = Some(snap);
+    main.pass(&mut app, &mut sim);
+    let log = link.0.borrow().log.clone();
+    assert_eq!(log[..6], ["poll", "watch", "snapshot", "poll", "watch", "snapshot"]);
+    let packed = crate::usbsnap::pack(&snap);
+    assert_eq!(sim.backup[SNAP_BKP[0]], packed[0], "the snapshot kept");
+    assert_eq!(sim.backup[USB_DROPS_BKP], 0x0b00_0001, "the second drop counted, the first was the snapshot's");
 }
 
 /// The ALERTS menu lists the limits and reminders (it scrolls), each OFF until set; the DFA a1 limit reads 0.75.

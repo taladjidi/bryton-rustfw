@@ -203,12 +203,22 @@ pub fn local_time(utc: i64, zone_min: i16, dst: Dst) -> i64 {
     standard + if summer { 3600 } else { 0 }
 }
 
+/// What the shown clock is worked out from: the RTC's two words, the zone, the summer-time rule, the learnt offset.
+pub(crate) type ClockKey = (u32, u32, Option<i16>, Dst, Option<i8>);
+
 impl App {
     /// Reads the RTC into the shown clock ([`App::show_clock`]); its seconds, which the zone never changes.
     pub(crate) fn read_clock(&mut self, b: &mut impl Board) -> u8 {
         let (tr, dr) = b.rtc();
-        let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
+        let (h, m, s) = rtc_time_from_tr(tr);
+        // passes come faster than the RTC's seconds: the same reading and rules give the same shown clock
+        let key = (tr, dr, self.settings.zone_min(), self.settings.dst, self.gps.aid.offset_15min);
+        if self.clock_key == Some(key) {
+            return s;
+        }
+        let (y, mo, d) = rtc_date_from_dr(dr);
         self.show_clock((y, mo, d, h, m, s));
+        self.clock_key = Some(key); // after: show_clock clears it, for a time that did not come from the RTC
         s
     }
 
@@ -216,6 +226,7 @@ impl App {
     /// CLOCK or before an offset from UTC is learnt, else [`local_time`] of its UTC (module doc). The difference is
     /// kept for the FIT times ([`App::rec_time`]) and the sun's.
     pub(crate) fn show_clock(&mut self, rtc: recorder::Local) {
+        self.clock_key = None;
         let rtc_s = epoch_s(rtc);
         let delta = match (self.settings.zone_min(), self.gps.aid.offset_15min) {
             (Some(zone), Some(o)) => local_time(rtc_s - i64::from(o) * 900, zone, self.settings.dst) - rtc_s,
@@ -303,5 +314,43 @@ mod tests {
         assert_eq!(fixed(540, (2026, 12, 31, 15, 0, 0)), (2027, 1, 1, 0, 0, 0), "Tokyo");
         assert_eq!(fixed(14 * 60, (2026, 2, 28, 10, 0, 0)), (2026, 3, 1, 0, 0, 0), "UTC + 14");
         assert_eq!(fixed(-12 * 60, (2028, 3, 1, 11, 0, 0)), (2028, 2, 29, 23, 0, 0), "UTC - 12, a leap day");
+    }
+
+    /// `read_clock` skips the work when the reading and the rules are the ones it worked from: across a minute, a
+    /// midnight and the autumn change (Paris, 2026-10-25 01:00 UTC), what it keeps equals a clock worked out afresh.
+    #[test]
+    fn cached_clock_equals_a_fresh_one() {
+        use crate::sim::Sim;
+        // (days after the sim's 2026-10-23, h, m, TIME ZONE, rule); the zone number is (minutes + 720) / 15 + 1: 53 is
+        // Paris, 85 Tokyo. Day 156 is the spring change, 2027-03-28; a zone and rule are edited at pass 180
+        let cases = [
+            (0, 10, 0, 53, Dst::Eu),
+            (0, 23, 59, 53, Dst::Eu),
+            (2, 0, 59, 53, Dst::Eu),
+            (156, 0, 59, 53, Dst::Eu),
+            (0, 10, 0, 85, Dst::Off),
+        ];
+        for (day, h, m, tz, dst) in cases {
+            let mut sim = Sim::new(h, m, 30);
+            sim.ms += day * 86_400_000;
+            let mut app = App::start(&mut sim, None);
+            (app.settings.tz, app.settings.dst) = (tz, dst);
+            app.gps.aid.offset_15min = Some(0);
+            for i in 0..360 {
+                sim.ms += 250;
+                let before = app.clock_delta_s;
+                if i == 180 {
+                    (app.settings.tz, app.settings.dst) = if tz == 85 { (53, Dst::Eu) } else { (85, Dst::Off) };
+                }
+                let s = app.read_clock(&mut sim);
+                if i == 180 {
+                    assert_ne!(app.clock_delta_s, before, "the edit shows at once");
+                }
+                let kept = (app.date, app.strip.time, app.clock_delta_s);
+                app.clock_key = None;
+                assert_eq!(app.read_clock(&mut sim), s);
+                assert_eq!((app.date, app.strip.time, app.clock_delta_s), kept, "at {} ms", sim.ms);
+            }
+        }
     }
 }

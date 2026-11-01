@@ -149,6 +149,26 @@ impl Hrv {
     }
 }
 
+/// ln(s) for the box sizes 4 to 16, with their sum and the sum of their squares (the regression's constants, worked
+/// out once here; the `ln_table_matches` test checks them against [`ln`]).
+const LN_S: [f64; 13] = [
+    1.386_294_361_119_890_6,
+    1.609_437_912_434_100_3,
+    1.791_759_469_228_055,
+    1.945_910_149_055_313_2,
+    2.079_441_541_679_835_7,
+    2.197_224_577_336_219_6,
+    core::f64::consts::LN_10,
+    2.397_895_272_798_370_7,
+    2.484_906_649_788_000_4,
+    2.564_949_357_461_536_7,
+    2.639_057_329_615_258_4,
+    2.708_050_201_102_21,
+    2.772_588_722_239_781,
+];
+const LN_S_SUM: f64 = 28.880_100_636_852_617;
+const LN_S_SQ: f64 = 66.451_877_539_599_17;
+
 /// DFA alpha1 of the intervals `x` (overwritten by the integrated series), box sizes 4 to 16; None under 64.
 ///
 /// ```
@@ -168,8 +188,8 @@ pub fn dfa_a1(x: &mut [f32]) -> Option<f32> {
         *v = y;
     }
     // least squares of log F against log s, over the 13 box sizes
-    let (mut sl, mut sf, mut sll, mut slf) = (0.0, 0.0, 0.0, 0.0);
-    for s in 4..=16 {
+    let (mut sf, mut slf) = (0.0, 0.0);
+    for (s, l) in (4..=16).zip(LN_S) {
         let sz = s as f32;
         let (sk, skk) = (sz * (sz - 1.0) / 2.0, (sz - 1.0) * sz * (2.0 * sz - 1.0) / 6.0);
         let d = sz * skk - sk * sk;
@@ -188,15 +208,12 @@ pub fn dfa_a1(x: &mut [f32]) -> Option<f32> {
                 f2 += r * r;
             }
         }
-        let l = ln(f64::from(sz));
         // log of the RMS: half the log of the mean square (no sqrt needed)
         let f = 0.5 * ln(f64::from(f2 / ((n / s * s) as f32)).max(1e-30));
-        sl += l;
         sf += f;
-        sll += l * l;
         slf += l * f;
     }
-    let a = ((13.0 * slf - sl * sf) / (13.0 * sll - sl * sl)) as f32;
+    let a = ((13.0 * slf - LN_S_SUM * sf) / (13.0 * LN_S_SQ - LN_S_SUM * LN_S_SUM)) as f32;
     a.is_finite().then_some(a)
 }
 
@@ -205,6 +222,16 @@ mod tests {
     use super::*;
     extern crate std;
     use std::vec::Vec;
+
+    #[test]
+    fn ln_table_matches() {
+        let (mut sum, mut sq) = (0.0, 0.0);
+        for (s, l) in (4..=16).zip(LN_S) {
+            assert!((l - ln(f64::from(s))).abs() < 1e-9, "ln {s}");
+            (sum, sq) = (sum + l, sq + l * l);
+        }
+        assert!((sum - LN_S_SUM).abs() < 1e-9 && (sq - LN_S_SQ).abs() < 1e-9);
+    }
 
     /// xorshift32, then the sum of 4 uniforms: near-Gaussian noise of mean 0 and standard deviation `sd`.
     pub(crate) fn noise(seed: u32, sd: f32) -> impl FnMut() -> f32 {

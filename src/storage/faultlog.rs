@@ -57,7 +57,7 @@ pub enum Kind {
     Cpu = 1,
     /// A panic, its line as the detail.
     Panic = 2,
-    /// The stack canary found overwritten (main.rs `stack_check`), detail 0.
+    /// The stack canary found overwritten (app/main_loop.rs `stack_ok`), detail 0.
     Stack = 3,
     /// A static cell built twice (main.rs `once`), its line as the detail. The two kind bits are full (bit 10 is
     /// [`LOGGED`]), so it is kind 3 with a non-zero detail: an earlier build reads it as the canary.

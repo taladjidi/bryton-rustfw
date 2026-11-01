@@ -6,7 +6,7 @@ Only volatile registers: none of these chips has non-volatile memory a register 
     tools/i2c.py scan                       which 7-bit addresses acknowledge
     tools/i2c.py ids                        the ID registers of the chips stock knows (light, barometers, accel)
     tools/i2c.py read ADDR REG [N]          N bytes from REG on (hex or decimal)
-    tools/i2c.py write ADDR REG BYTE...     bytes to REG on
+    tools/i2c.py write ADDR REG BYTE...     bytes to REG on (--yes anywhere on the line to write to 0x55, the touch controller)
     tools/i2c.py lux                        one light measurement (standby again after it)
     tools/i2c.py baro                       one barometer conversion: pressure and temperature
     tools/i2c.py --touch read 0x55 REG [N]  the same on I2C1, the touch bus (BOARD.md 17), as the firmware set it up
@@ -14,12 +14,11 @@ Only volatile registers: none of these chips has non-volatile memory a register 
 The firmware may use the bus between two of these transfers: run with a build that leaves I2C4 alone, or accept a
 rare failed transfer. Each bus wait is a USB round trip; the bus holds SCL low meanwhile (clock stretching).
 """
-import importlib.util, sys, time
+import sys, time
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location('dev', Path(__file__).resolve().parent / 'dev.py')
-dev = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(dev)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dev  # noqa: E402
 
 GPIOD = 0x58020c00
 MODER, OTYPER, AFRH = 0x00, 0x04, 0x24
@@ -28,29 +27,18 @@ I2C4 = 0x58001c00
 CR1, CR2, TIMINGR, ISR, ICR, RXDR, TXDR = 0x00, 0x04, 0x10, 0x18, 0x1c, 0x24, 0x28
 TXIS, RXNE, NACKF, STOPF, TC = 1 << 1, 1 << 2, 1 << 4, 1 << 5, 1 << 6
 RD, START, AUTOEND = 1 << 10, 1 << 13, 1 << 25
+TOUCH = 0x55
+YES = '--yes' in sys.argv
 
 
-class Bus:
-    def __init__(self, s):
-        self.s = s
-
-    def peek(self, a):
-        return int(dev.command(self.s, f'peek {a:#x}'), 16)
-
-    def poke(self, a, v):
-        assert dev.command(self.s, f'poke {a:#x} {v:#x}') == 'ok'
-
-    def field(self, a, shift, bits, val):
-        mask = ((1 << bits) - 1) << shift
-        self.poke(a, (self.peek(a) & ~mask) | (val << shift))
-
+class Bus(dev.Regs):
     def up(self):
-        self.field(RCC_D3CCIPR, 8, 2, 2)                                       # I2C4SEL = hsi_ker_ck
+        self.set_bits(RCC_D3CCIPR, 8, 2, 2)                                       # I2C4SEL = hsi_ker_ck
         self.poke(RCC_APB4ENR, self.peek(RCC_APB4ENR) | 1 << 7)               # I2C4EN
         for pin in (12, 13):                                                   # SCL, SDA: AF4 open drain
-            self.field(GPIOD + OTYPER, pin, 1, 1)
-            self.field(GPIOD + AFRH, 4 * (pin - 8), 4, 4)
-            self.field(GPIOD + MODER, 2 * pin, 2, 2)
+            self.set_bits(GPIOD + OTYPER, pin, 1, 1)
+            self.set_bits(GPIOD + AFRH, 4 * (pin - 8), 4, 4)
+            self.set_bits(GPIOD + MODER, 2 * pin, 2, 2)
         if self.peek(I2C4 + CR1) & 1 == 0:
             self.poke(I2C4 + TIMINGR, 15 << 28 | 4 << 20 | 2 << 16 | 7 << 8 | 9)  # about 200 kHz (main.rs)
             self.poke(I2C4 + CR1, 1)
@@ -70,6 +58,8 @@ class Bus:
                 raise SystemExit(f'I2C4 stuck, ISR {isr:#x}')
 
     def write(self, addr, reg, data=b''):
+        if addr == TOUCH and not YES:  # the touch controller may keep a write (firmware / config registers): inferred
+            raise SystemExit('i2c.py: a write to the touch controller (0x55) needs --yes')
         self.poke(I2C4 + CR2, addr << 1 | (len(data) + 1) << 16 | AUTOEND | START)
         for b in bytes([reg]) + bytes(data):
             if not self.wait(TXIS):
@@ -110,7 +100,7 @@ CHIPS = [('light LTR-308ALS', 0x53, 0x06, 0xb1), ('barometer LPS22HH', 0x5c, 0x0
 
 
 def main():
-    args = sys.argv[1:]
+    args = [a for a in sys.argv[1:] if a != '--yes']
     if not args:
         raise SystemExit(__doc__)
     num = lambda v: int(v, 0)

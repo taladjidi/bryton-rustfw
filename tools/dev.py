@@ -27,7 +27,7 @@ plugged in: the dot at the top right turns green when the link is ready.
                                   with the fault marker (peek 0x580040c4 reads 0xfa0000nn within a minute)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
-import argparse, os, struct, sys, time, zlib
+import argparse, os, re, struct, sys, time, zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,6 +67,32 @@ def command(s, cmd):
     s.reset_input_buffer()
     s.write(cmd.encode() + b'\n')
     return line(s)
+
+
+def card_writes(info):
+    """`info`'s card-write flag: True, False, or None for a build that does not say (older than the flag)."""
+    m = re.search(r', card writes (yes|no)\b', info)
+    return None if m is None else m.group(1) == 'yes'
+
+
+class Regs:
+    """peek / poke / read-modify-write of the unit's registers (the raw-register tools gnss.py, nrf.py, i2c.py)."""
+
+    def __init__(self, s):
+        self.s = s
+
+    def peek(self, a):
+        return int(command(self.s, f'peek {a:#x}'), 16)
+
+    def poke(self, a, v):
+        assert command(self.s, f'poke {a:#x} {v:#x}') == 'ok'
+
+    def set_bits(self, a, shift, bits, val):
+        mask = ((1 << bits) - 1) << shift
+        self.poke(a, (self.peek(a) & ~mask) | (val << shift))
+
+    def field(self, base, reg, pin, bits, val):
+        self.set_bits(base + reg, pin * bits, bits, val)
 
 
 def png(pixels565, w=W, h=H):
@@ -296,6 +322,16 @@ def selftest():
     if packed.exists():
         data, total = image_payload(packed)
         assert struct.unpack_from('<I', data, 0x98)[0] == len(data) and total == sum(data) & 0xffffffff
+    assert card_writes('x, ride idle, card writes no') is False and card_writes('a, card writes yes') is True
+    assert card_writes('x, ride idle') is None  # an older build: unknown
+    global command
+    real, log = command, []
+    command = lambda s, c: (log.append(c), '0x000000ff' if c.startswith('peek') else 'ok')[1]
+    try:
+        Regs(None).field(0x1000, 0x20, 3, 4, 7)  # AFRL pin 3: bits 12..15
+    finally:
+        command = real
+    assert log == ['peek 0x1020', 'poke 0x1020 0x70ff'], log
     assert sector_bytes('00ff' * 256) == b'\x00\xff' * 256
     # a window of 2 s: step 4 ms of work, draw 1 ms of it, usb 2 ms outside it
     p = prof_parse(['prof 2000 1990 24 4800 3 0', 'step 40 800000 30000', 'draw 40 200000 9000', 'tiles 0 0 0',

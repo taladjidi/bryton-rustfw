@@ -91,6 +91,72 @@ pub enum BusError {
     Overrun,
 }
 
+/// SDMMC_STA flags (RM0399 SDMMC status register) the board's data path reads.
+pub mod sta {
+    /// Data block sent or received, CRC failed (writing: the card's CRC status token said the block came in damaged).
+    pub const DCRCFAIL: u32 = 1 << 1;
+    /// Data timeout.
+    pub const DTIMEOUT: u32 = 1 << 3;
+    /// Transmit FIFO underrun.
+    pub const TXUNDERR: u32 = 1 << 4;
+    /// Receive FIFO overrun.
+    pub const RXOVERR: u32 = 1 << 5;
+    /// The data transfer ended (DLEN reached).
+    pub const DATAEND: u32 = 1 << 8;
+    /// Transmit FIFO full.
+    pub const TXFIFOF: u32 = 1 << 16;
+    /// Receive FIFO empty.
+    pub const RXFIFOE: u32 = 1 << 19;
+}
+
+/// The error a data transfer's status reports, first match first: a CRC failure, then a timeout, then the FIFO's own
+/// (an overrun reading, `to_card` false; an underrun writing), the flags ST's HAL_MMC_ReadBlocks / WriteBlocks stop
+/// on. The other direction's FIFO flag is not this transfer's.
+///
+/// ```
+/// use bryton_rustfw::emmc::{BusError, data_error, sta};
+/// assert_eq!(data_error(sta::DTIMEOUT | sta::DCRCFAIL, false), Some(BusError::Crc));
+/// assert_eq!(data_error(sta::TXUNDERR, false), None);
+/// ```
+pub fn data_error(status: u32, to_card: bool) -> Option<BusError> {
+    let fifo = if to_card { sta::TXUNDERR } else { sta::RXOVERR };
+    if status & sta::DCRCFAIL != 0 {
+        Some(BusError::Crc)
+    } else if status & sta::DTIMEOUT != 0 {
+        Some(BusError::Timeout)
+    } else if status & fifo != 0 {
+        Some(BusError::Overrun)
+    } else {
+        None
+    }
+}
+
+/// How long a data transfer of `len` bytes may take, ms: 100 and 1 a block, at most 10 s; None when `len` is not
+/// whole blocks that SDMMC_DLEN (25 bits) holds (this driver never asks that).
+///
+/// ```
+/// use bryton_rustfw::emmc::data_limit_ms;
+/// assert_eq!((data_limit_ms(512), data_limit_ms(64 * 512), data_limit_ms(100)), (Some(101), Some(164), None));
+/// ```
+pub fn data_limit_ms(len: usize) -> Option<u32> {
+    let whole = len > 0 && len.is_multiple_of(SECTOR) && len < 1 << 25;
+    whole.then(|| (100 + (len / SECTOR) as u32).min(10_000))
+}
+
+/// SDMMC_CLKCR for the bus (RM0399): CLKDIV 2 (25 MHz) or 125 (400 kHz, to identify), PWRSAV (the clock only while
+/// the bus is busy) at 25 MHz only (the card needs a running clock to identify), WIDBUS 4 bits when `wide`, NEGEDGE,
+/// HWFC_EN.
+///
+/// ```
+/// use bryton_rustfw::emmc::clkcr;
+/// assert_eq!(clkcr(false, false), 125 | 1 << 16 | 1 << 17);
+/// ```
+pub fn clkcr(fast: bool, wide: bool) -> u32 {
+    let div = if fast { 2 } else { 125 };
+    let pwrsav = if fast { 1 << 12 } else { 0 };
+    div | pwrsav | (u32::from(wide) << 14) | (1 << 16) | (1 << 17)
+}
+
 /// Why a card operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -422,5 +488,50 @@ impl<B: Board> fat::Disk for Volume<'_, B> {
 impl<B: Board> fat::DiskWrite for Volume<'_, B> {
     fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), fat::Error> {
         self.0.write(self.1, lba, buf).map_err(|_| fat::Error::Io)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every combination of the four error flags: the priority, and each direction ignores the other's FIFO flag.
+    #[test]
+    fn data_error_priority() {
+        let flags = [sta::DCRCFAIL, sta::DTIMEOUT, sta::RXOVERR, sta::TXUNDERR];
+        for m in 0..16u32 {
+            let s = (0..4).filter(|i| m & 1 << i != 0).fold(sta::DATAEND | sta::RXFIFOE, |s, i| s | flags[i]);
+            for to_card in [false, true] {
+                let fifo = if to_card { 8 } else { 4 };
+                let want = if m & 1 != 0 {
+                    Some(BusError::Crc)
+                } else if m & 2 != 0 {
+                    Some(BusError::Timeout)
+                } else if m & fifo != 0 {
+                    Some(BusError::Overrun)
+                } else {
+                    None
+                };
+                assert_eq!(data_error(s, to_card), want, "{m:04b} {to_card}");
+            }
+        }
+    }
+
+    #[test]
+    fn data_limits() {
+        assert_eq!(data_limit_ms(0), None);
+        assert_eq!(data_limit_ms(511), None);
+        assert_eq!(data_limit_ms(513), None);
+        assert_eq!(data_limit_ms((1 << 25) - 512), Some(10_000)); // 65 535 blocks: the 10 s cap
+        assert_eq!(data_limit_ms(1 << 25), None, "past DLEN");
+        assert_eq!(data_limit_ms(9_900 * 512), Some(10_000));
+        assert_eq!(data_limit_ms(9_899 * 512), Some(9_999));
+    }
+
+    #[test]
+    fn clkcr_bits() {
+        assert_eq!(clkcr(true, true), 2 | 1 << 12 | 1 << 14 | 1 << 16 | 1 << 17);
+        assert_eq!(clkcr(true, false) & 1 << 14, 0);
+        assert_eq!(clkcr(false, true), 125 | 1 << 14 | 1 << 16 | 1 << 17, "no PWRSAV at 400 kHz");
     }
 }

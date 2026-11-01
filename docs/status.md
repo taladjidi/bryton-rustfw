@@ -166,7 +166,7 @@ A feature not listed here was seen on the unit.
   on a real ride, the trip time through an auto-pause and a Start pause, each lap's power and NP against the power
   meter's own figures, and the uphill and downhill split on a real descent (the 30 s grade lags about 15 s at a change).
 
-- **The stack canary (review S8; link.x `_stack_canary`, main.rs `stack_check`)**: seen on the unit 2026-10-29 from a
+- **The stack canary (review S8; link.x `_stack_canary`, lib app/main_loop.rs `stack_ok`)**: seen on the unit 2026-10-29 from a
   RAM run: `info` and `prof` as before (0.98 % awake idle on the overview), `dev.py stackfault` reset the unit and
   `peek 0x580040c4` read 0xfa000001. Still to see: a DIAG_STOP-free cold boot of an installed build with it (nothing
   changed in the boot, so low risk).
@@ -595,6 +595,19 @@ A feature not listed here was seen on the unit.
   (the menus, the sub-struct screens and the four ride pages), 79 refused by the walk's own rules (62 imperial, 5 rows
   not on the unit, 4 KEYS, 4 rows that act, 2 INDOOR, 2 NEARBY), 0 title drift, 0 failed, no reset or fault, the
   ride idle at the end, 1.04 % awake idle on the overview, 1 489 s. Still to see: the imperial pages (a human check).
+- **The night review's fixes (2026-11-01, docs/review-2026-11-01.md)**: RAM runs only, cable in, no ride, no keys.
+  Seen: main 21ea124 (the board fixes: delay_ms masking the touch and USB lines, the park, POIS in AXI) up 72 s,
+  fault 0; main be83a5f (the main loop in the library, the radio-only idle passes) up 94 s, no reset, fault 0, no
+  radio reset or resync, `card writes no`, 0.70 % awake idle over 94 s (`dev.py prof`; 0.91 to 0.93 % on 2026-10-31).
+  Still to see, before a ride build: a ride with the owner's sensors (caps at 4 000 W meter / 2 000 W trainer, the
+  stale trainer fields, `dev.py info`'s `climb tile us ... slice max` under the new 10 ms AHEAD_US with quarter
+  slices); a restart mid-ride with power (RIDE RESUMED: kJ, TSS, NP, max and a drained W'bal carry on); a busy BLE
+  scan while idle (the 16-radio-pass cap, the clock and auto-off not stalling); `dev.py reset` / `stackfault` and a
+  drive eject's restart through the new loop; a killed `shot` client (output dropped, DTR / bus reset recovering);
+  an EMMC_WRITE build's first HISTORY delete on a full card ("CARD FULL", nothing written); the route graph's edge
+  count on the owner's own route file (`cargo test-host real_file -- --ignored --nocapture` with BRYTON_ROUTE_DAT:
+  set EDGES to the measured maximum plus 10 %, today 6 144 scaled, not measured); Engineer Mode's USB id and
+  `iaprecover.py --boot-sum` before the next recovery write.
 - The panel at 50 MHz SPI: an owner's look for noise or shifted pixels; if any, MBR /4 (25 MHz) in `spi_init`.
 
 ## Known problems

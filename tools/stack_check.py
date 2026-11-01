@@ -3,7 +3,7 @@
 
 The stack is DTCM from the canary above .bss to the top (link.x `_stack_canary` to `_stack_top`): on 2026-10-24
 main's frame had grown to 111 KB (the app held there several times over) and opening a workout overflowed it into
-.bss. The canary (main.rs `stack_check`) turns an overflow that reaches it into a reset at the end of the pass, but
+.bss. The canary (lib app/main_loop.rs `stack_ok`) turns an overflow that reaches it into a reset at the end of the pass, but
 cannot stop it: these budgets are the line. This reads each function's frame from its `push` and `sub sp, #n` in the
 release ELF (llvm-objdump from the toolchain) and the stack's bounds (llvm-nm), and fails when a frame is over its
 budget, or when main's frame and the largest other one do not fit the stack together (a lower bound of the boot's

@@ -27,7 +27,9 @@ pub mod training;
 pub mod ui;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
-pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, mga, nrf, panel, powercal, sensors, touch};
+pub use drivers::{
+    ambient, battery, ble, emmc, fec, fecble, ftms, gnss, mga, nrf, panel, periph, powercal, sensors, touch,
+};
 pub use link::{dev, msc, phone, prof, usbsnap};
 pub use nav::{altitude, climbs_ahead, course, math, places, segment, segment_match, sun};
 pub use storage::{
@@ -279,6 +281,8 @@ pub struct App {
     date: (u16, u8, u8),
     /// The shown clock minus the RTC, seconds (0 under TIME ZONE CLOCK or before an offset from UTC is learnt).
     clock_delta_s: i32,
+    /// What the shown clock was last worked out from (RTC words, zone, summer-time rule, learnt offset): `read_clock`.
+    clock_key: Option<app::ClockKey>,
     /// The sun's rise and set (local minutes) for the date and minute of the last pass that changed it: the key, then
     /// the times (None without a fix, the zone learnt, or in polar day or night). Worked out at most once a minute.
     sun: Option<SunNow>,
@@ -508,6 +512,7 @@ impl App {
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
+            clock_key: None,
             clock_delta_s: 0, // the registers hold no TIME ZONE: CLOCK until the settings file is read
             sun: None,
             heading: None,
@@ -668,7 +673,9 @@ impl App {
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
-        self.watch_radio(b);
+        // what the radio passes in this pass's sleep did not count yet (main_loop.rs)
+        let radio_ms = pass_ms.saturating_sub(core::mem::take(&mut self.watch.ahead_ms));
+        self.watch_radio(b, radio_ms);
         t = self.timed(b, Sec::Radio, t);
         self.poll_gnss(b);
         t = self.timed(b, Sec::Gnss, t);
@@ -693,7 +700,7 @@ impl App {
         t = now;
         self.pair_asked(b);
         self.live.tick(pass_ms);
-        self.radio.tick(pass_ms);
+        self.radio.tick(radio_ms);
         let (lost, back) = self.radio.lost_event(self.ride.state() != ride::State::Idle);
         for (mask, word, kind) in [(lost, " LOST", Banner::Alarm), (back, " BACK", Banner::Info)] {
             let mut l = Line::<32>::new();

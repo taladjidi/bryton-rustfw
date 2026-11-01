@@ -89,6 +89,8 @@ pub struct Sim {
     pub adc_n: u8,
     /// A channel that answers `None` (a failed conversion), or none.
     pub adc_fail: Option<u8>,
+    /// The main loop's side of the board ([`LoopBoard`]: loop_model.rs).
+    pub main: LoopModel,
 }
 
 /// The Sitronix touch controller (BOARD.md 17), as the protocol doc describes it: Init for 50 ms after its reset
@@ -1284,6 +1286,7 @@ impl Sim {
             adc_calls: [0; 4],
             adc_n: 0,
             adc_fail: None,
+            main: LoopModel::default(),
         }
     }
 
@@ -1352,6 +1355,20 @@ fn span(p: &[u8], limit: u32) -> (u32, u32) {
     let (a, b) = (u32::from(p[0]) << 8 | u32::from(p[1]), u32::from(p[2]) << 8 | u32::from(p[3]));
     assert!(a <= b && b < limit, "window {a}..{b} outside 0..{limit}");
     (a, b)
+}
+
+impl Sim {
+    /// What the Nordic chip has sent by now: the scan's end, the sensors' broadcasts, the phone's and the trainer's
+    /// traffic (the chip sends as time goes; the board reads it).
+    fn nordic_due(&mut self) {
+        if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
+            self.nordic.scan_end = None;
+            self.nordic.queue(&[2, 0x1b, 0, 0xff, 0xff, 1]); // BLE_GAP_EVT_TIMEOUT, source scan
+        }
+        self.nordic.ant_tick(self.ms);
+        self.nordic.phone_tick(self.ms);
+        self.nordic.ftms_tick(self.ms);
+    }
 }
 
 impl Board for Sim {
@@ -1615,13 +1632,7 @@ impl Board for Sim {
     }
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
-        if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
-            self.nordic.scan_end = None;
-            self.nordic.queue(&[2, 0x1b, 0, 0xff, 0xff, 1]); // BLE_GAP_EVT_TIMEOUT, source scan
-        }
-        self.nordic.ant_tick(self.ms);
-        self.nordic.phone_tick(self.ms);
-        self.nordic.ftms_tick(self.ms);
+        self.nordic_due();
         let n = buf.len().min(self.nordic.out.len());
         for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
             *slot = b;
@@ -1675,6 +1686,8 @@ mod workout_tests;
 
 mod ble_sim;
 pub use ble_sim::{Act, FtmsSim, PhoneSim};
+mod loop_model;
+pub use loop_model::{LoopModel, SimLink};
 
 #[cfg(test)]
 mod phone_tests;
