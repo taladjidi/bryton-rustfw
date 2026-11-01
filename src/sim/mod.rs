@@ -44,7 +44,72 @@ pub trait NrfExt {
 }
 
 type KeyScript = Box<dyn Fn(u64) -> u8>;
-type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
+
+/// What the transfers cost in time on the unit, ns. Computed values say where they come from; "inferred" ones are
+/// assumptions until a silent bench on the unit (docs/status.md, "Not yet seen on the unit"). The costs are always paid
+/// (the simulator was free before 2026-11-01); `work_ns_per_byte` is the read side and is zero unless a test sets it.
+#[derive(Clone, Copy)]
+pub struct Cost {
+    /// A panel pixel: 16 bits at SPI1's 50 MHz (main.rs `spi_init`, BOARD.md 6): 320 ns.
+    pub panel_pixel_ns: u64,
+    /// A panel command or window: the DC toggle and the wait for the end of transfer (inferred, 1 us).
+    pub panel_cmd_ns: u64,
+    /// A panel parameter byte at 50 MHz.
+    pub panel_byte_ns: u64,
+    /// An I2C byte: 9 clocks of SCL; main.rs i2c_init TIMINGR gives PRESC 15 (250 ns at 64 MHz), SCLL 9, SCLH 7: a
+    /// clock of 18 x 250 = 4.5 us (RM0399 I2C, sync delays left out), 40.5 us a byte, about 222 kHz.
+    pub i2c_byte_ns: u64,
+    /// An I2C transaction's start, restart and stop (about 2 clocks, same TIMINGR).
+    pub i2c_frame_ns: u64,
+    /// A GNSS byte: SPI4 at 4 MHz (main.rs, BOARD.md 13): 2 us.
+    pub gnss_byte_ns: u64,
+    /// A GNSS transfer's chip select and polling (inferred, 5 us).
+    pub gnss_xfer_ns: u64,
+    /// A card write command's own time: the busy after CMD24 / CMD25 and the CMD13 polls that wait it out (inferred,
+    /// 1 ms: eMMC 5.x programming busy is typically 0.5 to 2 ms, JESD84-B51 "busy after write"; not looked up on the part).
+    pub write_cmd_ns: u64,
+    /// A card sector written, on top of the command's: 0.2 ms optimistic (2.5 MB/s like the measured read) or 2 ms
+    /// pessimistic (the survey's guess); the budget gate runs at both ([`Cost::pessimistic`]).
+    pub write_sector_ns: u64,
+    /// The card's stall after this many sectors written (inferred: every 1024 sectors; 0: none).
+    pub stall_every: u64,
+    /// The stall's length, ms (inferred: 300).
+    pub stall_ms: u64,
+}
+
+impl Cost {
+    /// The survey's pessimistic card: 2 ms a written sector.
+    pub fn pessimistic() -> Self {
+        Self { write_sector_ns: 2_000_000, ..Self::default() }
+    }
+}
+
+/// Where the paid time went ([`Sim::paid_ns`]).
+pub const PAID: [&str; 6] = ["panel", "i2c", "gnss", "card wr", "card rd", "stall"];
+const P_PANEL: usize = 0;
+const P_I2C: usize = 1;
+const P_GNSS: usize = 2;
+const P_WRITE: usize = 3;
+const P_READ: usize = 4;
+const P_STALL: usize = 5;
+
+impl Default for Cost {
+    fn default() -> Self {
+        Self {
+            panel_pixel_ns: 320,
+            panel_cmd_ns: 1000,
+            panel_byte_ns: 160,
+            i2c_byte_ns: 40_500,
+            i2c_frame_ns: 9_000,
+            gnss_byte_ns: 2000,
+            gnss_xfer_ns: 5000,
+            write_cmd_ns: 1_000_000,
+            write_sector_ns: 200_000,
+            stall_every: 1024,
+            stall_ms: 300,
+        }
+    }
+}
 
 pub struct Sim {
     pub screen: Vec<u16>,
@@ -95,12 +160,32 @@ pub struct Sim {
     pub emmc: EmmcCard,
     pub bus: Bus,
     pub touch: TouchChip,
-    /// The work an eMMC read costs, ns a byte (reading and parsing what was read: about 430 on the unit, 2.3 MB/s,
-    /// `tools/dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`prof::Clock::us`]. 0 (the default): free.
+    /// The time an eMMC read costs, ns a byte: about 430 on the unit, the measured end-to-end rate of a scan (2.3 MB/s,
+    /// `tools/dev.py bench scan`), that is the card's own read time (about 95 ns a byte at its raw 10.5 MB/s) plus
+    /// parsing, so a bulk read that is not parsed is overcharged. It moves the clock ([`Sim::ms`]) and
+    /// [`prof::Clock::us`]. 0 (the default): most tests do not mind the time and it would move the clock under all of
+    /// them; the budget gate (budget_tests.rs) and the scan tests set it.
     pub work_ns_per_byte: u64,
     /// Work done so far, ns. Must not advance by more than 21 s between two Clock reads: the u32 cycle counter wraps
     /// at 21.47 s of work (200 MHz) and Clock catches one wrap only.
     pub awake_ns: u64,
+    /// What each transfer costs in time ([`Cost`]); the sub-millisecond rest of it is in `cost_rem`.
+    pub cost: Cost,
+    cost_rem: u64,
+    /// Longest gap between two reads of the keys, ms, and the time of the last read (the gate's touch/key latency).
+    pub longest_key_gap_ms: u64,
+    last_keys_ms: u64,
+    /// Sectors written so far, for the card's periodic stall.
+    sectors_written: u64,
+    /// The RTC stands at this many seconds after its start, whatever the time: for a screen hashed against a reference.
+    pub frozen_s: Option<u64>,
+    /// Time paid so far per [`PAID`] category, ns; and, for the longest gap between GNSS transfers, its length and what
+    /// was paid inside it (the test's breakdown of a gap).
+    pub paid_ns: [u64; 6],
+    paid_at_gnss: [u64; 6],
+    pub worst_gnss_gap: (u64, [u64; 6]),
+    /// What was paid inside every gap past the receiver's 1.5 s time-out, summed, and how many such gaps.
+    pub long_gnss_gaps: (u32, [u64; 6]),
     /// The cycle counter ([`Board::cycles`]): each read moves it on by [`Sim::cycles_step`], wrapping as CYCCNT does.
     pub cycles: u32,
     /// What each read of the cycle counter adds (0, the default: the counter stands still).
@@ -115,46 +200,8 @@ pub struct Sim {
     pub main: LoopModel,
 }
 
-/// The Sitronix touch controller (BOARD.md 17), as the protocol doc describes it: Init for 50 ms after its reset
-/// is released, then Normal; INT low while a finger is down; the registers the driver reads.
-pub struct TouchChip {
-    /// When the reset was released (None: held in reset, or never released).
-    run_since: Option<u64>,
-    finger: FingerScript,
-    /// A second finger, for a pinch.
-    finger2: FingerScript,
-    /// Point reads so far (the app reads only while a finger is down).
-    pub reads: u32,
-}
-
-impl TouchChip {
-    fn ready(&self, ms: u64) -> bool {
-        self.run_since.is_some_and(|t| ms >= t + 50)
-    }
-
-    fn read(&mut self, ms: u64, reg: u8, buf: &mut [u8]) -> bool {
-        let Some(t) = self.run_since else { return false }; // in reset: no acknowledge
-        let mut regs = [0u8; 0x40];
-        regs[0x00] = 0x05; // version
-        regs[0x01] = if ms >= t + 50 { 0x00 } else { 0x01 }; // Normal, else Init
-        regs[0x04..0x07].copy_from_slice(&[0x01, 0xf0, 0x40]); // 240 x 320
-        regs[0x0c..0x10].copy_from_slice(&[0, 0, 1, 2]);
-        regs[0x3f] = 2;
-        if let Some((x, y)) = (self.finger)(ms).filter(|_| self.ready(ms)) {
-            regs[0x12..0x15].copy_from_slice(&[0x80 | (x >> 4 & 0x70) as u8 | (y >> 8 & 7) as u8, x as u8, y as u8]);
-        }
-        if let Some((x, y)) = (self.finger2)(ms).filter(|_| self.ready(ms)) {
-            regs[0x16..0x19].copy_from_slice(&[0x80 | (x >> 4 & 0x70) as u8 | (y >> 8 & 7) as u8, x as u8, y as u8]);
-        }
-        if reg == 0x12 {
-            self.reads += 1;
-        }
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b = regs.get(usize::from(reg) + i).copied().unwrap_or(0);
-        }
-        true
-    }
-}
+mod touch_model;
+pub use touch_model::TouchChip;
 
 /// SEC_COUNT of the simulated eMMC: about 31 GB, as the unit's.
 pub const EMMC_SECTORS: u32 = 0x03a3_e000;
@@ -479,129 +526,8 @@ impl EmmcCard {
     }
 }
 
-/// The chips on the sensor bus, as their registers behave (BOARD.md 16).
-pub struct Bus {
-    /// The ambient light, tenths of a lux; None: no light sensor (it never acknowledges).
-    pub lux10: Option<u32>,
-    /// The light sensor's registers (written ones kept).
-    light: [u8; 0x20],
-    /// When the light sensor left standby (None: in standby).
-    light_on_since: Option<u64>,
-    /// Time the light sensor has spent measuring, ms (up to its last standby).
-    pub light_on_ms: u64,
-    /// Light readings taken.
-    pub light_reads: u32,
-    /// Transactions on the bus (reads and writes, any chip): each one the CPU polls through on the unit.
-    pub transactions: u32,
-    /// The barometer's pressure and temperature (hPa x 10, C x 100); None: no barometer.
-    pub baro: Option<(u32, i16)>,
-    /// The barometer follows this altitude (mm, a function of the time in ms) on the sea-level pressure `baro_p0`
-    /// (1/4096 hPa), instead of `baro`'s pressure: a simulated climb, with `baro_noise` counts of 1/4096 hPa of
-    /// pseudo-random noise on each reading.
-    pub baro_alt: Option<fn(u64) -> i32>,
-    /// See `baro_alt`.
-    pub baro_p0: u32,
-    /// See `baro_alt`.
-    pub baro_noise: u32,
-    /// When the last one-shot conversion is done (None: none asked since the last read).
-    baro_done: Option<u64>,
-    /// One-shot conversions asked.
-    pub baro_conversions: u32,
-    /// The accelerometer's CTRL_REG1 (0x77, running at 400 Hz, as stock leaves it).
-    pub accel_ctrl1: u8,
-}
-
-impl Bus {
-    fn read(&mut self, now: u64, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
-        use crate::ambient::*;
-        self.transactions += 1;
-        match addr {
-            LIGHT_ADDR => {
-                let Some(lux10) = self.lux10 else { return false };
-                let ready = self.light_on_since.is_some_and(|t| now >= t + 100);
-                let raw = lux10.min(0x3_ffff);
-                let mut regs = self.light;
-                regs[0x06] = LIGHT_ID;
-                regs[0x07] = if ready { 0x08 } else { 0 };
-                regs[0x0d..0x10].copy_from_slice(&raw.to_le_bytes()[..3]);
-                if reg == 0x0d {
-                    assert!(ready, "light read before its conversion");
-                    assert_eq!((regs[0x04], regs[0x05]), (0x22, 0x02), "the lux scale assumes 18 bits, gain 6");
-                    self.light_reads += 1;
-                }
-                for (i, b) in buf.iter_mut().enumerate() {
-                    *b = regs[(usize::from(reg) + i) % regs.len()];
-                }
-                true
-            }
-            BARO_ADDR => {
-                let Some((p, t)) = self.baro else { return false };
-                let ready = self.baro_done.is_some_and(|d| now >= d);
-                let mut regs = [0u8; 0x30];
-                regs[0x0f] = BARO_ID;
-                regs[0x27] = if ready { 0x03 } else { 0 };
-                let raw = match self.baro_alt {
-                    Some(f) => {
-                        let h = f64::from(f(now)) / 44_307_694.0;
-                        let noise = (now.wrapping_mul(2_654_435_761) >> 7) as u32 % (2 * self.baro_noise + 1);
-                        ((f64::from(self.baro_p0) * (1.0 - h).powf(1.0 / 0.190284)) as u32)
-                            .saturating_add(noise)
-                            .saturating_sub(self.baro_noise)
-                    }
-                    None => p * 4096 / 10,
-                };
-                regs[0x28..0x2b].copy_from_slice(&raw.to_le_bytes()[..3]);
-                regs[0x2b..0x2d].copy_from_slice(&t.to_le_bytes());
-                if reg == 0x28 {
-                    self.baro_done = None;
-                }
-                for (i, b) in buf.iter_mut().enumerate() {
-                    *b = regs[(usize::from(reg) + i) % regs.len()];
-                }
-                true
-            }
-            ACCEL_ADDR => true,
-            _ => false,
-        }
-    }
-
-    fn write(&mut self, now: u64, addr: u8, reg: u8, data: &[u8]) -> bool {
-        use crate::ambient::*;
-        self.transactions += 1;
-        match addr {
-            LIGHT_ADDR if self.lux10.is_some() => {
-                for (i, &v) in data.iter().enumerate() {
-                    self.light[(usize::from(reg) + i) % 0x20] = v;
-                }
-                if reg == 0 {
-                    match (data[0] & 0x02 != 0, self.light_on_since) {
-                        (true, None) => self.light_on_since = Some(now),
-                        (false, Some(t)) => {
-                            self.light_on_ms += now - t;
-                            self.light_on_since = None;
-                        }
-                        _ => {}
-                    }
-                }
-                true
-            }
-            BARO_ADDR if self.baro.is_some() => {
-                if reg == 0x11 && data[0] & 1 != 0 {
-                    self.baro_done = Some(now + 20);
-                    self.baro_conversions += 1;
-                }
-                true
-            }
-            ACCEL_ADDR => {
-                if reg == 0x20 {
-                    self.accel_ctrl1 = data[0];
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-}
+mod sensor_model;
+pub use sensor_model::Bus;
 
 /// Where the simulated fix is (degrees x 1e-7): in the sea near 0 N 0 E, nowhere real, as the synthetic volume's
 /// rides and tiles (AGENTS.md, "Public repository").
@@ -1296,6 +1222,18 @@ fn to_bcd(v: u64) -> u32 {
 }
 
 impl Sim {
+    /// Time spent by a transfer of kind `what` ([`PAID`]): the clock moves on by `ns`, and the work counter too when
+    /// the CPU works through it (`cpu`; the panel's pixels go by DMA and the CPU sleeps, BOARD.md 6).
+    fn pay(&mut self, what: usize, ns: u64, cpu: bool) {
+        self.paid_ns[what] += ns;
+        if cpu {
+            self.awake_ns += ns;
+        }
+        self.cost_rem += ns;
+        self.ms += self.cost_rem / 1_000_000;
+        self.cost_rem %= 1_000_000;
+    }
+
     /// This firmware's default settings in the backup registers, as after its first start: the next start does not
     /// import stock's ([`App::first_start`]).
     pub fn own_settings(&mut self) {
@@ -1353,23 +1291,19 @@ impl Sim {
             pixels: 0,
             windows: 0,
             emmc: EmmcCard::default(),
-            bus: Bus {
-                lux10: Some(3000), // 300 lux: indoors
-                light: [0; 0x20],
-                light_on_since: None,
-                light_on_ms: 0,
-                light_reads: 0,
-                transactions: 0,
-                baro: Some((10_132, 2150)),
-                baro_alt: None,
-                baro_p0: crate::altitude::P_STD,
-                baro_noise: 0,
-                baro_done: None,
-                baro_conversions: 0,
-                accel_ctrl1: 0x77,
-            },
-            touch: TouchChip { run_since: None, finger: Box::new(|_| None), finger2: Box::new(|_| None), reads: 0 },
+            bus: Bus::new(),
+            touch: TouchChip::new(),
             work_ns_per_byte: 0,
+            cost: Cost::default(),
+            cost_rem: 0,
+            longest_key_gap_ms: 0,
+            last_keys_ms: 0,
+            sectors_written: 0,
+            frozen_s: None,
+            paid_ns: [0; 6],
+            paid_at_gnss: [0; 6],
+            worst_gnss_gap: (0, [0; 6]),
+            long_gnss_gaps: (0, [0; 6]),
             awake_ns: 0,
             cycles: 0,
             cycles_step: 0,
@@ -1382,13 +1316,13 @@ impl Sim {
 
     /// The finger on the touch panel as a function of the simulated time in ms (None: lifted).
     pub fn finger(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
-        self.touch.finger = Box::new(f);
+        self.touch.set_finger(f);
         self
     }
 
     /// A second finger on the touch panel, as [`Sim::finger`].
     pub fn finger2(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
-        self.touch.finger2 = Box::new(f);
+        self.touch.set_finger2(f);
         self
     }
 
@@ -1522,6 +1456,7 @@ impl Board for Sim {
 
     fn panel_cmd(&mut self, cmd: u8, params: &[u8]) {
         assert!(self.powered, "command 0x{cmd:02x} to an unpowered panel");
+        self.pay(P_PANEL, self.cost.panel_cmd_ns + params.len() as u64 * self.cost.panel_byte_ns, true);
         self.cmds.push(cmd);
         match cmd {
             SWRESET => (self.asleep, self.display_on) = (true, false),
@@ -1543,6 +1478,8 @@ impl Board for Sim {
         assert_eq!(self.colmod & 0x07, 0x05, "pixel format is not 16-bit");
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");
+        self.pay(P_PANEL, self.cost.panel_cmd_ns, true);
+        self.pay(P_PANEL, u64::from(count) * self.cost.panel_pixel_ns, false);
         self.pixels += u64::from(count);
         self.windows += 1;
         for y in y0..=y1 {
@@ -1563,12 +1500,14 @@ impl Board for Sim {
     }
 
     fn keys_down(&mut self) -> u8 {
+        self.longest_key_gap_ms = self.longest_key_gap_ms.max(self.ms - self.last_keys_ms);
+        self.last_keys_ms = self.ms;
         (self.keys)(self.ms)
     }
 
     fn rtc(&mut self) -> (u32, u32) {
         // 2026-10-23 at the start; the day rolls over at midnight
-        let t = self.start_s + self.ms / 1000;
+        let t = self.start_s + self.frozen_s.unwrap_or(self.ms / 1000);
         let (y, mo, d) = crate::civil_from_days(crate::days_from_civil(2026, 10, 23) + (t / 86400) as i32);
         let t = t % 86400;
         let tr = to_bcd(t / 3600) << 16 | to_bcd(t / 60 % 60) << 8 | to_bcd(t % 60);
@@ -1658,6 +1597,19 @@ impl Board for Sim {
 
     fn gnss_transfer(&mut self, buf: &mut [u8]) {
         assert_eq!(buf.len() % 4, 0, "SPI transfers move 4 bytes at a time");
+        self.pay(P_GNSS, self.cost.gnss_xfer_ns + buf.len() as u64 * self.cost.gnss_byte_ns, true);
+        if self.gnss.powered {
+            let gap = self.ms.saturating_sub(self.gnss.last_xfer);
+            let paid: [u64; 6] = core::array::from_fn(|i| self.paid_ns[i] - self.paid_at_gnss[i]);
+            if gap > self.worst_gnss_gap.0 {
+                self.worst_gnss_gap = (gap, paid);
+            }
+            if gap > 1500 {
+                self.long_gnss_gaps.0 += 1;
+                self.long_gnss_gaps.1 = core::array::from_fn(|i| self.long_gnss_gaps.1[i] + paid[i]);
+            }
+        }
+        self.paid_at_gnss = self.paid_ns;
         let (tr, dr) = self.rtc();
         let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
         let utc = crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600; // the RTC runs on UTC + 2 h
@@ -1696,11 +1648,7 @@ impl Board for Sim {
     }
 
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
-        if self.work_ns_per_byte > 0 {
-            let before = self.awake_ns / 1_000_000;
-            self.awake_ns += buf.len() as u64 * self.work_ns_per_byte;
-            self.ms += self.awake_ns / 1_000_000 - before; // the work takes time as well
-        }
+        self.pay(P_READ, buf.len() as u64 * self.work_ns_per_byte, true); // the work takes time as well
         self.emmc.read(index, arg, buf)
     }
 
@@ -1715,26 +1663,42 @@ impl Board for Sim {
     }
 
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {
+        let sectors = buf.len().div_ceil(512) as u64;
+        self.pay(P_WRITE, self.cost.write_cmd_ns + sectors * self.cost.write_sector_ns, true);
+        let before = self.sectors_written;
+        self.sectors_written += sectors;
+        let c = self.cost;
+        if c.stall_every > 0 && self.sectors_written / c.stall_every > before / c.stall_every {
+            self.pay(P_STALL, c.stall_ms * 1_000_000, true);
+        }
         self.emmc.write(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
+        self.pay(P_I2C, (3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns, true);
         self.bus.read(self.ms, addr, reg, buf)
     }
 
     fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool {
+        self.pay(P_I2C, (2 + data.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns, true);
         self.bus.write(self.ms, addr, reg, data)
     }
 
+    fn i2c_recover(&mut self) -> bool {
+        self.pay(P_I2C, 100_000, true); // nine pulses at 100 kHz and the STOP: busy-waiting CPU time
+        self.bus.recover()
+    }
+
     fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool {
+        self.pay(P_I2C, (3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns, true);
         self.touch.read(self.ms, reg, buf)
     }
 
     fn touch_reset(&mut self, run: bool) {
-        self.touch.run_since = if run { self.touch.run_since.or(Some(self.ms)) } else { None };
+        self.touch.reset(run, self.ms);
     }
 
     fn touch_int(&mut self) -> bool {
-        self.touch.ready(self.ms) && (self.touch.finger)(self.ms).is_some()
+        self.touch.int(self.ms)
     }
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
@@ -1757,6 +1721,8 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 
 #[cfg(test)]
 mod assist_tests;
+#[cfg(test)]
+mod budget_tests;
 #[cfg(test)]
 mod chip_link;
 #[cfg(test)]
@@ -1905,3 +1871,7 @@ mod drive_tests;
 
 #[cfg(test)]
 mod diag_tests;
+
+mod key_model;
+#[cfg(test)]
+mod peripheral_tests;

@@ -902,7 +902,8 @@ impl App {
         // after a drive command sampled the panel, the sleep since the main loop's last read is time counted already:
         // charged again, a tap still down at the command's end was a hold (review)
         let dt_ms = if core::mem::take(&mut self.touch.sampled) { 0 } else { dt_ms };
-        let (g, finger) = sample_touch(b, &mut self.touch.rec, self.touch.ok, false, dt_ms);
+        let (g, finger, read) = sample_touch(b, &mut self.touch.rec, self.touch.ok, false, dt_ms);
+        self.touch_health(b, read, dt_ms);
         if self.strip.locked {
             return None; // locked: a finger neither acts nor keeps the light on
         }
@@ -910,6 +911,25 @@ impl App {
             self.light.idle_ms = 0;
         }
         g.map(Input::Touch)
+    }
+
+    /// A point read's outcome (None: none was tried). After [`TOUCH_RECOVER_AFTER`] failures in a row the controller's
+    /// reset is pulsed low 5 ms and it is initialised again (BOARD.md 17), then left alone for `backoff_ms`
+    /// ([`TOUCH_BACKOFF_MS`], doubling to [`I2C_BACKOFF_MAX_MS`]) until a read succeeds.
+    fn touch_health(&mut self, b: &mut impl Board, read: Option<bool>, dt_ms: u32) {
+        let t = &mut self.touch;
+        t.wait_ms = t.wait_ms.saturating_sub(dt_ms);
+        match read {
+            Some(true) => (t.fails, t.backoff_ms) = (0, 0),
+            Some(false) => t.fails = t.fails.saturating_add(1),
+            None => {}
+        }
+        if t.fails >= TOUCH_RECOVER_AFTER && t.wait_ms == 0 && t.ok {
+            t.fails = 0;
+            t.backoff_ms = (t.backoff_ms * 2).clamp(TOUCH_BACKOFF_MS, I2C_BACKOFF_MAX_MS);
+            t.wait_ms = t.backoff_ms;
+            let _ = touch::init(b); // bounded: 10 reads and 5 + 50 + 100 ms
+        }
     }
 
     /// Start (or a tap on the chosen row) on row `sel` of `menu`: it acts, then the rows that changed are drawn, or
@@ -933,20 +953,22 @@ impl App {
 }
 
 /// One sample of the touch panel into `r`, `dt_ms` after the previous one, if INT is low, a finger was down or
-/// `always`: the gesture that ended, and whether a finger is on the panel.
+/// `always`: the gesture that ended, whether a finger is on the panel, and whether the point read answered (None: no
+/// read was tried).
 pub(crate) fn sample_touch(
     b: &mut impl Board,
     r: &mut touch::Recogniser,
     ok: bool,
     always: bool,
     dt_ms: u32,
-) -> (Option<Gesture>, bool) {
+) -> (Option<Gesture>, bool, Option<bool>) {
     if !ok || !(always || r.down() || b.touch_int()) {
-        return (None, false);
+        return (None, false, None);
     }
     let mut buf = [0; 7]; // the first two point slots: a pinch needs both
-    let [p, q] = if b.touch_read(touch::REG_POINT, &mut buf) { touch::points(buf) } else { [None, None] };
-    (r.feed2(p, q, dt_ms), p.is_some())
+    let answered = b.touch_read(touch::REG_POINT, &mut buf);
+    let [p, q] = if answered { touch::points(buf) } else { [None, None] };
+    (r.feed2(p, q, dt_ms), p.is_some(), Some(answered))
 }
 
 /// (`x`, `y`) is in box (left, top, width, height).

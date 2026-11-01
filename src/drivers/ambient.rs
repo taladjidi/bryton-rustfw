@@ -60,6 +60,15 @@ fn reg(b: &mut impl Board, addr: u8, r: u8) -> Option<u8> {
 /// every 100 ms at gain 6, the barometer powered down with block data update (one-shot conversions
 /// only), the accelerometer powered down (CTRL_REG1 0x07: output rate 0, axes enabled, as stock's "off").
 pub fn init(b: &mut impl Board) -> Chips {
+    let c = probe(b);
+    if c.light || c.baro {
+        return c;
+    }
+    let _ = b.i2c_recover(); // nothing answered: a chip may hold SDA low after a reset in the middle of a read
+    probe(b)
+}
+
+fn probe(b: &mut impl Board) -> Chips {
     let _ = b.i2c_write(ACCEL_ADDR, 0x20, &[0x07]);
     let light = reg(b, LIGHT_ADDR, PART_ID) == Some(LIGHT_ID)
         && b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[0])
@@ -104,18 +113,18 @@ pub fn baro_start(b: &mut impl Board) -> bool {
     b.i2c_write(BARO_ADDR, CTRL_REG2, &[0x11]) // IF_ADD_INC (its reset value), ONE_SHOT
 }
 
-/// The last conversion: (pressure in 1/4096 hPa, the chip's own unit; temperature in C x 100); None if not ready or
-/// no answer.
-pub fn baro_read_raw(b: &mut impl Board) -> Option<(u32, i16)> {
+/// The last conversion: (pressure in 1/4096 hPa, the chip's own unit; temperature in C x 100). The outer `None`: no
+/// answer on the bus; the inner: answered, not ready.
+pub fn baro_read_raw(b: &mut impl Board) -> Option<Option<(u32, i16)>> {
     if reg(b, BARO_ADDR, STATUS)? & 0x03 != 0x03 {
-        return None; // T_DA and P_DA
+        return Some(None); // T_DA and P_DA
     }
     let mut d = [0; 5];
     if !b.i2c_read(BARO_ADDR, PRESS_OUT, &mut d) {
         return None;
     }
     let p = i32::from_le_bytes([0, d[0], d[1], d[2]]) >> 8; // 24-bit two's complement, 4096 per hPa
-    Some((p.max(0) as u32, i16::from_le_bytes([d[3], d[4]])))
+    Some(Some((p.max(0) as u32, i16::from_le_bytes([d[3], d[4]]))))
 }
 
 /// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each, stock's

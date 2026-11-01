@@ -90,6 +90,12 @@ pub(crate) struct Light {
     pub(crate) ms: u32,
     /// The measurement is still running.
     pub(crate) measuring: bool,
+    /// Sensor bus transfers failed in a row (app/device.rs `sensor_ok`).
+    pub(crate) fails: u8,
+    /// The sensor bus is left alone for this long, ms (after a clear: `sensor_ok`).
+    pub(crate) hold_ms: u32,
+    /// The last such wait, ms; 0 once a transfer succeeded.
+    pub(crate) backoff_ms: u32,
     /// AUTO (THEME): the day or night theme from the light (ui/theme.rs).
     pub(crate) day_night: crate::theme::DayNight,
 }
@@ -105,6 +111,9 @@ impl Light {
             auto_level: LIGHT_LEVELS[1],
             ms: LIGHT_MS,
             measuring: false,
+            fails: 0,
+            hold_ms: 0,
+            backoff_ms: 0,
             day_night: Default::default(),
         }
     }
@@ -787,12 +796,26 @@ pub(crate) struct TouchState {
     /// The panel was sampled during a drive command: the main loop's next `dt_ms` (its sleep since its own last
     /// read) is time those samples already counted.
     pub(crate) sampled: bool,
+    /// Touch reads failed in a row (`App::touch_health`).
+    pub(crate) fails: u8,
+    /// No controller reset for this long, ms.
+    pub(crate) wait_ms: u32,
+    /// The last such wait, ms; 0 once a read succeeded.
+    pub(crate) backoff_ms: u32,
 }
 
 impl TouchState {
     /// With the controller's answer (`ok`), nothing pending.
     pub(crate) fn new(ok: bool) -> Self {
-        TouchState { ok, rec: touch::Recogniser::default(), pending: None, sampled: false }
+        TouchState {
+            ok,
+            rec: touch::Recogniser::default(),
+            pending: None,
+            sampled: false,
+            fails: 0,
+            wait_ms: 0,
+            backoff_ms: 0,
+        }
     }
 }
 

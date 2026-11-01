@@ -640,10 +640,16 @@ fn hash(screen: &[u16]) -> u64 {
 }
 
 /// The built-in themes draw as they did before the metrics: the main menu and a ride page in DARK hash to the values
-/// taken from the same test on the commit before (main, 2026-10-30).
+/// taken from the same test on the commit before (main, 2026-10-30). The RTC is frozen (`Sim::frozen_s`) at the second
+/// the reference was taken at, so the strip's clock does not depend on how long the transfers take.
 #[test]
 fn dark_draws_as_before_the_metrics() {
-    let (mut sim, mut app) = unit(None);
+    let (mut sim, mut app) = super::tests::unit_with(None, |sim| {
+        sim.own_settings();
+        sim.emmc.image = crate::fat::tests::image();
+        sim.frozen_s = Some(1); // an odd second: the clock's blinking colon as the reference was taken
+    });
+    run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
     app.press(&mut sim, Press::Long(Key::Page));
     run(&mut sim, &mut app, 200);
     let menu = hash(&sim.screen);

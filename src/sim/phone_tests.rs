@@ -6,6 +6,17 @@ use super::*;
 use crate::phone::Stored;
 
 /// `\Rustfw\ble.bin` as the card holds it.
+/// Runs until the bond is on the card, 12 s at most. The app's own clock lags the simulated one by the panel's DMA
+/// waits (the CPU sleeps in them and its counter stops, as on the unit), so the bond's 3 s are a little longer here.
+fn until_bonded(sim: &mut Sim, app: &mut App) {
+    for _ in 0..48 {
+        if stored(sim).and_then(|s| s.bond).is_some() {
+            break;
+        }
+        run(sim, app, 250);
+    }
+}
+
 fn stored(sim: &Sim) -> Option<Stored> {
     let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
@@ -101,7 +112,16 @@ fn media_keys_and_now_playing() {
     assert_eq!(ph.commands, [2, 3, 4, 5], "toggle, next, previous, volume up: AMS");
     assert_eq!(ph.reports, [0x08, 0], "volume up pressed and released: HID");
     assert_eq!(app.phone.now.title.as_str(), "Song");
-    assert_eq!(app.field_text(Field::Music).as_str(), "1:06", "64 s told, 2 s since");
+    for _ in 0..40 {
+        if super::tests::is_consistent(&sim, &app) {
+            break;
+        }
+        run(&mut sim, &mut app, 50); // the second the transfers moved on to, drawn
+    }
+    assert!(
+        app.field_text(Field::Music).as_str().starts_with("1:0"),
+        "64 s told, 2 to 3 s since (the transfers take time now)"
+    );
     assert_consistent(&sim, &app);
     sim.save("phone_media");
 }
@@ -195,7 +215,7 @@ fn a_call_on_a_more_page() {
 fn the_bonded_phone_comes_back() {
     let (mut sim, mut app) = unit(iphone(Vec::new()));
     app.activate(&mut sim, Menu::Phone, 1);
-    run(&mut sim, &mut app, 3000);
+    until_bonded(&mut sim, &mut app);
     assert!(stored(&sim).and_then(|s| s.bond).is_some());
 
     let mut sim2 = Sim::new(9, 5, 0);
@@ -238,7 +258,7 @@ fn the_bonded_phone_comes_back() {
 fn the_bond_waits_for_the_ride_to_settle() {
     let (mut sim, mut app) = unit(iphone(Vec::new()));
     app.activate(&mut sim, Menu::Phone, 1);
-    run(&mut sim, &mut app, 3000);
+    until_bonded(&mut sim, &mut app);
     let mut sim2 = Sim::new(9, 5, 0);
     sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
     crate::fat::write::tests::fill(&mut sim2.emmc.image, 0, true);

@@ -162,7 +162,7 @@ impl<B: Board> Touching<'_, B> {
             // the point read after every chunk, finger or not: INT may only pulse (stock takes its falling edge, which
             // the main loop latches), and a swipe's start missed until the command ends is a short drag (seen on the
             // unit, 2026-10-24); one 3-byte I2C read per 8 KB
-            && let (Some(g), _) = sample_touch(self.lent.1, self.touch, self.ok, true, ms)
+            && let (Some(g), ..) = sample_touch(self.lent.1, self.touch, self.ok, true, ms)
         {
             *self.pending = Some(Input::Touch(g));
         }
