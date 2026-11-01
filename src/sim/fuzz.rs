@@ -3,6 +3,16 @@
 
 extern crate std;
 use std::vec::Vec;
+
+/// The fuzz scale: `FUZZ_SCALE` in the environment (default 1: every seed; `./check.sh --quick` sets 0.25).
+fn fuzz_scale() -> f32 {
+    std::env::var("FUZZ_SCALE").ok().and_then(|v| v.parse().ok()).filter(|s| *s > 0.0 && *s <= 1.0).unwrap_or(1.0)
+}
+
+/// `n` seeds (or a reach threshold) at the fuzz scale, at least 1.
+fn scaled(n: u32) -> u32 {
+    ((n as f32 * fuzz_scale()) as u32).max(1)
+}
 /// xorshift32: deterministic, so a failure reproduces.
 fn bytes(seed: u32, n: usize) -> impl Iterator<Item = u8> {
     let mut x = seed;
@@ -877,7 +887,7 @@ fn fit_structure() {
     use crate::fitread::{Msg, Reader};
     let mut made = FitMade::default();
     let (mut kinds, mut whole, mut files) = ([0u32; 4], 0u32, 0u32);
-    for seed in 1..=3000u32 {
+    for seed in 1..=scaled(3000) {
         let file = fit_structured(seed.wrapping_mul(2654435761), &mut made);
         for (position, alpha1) in [(true, false), (false, true)] {
             let new = || if position { Reader::with_position() } else { Reader::with_alpha1() };
@@ -911,10 +921,11 @@ fn fit_structure() {
         "fit structure: {files} files, {whole} whole, messages {kinds:?}, made {:?}",
         (made.big, made.dev, made.redefined, made.compressed, made.odd_sizes, made.globals)
     );
-    assert!(kinds.iter().all(|&k| k > 50), "every message kind reached: {kinds:?}");
+    assert!(kinds.iter().all(|&k| k > scaled(50) - 1), "every message kind reached: {kinds:?}");
     assert!(whole > files / 2, "{whole} of {files} read whole");
-    assert!(made.big > 500 && made.dev > 500 && made.redefined > 500 && made.compressed > 500 && made.odd_sizes > 500);
-    assert!(made.globals.iter().all(|&g| g > 500), "{:?}", made.globals);
+    let m = scaled(500);
+    assert!(made.big > m && made.dev > m && made.redefined > m && made.compressed > m && made.odd_sizes > m);
+    assert!(made.globals.iter().all(|&g| g > m), "{:?}", made.globals);
 }
 
 /// Random power curves into the critical power fit (power_curve.rs `fit_cp`): bests from 0 to 2000 W, some missing,
@@ -2225,7 +2236,25 @@ fn menu_touch_and_keys() {
 /// WORKOUT and COURSE menus too), and no stored setting (the settings' registers, the pages, the sensors) changed
 /// but by an act in a menu: Start or a tap on a row, or the end of a number's edit (Back or a swipe right keep it).
 #[test]
-fn menu_tree_by_chance() {
+fn menu_tree_by_chance_part_0() {
+    menu_tree_by_chance(0);
+}
+#[test]
+fn menu_tree_by_chance_part_1() {
+    menu_tree_by_chance(1);
+}
+#[test]
+fn menu_tree_by_chance_part_2() {
+    menu_tree_by_chance(2);
+}
+#[test]
+fn menu_tree_by_chance_part_3() {
+    menu_tree_by_chance(3);
+}
+
+/// Seeds 1 to 36 in four runs of nine (`part`), which was one test of 24 s, the floor of `cargo test-host`. Not
+/// scaled by `FUZZ_SCALE`: the rare menus need all 36 seeds.
+fn menu_tree_by_chance(part: u32) {
     use super::*;
     use crate::touch::Dir;
     use std::collections::BTreeMap;
@@ -2236,7 +2265,7 @@ fn menu_tree_by_chance() {
         .chain(crate::sensors::Kind::ALL.iter().map(|k| k.backup()))
         .collect();
     let (mut acts, mut rides) = (0, 0);
-    for seed in 1..=36u32 {
+    for seed in 9 * part + 1..=9 * part + 9 {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
@@ -2370,7 +2399,20 @@ fn menu_tree_by_chance() {
             }
         }
     }
-    std::println!("reached: {reached:?}; {acts} stored by an act, {rides} ride cards");
+    std::println!("part {part}, reached: {reached:?}; {acts} stored by an act, {rides} ride cards");
+    // the reach checks are over the four parts together (one process: libtest's threads; nextest would run each part
+    // alone and never get here): the part that finishes last makes them
+    static TOTAL: std::sync::Mutex<(BTreeMap<std::string::String, u32>, u32, u32, u32)> =
+        std::sync::Mutex::new((BTreeMap::new(), 0, 0, 0));
+    let mut total = TOTAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (k, n) in reached {
+        *total.0.entry(k).or_default() += n;
+    }
+    (total.1, total.2, total.3) = (total.1 + acts, total.2 + rides, total.3 + 1);
+    if total.3 < 4 {
+        return;
+    }
+    let (reached, acts, rides) = (core::mem::take(&mut total.0), total.1, total.2);
     assert!(reached["ride a course picked"] > 0, "pick_course reached: {reached:?}");
     let all = [
         "Main",
@@ -2430,7 +2472,7 @@ fn history_by_chance() {
         n
     };
     let (mut deletes, mut refused) = (0, 0);
-    for seed in 1..=8u32 {
+    for seed in 1..=scaled(8) {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::storage::trash::tests::volume();
         let all = rides(&sim.emmc.image, "Activities");
@@ -2498,7 +2540,7 @@ fn history_by_chance() {
         }
     }
     std::println!("{deletes} deletes, {refused} refused while riding");
-    assert!(deletes > 5 && refused > 0, "{deletes} deletes, {refused} refused");
+    assert!(deletes > scaled(5) - 1 && refused > 0, "{deletes} deletes, {refused} refused");
 }
 
 /// Random edits of random pages (page.rs): every result well formed, within 5 rows and 8 cells, every box a value's
@@ -2782,7 +2824,7 @@ fn page_editor_inputs() {
     let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
     let (mut mores, mut more_edits, mut more_kept) = (0, 0, 0);
     let (mut indoor_edits, mut indoor_changed, mut mtb_edits) = (0, 0, 0);
-    for seed in 1..=48u32 {
+    for seed in 1..=scaled(48) {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         sim.own_settings();
@@ -2871,10 +2913,12 @@ fn page_editor_inputs() {
     std::println!("editor reached: {splits} splits, {merges} merges, {added} pages added, {deleted} deleted");
     std::println!("MORE reached: {mores} passes up, {more_edits} in the editor, {more_kept} kept");
     std::println!("indoor set reached: {indoor_edits} passes in its editor, {indoor_changed} changes");
-    assert!(indoor_edits > 50 && indoor_changed > 5, "{indoor_edits} {indoor_changed}");
+    let q = fuzz_scale();
+    let t = |n: u32| (n as f32 * q) as usize; // a threshold at the scale (0 is `> 0`)
+    assert!(indoor_edits > t(50) && indoor_changed > t(5), "{indoor_edits} {indoor_changed}");
     assert!(mtb_edits > 0, "the MTB set reached: {mtb_edits}");
-    assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
-    assert!(mores > 50 && more_edits > 5 && more_kept > 0, "{mores} {more_edits} {more_kept}");
+    assert!(splits > t(10) && merges > t(10) && added > t(3) && deleted > t(3), "{splits} {merges} {added} {deleted}");
+    assert!(mores > t(50) && more_edits > t(5) && (more_kept > 0 || q < 1.0), "{mores} {more_edits} {more_kept}");
 }
 
 /// Random pressures, altitudes and calibrations into the barometric altitude (altitude.rs): no panic, and every

@@ -199,7 +199,10 @@ changed (the walk selftest: `src/sim/walk_tests.rs` instead of `src/ui/tiles.rs`
 `renode/` are untouched. Renode runs after the lanes, only when they
 passed (it needs the image and the simulator's preview). The changes are the diff against the merge base with
 `origin/main` plus the working tree; a detached HEAD skips nothing. `./check.sh --full` forces everything. `./check.sh --quick` is the
-iteration tier and **not the gate**: the guards, lint, fmt, firmware clippy, host clippy and `cargo test-host`. Commit after the full
+iteration tier and **not the gate**: the guards, lint, fmt, firmware and host clippy, then the host tests with a quarter of
+the fuzz seeds (`FUZZ_SCALE=0.25`) and, on a branch, only the tests the diff can reach (`tools/test_select.py`, filters
+printed; all when anything shared or unmapped changed). The gate always runs every test at `FUZZ_SCALE` 1, and Renode's
+timeout scales with the machine's load (one retry, printed; docs/devloop.md "The gate"). Commit after the full
 `./check.sh` exits 0.
 
 Look at `target/sim/preview.bmp` after any drawing change, and at `target/sim/fonts.bmp` (every font, written by
