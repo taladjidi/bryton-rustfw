@@ -18,6 +18,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **The ride's hang, reproduced in the model (2026-11-01, `ride_radio_tests.rs` `the_bursts_of_a_ride_...`):** after the
+  differential test fixed the response order, the old configuration (100 ms pass, 20 us wait) keeps the queue near 70 to
+  88 of 96, and a burst on top hangs it: the phone's 12 notifications as 48 events in one pass (3 hangs in 5 minutes) and
+  32 ANT events after a suspend (1 hang); the 8 channels' search time-outs alone (16 events) do not. The production
+  configuration never hangs under the same bursts: worst high-water 48 of 96. Which burst the ride really had is still
+  open (the model shows it could be either).
 - **The sensor bus clear (2026-11-01, main.rs `i2c_clear`, BOARD.md 16 "Bus clear"):** nine SCL pulses and a STOP on
   PD12 / PD13, run at start when no chip answers and after 3 failed transfers in a row. Never run on the unit: check it
   with a scope or by holding SDA low from a test fixture, and that a healthy bus is left as `i2c_init` leaves it.
