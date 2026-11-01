@@ -487,6 +487,8 @@ pub struct Scan {
     /// (`second`), on top of the cache's entries, so `out` is no longer the cache's alone.
     over: bool,
     second: bool,
+    /// The file being read was read again once after a Corrupt chain (a FAT sector kept while a computer wrote).
+    retried: bool,
     /// Files listed so far (shown as progress).
     pub listed: u16,
     /// Rides read (not found in the cache) since the scan started.
@@ -530,6 +532,7 @@ impl Scan {
             shown: false,
             over: false,
             second: false,
+            retried: false,
             listed: 0,
             read: 0,
             out: Summary {
@@ -743,6 +746,7 @@ impl Scan {
                             }
                         }
                         self.file = Some((e.file, 0, day, start));
+                        self.retried = false;
                         (self.reader, self.acc, self.seek) = (Reader::new(), Acc::new(), Seek::new());
                         self.rolling.reset();
                     }
@@ -762,7 +766,13 @@ impl Scan {
                 self.over |= self.second;
                 return Ok(());
             }
-            Err(_) => {
+            Err(e) => {
+                if e == fat::Error::Corrupt && !self.retried {
+                    // a chain changed under a FAT sector kept (a computer writing over USB): once more, from a cold FAT
+                    (self.retried, self.seek) = (true, Seek::new());
+                    self.forget_fat();
+                    return Ok(());
+                }
                 self.end_file(false); // one bad file: skipped, the scan goes on
                 return Ok(());
             }
@@ -1244,6 +1254,20 @@ pub(crate) mod tests {
         }
         let (s, _) = scan(&mut d, Some(cache()), 4096);
         assert_eq!(s.out.skipped, 3, "the bad CRC, the cut file and this one");
+    }
+
+    /// A Corrupt read once (a FAT sector kept while a computer wrote) is read again from a cold FAT: the ride counts.
+    #[test]
+    fn a_corrupt_read_once_is_retried() {
+        let base = image();
+        let (good, _) = scan(&mut Ram(base.clone(), 0), None, 1 << 20);
+        let mut d = Ram(base, 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, "Activities/261020080000.fit").unwrap();
+        let mut fl = Flaky(d, fat.lba(f.cluster), true, fat::Error::Corrupt);
+        let (s, _) = scan(&mut fl, Some(cache()), 1 << 20);
+        assert!(!fl.2, "the error happened");
+        assert_eq!(s.out.all, good.out.all, "read again, counted");
     }
 
     /// A stock .ini longer than the buffer is cut at a line end: no sensor id read from half a line.

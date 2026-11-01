@@ -34,8 +34,9 @@ use crate::text::Line;
 /// Nodes the graph holds at most (20 bytes each). A real tile has 445 at the median and 2868 at most in the
 /// mountain region measured (review 2026-11-01: 2560 was below it); a tile that does not fit is skipped.
 pub const NODES: usize = 3072;
-/// Edges the graph holds at most (9 bytes each): two or three a node.
-pub const EDGES: usize = 7168;
+/// Edges the graph holds at most (9 bytes each). Not measured for the 2868-node tile (the owner's route file is not
+/// in the repository: `real_file` prints it); 2 a node as the first 2560 nodes had it, 5120 of 2560.
+pub const EDGES: usize = 6144;
 /// Tiles remembered at most, the ones with no data too.
 pub const TILES: usize = 16;
 /// The elevation of a node that has none.

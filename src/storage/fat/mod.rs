@@ -500,7 +500,7 @@ fn lfn_piece(lfn: &mut [u16; LFN], e: &[u8; 32], ord: u8, sum: Option<u8>, left:
     for (slot, a) in lfn.iter_mut().skip((n - 1) * 13).zip(AT) {
         *slot = u16_at(e, a);
     }
-    *left = (n - 1) as u8;
+    *left = (ord & 0x1f).saturating_sub(1); // n is 1 to 20 here
     Some(e[13])
 }
 
