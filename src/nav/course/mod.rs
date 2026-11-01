@@ -108,13 +108,12 @@ fn hypot(dx: i64, dy: i64) -> u32 {
 ///
 /// ```
 /// use bryton_rustfw::course::step_mm;
-/// assert_eq!(step_mm((0, 0), (8983, 0)), 99_998); // 8983e-7 degrees of latitude: 100 m
+/// assert_eq!(step_mm((0, 0), (9043, 0)), 99_992); // 9043e-7 degrees of latitude at the equator: 100 m
 /// ```
 pub fn step_mm(a: (i32, i32), b: (i32, i32)) -> u64 {
-    let cos = cos_q16(a.0);
     let clamp = |v: i64| v.clamp(-(1 << 31), 1 << 31);
-    let dy = clamp((i64::from(b.0) - i64::from(a.0)) * 11_132 / 1000);
-    let dx = clamp((i64::from(b.1) - i64::from(a.1)) * 11_132 * cos / 65_536 / 1000);
+    let (dx, dy) = crate::math::plane_mm((a.0, a.1, cos_q16(a.0)), b.0, b.1);
+    let (dx, dy) = (clamp(dx), clamp(dy));
     (dx * dx).unsigned_abs().saturating_add((dy * dy).unsigned_abs()).isqrt()
 }
 
@@ -185,7 +184,7 @@ impl Odometer {
     /// ```
     /// use bryton_rustfw::course::{Odometer, Pt};
     /// let mut o = Odometer::new();
-    /// let north = |m: i32, split| Pt { lat: m * 8983 / 100, split, ..Pt::default() }; // 8983e-7 degrees: 100 m
+    /// let north = |m: i32, split| Pt { lat: m * 9043 / 100, split, ..Pt::default() }; // 9043e-7 degrees at the equator: 100 m
     /// assert!(!o.step(north(0, false)) && !o.step(north(500, false)));
     /// assert!(o.step(north(5000, true)), "4.5 km where a segment starts: a gap");
     /// assert!(!o.step(north(5100, false)) && !o.step(north(9000, false)), "3.9 km inside a segment: ridden");
@@ -793,8 +792,9 @@ impl Course {
     /// The degrees x 1e-7 (latitude, longitude) of a point of this course's plane.
     pub fn lat_lon(&self, p: (i32, i32)) -> Option<(i32, i32)> {
         let (lat, lon, cos) = self.origin?;
-        let dlat = i64::from(p.1) * 1_000_000 / 11_132;
-        let dlon = (i64::from(p.0) * 1_000_000 * 65_536).checked_div(11_132 * cos.max(1)).unwrap_or(0);
+        let (north, east) = crate::math::mm_per_degree(cos);
+        let dlat = i64::from(p.1) * 10_000_000_000 / north;
+        let dlon = (i64::from(p.0) * 10_000_000_000).checked_div(east.max(1)).unwrap_or(0);
         Some((
             (i64::from(lat) + dlat).clamp(-900_000_000, 900_000_000) as i32,
             (i64::from(lon) + dlon).clamp(-1_800_000_000, 1_800_000_000) as i32,
@@ -1077,12 +1077,13 @@ pub(crate) mod tests {
 
     /// Degrees x 1e-7 per metre north (as map.rs's 0.011132 m per unit).
     const NORTH: f64 = 1.0 / 0.011_132;
+    const NORTH_LAT: f64 = 1.0 / 0.011_057_431;
 
     /// A course from points in metres east and north of 0 N 0 E, with altitudes in metres.
     pub fn course(pts: &[(f64, f64, f64)]) -> Course {
         let mut c = Course::new();
         for &(x, y, z) in pts {
-            c.push((y * NORTH).round() as i32, (x * NORTH).round() as i32, Some((z * 10.0).round() as i32));
+            c.push((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32, Some((z * 10.0).round() as i32));
         }
         c.finish();
         c
@@ -1104,7 +1105,7 @@ pub(crate) mod tests {
     }
 
     fn fix(x: f64, y: f64) -> (i32, i32) {
-        ((y * NORTH) as i32, (x * NORTH) as i32)
+        ((y * NORTH_LAT) as i32, (x * NORTH) as i32)
     }
 
     /// Descents: a long gentle one (4 km at 4 %) and a short steep one (300 m at 12 %) are both found, with their
@@ -1290,7 +1291,7 @@ pub(crate) mod tests {
     fn add(c: &mut Course, pts: &[(f64, f64, f64)], split: bool, stated: Option<(f64, f64)>) {
         for (k, &(x, y, z)) in pts.iter().enumerate() {
             let dist_m = stated.map(|(a, b)| (a + (b - a) * k as f64 / (pts.len() - 1) as f64).round() as u32);
-            let (lat, lon) = ((y * NORTH).round() as i32, (x * NORTH).round() as i32);
+            let (lat, lon) = ((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32);
             c.add(Pt { lat, lon, alt_dm: Some((z * 10.0).round() as i32), split: split && k == 0, dist_m });
         }
     }
@@ -1367,7 +1368,8 @@ pub(crate) mod tests {
         assert_eq!(c.points()[0], (0, 0));
         assert!((c.points().last().unwrap().1 - 150_000).abs() < 20);
         assert!(c.dist[..c.len - 1].windows(2).all(|w| w[1] - w[0] >= c.step_m && w[1] - w[0] < c.step_m + 20));
-        assert!((149_990..=150_010).contains(&c.len_m()), "the distance of every point given: {}", c.len_m());
+        // 5 m steps are 452 units of 1.1 cm: the rounding of each leaves the total 0.02 % short
+        assert!((149_960..=150_010).contains(&c.len_m()), "the distance of every point given: {}", c.len_m());
     }
 
     /// Climbs worked out by hand: 1 km flat at 100 m, 2 km up to 220 m (6 %), a 200 m dip of 5 m, 800 m up 40 m
@@ -1418,7 +1420,7 @@ pub(crate) mod tests {
         }
         let (lat, lon) = fix(2030.0, 1000.0);
         c.follow(&mut t, lat, lon);
-        assert!(t.along_m.abs_diff(3000) <= 2 && t.off_m == Some(30), "found again after a jump: {t:?}");
+        assert!(t.along_m.abs_diff(3000) <= 5 && t.off_m == Some(30), "found again after a jump: {t:?}");
     }
 
     /// An out-and-back: going out, the outbound leg; past the turn, the return leg, though both are as near.

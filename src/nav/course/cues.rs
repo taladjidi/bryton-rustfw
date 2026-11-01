@@ -898,9 +898,10 @@ pub(crate) mod tests {
 
     /// Degrees x 1e-7 per metre, as course.rs's tests.
     const NORTH: f64 = 1.0 / 0.011_132;
+    const NORTH_LAT: f64 = 1.0 / 0.011_057_431;
 
     fn at(x: f64, y: f64) -> (i32, i32) {
-        ((y * NORTH).round() as i32, (x * NORTH).round() as i32)
+        ((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32)
     }
 
     fn turns(c: &Course) -> Vec<(u32, Turn)> {
@@ -982,7 +983,7 @@ pub(crate) mod tests {
         for (x, y, z) in
             lines(&[(0.0, 0.0, 0.0), (2000.0, 0.0, 0.0), (2000.0, 5.0, 0.0), (0.0, 5.0, 0.0), (0.0, 500.0, 0.0)], 10.0)
         {
-            c.push((y * NORTH).round() as i32, (x * NORTH).round() as i32, Some((z * 10.0) as i32));
+            c.push((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32, Some((z * 10.0) as i32));
         }
         c.finish();
         check(&turns(&c), &[(500, Turn::Water), (2002, Turn::UTurn), (3505, Turn::Food), (4400, Turn::SharpLeft)], 3);
@@ -998,7 +999,7 @@ pub(crate) mod tests {
             c.add_cue(lat, lon, if k >= 300 { Turn::Right } else { Turn::Water }, None);
         }
         for (x, y, z) in lines(&[(0.0, 0.0, 0.0), (4000.0, 0.0, 0.0)], 10.0) {
-            c.push((y * NORTH).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
+            c.push((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
         }
         c.finish();
         assert_eq!(c.cues().iter().filter(|c| c.turn == Turn::Right).count(), 20);
@@ -1127,7 +1128,7 @@ pub(crate) mod tests {
             f.add_cue(lat, lon, Turn::Left, None);
         }
         for &(x, y, z) in &pts {
-            f.push((y * NORTH).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
+            f.push((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
         }
         let t0 = std::time::Instant::now();
         f.finish();
@@ -1333,7 +1334,7 @@ pub(crate) mod tests {
             f.add_cue(lat, lon, Turn::Left, None);
         }
         for &(x, y, z) in &pts {
-            f.push((y * NORTH).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
+            f.push((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
         }
         f.finish();
         for c in [course(&pts), f] {
@@ -1426,7 +1427,7 @@ pub(crate) mod tests {
             f.add_cue(lat, lon, Turn::Left, None);
         }
         for (x, y, z) in lines(&corners, 10.0) {
-            f.push((y * NORTH).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
+            f.push((y * NORTH_LAT).round() as i32, (x * NORTH).round() as i32, Some(z as i32));
         }
         let t0 = std::time::Instant::now();
         f.finish();

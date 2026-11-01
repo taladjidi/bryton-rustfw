@@ -9,9 +9,13 @@
 //!   constants of 42 and 7 days, `x[d] = x[d-1] + (TSS[d] - x[d-1]) / N`, and TSB is the form the rider starts the day
 //!   with, **yesterday's CTL minus yesterday's ATL**. Read in: trainerroad.com/forum/t/performance-management-chart/18713,
 //!   groups.google.com/g/golden-cheetah-users/c/h_KSL1oUmLI, uphillathlete.com/?p=60379 and
-//!   fascatcoaching.com/tips/realtstwkt. This is the linear form (weight k = 1/N), **inferred** to match TrainingPeaks;
-//!   WKO may use 1 - e^(-1/N), which weighs ATL's last day about 7 % differently. Days without a ride count 0; the
-//!   series starts at 0, `WARM` days before the chart.
+//!   fascatcoaching.com/tips/realtstwkt. This is the linear form (weight k = 1/N): a forum post quotes it as TrainingPeaks' formula,
+//!   `CTLt = CTLy + (TSS - CTLy) / 42` (forum.intervals.icu/t/detraining-quantification/112212, a rider's quote, not
+//!   the vendor's), but no primary statement was found (checked 2026-11-01: Intervals.icu's forum search gives no
+//!   statement of its author), so it stays **inferred**; WKO or Golden Cheetah may use 1 - e^(-1/N), which weighs
+//!   ATL's last day about 7 % differently. Days without a ride count 0. **The series starts at 0, `WARM` days before
+//!   the chart, not seeded:** the start of the chart reads CTL up to 5.7 % low (the 42-day tail of the unseen
+//!   history), which a seed would only replace by a guess; the scan's index holds no older rides to seed from.
 //! - **Where the rides come from:** the scan's index ([`crate::history::Index`], the newest [`RIDES`] rides). A rider
 //!   with more rides than that in `DAYS` days gets a CTL that is too low at the far end; the oldest month of a full
 //!   index is partial and is left out of [`Load::months`]; [`Load::partial`] says the window may be cut short.

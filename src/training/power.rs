@@ -102,6 +102,10 @@ impl Power {
     /// One second's power, counted in the ride's totals if `moving`: [`Power::second`] without W' balance (a ride
     /// read back from its file, a second a record).
     pub fn sample(&mut self, p: Option<u16>, moving: bool) {
+        // A dropout once the ride has had power is a second at 0 W, window and seconds kept: Golden Cheetah's NP
+        // (src/Metrics/Coggan.cpp `IsoPower`) rolls over every sample, none skipped, and counts them all in its
+        // seconds, so TSS counts the dropout's time. Before the first reading there is no meter: the ring restarts.
+        let p = p.or((self.secs > 0).then_some(0));
         match p {
             Some(p) => self.push(p),
             None => (self.n, self.sums) = (0, [0; 3]),
@@ -177,14 +181,15 @@ impl Power {
         (self.np_n > 0).then(|| (self.np_sum / u64::from(self.np_n)).isqrt().isqrt().min(u64::from(u16::MAX)) as u16)
     }
 
-    /// Intensity factor x 100: NP / FTP.
+    /// Intensity factor x 100: NP / FTP (None without an FTP: a ratio to 0 W says nothing, not IF 25000).
     pub fn if_x100(&self, ftp: u16) -> Option<u32> {
-        self.np().map(|np| u32::from(np) * 100 / u32::from(ftp.max(1)))
+        self.np().filter(|_| ftp > 0).map(|np| u32::from(np) * 100 / u32::from(ftp))
     }
 
     /// Training stress score: (s x NP x IF) / (FTP x 3600) x 100 = s x NP^2 x 100 / (FTP^2 x 3600).
     pub fn tss(&self, ftp: u16) -> Option<u32> {
-        Some(tss(self.secs, self.np()?, ftp))
+        let np = self.np().filter(|_| ftp > 0)?;
+        Some(tss(self.secs, np, ftp))
     }
 
     /// Average power over the seconds counted, W (None before one).
@@ -250,6 +255,66 @@ mod tests {
         assert_eq!(tss(u32::MAX, u16::MAX, 1), tss(1_000_000, u16::MAX, 1), "no overflow from a damaged file");
     }
     use crate::ride::Input;
+
+    /// A second with no reading after power was heard counts as 0 W in the window and in the seconds (Golden Cheetah's
+    /// `IsoPower` rolls over every sample): 60 s at 200 W, 30 s of dropout, 60 s at 200 W.
+    #[test]
+    fn a_dropout_is_zero_watts() {
+        let (mut p, r) = (Power::default(), riding());
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        let before = p.np();
+        for _ in 0..30 {
+            p.second(None, &r, 250, 20_000);
+        }
+        assert_eq!(p.rolling(2), Some(0), "the window holds 30 zeros");
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        assert_eq!(p.secs, 150, "the dropout's seconds count toward TSS");
+        assert!(p.np() < before, "{:?} < {before:?}", p.np());
+        let mut q = Power::default(); // no meter at all: nothing counted
+        for _ in 0..60 {
+            q.second(None, &r, 250, 20_000);
+        }
+        assert_eq!((q.secs, q.np()), (0, None));
+    }
+
+    /// With the ring kept through an auto-pause (the ride is not moving), the paused seconds sit in the 30 s window
+    /// but are not counted: NP of the seconds after the stop is pulled down by the zeros, `secs` is the moving ones.
+    #[test]
+    fn np_across_an_auto_pause() {
+        let (mut p, r) = (Power::default(), riding());
+        let mut stopped = Ride::new();
+        stopped.start_pause();
+        stopped.second(&Input { speed_x10: Some(0), ..Input::default() });
+        assert!(!stopped.moving());
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        for _ in 0..30 {
+            p.second(Some(0), &stopped, 250, 20_000);
+        }
+        assert_eq!(p.secs, 60, "paused seconds are not counted");
+        for _ in 0..30 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        let np_after = p.np().unwrap();
+        assert!(np_after < 200, "{np_after}");
+        assert_eq!(p.secs, 90);
+    }
+
+    /// No FTP: no IF and no TSS (the screens show "--"), not a ratio to 0 W.
+    #[test]
+    fn no_ftp_no_score() {
+        let (mut p, r) = (Power::default(), riding());
+        for _ in 0..60 {
+            p.second(Some(200), &r, 250, 20_000);
+        }
+        assert_eq!((p.if_x100(0), p.tss(0)), (None, None));
+        assert!(p.if_x100(200).is_some() && p.tss(200).is_some());
+    }
 
     fn riding() -> Ride {
         let mut r = Ride::new();

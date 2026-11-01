@@ -319,7 +319,6 @@ impl Ride {
             self.balance.add(i.balance.filter(|&b| b <= 100));
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
             self.max_cadence = self.max_cadence.max(i.cadence.unwrap_or(0));
-            self.lap_power.sample(i.power, true);
             if let Some(alt) = alt_mm {
                 self.max_alt_mm = Some(self.max_alt_mm.map_or(alt, |m| m.max(alt)));
                 let low = self.alt_low.get_or_insert(alt);
@@ -343,6 +342,9 @@ impl Ride {
                 }
             }
         }
+        // the lap's power follows the ride's rule (power.rs `Power::second`): the ring sees every running second, the
+        // totals and NP count the moving ones
+        self.lap_power.sample(i.power, self.moving);
         Some(Event::Second)
     }
 

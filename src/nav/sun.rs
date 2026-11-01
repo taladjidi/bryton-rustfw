@@ -99,24 +99,14 @@ mod tests {
     use super::*;
 
     /// Local minutes of the day within a minute of the expected ones. The expected values are the published
-    /// sunrise and sunset of api.sunrise-sunset.org (checked for the dates named), and the synthetic places' are
-    /// from the same equations in double precision (NOAA's calculator gives no table).
+    /// sunrise and sunset of api.sunrise-sunset.org (checked for the dates named); none is computed by this
+    /// file's own equations.
     fn near(got: Option<(u32, u32)>, want: (u32, u32)) -> bool {
         got.is_some_and(|(r, s)| r.abs_diff(want.0) <= 1 && s.abs_diff(want.1) <= 1)
     }
 
     #[test]
     fn sun_times_match_the_published_equations() {
-        // equator, equinox (2026-03-20, days 20532): 06:04 and 18:11 UTC
-        assert!(near(rise_set(0, 0, 20532, 0), (364, 1091)));
-        // 60 N at the June solstice (2026-06-21): 02:36 and 21:28 UTC, a day of 18 h 52 min
-        assert!(near(rise_set(600_000_000, 0, 20625, 0), (156, 1288)));
-        // 60 N at the December solstice: 09:02 and 14:54, 5 h 52 min of light
-        assert!(near(rise_set(600_000_000, 0, 20808, 0), (542, 894)));
-        // 40 S, 150 E, December (20808), local clock at UTC+10: 04:27 and 19:28
-        assert!(near(rise_set(-400_000_000, 1_500_000_000, 20808, 600), (267, 1168)));
-        // 15 E in September (20718), local clock at UTC+1: 05:49 and 17:56
-        assert!(near(rise_set(0, 150_000_000, 20718, 60), (349, 1076)));
         // published, api.sunrise-sunset.org: Greenwich (51.4772, -0.0016) 2026-06-21 at UTC: 03:43 and 20:21
         assert!(near(rise_set(514_772_000, -16_000, 20625, 0), (223, 1221)));
         // Greenwich 2026-03-20 at UTC: 06:02 and 18:13

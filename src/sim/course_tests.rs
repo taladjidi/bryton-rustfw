@@ -236,8 +236,10 @@ fn course_ride() {
 /// The made-up road of the synthetic map file (tools/route_pack.py, `\Map\MapData\Test` on the test volume): ridden
 /// east at 8 m/s from 100 m along it.
 fn ahead_route(ms: u64) -> (i32, i32, i32) {
-    let (lat, lon) = crate::route::tests::metres(100.0 + ms as f64 * 0.008, 0.0);
-    (lat, lon, 9_000_000)
+    // east along the origin's parallel, by the firmware's own length of a degree there (math.rs)
+    let (lat, lon0) = crate::route::tests::metres(0.0, 0.0);
+    let east = crate::math::mm_per_degree(crate::math::cos_q16(lat)).1 as f64 / 1e10;
+    (lat, lon0 + ((100.0 + ms as f64 * 0.008) / east) as i32, 9_000_000)
 }
 
 /// An MTB ride turns climbs ahead's trails mode on; a road ride leaves it off.
@@ -478,7 +480,7 @@ fn course_cues_ride() {
     let texts: Vec<_> = said.iter().map(|s| s.1.as_str()).collect();
     assert_eq!(texts, want.iter().map(|w| w.1.as_str()).collect::<Vec<_>>(), "{said:?}");
     for (s, w) in said.iter().zip(&want) {
-        assert!((s.0 - w.0).abs() <= 24.0, "{s:?} where {w:?}"); // a fix a second, looked at every 500 ms
+        assert!((s.0 - w.0).abs() <= 24.0 + w.0 * 0.007, "{s:?} where {w:?}"); // a fix a second, looked at every 500 ms
     }
     let beeps = sim.tones[tones..].iter().filter(|&&hz| hz == 1800).count();
     assert_eq!(beeps, 3 * cues.len(), "a beep at 200 m, two at the turn");

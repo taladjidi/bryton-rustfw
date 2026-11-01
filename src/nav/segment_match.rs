@@ -104,9 +104,7 @@ impl Default for Matcher {
 
 /// Plane millimetres east and north of `o` (degrees x 1e-7 and the cosine of its latitude), as [`step_mm`]'s plane.
 fn mm(o: (i32, i32, i64), lat: i32, lon: i32) -> (i64, i64) {
-    let dy = (i64::from(lat) - i64::from(o.0)) * 11_132 / 1000;
-    let dx = (i64::from(lon) - i64::from(o.1)) * 11_132 * o.2 / 65_536 / 1000;
-    (dx, dy)
+    crate::math::plane_mm(o, lat, lon)
 }
 
 /// A start pair that is in use (stored as (0, 0) when unused).
@@ -470,7 +468,7 @@ pub(crate) mod tests {
 
     /// A fix `east` m east of the segment's start and `north` m north, degrees x 1e-7.
     pub(crate) fn at(east: f64, north: f64) -> (i32, i32) {
-        ((north / 0.011132).round() as i32, 100_000_000 + (east / 0.011132).round() as i32)
+        ((north / 0.011057431).round() as i32, 100_000_000 + (east / 0.011132).round() as i32)
     }
 
     /// Runs `fixes` (one a second from t = 0) through the matcher the way S3 will; the events, in order.
@@ -619,7 +617,7 @@ pub(crate) mod tests {
             x ^= x >> 17;
             x ^= x << 5;
             let (e, n) = (f64::from(x % 13) - 6.0, f64::from((x >> 8) % 13) - 6.0);
-            f.push((stop.0 + (n / 0.011132) as i32, stop.1 + (e / 0.011132) as i32));
+            f.push((stop.0 + (n / 0.011057431) as i32, stop.1 + (e / 0.011132) as i32));
         }
         let ev = drive(&mut Matcher::new(), &s, &f);
         assert_eq!(ev.last(), Some(&Event::Lost(ID)), "{ev:?}");

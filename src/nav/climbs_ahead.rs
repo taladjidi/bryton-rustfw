@@ -224,23 +224,10 @@ fn turn_penalty_m(cos_milli: i64) -> u64 {
     u64::from(angle * 50 / 180)
 }
 
-/// Sine of an angle in degrees (-360 to 360), by the series of tiles.rs, which is accurate within a quarter turn.
-fn sin_deg(d: f64) -> f64 {
-    let d = if d > 180.0 {
-        d - 360.0
-    } else if d < -180.0 {
-        d + 360.0
-    } else {
-        d
-    };
-    let a = d.abs();
-    let s = crate::math::sin((if a > 90.0 { 180.0 - a } else { a }) * core::f64::consts::PI / 180.0);
-    if d < 0.0 { -s } else { s }
-}
-
 /// A heading in degrees x 1e-5 (clockwise from north) as (east, north) x 16384.
 fn heading_vec(h_e5: i32) -> (i64, i64) {
     let deg = f64::from(h_e5.rem_euclid(36_000_000)) / 1e5;
+    let sin_deg = |d: f64| crate::math::sin(d * core::f64::consts::PI / 180.0);
     ((sin_deg(deg) * 16384.0) as i64, (sin_deg(90.0 - deg) * 16384.0) as i64)
 }
 
@@ -908,7 +895,7 @@ pub(crate) mod tests {
         let cos = 40_295.0 / 65_536.0;
         a.path[..a.n]
             .iter()
-            .map(|p| (f64::from(p.lon - lon0) * 0.011_132 * cos, f64::from(p.lat - lat0) * 0.011_132))
+            .map(|p| (f64::from(p.lon - lon0) * 0.011_132 * cos, f64::from(p.lat - lat0) * 0.011_057_431))
             .collect()
     }
 

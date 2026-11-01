@@ -537,6 +537,7 @@ fn f32_at(b: &[u8], at: usize) -> Result<f32, Error> {
 }
 
 /// A coordinate of the file (degrees, f32) as degrees x 1e-7, when it is finite and within `limit` degrees.
+/// An f32 has 24 bits: at |lon| 100 to 180 its step is 7.6e-6 degrees, 0.8 m at the equator, harmless against START_M.
 #[allow(clippy::cast_possible_truncation)] // |v| <= 180, so the product fits an i32 (1.8e9 < 2^31); rounds half away
 fn e7(v: f32, limit: f32) -> Result<i32, Error> {
     if v.is_finite() && v.abs() <= limit {
