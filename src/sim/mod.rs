@@ -1750,6 +1750,8 @@ mod curve_tests;
 #[cfg(test)]
 mod gnss_model_tests;
 #[cfg(test)]
+mod gnss_serve;
+#[cfg(test)]
 mod laps_tests;
 #[cfg(test)]
 mod map_tests;

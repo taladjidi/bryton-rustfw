@@ -339,7 +339,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   against the table; one test per fatal rule).
   `gnss_model.rs` (the GNSS receiver, strict like the Nordic table: its rules G1 to G10 with their sources, ACK / NAK and
   MGA-ACK answers, the 1.5 s stream time-out, MAXFF, the 4 kB buffer; a test that provokes a rule sets `gnss.expect`) and
-  `gnss_model_tests.rs` (each rule, every frame `gnss.rs` builds against the table, the retry of a refused configuration).
+  `gnss_serve.rs` (`#[ignore]`: the model served over a pipe to Renode, `renode/gnss_run.py`), `gnss_model_tests.rs` (each rule, every frame `gnss.rs` builds against the table, the retry of a refused configuration).
   `panel_model.rs` (the ST7789V's settle and sleep rules P1 to P3 with sources, strict: a command inside the window fails)
   and `panel_model_tests.rs` (each rule, the firmware's init and off against them, the sim's SPI time against
   `periph::panel_fill_us`, the pure fill time the DMA time-out in `periph::dma_timeout_ms` uses).
@@ -372,7 +372,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   port (it implements `Host`) and the mass storage interface (its class requests, and `msc::Pipe` over its bulk
   endpoints, each wait 1 s at most).
 - `src/board/hw.rs`: the unsafe primitives (above).
-- `tools/dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks (`run.py`, `s510.repl`, `s510.resc`), and the radio spike: `nrf_run.py` (not in check.sh) boots the firmware with `NrfUsart.cs`, a C# USART2 for Renode that bridges to `tools/nrf_emu.py --serve`.
+- `tools/dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks (`run.py`, `s510.repl`, `s510.resc`), and the radio spike: `nrf_run.py` (not in check.sh) boots the firmware with `NrfUsart.cs`, a C# USART2 for Renode that bridges to `tools/nrf_emu.py --serve`; and the GNSS one: `gnss_run.py` (not in check.sh, `--selftest` needs no Renode) boots it with `GnssSpi.cs`, a C# SPI4 for Renode that bridges to the ignored test `src/sim/gnss_serve.rs`, which serves `gnss_model.rs` over a pipe.
 - `tools/assist.py`: downloads u-blox's AssistNow Offline data with the rider's own token (environment or
   `~/.config/bryton-rustfw/assist.json`, never in the repository), keeps today's and later messages, and copies them to
   `\Rustfw\mga.ubx` on the mounted unit, compared after the copy (docs/sync.md). `assist.py selftest` (check.sh): no network.
