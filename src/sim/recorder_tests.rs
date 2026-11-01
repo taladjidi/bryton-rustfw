@@ -437,6 +437,152 @@ fn every_write_is_reliable_when_the_card_offers_it() {
     assert!(resumed > 0);
 }
 
+/// A card without reliable write whose cut leaves the torn sector's first k bytes new and the rest old (the review
+/// of 2026-11-01, finding 3: a sector a reader accepts; k on a directory entry's edge, moving with the cut): at
+/// every sector of a ride's first 75 s, once its first checkpoint is on the card the reboot resumes it, and the
+/// volume stays clean.
+#[test]
+fn a_prefix_torn_sector_never_loses_the_ride() {
+    let start = |cut: Option<u64>| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        (sim.emmc.tear, sim.emmc.cut_after) = (true, cut);
+        sim.emmc.tear_prefix = cut.map(|c| 32 * (1 + c as usize % 15));
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 1000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 75_000);
+        sim
+    };
+    let total = start(None).emmc.sectors_written;
+    let (mut resumed, mut first) = (0, None);
+    for cut in 0..total {
+        let mut sim = start(Some(cut));
+        let (mut sim, mut app) = reboot(&mut sim, 2);
+        run(&mut sim, &mut app, 1000);
+        let back = app.notes.list[0].as_str().ends_with("RIDE RESUMED");
+        resumed += usize::from(back);
+        match (first, back) {
+            (None, true) => first = Some(cut),
+            (Some(f), false) => panic!("cut {cut}: the ride not resumed, though cut {f} resumed it"),
+            _ => {}
+        }
+        let lost = crate::fat::write::tests::fsck_torn(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+        assert!(first.is_none() || lost <= 2, "cut {cut}: {lost} clusters lost");
+    }
+    std::println!("{total} prefix-torn cuts, {resumed} resumed from cut {first:?}");
+    assert!(resumed > 0);
+}
+
+/// The first cluster's sectors of the file `path` on the simulated card, and its size.
+fn file_lbas(sim: &Sim, path: &str) -> (core::ops::Range<u32>, u32) {
+    let mut ram = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
+    let size = crate::fat::Fat::mount(&mut ram).unwrap().open(&mut ram, path).unwrap().size;
+    (crate::sim::drive_tests::dir_sectors(&sim.emmc.image, path), size)
+}
+
+/// A ride of 70 s on the simulated card (its first checkpoint on it): the sim, the app, the clean copy's file in
+/// `\Rustfw\Rides` and the sector its next checkpoint writes second (the one after the trailer's).
+fn ride_70s() -> (Sim, App, std::string::String, u32) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    let name = std::string::String::from(core::str::from_utf8(&app.rec.clean.name()).unwrap());
+    let (lbas, size) = file_lbas(&sim, &std::format!("Rustfw/Rides/{name}.fit"));
+    let next = lbas.start + (size - 2) / 512 + 1;
+    assert!(next + 2 < lbas.end, "the next checkpoint in the file's first cluster");
+    (sim, app, name, next)
+}
+
+/// The review of 2026-11-01, finding 33: a card that stays "programming" (CMD13 state 7) after a write that landed.
+/// A few polls are waited out (1 ms each); past [`crate::emmc::TRIES`] the driver gives up (`Busy`) after about a
+/// second, the data on the card. The recorder counts the failed checkpoint, tries again, and the ride is saved,
+/// none of its seconds lost but those the wait dropped; the volume clean.
+#[test]
+fn a_card_busy_past_the_drivers_second_fails_the_write_and_the_ride_goes_on() {
+    let mut s = Sim::new(9, 0, 0);
+    s.emmc.image = std::vec![0; 64 * 512];
+    let card = crate::emmc::Card::init(&mut s).unwrap();
+    s.emmc.prog_polls = 5;
+    let t0 = s.ms;
+    assert_eq!(card.write(&mut s, 3, &[7; 512]), Ok(()));
+    assert!(s.ms - t0 >= 5, "the polls waited out");
+    s.emmc.prog_polls = crate::emmc::TRIES;
+    let t0 = s.ms;
+    assert_eq!(card.write(&mut s, 4, &[8; 512]), Err(crate::emmc::Error::Busy));
+    assert!(s.ms - t0 >= 1000 && s.emmc.image[4 * 512] == 8, "given up after a second, the sector landed");
+    s.emmc.prog_polls = 0;
+    assert_eq!(card.write(&mut s, 5, &[9; 512]), Ok(()), "the card ready again");
+
+    let (mut sim, mut app, name, _) = ride_70s();
+    let errors = app.rec.clean.errors;
+    sim.emmc.prog_polls = crate::emmc::TRIES;
+    run(&mut sim, &mut app, 55_000); // the checkpoint at 120 s: its first write lands, then the driver gives up
+    sim.emmc.prog_polls = 0;
+    assert!(app.rec.clean.errors > errors, "no write given up");
+    run(&mut sim, &mut app, 120_000);
+    let timer = app.ride.timer_s();
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    let times = record_times(&sim.emmc.image, &std::format!("Activities/{name}.fit"));
+    assert!(times.windows(2).all(|p| p[0] < p[1]), "times in order");
+    let dropped = app.rec.clean.dropped;
+    assert!(times.len() as u32 + dropped + 2 >= timer, "{} records, {dropped} dropped, of {timer} s", times.len());
+    crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+}
+
+/// The review of 2026-11-01, finding 33: a multi-sector checkpoint write that lands its first sector, then fails
+/// (`bad_partial`), and the unit reset before the retry: the boot resumes the ride from its last whole checkpoint,
+/// and it is saved, a whole FIT file; the volume clean.
+#[test]
+fn a_resume_after_a_partial_multi_sector_write() {
+    let (mut sim, mut app, name, next) = ride_70s();
+    (sim.emmc.bad, sim.emmc.bad_partial, sim.emmc.bad_left) = (std::vec![next..next + 1], true, Some(1));
+    run(&mut sim, &mut app, 55_000); // the checkpoint at 120 s: its trailer's sector lands, the next fails
+    assert_eq!(sim.emmc.bad_left, Some(0), "the write failed");
+    let timer = app.ride.timer_s();
+    let (mut sim, mut app) = reboot(&mut sim, 3);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    let back = app.ride.timer_s();
+    assert!(back + 2 * crate::recorder::CHECKPOINT_S >= timer, "back at {back} of {timer}");
+    app.press(&mut sim, Press::Short(Key::Start)); // ride on
+    run(&mut sim, &mut app, 30_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    let times = record_times(&sim.emmc.image, &std::format!("Activities/{name}.fit"));
+    assert!(times.windows(2).all(|p| p[0] < p[1]) && times.len() as u32 >= back, "{} records", times.len());
+    crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+}
+
+/// The review of 2026-11-01, finding 33: a card that drops a checkpoint's sector and still answers done (`lie`).
+/// Nothing reads it back until the save: its read-back (recorder/mod.rs, the save's step 2: the file's FIT CRC)
+/// finds the file not whole, and the ride is kept as it is in `\Rustfw\Rides`, never a broken file in `\Activities`.
+#[test]
+fn the_saves_read_back_catches_a_card_that_lies() {
+    let (mut sim, mut app, name, next) = ride_70s();
+    // the checkpoints at 120 and 180 s land nothing but sector 0: the one at 120 s starts in the trailer's sector
+    // (`next - 1`), the one at 180 s in the next, which no later checkpoint writes again
+    sim.emmc.lie = Some(next - 1..next + 8);
+    run(&mut sim, &mut app, 115_000);
+    sim.emmc.lie = None;
+    run(&mut sim, &mut app, 60_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    let file = |dir: &str| crate::storage::trash::tests::file(&sim.emmc.image, &std::format!("{dir}/{name}.fit"));
+    assert!(file("Activities").is_none(), "a file the card broke saved");
+    let kept = file("Rustfw/Rides").expect("kept where it was recorded");
+    assert!(crate::fit::tests::decode(&kept).is_err(), "the lie in the file");
+    assert!(file("Rustfw/Activities").is_some(), "the full copy, untouched, saved");
+    crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The end-ride screen (app/riding.rs `end_input`): RESUME, SAVE, DISCARD
 // ---------------------------------------------------------------------------------------------------------------

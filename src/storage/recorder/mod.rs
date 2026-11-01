@@ -1117,7 +1117,11 @@ impl Recorder {
                     self.errors = self.errors.saturating_add(1);
                 }
             }
-            if let Some(r) = best.filter(|r| r.phase != Phase::Done) {
+            // not this ride's own record, which a first checkpoint that landed and still failed left (a CRC or busy
+            // timeout after programming): resumed from it, the seconds since in the buffer were lost (the review of
+            // 2026-11-01, finding 11). The checkpoint is done again below
+            let own = |r: &Rec| self.file.is_some_and(|f| f.first == r.cluster);
+            if let Some(r) = best.filter(|r| r.phase != Phase::Done && !own(r)) {
                 // what the last run left unfinished comes first (the boot did not finish it: its marker was lost, or
                 // the card failed then): one writer, one ride. A ride in progress goes on in place of this one if
                 // the marker said so or it stopped a moment ago; else it is saved as it is
