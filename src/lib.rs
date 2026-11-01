@@ -85,6 +85,11 @@ pub trait Board {
     fn cycles(&mut self) -> u32 {
         0
     }
+    /// Microseconds the work slept in WFI since the last call (the panel's DMA, `delay_ms`), taken (read, then zero):
+    /// the cycle counter stops in WFI, so the app's clock would miss them. 0 always: nothing waits.
+    fn waited_us(&mut self) -> u32 {
+        0
+    }
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
     /// Nordic chip's reset line PA6 (BOARD.md 11), one edge and no wait: `true` brings USART2 up and pulls the line low,
@@ -251,6 +256,8 @@ pub struct App {
     gps: Gps,
     /// Time run since the start, ms (saturating): a minute of it clears the fault count.
     up_ms: u32,
+    /// Pass time not yet counted (a pass over [`MAX_PASS_MS`]), ms: repaid by [`App::step`], at most a pass's length a pass.
+    debt_ms: u32,
     /// Wheel, backlight, max heart rate, FTP.
     settings: Settings,
     /// The colour theme in use (THEME), DARK until the settings file is read ([`App::look`]).
@@ -494,6 +501,7 @@ impl App {
             saver: Saver::new(),
             gps: Gps::new(gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r)))),
             up_ms: 0,
+            debt_ms: 0,
             settings: misc,
             theme: ui::Theme::DARK,
             auto_themes: [ui::Theme::OUTDOOR, ui::Theme::DARK],
@@ -591,6 +599,7 @@ impl App {
         let marker = b.backup_read(RIDE_BKP) == RIDE_OPEN;
         let open = self.card_writable && (marker || self.left_by_a_power_loss(b));
         self.rec.resume_if(open);
+        let _ = b.waited_us(); // the start-up's waits (panel init, touch, Nordic boot) are not the first pass's
         self.trash_check = self.card_writable;
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
@@ -641,8 +650,27 @@ impl App {
         // work done during the sleep (USB) is in the sleep's length already (2026-10-25 review: counted twice)
         let now = self.prof.clock.us(b);
         let (sleep_ms, sleep_work_us) = self.prof.clock.sleep;
-        let work_us = now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)).saturating_sub(sleep_work_us);
-        let pass_ms = (sleep_ms + (work_us / 1000)).min(MAX_PASS_MS);
+        let work_us = now
+            .wrapping_sub(core::mem::replace(&mut self.awake_at, now))
+            .saturating_sub(sleep_work_us)
+            .saturating_add(core::mem::take(&mut self.prof.clock.owed_us))
+            .saturating_add(b.waited_us());
+        // a pass longer than MAX_PASS_MS (a save, a fresh card's start, a card stall) counts MAX_PASS_MS: one huge dt
+        // would fire every timer at once. The excess is a debt (capped at a minute), repaid at most the pass's own
+        // length per pass, so the clock runs at most twice real speed after a stall and time-outs (a banner) do not
+        // vanish. The ride's seconds come from the RTC (`catch_up_seconds`: a stall over MAX_CATCH_UP loses the
+        // seconds beyond it); this clock drives the time-outs and the cadences counted in ms.
+        let own_ms = sleep_ms.saturating_add(work_us / 1000);
+        let debt_ms = self.debt_ms;
+        let pass_ms = if own_ms > MAX_PASS_MS {
+            self.debt_ms = (debt_ms + own_ms - MAX_PASS_MS).min(60_000);
+            MAX_PASS_MS
+        } else {
+            let repaid = debt_ms.min(own_ms).min(MAX_PASS_MS - own_ms);
+            self.debt_ms = debt_ms - repaid;
+            (own_ms + repaid).min(MAX_PASS_MS)
+        };
+        self.prof.clock.owed_us = work_us % 1000;
         self.dt_ms = pass_ms;
         self.emmc.advance(pass_ms);
         self.emmc.urgent(!self.ride_settled());

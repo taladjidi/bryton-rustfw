@@ -78,7 +78,7 @@ fn basemap_under_the_map() {
     while sim.ms < t0 + 840_000 {
         let (view, px, r) = (app.map_view(0), sim.pixels, reads(&sim));
         app.step(&mut sim);
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
         if app.map_view(0) != view {
             refits += 1;
             refit_px += sim.pixels - px;
@@ -210,7 +210,7 @@ fn map_page_follows_a_ride() {
     while sim.ms < t0 + 840_000 {
         let (view, px) = (app.map_view(0), sim.pixels);
         app.step(&mut sim);
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
         let cost = sim.pixels - px;
         if app.map_view(0) != view {
             refits += 1;

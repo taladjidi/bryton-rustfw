@@ -52,6 +52,8 @@ pub struct LinkScript {
     pub snap: Option<UsbSnap>,
     /// A drive command ran (the next `worked` says so once).
     pub worked: bool,
+    /// Each poll runs a drive command that sleeps this long, ms (a busy USB drive: `delay_ms` takes SysTick over).
+    pub busy_ms: u32,
     /// The calls, in order.
     pub log: Vec<&'static str>,
 }
@@ -70,7 +72,12 @@ impl Host for SimLink {
 }
 
 impl UsbLink for SimLink {
-    fn poll(&mut self, _: &mut Session, _: &mut App, _: &mut impl Board, _: Stats) -> Effect {
+    fn poll(&mut self, _: &mut Session, _: &mut App, b: &mut impl Board, _: Stats) -> Effect {
+        let busy = self.0.borrow().busy_ms;
+        if busy > 0 {
+            b.delay_ms(busy);
+            self.0.borrow_mut().worked = true;
+        }
         let mut s = self.0.borrow_mut();
         s.log.push("poll");
         s.effects.pop_front().unwrap_or(Effect::None)
@@ -159,7 +166,7 @@ impl LoopBoard for Sim {
         self.main.bytes_always || self.nordic.has_bytes(now)
     }
     fn sleep(&mut self) {
-        self.delay_ms(1);
+        self.sleep_ms(1);
     }
     fn take_io(&mut self) -> (u32, u32, u32) {
         (0, 0, 0)

@@ -21,6 +21,7 @@
 //! `cargo test-host budget -- --nocapture` prints the table. Out of scope: the unit's own measurements
 //! (docs/status.md, "Not yet seen on the unit").
 
+use super::SimLink;
 use super::ride_radio_tests::radio_unit;
 use super::*;
 use crate::ui::menu::Row;
@@ -66,7 +67,7 @@ const EXEMPT: &[Exempt] = &[
         row: "first ride on a fresh card",
         setting: "0.2 ms/sector",
         key: Some(1206),
-        gnss: Some(1420),
+        gnss: None,
         lost: None,
         why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
@@ -75,14 +76,14 @@ const EXEMPT: &[Exempt] = &[
         setting: "2 ms/sector",
         key: Some(1955),
         gnss: Some(2059),
-        lost: Some(1),
+        lost: None,
         why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
     Exempt {
         row: "first ride on a fresh card, map page",
         setting: "0.2 ms/sector",
         key: Some(1207),
-        gnss: Some(1589),
+        gnss: None,
         lost: None,
         why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
@@ -91,7 +92,7 @@ const EXEMPT: &[Exempt] = &[
         setting: "2 ms/sector",
         key: Some(1955),
         gnss: Some(2228),
-        lost: Some(1),
+        lost: None,
         why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md",
     },
     Exempt {
@@ -99,7 +100,7 @@ const EXEMPT: &[Exempt] = &[
         setting: "0.2 ms/sector",
         key: Some(1536),
         gnss: Some(1749),
-        lost: Some(1),
+        lost: None,
         why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md; plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
     },
     Exempt {
@@ -107,7 +108,7 @@ const EXEMPT: &[Exempt] = &[
         setting: "2 ms/sector",
         key: Some(2285),
         gnss: Some(2389),
-        lost: Some(1),
+        lost: None,
         why: "first ride on a fresh card: the recorder creates its 20 folders and files (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms). Follow-up: prepare the card's folders when it is first seen, outside a ride (owner to decide), see docs/status.md; plus the card's 300 ms stall (inferred) lands in the checkpoint's pass. Follow-up: bench the stall on the unit; write the checkpoint outside the key pass (recorder, a later opus task)",
     },
     Exempt {
@@ -205,7 +206,7 @@ impl Rig {
         let t = self.sim.ms;
         self.app.step(&mut self.sim);
         self.worst_pass = self.worst_pass.max(self.sim.ms - t);
-        self.sim.delay_ms(POLL_MS);
+        self.sim.sleep_ms(POLL_MS);
     }
 
     fn run(&mut self, ms: u64) {
@@ -222,7 +223,7 @@ impl Rig {
         let end = self.sim.ms + ms;
         while self.sim.ms < end {
             self.app.step(&mut self.sim);
-            self.sim.delay_ms(FILL_STRIDE);
+            self.sim.sleep_ms(FILL_STRIDE);
         }
         self.sim.nordic.limits = limits;
         self.run(3000);
@@ -623,4 +624,101 @@ fn a_card_stall_inside_a_checkpoint_keeps_the_radio_drained_and_the_ride() {
         );
         assert_eq!(crate::fat::write::tests::fsck(&r.sim.emmc.image), Ok(0), "{stall} ms");
     }
+}
+
+/// The app's clock (`up_ms`: the time-outs and the cadences counted in ms) keeps real time even when the
+/// pass waits for the panel's DMA (the cycle counter stops in WFI): an hour of full-screen redraws, 2026-11-01.
+#[test]
+fn the_app_clock_counts_the_waits_of_the_work() {
+    let mut r = Rig::new(crate::fat::tests::image(), settings()[0]);
+    r.press(Press::Short(Key::Start));
+    r.run(5000);
+    let (up0, real0) = (u64::from(r.app.up_ms), r.sim.ms);
+    while r.sim.ms < real0 + 3_600_000 {
+        r.app.show(&mut r.sim); // a full redraw: its pixels go by DMA, the CPU sleeps
+        r.pass();
+    }
+    let (up, real) = (u64::from(r.app.up_ms) - up0, r.sim.ms - real0);
+    assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
+}
+
+/// The same through the unit's own loop ([`crate::MainLoop::pass`]) with the radio mix and a finger on the panel: the
+/// waits of the touch and radio passes between the sleep's slices count once (not dropped, not twice).
+#[test]
+fn the_loop_keeps_real_time_through_all_its_waits() {
+    let (mut sim, mut app) = radio_unit(70, board_wait_us(), crate::fat::tests::image(), true, |sim| {
+        // a tap on the strip every 7 s: the touch path (a read and a gesture) runs between slices
+        sim.touch.set_finger(|ms| (ms % 7000 < 120).then_some((120, 5)));
+    });
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..200 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up0, real0) = (u64::from(app.up_ms), sim.ms);
+    while sim.ms < real0 + 3_600_000 {
+        app.show(&mut sim); // a full redraw each pass
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (u64::from(app.up_ms) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
+}
+
+/// A pass longer than MAX_PASS_MS (a save, a card stall) is spread over the next passes, not lost: after a 1.7 s
+/// pass the clock is back on real time within a few passes (repaid at most a pass's length a pass).
+#[test]
+fn a_long_pass_is_owed_to_the_clock_not_dropped() {
+    let mut r = Rig::new(crate::fat::tests::image(), settings()[0]);
+    r.press(Press::Short(Key::Start));
+    r.run(5000);
+    let (up0, real0) = (u64::from(r.app.up_ms), r.sim.ms);
+    r.sim.awake_ns += 1_700_000_000; // the work of one pass: 1.7 s of CPU
+    r.sim.ms += 1700;
+    r.run(60_000);
+    let (up, real) = (u64::from(r.app.up_ms) - up0, r.sim.ms - real0);
+    assert!(real.abs_diff(up) <= 60, "app clock {up} ms against real {real} ms after a 1.7 s pass");
+}
+
+/// A cable in and a busy drive (each poll sleeps in a drive command, which takes SysTick over): the delays count once
+/// in the clock, not again as the slice's elapsed time.
+#[test]
+fn a_busy_usb_drive_is_not_counted_twice() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let link = SimLink::default();
+    link.0.borrow_mut().busy_ms = 3;
+    (sim.main.link, sim.main.vbus) = (Some(link), true);
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..50 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up0, real0) = (u64::from(app.up_ms), sim.ms);
+    while sim.ms < real0 + 600_000 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (u64::from(app.up_ms) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
+}
+
+/// After a 60 s stall the clock catches up at twice real speed at most: a banner (4 s) does not vanish at once.
+#[test]
+fn a_stall_is_repaid_at_most_at_twice_real_speed() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the stall is on purpose
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    sim.delay_ms(60_000); // the stall, inside the work
+    app.say("BANNER");
+    let t0 = sim.ms;
+    while app.notes.ms.is_some() {
+        app.step(&mut sim);
+        sim.sleep_ms(POLL_MS);
+        assert!(sim.ms - t0 < 10_000, "the banner never went");
+    }
+    let real = sim.ms - t0;
+    // the stalled pass counts MAX_PASS_MS at once, the rest of the banner runs at twice real speed at most
+    assert!(
+        real >= u64::from(BANNER_MS - MAX_PASS_MS) / 2 - 100,
+        "a {BANNER_MS} ms banner lasted {real} ms of real time"
+    );
 }

@@ -146,9 +146,14 @@ impl<L: UsbLink> MainLoop<L> {
                 break;
             };
             b.timer_start(slice);
+            // SysTick's count before a USB command: one that slept (`worked`) took the timer over, so the slice's
+            // length is this, and the command's own delays are in `waited` (counted once)
+            let mut before_poll = 0;
+            let mut took_over = false;
             let w = loop {
                 let usb_at = b.cycles();
                 if let Some(l) = &mut self.link {
+                    before_poll = b.timer_elapsed_ms(slice);
                     match l.poll(&mut self.session, app, b, self.policy.stats()) {
                         Effect::Key(p) => press = Some(p),
                         Effect::Reset => {
@@ -198,7 +203,9 @@ impl<L: UsbLink> MainLoop<L> {
                     // a drive command read or wrote the card, which may have slept and taken over SysTick: without
                     // this, the sleep's end is lost and the main loop stalls while USB is still served (seen on the
                     // unit, 2026-10-24: the uptime stopped, the dev link kept answering)
-                    woke |= l.worked();
+                    let worked = l.worked();
+                    took_over |= worked;
+                    woke |= worked;
                     app.set_usb(b, dot);
                     app.prof().span(Sec::Usb, usb_at, b.cycles());
                 }
@@ -219,7 +226,8 @@ impl<L: UsbLink> MainLoop<L> {
             };
             // a byte-ended slice counts 1 ms at least: SysTick counts whole ms, and a chip sending faster than a byte
             // a ms (BOARD.md 11: 4 us after a full FIFO is read) would keep every slice at 0 and the pass from ending
-            self.policy.slept(if w.timer { slice } else { b.timer_elapsed_ms(slice).max(u32::from(w.bytes)) });
+            let elapsed = if took_over { before_poll } else { b.timer_elapsed_ms(slice) };
+            self.policy.slept(if w.timer && !took_over { slice } else { elapsed.max(u32::from(w.bytes)) });
             b.timer_stop();
             // the panel before the early end below: with the USB drive busy, every slice ends early, and touch was
             // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
@@ -272,7 +280,10 @@ impl<L: UsbLink> MainLoop<L> {
         }
         b.checkpoint(7);
         // the app's work is the pass less its sleep loop (USB polls, a WFI that does not sleep)
-        let pass_ms = self.policy.account(b.cycles().wrapping_sub(t0), sleep_cycles);
+        // the whole pass's waits in WFI (the step's DMA, a touch's, a radio pass's, an input's): work, not sleep
+        let waited = b.waited_us();
+        app.prof().clock.owed_us = app.prof().clock.owed_us.saturating_add(waited); // the next step's work
+        let pass_ms = self.policy.account(b.cycles().wrapping_sub(t0), sleep_cycles, waited);
         app.prof().pass(pass_ms, slept);
         app.prof().io(b.take_io());
         radio_passes

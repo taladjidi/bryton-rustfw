@@ -556,7 +556,11 @@ fn a_card_busy_past_the_drivers_second_fails_the_write_and_the_ride_goes_on() {
     assert!(times.len() as u32 + dropped + 2 >= timer, "{} records, {dropped} dropped, of {timer} s", times.len());
     crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
     super::budget_tests::print_gap_breakdown(&sim, "card busy");
-    sim.gnss.assert_reads(2426, 2);
+    // measured 2759 ms with the app clock counting the waits (2205 before, in another phase of the read interval):
+    // one write given up after the driver's second (`errors` above) plus the rest of the gap, which has 8 ms of paid
+    // time (the checkpoint's other writes and the read interval around the pass). Bound: measured + 10 %.
+    assert_eq!(app.rec.clean.errors - errors, 1, "one busy wait given up");
+    sim.gnss.assert_reads(3040, 2);
 }
 
 /// The review of 2026-11-01, finding 33: a multi-sector checkpoint write that lands its first sector, then fails

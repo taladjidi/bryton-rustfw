@@ -171,6 +171,11 @@ pub struct Sim {
     /// Work done so far, ns. Must not advance by more than 21 s between two Clock reads: the u32 cycle counter wraps
     /// at 21.47 s of work (200 MHz) and Clock catches one wrap only.
     pub awake_ns: u64,
+    /// Time slept in a transfer's wait (the panel's DMA) not yet taken by [`Board::waited_us`], ns.
+    waited_ns: u64,
+    /// In-pass `delay_ms` calls count as waits of the work, as on the unit; the loop helpers sleep with
+    /// [`Sim::sleep_ms`], which does not.
+    pub count_waits: bool,
     /// What each transfer costs in time ([`Cost`]); the sub-millisecond rest of it is in `cost_rem`.
     pub cost: Cost,
     cost_rem: u64,
@@ -938,10 +943,27 @@ impl Sim {
         self.paid_ns[what] += ns;
         if cpu {
             self.awake_ns += ns;
+        } else {
+            self.waited_ns += ns;
         }
         self.cost_rem += ns;
         self.ms += self.cost_rem / 1_000_000;
         self.cost_rem %= 1_000_000;
+    }
+
+    /// The loop's own sleep: the clock moves on, nothing is owed to the app's clock.
+    pub fn sleep_ms(&mut self, ms: u32) {
+        self.ms += u64::from(ms);
+        if let Some(x) = &mut self.nrf_ext {
+            x.advance_ms(ms);
+        }
+        if let Some((dir, n)) = &mut self.record
+            && self.dirty
+        {
+            std::fs::write(dir.join(format!("{:05}.bmp", *n)), bmp(&self.screen)).unwrap();
+            *n += 1;
+            self.dirty = false;
+        }
     }
 
     /// This firmware's default settings in the backup registers, as after its first start: the next start does not
@@ -1017,6 +1039,8 @@ impl Sim {
             worst_gnss_gap: (0, [0; 6]),
             long_gnss_gaps: (0, [0; 6]),
             awake_ns: 0,
+            waited_ns: 0,
+            count_waits: true,
             cycles: 0,
             cycles_step: 0,
             adc_calls: [0; 4],
@@ -1251,18 +1275,13 @@ impl Board for Sim {
         self.rtc_sets += 1;
     }
 
+    /// A delay inside the work is a wait the app's clock must count ([`Board::waited_us`]), when
+    /// [`Sim::count_waits`] is on; the loop's own sleep is [`Sim::sleep_ms`].
     fn delay_ms(&mut self, ms: u32) {
-        self.ms += u64::from(ms);
-        if let Some(x) = &mut self.nrf_ext {
-            x.advance_ms(ms);
+        if self.count_waits {
+            self.waited_ns += u64::from(ms) * 1_000_000;
         }
-        if let Some((dir, n)) = &mut self.record
-            && self.dirty
-        {
-            std::fs::write(dir.join(format!("{:05}.bmp", *n)), bmp(&self.screen)).unwrap();
-            *n += 1;
-            self.dirty = false;
-        }
+        self.sleep_ms(ms);
     }
 
     fn standby(&mut self) {
@@ -1388,6 +1407,12 @@ impl Board for Sim {
         ((self.awake_ns / 5) as u32).wrapping_add(self.cycles)
     }
 
+    fn waited_us(&mut self) -> u32 {
+        let us = self.waited_ns / 1000;
+        self.waited_ns %= 1000;
+        us.min(u64::from(u32::MAX)) as u32
+    }
+
     fn emmc_writable(&self) -> bool {
         self.writable
     }
@@ -1450,7 +1475,7 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
     let end = sim.ms + ms;
     while sim.ms < end {
         app.step(sim);
-        sim.delay_ms(POLL_MS);
+        sim.sleep_ms(POLL_MS);
     }
 }
 
