@@ -137,6 +137,33 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     - SysTick is modelled at 400 MHz, so emulated delays are half as long.
 - QEMU has no STM32H7 board.
 
+### The radio chip's real app (`tools/nrf_emu.py`)
+
+Bryton's nRF52 application (the radio chip's firmware) runs in a Unicorn emulator, so the library's radio code can talk
+to the real app byte for byte instead of to the simulator's model. `python3 -I tools/nrf_emu.py selftest` (a fraction of
+a second, in check.sh lane P) boots it, gets the version, checks that an unknown opcode hangs it with no answer, and
+that injected ANT events come out as type 08 frames of 44 bytes; it prints `skip:` when the binary
+(`NRF_BIN`, default `~/Documents/bryton/firmware/R039/nordic.bin`) or `unicorn` is missing. Nothing of the binary is
+in this repository: the header gives the app's offset, the load address is the S332 application origin, and anything
+specific to it stays in the private notes (`NRF_PRIVATE` may name a JSON with its error handler's address).
+
+- **Why Unicorn, not Renode:** the harness must pace the UART byte by byte against a host that holds RTS, count
+  instructions between two frames, inject SoftDevice events through SWI2 and answer SVCs in Python; Unicorn gives that
+  directly. Unicorn's M-class core has no NVIC, so the harness does exception entry and return itself (PRIMASK and the
+  condition flags are honoured).
+- **Models:** UARTE0 with EasyDMA (1 Mbaud byte time, ENDRX / ENDTX / RXTO events, the ENDRX_STARTRX short, a TX that
+  waits while the host holds RTS), NVIC enable / pending, the SoftDevice SVCs the app makes at start and in its event
+  poll (enable, cfg_set, ble_enable, version get, ble and ANT event get, SoC event get, app event wait). Any other SVC
+  stops the run and is named. Events are injected with `inject_ant` / `inject_ble` (SWI2 pended).
+- **Does not model:** the real SoftDevice (its calls cost nothing here; they cost microseconds on the chip), the ANT
+  queue of 32, radio timing, RTC, the 4-byte UART FIFO beyond a count, UART errors, priorities (one interrupt at a
+  time). One instruction is one cycle at 64 MHz; the Cortex-M4 average is a little higher.
+- **Hang detection:** the app's error handler masks the app interrupts and idles or spins; the harness reports it when
+  the core sleeps or spins with the UART interrupt masked.
+- **Measured (burst of 8 queued ANT events):** about 990 instructions of app work between the end of a frame and the
+  start of the next frame's header (15 us at CPI 1), 1630 to the first byte on the wire (25 us); the simulator's
+  `frame_gap_us: 80` is pessimistic by about three times, before the real SoftDevice's own call time.
+
 ## Testing strategy
 
 Modelled on the patch repo's layers (bryton-S510-mods `docs/validation.md`: build checks, Ghidra instruction

@@ -371,6 +371,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
   after `tools/dev.py reset`): a firmware that reads the link takes the bytes first.
+- `tools/nrf_emu.py`: Bryton's nRF52 application run in Unicorn against SoftDevice stubs, with the host UART protocol
+  as a byte pipe (docs/devloop.md, "The radio chip's real app"). The binary is read at run time and skipped when absent;
+  nothing of it is in the repository.
 - `tools/s810_probe.py`: what an S810 owner sends back (docs/s810.md, section 3): read only, the stock drive's
   versions, file shapes and the debug logs' hardware lines in one zip, nothing personal; `selftest` (check.sh).
 - `tools/fonts/`: Barlow Semi Condensed Bold (`BarlowSemiCondensed-Bold.ttf`) and its OFL.txt licence, for the SMOOTH fonts (`tools/font.py`).
