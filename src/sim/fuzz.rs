@@ -399,7 +399,7 @@ fn power_calibration_pages() {
 #[test]
 fn power_pages_mixed() {
     use crate::sensors::{Decoders, Kind, Live, Metric};
-    let (mut torque, mut combined) = (0, 0);
+    let (mut torque, mut combined, mut capped) = (0, 0, 0);
     for seed in 13..=16u32 {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
         let v: std::vec::Vec<u8> = bytes(seed, 1 << 16).collect();
@@ -415,6 +415,15 @@ fn power_pages_mixed() {
             }
             live.tick(1000); // values age out within 5 messages
             dec.decode(Kind::Power, d, 2105, &mut live);
+            // the plausibility caps: out-of-range power and cadence never reach `live`, and the fuzz sends them
+            let over = d[0] == 0x10 && u16::from_le_bytes([d[6], d[7]]) > crate::trainer::MAX_W;
+            capped += usize::from(over);
+            assert!(live.get(Metric::Power).is_none_or(|v| v <= crate::trainer::MAX_W), "power");
+            assert!(live.get(Metric::Cadence).is_none_or(|v| v <= 250), "cadence");
+            let mut hr = Live::default();
+            dec.decode(Kind::Hr, [4, 0, 0, 0, 0, 0, 0, d[7]], 2105, &mut hr);
+            assert!(hr.get(Metric::Hr).is_none_or(|v| v <= 250), "hr");
+            capped += usize::from(d[7] > 250);
             for m in [Metric::TorqueL, Metric::TorqueR, Metric::SmoothL, Metric::SmoothR, Metric::SmoothC] {
                 assert!(live.get(m).is_none_or(|v| v <= 200), "{m:?} {:?}", live.get(m));
             }
@@ -422,7 +431,7 @@ fn power_pages_mixed() {
             combined += live.get(Metric::SmoothC).is_some() as usize;
         }
     }
-    assert!(torque > 1000 && combined > 100, "reached: {torque} {combined}");
+    assert!(torque > 1000 && combined > 100 && capped > 1000, "reached: {torque} {combined} {capped}");
 }
 
 /// Random bytes from the computer, with command words mixed in, into the dev link protocol.
@@ -3054,7 +3063,7 @@ fn fec_pages_into_the_app() {
             app.press(&mut sim, Press::Short(Key::Page));
         }
         if let Some(p) = app.live.get(Metric::Power) {
-            assert!(p < 0xfff);
+            assert!(p <= crate::trainer::MAX_W, "{p}");
         }
         if let Some(s) = app.live.get(Metric::Speed) {
             assert!(s <= 2400, "{s}");
@@ -3087,6 +3096,7 @@ fn ftms_link_events() {
     let mut reached = [0usize; 4]; // owned, data, status, responses
     let mut gatt = [0usize; 5]; // Services, Chars, Descs, Read, ConnParamRequest
     let mut listed = [0usize; 3]; // advertising reports: listed, with a name, past the cap
+    let mut over = 0; // Indoor Bike Data powers past the cap, which never reach `live`
     for seed in 1..=4u32 {
         let v: Vec<u8> = bytes(seed, 1 << 16).collect();
         for (k, c) in v.chunks_exact(48).enumerate() {
@@ -3151,6 +3161,7 @@ fn ftms_link_events() {
                 }
             }
             app.phone_event(&mut sim, &p);
+            assert!(app.live.get(crate::sensors::Metric::Power).is_none_or(|p| p <= crate::trainer::MAX_W));
             if app.ftms.conn.is_none() {
                 app.ftms_down(); // the link made again at once (not after the backoff), so the fuzz keeps reaching it
                 run(&mut sim, &mut app, 1000);
@@ -3190,6 +3201,7 @@ fn ftms_link_events() {
         for c in v.chunks(13) {
             let mut r = crate::trainer::Reading::default();
             crate::ftms::bike_data(c, &mut r);
+            over += usize::from(r.power.is_some_and(|p| p > crate::trainer::MAX_W)); // what the cap must stop
             let _ = (crate::ftms::modes(c), crate::ftms::range(c), crate::ftms::response(c));
             let _ = (crate::ftms::advertised(c), crate::ftms::control_lost(c));
             let _ = crate::ftms::as_fec((c[0], c.get(1).copied().unwrap_or(0)));
@@ -3199,6 +3211,7 @@ fn ftms_link_events() {
     assert!(reached.iter().all(|&n| n > 50), "owned events, data, status, responses: {reached:?}");
     assert!(gatt.iter().all(|&n| n > 5), "Services, Chars, Descs, Read, ConnParamRequest: {gatt:?}");
     assert!(listed.iter().all(|&n| n > 5), "listed, named, past the cap: {listed:?}");
+    assert!(over > 20, "out-of-range powers reached the parser: {over}");
 }
 
 /// The FE-C over BLE trainer's link (drivers/fecble.rs, app/ftms.rs): with the D500 connected on connection 1,
@@ -3290,7 +3303,8 @@ fn fecble_link_events() {
             let r =
                 crate::nrf::AdvReport { addr_type: c[22] % 2, addr: [c[23] % 7, 1, 2, 3, 4, 5], rssi: -50, data: &ad };
             let fec = crate::fecble::advertised(&ad) == Some(crate::fecble::Proto::Fec);
-            listed[0] += usize::from(app.ftms.found(&r) && fec);
+            let _ = app.ftms.found(&r); // true only when the list changed: repeats are common here
+            listed[0] += usize::from(fec && app.ftms.n_found > 0);
             listed[1] += usize::from(crate::fecble::advertised(&ad).is_none());
         }
         app.ftms.searching = false;

@@ -282,6 +282,20 @@ fn no_clock_change_during_a_ride() {
     assert_eq!((sim.rtc_sets, app.gps.aid.offset_15min), (0, None));
 }
 
+/// The ride has ended but its full copy is still to be saved (`ride_settled` false): the time is not taken either.
+#[test]
+fn no_clock_change_while_the_full_copy_saves() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let time = [0xea, 0x07, 10, 25, 9, 41, 7, 7, 0, 1]; // Current Time: 2026-10-25 09:41:07
+    app.rec.full_pending = true;
+    app.phone_time(&mut sim, Some(&time), None);
+    assert_eq!(sim.rtc_sets, 0, "the ride is still being saved");
+    app.rec.full_pending = false;
+    app.phone_time(&mut sim, Some(&time), None);
+    assert_eq!(sim.rtc_sets, 1);
+}
+
 /// A chip that refuses a set-up command: the link is off, and the PHONE menu names the command and its error (for
 /// the first runs on the unit, which has no log).
 #[test]

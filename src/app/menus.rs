@@ -207,7 +207,7 @@ impl App {
             // the actions first (the rider comes here to calibrate or to control the trainer), then the sensors
             Menu::Sensors => {
                 let top = [
-                    (Row::Ride(menu::RideRow::CalPower), self.power_heard()),
+                    (Row::Ride(menu::RideRow::CalPower), self.radio.paired_heard(Kind::Power)),
                     (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
                 ];
                 let top = top.into_iter().filter(|r| r.1).map(|r| r.0);
@@ -484,7 +484,7 @@ impl App {
                     (true, Sensor::Search) => value.push_str("SEARCHING"),
                     // heard lately: connected; paired but silent: looked for again
                     (true, Sensor::Paired(_)) => {
-                        let heard = self.radio.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
+                        let heard = self.radio.heard(kind);
                         value.push_str(if heard { "CONNECTED" } else { "SEARCHING" });
                         color = if heard { ui::GREEN } else { ui::GREY };
                     }
@@ -1118,7 +1118,7 @@ impl App {
     /// Select on an ANT+ sensor: pair, stop, search again, forget.
     fn activate_sensor(&mut self, b: &mut impl Board, menu: Menu, sel: usize, k: usize) {
         let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };
-        let heard = self.radio.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
+        let heard = self.radio.heard(kind);
         match self.radio.sensors.get(k).copied() {
             Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
             Some(Sensor::Search) => self.set_sensor(b, kind, Sensor::Off),

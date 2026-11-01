@@ -1101,10 +1101,10 @@ impl App {
     }
 
     /// The phone's time: the RTC set to its local time, and the offset from UTC kept for the GPS and the FIT times
-    /// (replacing the one learnt at a fix). Not while a ride is open: its record times must not jump (the golden
+    /// (replacing the one learnt at a fix). Not while a ride is open or still being saved ([`App::ride_settled`]): its record times must not jump (the golden
     /// rule); the next link after it sets them.
-    fn phone_time(&mut self, b: &mut impl Board, current: Option<&[u8]>, local: Option<&[u8]>) {
-        if self.ride.state() != ride::State::Idle || self.rec.clean.phase() != recorder::Phase::Done {
+    pub(crate) fn phone_time(&mut self, b: &mut impl Board, current: Option<&[u8]>, local: Option<&[u8]>) {
+        if !self.ride_settled() {
             return;
         }
         let set = current.and_then(ph::current_time);

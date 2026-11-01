@@ -62,6 +62,10 @@ pub mod seen {
     pub const P2: u8 = 128;
 }
 
+/// General pages in a row without a page 25 after which the power and cadence are dropped (the profile sends page 25
+/// every few messages: inferred from the usual 1:1 interleave with page 16).
+pub const P25_MISSED: u8 = 8;
+
 /// Takes the 8 data bytes of a broadcast from the trainer into `r`; pages not listed in the module doc change
 /// nothing.
 ///
@@ -80,12 +84,18 @@ pub fn decode(d: [u8; 8], r: &mut Reading) {
         // general FE data: speed in mm/s (0xffff: none), the heart rate with its source in byte 7
         16 => {
             r.seen |= seen::P16;
+            // a trainer that stops sending page 25 must not leave its last power standing while any page refreshes `heard`
+            r.p25_missed = r.p25_missed.saturating_add(1);
+            if r.p25_missed >= P25_MISSED {
+                (r.power, r.cadence) = (None, None);
+            }
             r.speed_x10 = Some(u16_at(4)).filter(|&v| v != 0xffff).map(|v| (u32::from(v) * 36 / 1000) as u16);
             r.hr = Some(d[6]).filter(|&h| h != 0 && h != 0xff && d[7] & 3 != 0);
         }
         // trainer data: cadence, power (12 bits), status, target flags and state
         25 => {
             r.seen |= seen::P25;
+            r.p25_missed = 0;
             r.cadence = Some(d[2]).filter(|&c| c != 0xff);
             r.power = Some(u16_at(5) & 0x0fff).filter(|&p| p != 0x0fff);
             r.status = d[6] >> 4 & 7;
@@ -195,6 +205,18 @@ mod tests {
         decode([71, 0x31, 0, 0, 255, 255, 0x20, 0x03], &mut r);
         assert_eq!(r.last_cmd, Some((0x31, 0)));
         assert_eq!(r.seen, seen::P16 | seen::P25 | seen::P54 | seen::P71);
+    }
+
+    #[test]
+    fn power_goes_when_page_25_stops() {
+        let mut r = Reading::default();
+        decode([25, 1, 85, 0, 0, 0x2c, 0x71, 0x30], &mut r);
+        for i in 1..P25_MISSED {
+            decode([16, 25, 0, 0, 0, 0, 0, 0], &mut r);
+            assert_eq!(r.power, Some(300), "{i} general pages: still standing");
+        }
+        decode([16, 25, 0, 0, 0, 0, 0, 0], &mut r);
+        assert_eq!((r.power, r.cadence), (None, None));
     }
 
     #[test]

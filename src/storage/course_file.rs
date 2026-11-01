@@ -98,7 +98,7 @@ impl Entry {
 
     /// Its name, without the extension.
     pub fn name(&self) -> &str {
-        core::str::from_utf8(self.name.get(..usize::from(self.name_len)).unwrap_or(&[])).unwrap_or("")
+        super::bytes::ascii(&self.name, self.name_len)
     }
 }
 

@@ -7,6 +7,7 @@
 //! retries, and failing that resets the chip and starts it again.
 
 use crate::Board;
+use crate::storage::bytes;
 
 /// Packet type: a BLE command to the chip.
 pub const CMD: u8 = 0;
@@ -44,8 +45,9 @@ pub const TIMEOUT_MS: u32 = 500;
 /// header): it counts as garbage and is not read through, so a stray byte does not swallow up to 64 KB of real frames.
 pub const GARBAGE: usize = 512;
 
-/// Longest BLE event kept while a command waits ([`Rx::pop`]).
-pub const KEPT: usize = 128;
+/// Longest BLE event kept while a command waits ([`Rx::pop`]): a Chars discovery answer of 14 characteristics at
+/// the 103-byte MTU is 11 + 14 x 9 = 137 bytes (review 2026-11-01), so 160.
+pub const KEPT: usize = 160;
 /// Events kept at most: an ANCS answer of the longest message the inbox keeps (120 bytes) and a long title is about
 /// 180 bytes, ten notifications of 20 at the 23-byte ATT MTU, read in one pass (eight lost it).
 pub const KEPT_N: usize = 16;
@@ -61,7 +63,11 @@ pub struct Rx {
     last: usize,
     kept: [[u8; KEPT]; KEPT_N],
     kept_len: [u8; KEPT_N],
+    /// The oldest event kept is `kept[head]`: a ring, so a pop moves nothing.
+    head: usize,
     kept_n: usize,
+    /// The op of a call that timed out, whose answer may still come: the next call swallows one answer of that op.
+    late: Option<u8>,
     /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
     /// PHONE menu shows it when the link could not be set up.
     pub failed: Option<(u8, u32)>,
@@ -91,7 +97,9 @@ impl Rx {
             last: 0,
             kept: [[0; KEPT]; KEPT_N],
             kept_len: [0; KEPT_N],
+            head: 0,
             kept_n: 0,
+            late: None,
             failed: None,
             heard: false,
             strikes: 0,
@@ -110,7 +118,7 @@ impl Rx {
     /// [`Rx::resync`] after a chip reset: the events kept belong to a link that is gone, too.
     pub fn reset(&mut self) {
         self.resync();
-        self.kept_n = 0;
+        (self.kept_n, self.head, self.late) = (0, 0, None);
     }
 
     /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits ([`KEPT_N`]
@@ -127,13 +135,18 @@ impl Rx {
         // answer the discovery waits for), so a flood of ANCS notifications cannot hide them
         if self.kept_n == self.kept.len()
             && id != Some(EVT_HVX)
-            && let Some(i) = (0..self.kept_n).find(|&i| self.kept.get(i).is_some_and(|k| event_id(k) == Some(EVT_HVX)))
+            && let Some(i) =
+                (0..self.kept_n).find(|&i| self.kept.get(self.slot(i)).is_some_and(|k| event_id(k) == Some(EVT_HVX)))
         {
-            crate::storage::move_within(&mut self.kept, i + 1..self.kept_n, i);
-            crate::storage::move_within(&mut self.kept_len, i + 1..self.kept_n, i);
+            for j in i..self.kept_n - 1 {
+                let (a, b) = (self.slot(j), self.slot(j + 1));
+                (self.kept[a], self.kept_len[a]) = (self.kept[b], self.kept_len[b]);
+            }
             self.kept_n -= 1;
         }
-        if let (Some(slot), Some(len)) = (self.kept.get_mut(self.kept_n), self.kept_len.get_mut(self.kept_n))
+        let at = self.slot(self.kept_n);
+        if self.kept_n < KEPT_N
+            && let (Some(slot), Some(len)) = (self.kept.get_mut(at), self.kept_len.get_mut(at))
             && let Some(dst) = slot.get_mut(..p.len())
         {
             dst.copy_from_slice(p);
@@ -142,16 +155,21 @@ impl Rx {
         }
     }
 
-    /// The oldest event kept while a command waited, copied into `out`; its length.
+    /// The ring slot of the `i`th event kept (always in range: the modulo is the array's length).
+    fn slot(&self, i: usize) -> usize {
+        (self.head + i) % KEPT_N
+    }
+
+    /// The oldest event kept while a command waited, copied into `out` (its first `n` bytes); its length `n`.
     pub fn pop(&mut self, out: &mut [u8; KEPT]) -> Option<usize> {
         if self.kept_n == 0 {
             return None;
         }
-        let n = usize::from(self.kept_len[0]);
-        out.copy_from_slice(&self.kept[0]);
-        self.kept.rotate_left(1);
-        self.kept_len.rotate_left(1);
-        self.kept_n -= 1;
+        let at = self.head;
+        let n = usize::from(self.kept_len.get(at).copied().unwrap_or(0));
+        let src = self.kept.get(at).and_then(|k| k.get(..n)).unwrap_or(&[]);
+        out.iter_mut().zip(src).for_each(|(o, &s)| *o = s);
+        (self.head, self.kept_n) = (self.slot(1), self.kept_n - 1);
         Some(n)
     }
 
@@ -246,7 +264,14 @@ fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T
 pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     send(b, payload);
     let op = payload.get(1).copied();
+    // a call that timed out may still be answered: that late answer is not this call's (the next channel's open has
+    // the same op), so one answer of its op is swallowed. If it never came, this call times out too and forgets it.
+    let mut late = rx.late.take();
     let response = |p: &[u8]| match *p {
+        [RESP, o, ..] if late == Some(o) => {
+            late = None;
+            None
+        }
         [RESP, o, r0, r1, r2, r3, ref outputs @ ..] if Some(o) == op => {
             Some(match u32::from_le_bytes([r0, r1, r2, r3]) {
                 0 => {
@@ -262,6 +287,7 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
     let r = wait(b, rx, response).unwrap_or(Err(Error::Timeout));
     if r == Err(Error::Timeout) {
         rx.timeouts = rx.timeouts.saturating_add(1);
+        rx.late = op.filter(|_| late.is_none());
     }
     if let (Err(e), Some(op)) = (r, op) {
         rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
@@ -658,7 +684,7 @@ impl Device {
 
     /// The advertised name, printable ASCII only (other bytes become '?'); empty if it never sent one.
     pub fn name(&self) -> &str {
-        core::str::from_utf8(self.name.get(..usize::from(self.name_len)).unwrap_or(&[])).unwrap_or("")
+        bytes::ascii(&self.name, self.name_len)
     }
 }
 
@@ -724,7 +750,8 @@ impl Nearby {
         Nearby { devices: [NONE; Self::MAX], count: 0 }
     }
 
-    /// Notes a report: its signal strength, and its name if it carries one. True if the device is new.
+    /// Notes a report: its signal strength, and its name if it carries one. True if the device is new or its name
+    /// changed (the rssi alone is not a change worth a redraw).
     pub fn add(&mut self, r: &AdvReport) -> bool {
         let known = self.devices.iter().take(self.count).position(|d| d.addr == r.addr);
         let new = known.is_none() && self.count < Self::MAX;
@@ -743,14 +770,8 @@ impl Nearby {
         if let Some(m) = ad_maker(r.data) {
             d.maker = Some(m);
         }
-        if let Some(name) = ad_name(r.data) {
-            let n = name.len().min(Device::NAME);
-            for (slot, &c) in d.name.iter_mut().zip(name) {
-                *slot = if c.is_ascii_graphic() || c == b' ' { c } else { b'?' };
-            }
-            d.name_len = n as u8;
-        }
-        new
+        let renamed = ad_name(r.data).is_some_and(|name| bytes::set_ascii(&mut d.name, &mut d.name_len, name));
+        new || renamed
     }
 
     /// Distinct devices heard.
@@ -800,6 +821,45 @@ mod tests {
     }
 
     #[test]
+    fn a_long_event_is_kept_and_the_ring_wraps() {
+        let mut rx = Rx::new();
+        let mut out = [0; KEPT];
+        // 137 bytes: a Chars answer of 14 characteristics at MTU 103; and many more events than the ring holds, popped
+        // as they come, so the head goes round
+        let mut long = std::vec![BLE_EVT, 0x39];
+        long.resize(137, 7);
+        for round in 0..KEPT_N as u8 * 3 {
+            keep(&mut rx, &long);
+            keep(&mut rx, &[BLE_EVT, 0x11, round, 0, 0, 0x08]);
+            assert_eq!(rx.pop(&mut out), Some(137));
+            assert_eq!(&out[..137], &long[..]);
+            assert_eq!(rx.pop(&mut out), Some(6));
+            assert_eq!(out[2], round);
+            assert_eq!(rx.pop(&mut out), None);
+        }
+        long.resize(KEPT + 1, 7);
+        keep(&mut rx, &long);
+        assert_eq!(rx.pop(&mut out), None, "past KEPT: dropped");
+    }
+
+    #[test]
+    fn a_late_answer_is_not_the_next_calls() {
+        let frame = [6u8, 0, RESP, SD_BLE_VERSION_GET, 5, 0, 0, 0]; // an answer with an error code, from before
+        let mut out = [0; 16];
+        let mut call_with = |late: Option<u8>| {
+            let mut sim = crate::sim::Sim::new(9, 0, 0);
+            let _app = crate::App::start(&mut sim, None);
+            let sim = &mut sim;
+            let mut rx = Rx::new();
+            rx.late = late;
+            frame.iter().for_each(|&b| sim.nordic.stray(b));
+            call(sim, &mut rx, &[CMD, SD_BLE_VERSION_GET, 1], &mut out).map(|_| ())
+        };
+        assert_eq!(call_with(None), Err(Error::Code(5)), "taken for the answer");
+        assert_eq!(call_with(Some(SD_BLE_VERSION_GET)), Ok(()), "swallowed: the real answer follows");
+    }
+
+    #[test]
     fn a_resync_keeps_the_events_already_framed() {
         let mut rx = Rx::new();
         keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]);
@@ -823,10 +883,11 @@ mod tests {
         assert!(n.add(&report(1, -80, &[5, 0xff, 0x4c, 0, 0x10, 6])));
         assert_eq!(n.strongest().next().unwrap().maker, Some("iPhone/Mac"));
         assert!(n.add(&report(2, -50, &[4, 0x09, b'H', b'R', 0xff])));
-        assert!(!n.add(&report(1, -40, &[3, 0x08, b'P', b'C'])), "same address: not new");
+        assert!(n.add(&report(1, -40, &[3, 0x08, b'P', b'C'])), "same address, a name: listed again");
+        assert!(!n.add(&report(1, -45, &[3, 0x08, b'P', b'C'])), "the rssi alone: no change");
         let list: std::vec::Vec<_> =
             n.strongest().map(|d| (d.addr[0], d.rssi, std::string::String::from(d.name()))).collect();
-        assert_eq!(list, [(1, -40, "PC".into()), (2, -50, "HR?".into())]);
+        assert_eq!(list, [(1, -45, "PC".into()), (2, -50, "HR?".into())]);
         for i in 0..40 {
             n.add(&report(10 + i, -60, &[]));
         }

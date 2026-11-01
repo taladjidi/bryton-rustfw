@@ -25,6 +25,7 @@
 use crate::ble::{self, Event};
 use crate::fecble::{self, Proto};
 use crate::ftms::{self, BIKE_DATA, CONTROL, FEATURE, POWER_RANGE, RESISTANCE_RANGE, SERVICE, STATUS};
+use crate::storage::bytes;
 use crate::trainer::Command;
 use crate::*;
 
@@ -105,7 +106,7 @@ pub(crate) struct Found {
 impl Found {
     /// Its advertised name (printable ASCII), or empty.
     pub(crate) fn name(&self) -> &str {
-        core::str::from_utf8(self.name.get(..usize::from(self.name_len)).unwrap_or(&[])).unwrap_or("")
+        bytes::ascii(&self.name, self.name_len)
     }
 }
 
@@ -246,22 +247,17 @@ impl Ftms {
         };
         let Some(d) = self.found.get_mut(i) else { return false };
         (d.peer, d.rssi) = (peer, r.rssi);
+        let mut changed = known.is_none();
         if let Some(p) = proto
             && (p == Proto::Ftms || known.is_none())
         {
+            changed |= d.proto != p;
             d.proto = p;
         }
         if known.is_none() {
             d.name_len = 0;
         }
-        if let Some(name) = nrf::ad_name(r.data) {
-            let n = name.len().min(d.name.len());
-            for (slot, &c) in d.name.iter_mut().zip(name) {
-                *slot = if c.is_ascii_graphic() || c == b' ' { c } else { b'?' };
-            }
-            d.name_len = n as u8;
-        }
-        true
+        changed | nrf::ad_name(r.data).is_some_and(|name| bytes::set_ascii(&mut d.name, &mut d.name_len, name))
     }
 
     /// Commands may go out.
@@ -598,7 +594,7 @@ impl App {
                 } else if status == 0 && handle == f.handle(RESISTANCE_RANGE) {
                     f.resistance = ftms::range(data).unwrap_or(f.resistance);
                 } else if status == 0 && handle == f.handle(POWER_RANGE) {
-                    f.max_w = ftms::range(data).map_or(f.max_w, |(_, hi)| hi.clamp(0, trainer::MAX_W as i16) as u16);
+                    f.max_w = ftms::max_power(data, f.max_w);
                 }
                 Step::Read(i + 1)
             }

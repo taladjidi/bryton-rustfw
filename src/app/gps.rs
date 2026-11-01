@@ -115,9 +115,7 @@ impl App {
                     // a speed sensor or a trainer heard lately gives the speed (indoors a fix through a window says
                     // 0 km/h and would stop the ride); a paired one that is silent (a dead battery, a magnet knocked
                     // off) must not leave the ride without one: then the GPS's
-                    let sensor = [Kind::Speed, Kind::SpeedCadence, Kind::Trainer]
-                        .iter()
-                        .any(|&k| self.radio.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS));
+                    let sensor = [Kind::Speed, Kind::SpeedCadence, Kind::Trainer].iter().any(|&k| self.radio.heard(k));
                     if pvt.good() {
                         self.track.add(pvt.lat, pvt.lon, pvt.heading);
                         self.track.orient(self.settings.map_up, pvt.heading, pvt.speed_mm_s);
