@@ -529,7 +529,7 @@ fn byte_at(b: &[u8], at: usize) -> Result<u8, Error> {
 }
 
 fn u32_at(b: &[u8], at: usize) -> Result<u32, Error> {
-    le::<4>(b, at).map(u32::from_le_bytes)
+    crate::storage::bytes::le32(b, at).ok_or(Error::Short)
 }
 
 fn f32_at(b: &[u8], at: usize) -> Result<f32, Error> {

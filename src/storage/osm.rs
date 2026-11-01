@@ -34,31 +34,17 @@ const DATA: u32 = HEAD + 16 * BLOCK * BLOCK;
 
 /// The pack holding tile (`z`, `x`, `y`): `OSM<z>_<x / 16>_<y / 16>.PAK`.
 pub fn name(z: u8, x: u32, y: u32) -> Line<32> {
-    let mut l = Line::new();
-    l.push_str("OSM");
-    l.push_u32(u32::from(z));
-    l.push_str("_");
-    l.push_u32(x / BLOCK);
-    l.push_str("_");
-    l.push_u32(y / BLOCK);
-    l.push_str(".PAK");
-    l
+    super::pack_name("OSM", BLOCK, z, x, y)
 }
 
 /// The header is a version 1 pack of tile (`z`, `x`, `y`)'s block.
 pub fn header_ok(h: &[u8; HEAD as usize], z: u8, x: u32, y: u32) -> bool {
-    let u32_at = |i: usize| u32::from_le_bytes(super::take(h, i));
-    h[..4] == *b"OSMP"
-        && h[4..6] == [1, 0]
-        && h[6] == z
-        && u32::from(h[7]) == BLOCK
-        && u32_at(8) == x / BLOCK * BLOCK
-        && u32_at(12) == y / BLOCK * BLOCK
+    super::pack_header_ok(h, b"OSMP", BLOCK, z, x, y)
 }
 
 /// Where tile (`x`, `y`)'s index entry is in its pack.
 pub fn entry_at(x: u32, y: u32) -> u32 {
-    HEAD + 16 * ((y % BLOCK) * BLOCK + x % BLOCK)
+    super::pack_entry_at(16, BLOCK, x, y)
 }
 
 /// A tile's two blobs in its pack: (offset, length) of H and of P.

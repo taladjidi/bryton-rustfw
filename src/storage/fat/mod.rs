@@ -103,6 +103,8 @@ pub struct Cursor {
     buf: [u8; SECTOR],
     lfn: [u16; LFN],
     lfn_sum: Option<u8>,
+    /// Long name pieces still to come before the 8.3 entry (the ordinal the next piece must have).
+    lfn_left: u8,
 }
 
 /// A directory entry as [`Fat::list`] gives it.
@@ -139,11 +141,11 @@ pub struct Fat {
 }
 
 fn u16_at(b: &[u8], i: usize) -> u16 {
-    u16::from_le_bytes([b.get(i).copied().unwrap_or(0), b.get(i + 1).copied().unwrap_or(0)])
+    super::bytes::le16(b, i).unwrap_or(0)
 }
 
 fn u32_at(b: &[u8], i: usize) -> u32 {
-    u32::from(u16_at(b, i)) | u32::from(u16_at(b, i + 2)) << 16
+    super::bytes::le32(b, i).unwrap_or(0)
 }
 
 impl Fat {
@@ -161,7 +163,10 @@ impl Fat {
             && (1..=2).contains(&fats)
             && u16_at(&s, 17) == 0 // no FAT12/16 root directory
             && u16_at(&s, 22) == 0 // FAT12/16 FAT size
-            && fat_size > 0;
+            && fat_size > 0
+            // BPB_ExtFlags (fatgen103 section 3.1): bit 7 set means only the FAT numbered by bits 0 to 3 is live,
+            // mirroring is off; this reader follows FAT 0 only
+            && (u16_at(&s, 40) & 0x80 == 0 || u16_at(&s, 40) & 0x0f == 0);
         let data_start = fats.checked_mul(fat_size).and_then(|f| f.checked_add(reserved)).ok_or(Error::NotFat32)?;
         if !fat32 || total <= data_start {
             return Err(Error::NotFat32);
@@ -298,6 +303,7 @@ impl Fat {
             buf: [0; SECTOR],
             lfn: [0; LFN],
             lfn_sum: None,
+            lfn_left: 0,
         })
     }
 
@@ -336,10 +342,10 @@ impl Fat {
             match (e[0], e[11]) {
                 (0, _) => c.done = true,       // the end of the directory
                 (0xe5, _) => c.lfn_sum = None, // deleted
-                (ord, 0x0f) => c.lfn_sum = lfn_piece(&mut c.lfn, &e, ord, c.lfn_sum),
+                (ord, 0x0f) => c.lfn_sum = lfn_piece(&mut c.lfn, &e, ord, c.lfn_sum, &mut c.lfn_left),
                 (_, attr) if attr & 0x08 != 0 => c.lfn_sum = None, // the volume label
                 _ => {
-                    let long = c.lfn_sum == Some(short_sum(&e));
+                    let long = c.lfn_sum == Some(short_sum(&e)) && c.lfn_left == 0; // all pieces, down to the first
                     c.lfn_sum = None;
                     return Ok(Some((e, long)));
                 }
@@ -372,7 +378,12 @@ impl Fat {
                 }
             };
             if long {
-                for &ch in c.lfn.iter().take_while(|&&ch| ch != 0 && ch != 0xffff) {
+                let n = c.lfn.iter().take_while(|&&ch| ch != 0 && ch != 0xffff).count();
+                // a long name is cut in the middle: its last 4 bytes (the extension) stay, callers test them
+                for (i, &ch) in c.lfn.iter().take(n).enumerate() {
+                    if n > NAME && i >= NAME - 4 && i + 4 < n {
+                        continue;
+                    }
                     put(u8::try_from(ch).ok().filter(u8::is_ascii).unwrap_or(b'?'));
                 }
             } else {
@@ -472,21 +483,24 @@ impl Fat {
     }
 }
 
-/// Puts long name entry `e` (sequence `ord`) into `lfn`; the checksum while the pieces so far are whole.
-fn lfn_piece(lfn: &mut [u16; LFN], e: &[u8; 32], ord: u8, sum: Option<u8>) -> Option<u8> {
+/// Puts long name entry `e` (sequence `ord`) into `lfn`; the checksum while the pieces so far are whole. `left`
+/// is the ordinal the next piece must have (0: the name is complete): a piece out of sequence ends the name.
+fn lfn_piece(lfn: &mut [u16; LFN], e: &[u8; 32], ord: u8, sum: Option<u8>, left: &mut u8) -> Option<u8> {
     let n = usize::from(ord & 0x1f);
+    let want = core::mem::take(left);
     if n == 0 || n * 13 > LFN {
         return None;
     }
     if ord & 0x40 != 0 {
         lfn.fill(0); // the last piece comes first: a new name
-    } else if sum != Some(e[13]) {
+    } else if sum != Some(e[13]) || ord != want {
         return None;
     }
     const AT: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
     for (slot, a) in lfn.iter_mut().skip((n - 1) * 13).zip(AT) {
         *slot = u16_at(e, a);
     }
+    *left = (n - 1) as u8;
     Some(e[13])
 }
 
@@ -554,6 +568,93 @@ pub(crate) mod tests {
             }
             Ok(())
         }
+    }
+
+    /// `data` as `dir/name` (the folder made if missing), through the FAT writer.
+    pub fn put_file(d: &mut Ram, dir: &str, name: &str, data: &[u8]) {
+        let mut fat = Fat::mount(d).unwrap();
+        let dir = fat.ensure_dir(d, fat.root(), dir, (0, 0)).unwrap();
+        if let Ok(old) = fat.locate(d, dir, name) {
+            fat.remove(d, &old).unwrap();
+        }
+        let mut h = fat.create(d, dir, name, (0, 0)).unwrap();
+        let mut padded = data.to_vec();
+        padded.resize(data.len().div_ceil(SECTOR).max(1) * SECTOR, 0);
+        fat.write_sectors(d, &mut h, 0, &padded).unwrap();
+        fat.set_size(d, &mut h, data.len() as u32, (0, 0)).unwrap();
+    }
+
+    /// `data` as `dir/name` with a long name of any length (the writer takes 64 characters at most): the file is
+    /// made as TMP.GPX, then its entry is replaced by long name pieces and an 8.3 entry, in the folder's free slots.
+    pub fn put_long(d: &mut Ram, dir: &str, name: &str, data: &[u8]) {
+        put_file(d, dir, "TMP.GPX", data);
+        let mut fat = Fat::mount(d).unwrap();
+        let f = fat.open(d, dir).unwrap();
+        let h = fat.locate(d, f, "TMP.GPX").unwrap();
+        let (base, k) = (h.entry_lba as usize * SECTOR, usize::from(h.slot));
+        let mut short: [u8; 32] = d.0[base + k * 32..base + k * 32 + 32].try_into().unwrap();
+        short[..11].copy_from_slice(b"LONGNA~1GPX");
+        let units: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        let pieces = units.len().div_ceil(13);
+        // the following slots are empty, in this sector or the next of the same cluster
+        for p in 0..pieces {
+            let mut e = [0u8; 32];
+            let ord = (pieces - p) as u8;
+            e[0] = ord | if p == 0 { 0x40 } else { 0 };
+            e[11] = 0x0f;
+            e[13] = short_sum(&short);
+            const AT: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+            for (j, a) in AT.into_iter().enumerate() {
+                let u = units.get((usize::from(ord) - 1) * 13 + j).copied().unwrap_or(0xffff);
+                e[a..a + 2].copy_from_slice(&u.to_le_bytes());
+            }
+            d.0[base + (k + p) * 32..base + (k + p) * 32 + 32].copy_from_slice(&e);
+        }
+        d.0[base + (k + pieces) * 32..base + (k + pieces) * 32 + 32].copy_from_slice(&short);
+    }
+
+    #[test]
+    fn a_long_name_keeps_its_extension() {
+        let mut d = Ram(image(), 0);
+        let name = std::format!("{}.gpx", "Col-du-Galibier-".repeat(4));
+        assert_eq!(name.len(), 68);
+        put_long(&mut d, "Courses", &name, b"x");
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Courses").unwrap();
+        let mut c = fat.cursor(dir).unwrap();
+        let mut found = false;
+        while let Some(e) = fat.list(&mut d, &mut c).unwrap() {
+            if e.name().starts_with(b"Col-du") {
+                assert_eq!(e.name().len(), NAME);
+                assert!(e.name().ends_with(b".gpx"));
+                found = true;
+            }
+        }
+        assert!(found);
+    }
+
+    /// A long name missing its first piece is not a name (the 8.3 name shows); a volume with mirroring off and a
+    /// FAT other than the first live is refused.
+    #[test]
+    fn a_long_name_needs_all_its_pieces_and_a_mirrored_fat() {
+        let mut d = Ram(image(), 0);
+        put_long(&mut d, "Fresh", "twenty-chars-long.gpx", b"x");
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Fresh").unwrap();
+        let h = fat.locate(&mut d, dir, "twenty-chars-long.gpx").unwrap();
+        let at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32;
+        let short: [u8; 32] = d.0[at..at + 32].try_into().unwrap();
+        d.0[at - 32..at].copy_from_slice(&short); // the first piece is gone: [last piece][8.3]
+        let mut c = fat.cursor(dir).unwrap();
+        let mut names = Vec::new();
+        while let Some(e) = fat.list(&mut d, &mut c).unwrap() {
+            names.push(e.name().to_vec());
+        }
+        assert!(names.iter().any(|n| n == b"LONGNA~1.GPX"), "{names:?}");
+        d.0[40] = 0x81; // BPB_ExtFlags: mirroring off, the second FAT live
+        assert_eq!(Fat::mount(&mut d).err(), Some(Error::NotFat32));
+        d.0[40] = 0x80; // the first FAT live: read as it is
+        assert!(Fat::mount(&mut d).is_ok());
     }
 
     pub fn read_all(fat: &mut Fat, d: &mut Ram, path: &str) -> Result<Vec<u8>, Error> {

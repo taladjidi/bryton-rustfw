@@ -64,7 +64,7 @@ pub const LIST: usize = 32;
 pub const NAME: usize = 20;
 /// Bytes read from the card per disk read.
 pub const IO: usize = crate::stock::IO;
-/// A file longer than this is read only this far (a GPX of 4 MB is about 30 000 points).
+/// A file longer than this is refused (a GPX of 4 MB is about 30 000 points).
 pub const MAX_BYTES: u32 = 4 << 20;
 /// The folders listed: stock's routes, then the files copied over USB.
 const DIRS: [&str; 2] = ["PlanTrip", "Courses"];
@@ -138,6 +138,8 @@ impl List {
     /// Lists the course files in `DIRS` (the first [`LIST`]) from their folders alone: their names and sizes. Their
     /// lengths come later, a file at a time ([`Courses::step`]).
     pub fn read(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
+        // the old list: a file that is still the same (cluster, size, name) keeps its measured length
+        let (old, old_len) = (self.e, self.len);
         self.len = 0;
         let mut fat = Fat::mount(d)?;
         for dir in DIRS {
@@ -160,6 +162,11 @@ impl List {
                     };
                     e.name_len += 1;
                 }
+                if let Some(o) =
+                    old.iter().take(old_len).find(|o| o.measured && o.file == e.file && o.name() == e.name())
+                {
+                    (e.dist_m, e.measured) = (o.dist_m, true);
+                }
                 if let Some(slot) = self.e.get_mut(self.len) {
                     *slot = e;
                     self.len += 1;
@@ -180,17 +187,27 @@ struct Stream {
     file: File,
     gpx: bool,
     offset: u32,
+    /// Where the last read ended: the next one does not walk the chain from its first cluster.
+    seek: fat::Seek,
     fit: Reader,
     xml: Gpx,
 }
 
 impl Stream {
     fn new(e: &Entry) -> Self {
-        Stream { file: e.file, gpx: e.gpx, offset: 0, fit: Reader::with_position(), xml: Gpx::new() }
+        Stream {
+            file: e.file,
+            gpx: e.gpx,
+            offset: 0,
+            seek: fat::Seek::new(),
+            fit: Reader::with_position(),
+            xml: Gpx::new(),
+        }
     }
 
     /// Reads on for about `budget` bytes, each point (degrees x 1e-7, altitude in dm) and cue to `f` in order;
-    /// true once the file is done (its end, [`MAX_BYTES`], or the end of its FIT data).
+    /// true once the file is done (its end or the end of its FIT data). A file over [`MAX_BYTES`], a FIT that
+    /// fails its checks or ends before its data does, and a read error are `Err`: the course is not whole.
     #[inline(never)] // its read buffer lives in its own frame
     fn step(
         &mut self,
@@ -200,11 +217,14 @@ impl Stream {
         f: &mut dyn FnMut(Item),
     ) -> Result<bool, fat::Error> {
         let mut io = [0u8; IO];
-        let (size, mut spent) = (self.file.size.min(MAX_BYTES), 0u32);
+        let (size, mut spent) = (self.file.size, 0u32);
+        if size > MAX_BYTES {
+            return Err(fat::Error::Corrupt);
+        }
         while self.offset < size && spent < budget {
-            let n = fat.read_at(d, &self.file, self.offset, &mut io)?;
+            let n = fat.read_from(d, &self.file, self.offset, &mut io, &mut self.seek)?;
             if n == 0 {
-                return Ok(true);
+                return if self.gpx { Ok(true) } else { Err(fat::Error::Corrupt) }; // a FIT cut short
             }
             (self.offset, spent) = (self.offset.saturating_add(n as u32), spent.saturating_add(n as u32));
             let buf = io.get(..n).unwrap_or(&[]);
@@ -224,11 +244,18 @@ impl Stream {
                 }
                 _ => {}
             });
-            if self.fit.result().is_some() {
-                return Ok(true);
+            match self.fit.result() {
+                Some(Ok(())) => return Ok(true),
+                Some(Err(_)) => return Err(fat::Error::Corrupt),
+                None => {}
             }
         }
-        Ok(self.offset >= size)
+        // a FIT that ended before its data did is cut
+        let end = self.offset >= size;
+        if end && !self.gpx && self.fit.result().is_none() {
+            return Err(fat::Error::Corrupt);
+        }
+        Ok(end)
     }
 }
 
@@ -359,7 +386,7 @@ impl Courses {
                     return Progress::Reading;
                 }
                 if let Some(e) = self.list.e.get_mut(..self.list.len).and_then(|e| e.get_mut(*k)) {
-                    e.dist_m = odo.len_m();
+                    e.dist_m = odo.len_m().filter(|_| done.is_ok()); // a file not read whole has no length
                     e.measured = true;
                 }
                 Progress::Measured
@@ -674,6 +701,44 @@ pub(crate) mod tests {
             }
         }
         panic!("never loaded");
+    }
+
+    /// A file over MAX_BYTES, or a FIT cut short, is an error: not a whole course.
+    #[test]
+    fn a_file_not_whole_is_an_error() {
+        let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let big = Entry { file: File { cluster: 5, size: MAX_BYTES + 1, dir: false }, gpx: true, ..Entry::EMPTY };
+        let r = Stream::new(&big).step(&mut fat, &mut d, 1 << 20, &mut |_| {});
+        assert_eq!(r, Err(fat::Error::Corrupt));
+        let mut cut = Vec::new();
+        let (mut w, _) = crate::fit::Writer::start(&mut cut, 1_000_000).unwrap();
+        w.record(&mut cut, &crate::fit::Sample { time: 1_000_001, ..Default::default() }).unwrap();
+        crate::fat::tests::put_file(&mut d, "Courses", "CUT.FIT", &cut); // no session, no CRC
+        let mut c = Courses::new();
+        c.open(&mut d).unwrap();
+        let k = (0..c.list.len()).find(|&i| c.list.get(i).unwrap().name() == "CUT").unwrap();
+        assert_eq!(load(&mut c, &mut d, k), Progress::Loaded(false));
+        assert_eq!(c.on, None);
+    }
+
+    /// A long file name is listed (its extension kept), and a second open keeps the lengths measured.
+    #[test]
+    fn long_names_and_a_second_open() {
+        let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let name = std::format!("{}.gpx", "Col-du-Galibier-".repeat(4));
+        let gpx = b"<gpx><trk><trkseg><trkpt lat=\"45.0\" lon=\"6.0\"/><trkpt lat=\"45.01\" lon=\"6.0\"/></trkseg></trk></gpx>";
+        crate::fat::tests::put_long(&mut d, "Courses", &name, gpx);
+        let mut c = Courses::new();
+        c.open(&mut d).unwrap();
+        let n = c.list.len();
+        assert!((0..n).any(|i| c.list.get(i).unwrap().name().starts_with("COL-DU-GALIBIER")), "listed");
+        while c.step(&mut d, 4096) != Progress::Idle {}
+        let first: Vec<_> = (0..n).map(|i| *c.list.get(i).unwrap()).collect();
+        assert!(first.iter().all(|e| e.measured));
+        c.open(&mut d).unwrap();
+        let again: Vec<_> = (0..n).map(|i| *c.list.get(i).unwrap()).collect();
+        assert_eq!(again, first, "same files: measured lengths kept, nothing read again");
     }
 
     /// The synthetic card's courses (tools/fat_image.py): stock's route, a Garmin course and a GPX of the same hill,

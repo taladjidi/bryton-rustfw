@@ -32,17 +32,17 @@ use crate::inflate::{Inflater, Scratch};
 use crate::text::Line;
 
 /// Nodes the graph holds at most (20 bytes each). A real tile has 445 at the median and 2868 at most in the
-/// mountain region measured; a tile that does not fit is skipped.
-pub const NODES: usize = 2560;
+/// mountain region measured (review 2026-11-01: 2560 was below it); a tile that does not fit is skipped.
+pub const NODES: usize = 3072;
 /// Edges the graph holds at most (9 bytes each): two or three a node.
-pub const EDGES: usize = 5120;
+pub const EDGES: usize = 7168;
 /// Tiles remembered at most, the ones with no data too.
 pub const TILES: usize = 16;
 /// The elevation of a node that has none.
 pub const NO_ELEV: i16 = i16::MIN;
-/// The words of buffer a tile is inflated into (96 KB: the inflated tile of a full graph, about 36 bytes a node);
-/// main.rs takes them from the map's SDRAM, behind the basemap's (link.x MAP).
-pub const SCRATCH_WORDS: usize = 48 * 1024;
+/// The words of buffer a tile is inflated into (160 KB: the largest inflated tile seen is 150 KB); main.rs takes
+/// them from the map's SDRAM, behind the basemap's (link.x MAP).
+pub const SCRATCH_WORDS: usize = 80 * 1024;
 /// Edges kept for a node at most (the real maximum seen is 9).
 const MAX_EDGES: usize = 15;
 /// Tiles a z9 file spans a side: 2^(14 - 9).
