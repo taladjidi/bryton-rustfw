@@ -123,6 +123,7 @@ impl LoopBoard for Sim {
     }
     fn nrf_flush(&mut self) {
         self.nordic.out.clear();
+        self.nordic.fifo.clear();
     }
     fn wake_on_io(&mut self, _: bool, _: bool) {}
     fn timer_start(&mut self, ms: u32) {
@@ -155,7 +156,7 @@ impl LoopBoard for Sim {
         for (_, bytes) in self.main.later.extract_if(.., |(t, _)| *t <= now) {
             self.nordic.out.extend(bytes);
         }
-        self.main.bytes_always || !self.nordic.out.is_empty()
+        self.main.bytes_always || self.nordic.has_bytes(now)
     }
     fn sleep(&mut self) {
         self.delay_ms(1);

@@ -235,10 +235,46 @@ pub enum Error {
     Code(u32),
 }
 
-/// Sends one packet: the length header, then `payload`.
-pub fn send(b: &mut impl Board, payload: &[u8]) {
-    b.nrf_send(&(payload.len() as u16).to_le_bytes());
-    b.nrf_send(payload);
+/// How long [`Board::nrf_send`] waits for room in the TX FIFO before it returns what it took, us: a full 16-byte FIFO
+/// drains in 160 us when CTS allows, so more than that is the chip holding CTS.
+pub const PUT_WAIT_US: u64 = 500;
+
+/// Sends one packet: the length header, then `payload`. A frame is never cut short: while the chip holds CTS (it has
+/// read a command's header, and the previous response waits for an event frame that waits for our RTS) the chip's
+/// bytes are read into `rx`, which lets it finish the event, queue the response and release CTS; the rest goes on
+/// from there. Bounded by [`TIMEOUT_MS`] without a byte either way (the chip is hung: a reset cures it), then
+/// `Err(Timeout)`. What arrives meanwhile is treated as in [`call`]'s wait: BLE events kept, the rest dropped.
+pub fn send(b: &mut impl Board, rx: &mut Rx, payload: &[u8]) -> Result<(), Error> {
+    put(b, &(payload.len() as u16).to_le_bytes(), |x| rx_byte(rx, x))?;
+    put(b, payload, |x| rx_byte(rx, x))
+}
+
+fn rx_byte(rx: &mut Rx, x: u8) {
+    if rx.push(x).is_some() {
+        rx.keep_last();
+    }
+}
+
+/// `data` to the chip whole, reading (`each` byte) whatever it sends while it holds CTS.
+fn put(b: &mut impl Board, mut data: &[u8], mut each: impl FnMut(u8)) -> Result<(), Error> {
+    let (mut idle_ms, mut bytes) = (0, 0u32);
+    loop {
+        data = data.get(b.nrf_send(data)..).unwrap_or(&[]);
+        if data.is_empty() {
+            return Ok(());
+        }
+        let mut buf = [0; 16];
+        let n = b.nrf_recv(&mut buf);
+        buf.get(..n).unwrap_or(&[]).iter().for_each(|&x| each(x));
+        bytes += n as u32;
+        if n == 0 {
+            b.delay_ms(1); // sleep, not spin: the chip needs the host's reads, not its time
+            idle_ms += 1;
+        }
+        if idle_ms >= TIMEOUT_MS || bytes >= 0x1_0000 {
+            return Err(Error::Timeout);
+        }
+    }
 }
 
 /// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of silence, or
@@ -266,7 +302,7 @@ fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T
 /// and returns their length. Packets that arrive meanwhile are dropped, BLE events but advertising reports kept
 /// ([`Rx::pop`]).
 pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
-    send(b, payload);
+    let sent = send(b, rx, payload);
     let op = payload.get(1).copied();
     // a call that timed out may still be answered: that late answer is not this call's (the next channel's open has
     // the same op), so one answer of its op is swallowed. If it never came, this call fails once (it swallowed the
@@ -290,10 +326,15 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
         }
         _ => None,
     };
-    let r = wait(b, rx, response).unwrap_or(Err(Error::Timeout));
+    let r = match sent {
+        Ok(()) => wait(b, rx, response).unwrap_or(Err(Error::Timeout)),
+        Err(e) => Err(e), // the chip took no whole command: nothing to wait for
+    };
     if r == Err(Error::Timeout) {
         rx.timeouts = rx.timeouts.saturating_add(1);
-        rx.late = op.filter(|_| armed.is_none() || late.is_some()); // not after a swallow
+        if sent.is_ok() {
+            rx.late = op.filter(|_| armed.is_none() || late.is_some()); // not after a swallow
+        }
     }
     if let (Err(e), Some(op)) = (r, op) {
         rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
@@ -365,7 +406,7 @@ fn start_as(b: &mut impl Board, level: u8) -> Result<Version, Error> {
 
 /// Powers the chip down until its next reset (stock's power-off; the next start's reset pulse wakes it).
 pub fn system_off(b: &mut impl Board) {
-    send(b, &[CMD, SD_POWER_SYSTEM_OFF]);
+    let _ = put(b, &2u16.to_le_bytes(), |_| ()).and_then(|()| put(b, &[CMD, SD_POWER_SYSTEM_OFF], |_| ()));
 }
 
 /// Starts an active scan for `seconds` (0: until stopped), with stock's low-power timing: a 30 ms window every
@@ -847,7 +888,7 @@ mod tests {
         let ask = [CMD, SD_BLE_VERSION_GET, 1];
         sim.nordic.hung = true;
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "A: silent");
-        sim.nordic.hung = false;
+        sim.nordic.unhang();
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: its answer swallowed");
         assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "C: clean");
     }

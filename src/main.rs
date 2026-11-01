@@ -903,16 +903,21 @@ fn nrf_reset() {
     wr(U_ICR, 0xf); // PE, FE, NE, ORE
 }
 
-fn nrf_send(data: &[u8]) {
-    for &b in data {
+/// Puts bytes in the TX FIFO as it takes them, and returns how many. A byte that finds no room for
+/// `PUT_WAIT_US` (the FIFO drains one byte per 10 us when CTS allows) ends the call: the chip holds CTS, and the
+/// caller (lib `nrf::send`) drains the receive side and offers the rest again; a frame is never cut short.
+fn nrf_send(data: &[u8]) -> usize {
+    let wait = CPU_HZ / 1_000_000 * bryton_rustfw::nrf::PUT_WAIT_US as u32;
+    for (n, &b) in data.iter().enumerate() {
         let t0 = cycles();
         while rd(U_ISR) & ISR_TXFNF == 0 {
-            if cycles().wrapping_sub(t0) > CPU_HZ / 100 {
-                return; // 10 ms: the chip holds CTS (not running); the command will time out
+            if cycles().wrapping_sub(t0) > wait {
+                return n;
             }
         }
         wr(U_TDR, u32::from(b));
     }
+    data.len()
 }
 
 /// Reads what has arrived, and while bytes keep coming waits for the next one as long as
@@ -1539,8 +1544,8 @@ impl Board for S510 {
     fn nrf_reset(&mut self) {
         nrf_reset();
     }
-    fn nrf_send(&mut self, data: &[u8]) {
-        nrf_send(data);
+    fn nrf_send(&mut self, data: &[u8]) -> usize {
+        nrf_send(data)
     }
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         nrf_recv(buf)

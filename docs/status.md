@@ -18,6 +18,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **The Nordic send path (2026-11-02, `nrf::send` and main.rs `nrf_send`): a frame is never cut short.** `nrf_send` used to
+  give up after 10 ms on one byte (the chip holding CTS) and return mid-frame, which hangs the chip for ever; it now returns
+  how many bytes the TX FIFO took, and `nrf::send` reads the chip's bytes while CTS is held, bounded by 500 ms. The simulator
+  models the link byte by byte (`chip_link.rs`, BOARD.md 11), and its tests reproduce the deadlock (two commands back to back
+  behind a stalled event frame). To see on the unit: `tools/dev.py info` at a ride's start and after 10 min, `radio resets`
+  and `resyncs` unchanged, commands answered while sensors stream (a phone's pairing with three sensors on).
 - **The radio receive's wait (main.rs `nrf_recv`): the short wait of finding 8 (2026-10-31) was taken out on 2026-11-01**,
   back to 200 us after every byte. The chip's app needs more than 20 us (inferred) to pull and encode its next event, so the
   20 us wait ended each read after one frame; the drain fell behind a ride's events and the chip's 96-slot queue
