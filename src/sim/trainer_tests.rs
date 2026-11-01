@@ -1848,6 +1848,7 @@ fn the_pairing_is_read_after_a_late_card() {
 #[test]
 fn every_state_file_is_read_after_a_late_card() {
     let (mut sim, mut app) = unit();
+    app.set_bike_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::BikeStore::new())));
     run(&mut sim, &mut app, 8000);
     app.press(&mut sim, Press::Short(Key::Start)); // a ride's start makes bikes.bin and places.bin
     run(&mut sim, &mut app, 3000);
@@ -1874,6 +1875,7 @@ fn every_state_file_is_read_after_a_late_card() {
         sim2.nordic.sensors.push(trainer_sensor());
         sim2.emmc.dead = late_ms > 0; // 0: the control, no late card
         let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+        app2.set_bike_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::BikeStore::new())));
         run(&mut sim2, &mut app2, late_ms);
         sim2.emmc.dead = false;
         run(&mut sim2, &mut app2, 80_000); // the copies' minute between tries
@@ -1886,7 +1888,8 @@ fn every_state_file_is_read_after_a_late_card() {
             a.settings_store.file.loaded,
             a.store.file.loaded,
             a.places.file.loaded,
+            a.bikes().is_some(),
         );
-        assert_eq!(got, (77, true, false, true, true, true, true), "{late_ms}");
+        assert_eq!(got, (77, true, false, true, true, true, true, true), "{late_ms}");
     }
 }
