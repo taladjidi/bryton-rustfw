@@ -12,34 +12,21 @@ chip's flash.
 
 Never send DFU or flash commands: the Nordic firmware is not ours to replace (PI4 low at reset is its bootloader).
 """
-import importlib.util, sys, time
+import sys, time
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location('dev', Path(__file__).resolve().parent / 'dev.py')
-dev = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(dev)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dev  # noqa: E402
 
 GPIOA, GPIOD, GPIOI = 0x58020000, 0x58020c00, 0x58022000
 MODER, PUPDR, IDR, BSRR, AFRL = 0x00, 0x0c, 0x10, 0x18, 0x20
 USART2 = 0x40004400
 CR1, CR3, BRR, ISR, ICR, RDR, TDR = 0x00, 0x08, 0x0c, 0x1c, 0x20, 0x24, 0x28
 RXFNE, TXFNF = 1 << 5, 1 << 7
+FLASH_OPS = (0x29, 0x2a, 0x2b)
 
 
-class Nrf:
-    def __init__(self, s):
-        self.s = s
-
-    def peek(self, a):
-        return int(dev.command(self.s, f'peek {a:#x}'), 16)
-
-    def poke(self, a, v):
-        assert dev.command(self.s, f'poke {a:#x} {v:#x}') == 'ok'
-
-    def field(self, base, reg, pin, bits, val):
-        mask = ((1 << bits) - 1) << (pin * bits)
-        self.poke(base + reg, (self.peek(base + reg) & ~mask) | (val << (pin * bits)))
-
+class Nrf(dev.Regs):
     def reset(self):
         """Stock's sequence: PI4 high (kept), PA6 low while USART2 comes up, release, 800 ms."""
         self.poke(0x58024454, self.peek(0x58024454) & ~7 | 3)                  # USART2 kernel clock: HSI 64 MHz
@@ -67,6 +54,10 @@ class Nrf:
 
     def send(self, packet, wait=2.0):
         """Sends one packet (2-byte length header included) and returns what arrives within `wait` seconds."""
+        # inferred (nrf_soc.h from memory, not checked): SD_FLASH_PAGE_ERASE / WRITE / PROTECT = SOC_SVC_BASE 0x20 + 9..11
+        # as the op byte after the type; 0xC0 opens a SLIP frame, the DFU bootloader's framing (BOARD.md 11)
+        if packet[:1] == b'\xc0' or (len(packet) > 3 and packet[3] in FLASH_OPS):
+            raise SystemExit('nrf.py: DFU and flash packets are refused: the Nordic firmware is not ours to replace')
         for b in packet:
             while not self.peek(USART2 + ISR) & TXFNF:
                 pass

@@ -65,6 +65,11 @@ import uuid
 import zlib
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # no POSIX fcntl
+    fcntl = None
+
 ROOT = Path(__file__).resolve().parent.parent
 ICU = os.environ.get('SYNC_INTERVALS_URL', 'https://intervals.icu')
 STRAVA = os.environ.get('SYNC_STRAVA_URL', 'https://www.strava.com')
@@ -213,7 +218,7 @@ class Volume:
             flush(fd)  # the directory entry too
         finally:
             os.close(fd)
-        if p.read_bytes() != data:  # the drive can drop (AGENTS.md): read back, compare
+        if read_back(p) != data:  # the drive can drop (AGENTS.md): read back past the page cache, compare
             raise OSError(f'{p}: read back differs')
 
     def exists(self, path):
@@ -221,11 +226,22 @@ class Volume:
 
 
 def flush(fd):
-    import fcntl
     try:
         fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
     except (AttributeError, OSError):
         os.fsync(fd)
+
+
+def read_back(path):
+    """The file's bytes as the drive has them: not from the page cache (macOS F_NOCACHE, Linux fadvise DONTNEED).
+    shortcut: elsewhere (no such call) the read may come from the cache, so a cut USB link can go unseen; use a POSIX OS."""
+    fd = os.open(path, os.O_RDONLY)
+    with os.fdopen(fd, 'rb') as f:
+        if fcntl is not None and hasattr(fcntl, 'F_NOCACHE'):
+            fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
+        elif hasattr(os, 'posix_fadvise'):
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        return f.read()
 
 
 class Link:
@@ -262,6 +278,19 @@ def find_volume(cfg):
 # HTTP (urllib): JSON, multipart
 # ---------------------------------------------------------------------------------------------------------------
 
+class SameHost(urllib.request.HTTPRedirectHandler):
+    """A redirect to another host does not carry the Authorization header (the API key or the bearer token)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new and urllib.parse.urlparse(newurl).netloc != urllib.parse.urlparse(req.full_url).netloc:
+            new.headers.pop('Authorization', None)
+        return new
+
+
+OPENER = urllib.request.build_opener(SameHost)
+
+
 def request(method, url, headers=None, data=None, form=None, files=None):
     """(status, body bytes). `form` urlencoded, or `files` multipart with `form` as its other fields."""
     # Intervals.icu sits behind Cloudflare, which refuses Python's default User-Agent (error 1010, seen 2026-10-26)
@@ -281,7 +310,7 @@ def request(method, url, headers=None, data=None, form=None, files=None):
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with OPENER.open(req, timeout=60) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
@@ -695,6 +724,33 @@ def selftest():
         assert load('strava.json', {})['access_token'] == 'at3'
         assert oct(os.stat(home() / 'strava.json').st_mode & 0o777) == '0o600'
     srv.shutdown()
+    # a redirect to another host drops Authorization; one to the same host keeps it
+    seen = []
+
+    class Hop(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, self.headers.get('Authorization')))
+            if self.path.startswith('/to-'):
+                self.send_response(302)
+                self.send_header('Location', f'http://{self.path[4:]}:{self.server.server_port}/end')
+            else:
+                self.send_response(200)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(('127.0.0.1', 0), Hop)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f'http://127.0.0.1:{srv.server_port}'
+    request('GET', base + '/to-localhost', {'Authorization': 'secret'})
+    request('GET', base + '/to-127.0.0.1', {'Authorization': 'secret'})
+    srv.shutdown()
+    assert seen == [('/to-localhost', 'secret'), ('/end', None), ('/to-127.0.0.1', 'secret'), ('/end', 'secret')], seen
+    with tempfile.TemporaryDirectory() as td:
+        Volume(td).write('a/b.bin', b'xyz')
+        assert read_back(Path(td, 'a/b.bin')) == b'xyz' and not list(Path(td, 'a').glob('*.tmp'))
     print('sync.py selftest ok')
 
 

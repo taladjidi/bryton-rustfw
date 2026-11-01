@@ -167,6 +167,11 @@ impl App {
         }
     }
 
+    /// Whether this build may write the card, for the dev link's `info` (the unit tools refuse ride paths when "yes").
+    pub(crate) fn card_writes_word(&self) -> &'static [u8] {
+        if self.card_writable { b"yes" } else { b"no" }
+    }
+
     /// The ride's state for the dev link's `info`: a finished ride still being saved is "ending".
     pub(crate) fn ride_word(&self) -> &'static [u8] {
         match self.ride.state() {

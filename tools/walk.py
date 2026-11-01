@@ -191,12 +191,21 @@ def home(s):
         press(s, 'back')
 
 
+def at_discard(answer):
+    """Is the unit on the DISCARD confirmation (dev.py `where`: `where SCREEN DISCARD`)?"""
+    return answer == 'where SCREEN DISCARD'
+
+
 def discard(s):
     """Ends the ride: home, one press to the ride page, then pause, END RIDE, DISCARD, KEEP, DISCARD (as
     tools/profile.py), SETTLE between keys. True when `info` then says the ride is idle."""
     home(s)
     press(s, 'page')
-    for k in ('start', 'start --long', 'page', 'page', 'start', 'lap', 'start'):
+    keys = ('start', 'start --long', 'page', 'page', 'start', 'lap', 'start')
+    for i, k in enumerate(keys):
+        if i == len(keys) - 1 and not at_discard(dev.command(s, 'where')):
+            home(s)  # a dropped key: this Start would land elsewhere (SAVE), never press it
+            return False
         press(s, k)
     time.sleep(1.5)
     home(s)
@@ -301,8 +310,11 @@ def check_out(path):
 
 
 def fresh_paths():
-    src, test = SIM / 'paths.json', ROOT / 'src' / 'sim' / 'walk_tests.rs'
-    if not src.exists() or src.stat().st_mtime < test.stat().st_mtime:
+    """paths.json, regenerated when the walk test or any screen / app source is newer."""
+    src = SIM / 'paths.json'
+    newest = max(p.stat().st_mtime for d in ('ui', 'app') for p in (ROOT / 'src' / d).glob('*.rs'))
+    newest = max(newest, (ROOT / 'src' / 'sim' / 'walk_tests.rs').stat().st_mtime)
+    if not src.exists() or src.stat().st_mtime < newest:
         subprocess.run(['cargo', 'test-host', 'walk'], cwd=ROOT, check=True)
     return json.loads(src.read_text())
 
@@ -332,6 +344,7 @@ def main():
         print(before)
         if ride_state(before) != 'idle':
             sys.exit(f'walk.py: the unit is not idle at the start: {before}')
+        writes = dev.card_writes(before)
         last_up, nth = uptime_ms(before), 0
         for e in entries:
             if a.only and not re.search(a.only, e['name']):
@@ -344,6 +357,8 @@ def main():
             ride = is_ride(e)
             if not why and ride and not a.rides:
                 why = 'ride path (needs --rides)'
+            if not why and ride and writes is not False:
+                why = 'ride path: the build may write the card (info has no "card writes no")'
             if why:
                 rows.append((e['n'], e['name'], 'refused', why))
                 continue
@@ -505,6 +520,7 @@ def selftest():
     assert refuse(ok('MET X', ('page --long', 'back'))) is None
     assert refuse(ok('IMP MAIN')) and refuse(ok('MET OVERVIEW Dmy'))
     assert refuse(ok('MET OVERVIEW')) is None
+    assert at_discard('where SCREEN DISCARD') and not at_discard('where SCREEN END') and not at_discard('where MAIN')
     assert is_ride(ok('MET RIDE PAGE 1')) and not is_ride(ok('MET MAIN'))
     # title bands: equal text in other colours matches, other text does not
     def band(text_x, fg, bg):

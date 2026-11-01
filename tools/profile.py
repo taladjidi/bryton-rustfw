@@ -72,8 +72,12 @@ def main():
         time.sleep(3.0)  # the start: the scan of stock's rides and the first fix's work settle
     out = []
     with dev.connect() as s:
-        out.append(f'# Profile: {dev.command(s, "info")}\n')
-        for sc in a.scenarios or SCENARIOS:
+        info = dev.command(s, 'info')
+        out.append(f'# Profile: {info}\n')
+        todo = a.scenarios or [x for x in SCENARIOS if x != 'ride' or dev.card_writes(info) is False]
+        if 'ride' in todo and dev.card_writes(info) is not False:
+            sys.exit('profile.py: the ride scenario saves a ride: only on a build whose info says "card writes no"')
+        for sc in todo:
             home(s)
             if sc == 'idle':
                 out.append(window(s, a.seconds, 'idle overview'))
@@ -88,7 +92,7 @@ def main():
             elif sc == 'menu':
                 out.append(window(s, a.seconds, 'menu, Page every 0.5 s', menu_presses(a.seconds)))
             elif sc == 'ride':
-                key(s, 'start', wait=1.0)  # the ride starts, on the first ride page
+                key(s, 'start', wait=3.5)  # the ride starts; its READY CHECK card (3 s) swallows keys
                 out.append(window(s, a.seconds, 'ride running'))
 
                 def end(s):
