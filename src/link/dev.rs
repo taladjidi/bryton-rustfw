@@ -69,6 +69,10 @@ pub trait Host {
     fn poke(&mut self, addr: u32, value: u32);
     /// Sends what [`Host::send`] queued, so the answer reaches the computer now. Default: nothing queues.
     fn flush(&mut self) {}
+    /// Output is being dropped (nobody reads): long answers stop reading the card. Default: never.
+    fn dead(&self) -> bool {
+        false
+    }
 }
 
 /// The peripheral space (RM0399 memory map) that `peek` and `poke` may reach.
@@ -277,9 +281,9 @@ struct Load {
     seen_ms: u32,
 }
 
-/// An upload that got no byte for this long was abandoned (the computer's script was killed): the next bytes are a
+/// An upload that got no byte for this long (above any pass of the main loop) was abandoned (the computer's script was killed): the next bytes are a
 /// command again, not more image.
-const LOAD_STALL_MS: u32 = 2000;
+const LOAD_STALL_MS: u32 = 5000;
 
 /// Protocol state: the current command line, or the image being loaded.
 pub struct Session {
@@ -313,7 +317,8 @@ impl Session {
     pub fn feed(&mut self, mut data: &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
         // the clock is the main loop's: `load` sees a gap between packets, not the time of the connection
         if self.load.take_if(|l| stats.uptime_ms.wrapping_sub(l.seen_ms) > LOAD_STALL_MS).is_some() {
-            self.len = 0;
+            (self.len, self.overflow) = (0, false);
+            h.send(b"err load timeout\n");
         }
         if let Some(l) = &mut self.load {
             l.seen_ms = stats.uptime_ms;
@@ -430,6 +435,9 @@ impl Session {
                 h.send(b"shot 240 320\n");
                 let mut bytes = [0u8; 2 * W as usize];
                 for y in 0..H {
+                    if h.dead() {
+                        break;
+                    }
                     let row = app.render_row(y);
                     for (pair, &p) in bytes.chunks_exact_mut(2).zip(&row.px) {
                         pair.copy_from_slice(&p.to_be_bytes());
@@ -713,7 +721,7 @@ pub fn find_sectors(
     let mut buf = [0u8; 16 * emmc::SECTOR];
     let (mut at, mut lines) = (lba, 0);
     let end = lba.saturating_add(count);
-    while at < end && lines < 512 {
+    while at < end && lines < 512 && !h.dead() {
         let n = (end - at).min(16);
         let chunk = buf.get_mut(..n as usize * emmc::SECTOR).unwrap_or_default();
         if let Err(e) = read(at, chunk) {
@@ -747,6 +755,9 @@ pub fn send_ls(h: &mut impl Host, d: &mut impl crate::fat::Disk, path: &str) {
         return h.send(b"err not found\n");
     };
     for _ in 0..4096 {
+        if h.dead() {
+            return;
+        }
         match fat.list(d, &mut c) {
             Ok(Some(e)) => {
                 h.send(&hex(e.file.size)[..8]);

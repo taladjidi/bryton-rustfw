@@ -298,7 +298,7 @@ fn ride_open_refuses_the_risky_commands() {
     assert!(pc.got.starts_with(b"err usage: bench"), "{:?}", pc.got);
 }
 
-/// An upload the computer abandoned does not swallow the next commands: after 2 s without a byte it is dropped.
+/// An upload the computer abandoned does not swallow the next commands: after 5 s without a byte it is dropped, with an error line.
 #[test]
 fn a_stalled_upload_is_dropped() {
     let (_, app) = app_at(9, 0, 0);
@@ -306,11 +306,11 @@ fn a_stalled_upload_is_dropped() {
     let at = |uptime_ms| Stats { uptime_ms, ..Stats::default() };
     s.feed(b"load 1000 5\n", &app, at(100), &mut pc);
     assert_eq!(pc.got, b"ready\n");
-    s.feed(&[7; 100], &app, at(1900), &mut pc); // 1.8 s later: still the upload
+    s.feed(&[7; 100], &app, at(4900), &mut pc); // 4.8 s later: still the upload
     assert_eq!(pc.got, b"ready\n");
     pc.got.clear();
-    s.feed(b"info\n", &app, at(3901), &mut pc); // 2.001 s of silence: a command
-    assert!(pc.got.starts_with(b"bryton-rustfw"), "{:?}", pc.got);
+    s.feed(b"info\n", &app, at(9901), &mut pc); // 5.001 s of silence: a command
+    assert!(pc.got.starts_with(b"err load timeout\nbryton-rustfw"), "{:?}", pc.got);
 }
 
 /// A line longer than the buffer is refused whole, never run cut.

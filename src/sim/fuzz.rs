@@ -516,6 +516,55 @@ fn dev_link_input() {
     }
     assert!(maps > 0, "bench map reached");
     dev_link_lines(&app);
+    dev_link_ride_open();
+}
+
+/// The same lines with a ride running: nothing that runs an image, resets, pokes, or stalls the loop gets out, and the
+/// refusals are reached.
+fn dev_link_ride_open() {
+    use crate::dev::{Effect, Session, Stats};
+    let mut sim = super::Sim::new(9, 0, 0);
+    let mut app = crate::App::start(&mut sim, None);
+    app.step(&mut sim);
+    app.press(&mut sim, crate::Press::Short(crate::Key::Start));
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    let addrs = ["0x40000000", "0x5ffffffc", "0x40013014", "0x20000000", "0xfffffffc"];
+    let (mut session, mut pc) = (Session::new(), super::Pc::default());
+    let (mut refused, mut other) = (0, 0);
+    for c in bytes(78, 6 << 10).collect::<std::vec::Vec<_>>().chunks_exact(6) {
+        let a = addrs[usize::from(c[1]) % addrs.len()];
+        let line = match c[0] % 10 {
+            0 => std::format!("load {} {}\n", 156 + u32::from(c[2]) * 100, c[3]),
+            1 => "reset\n".into(),
+            2 => std::format!("find {} {} {} {}\n", c[2], 1 + c[3], c[4], c[5]),
+            3 => std::format!("bench {} {} {}\n", c[2], 1 + c[3] % 32, 1 + c[4]),
+            4 => std::format!("bench scan {}\n", 1 + c[4]),
+            5 => std::format!("bench map {} 0 0\n", c[2] % 61),
+            6 => std::format!("sector {}\n", c[2]),
+            7 => std::format!("poke {a} {}\n", c[3]),
+            8 => std::format!("peek {a}\n"),
+            _ => std::format!("{}\n", "x".repeat(usize::from(c[4]))),
+        };
+        let e = session.feed(line.as_bytes(), &app, Stats::default(), &mut pc);
+        assert!(
+            !matches!(
+                e,
+                Effect::Run(_)
+                    | Effect::Reset
+                    | Effect::Find(..)
+                    | Effect::Sector(_)
+                    | Effect::Bench(..)
+                    | Effect::BenchScan(_)
+                    | Effect::BenchMap(..)
+            ),
+            "{line:?} got out with a ride open"
+        );
+        refused += pc.got.windows(14).filter(|w| *w == b"err ride open\n").count();
+        other += 1;
+        pc.got.clear();
+    }
+    assert!(pc.regs.is_empty(), "a poke reached the board with a ride open");
+    assert!(refused > 100 && other > 500, "refusals reached: {refused} of {other}");
 }
 
 /// The dev link by structure: addresses at and around the range edges, counts at the bounds, long lines, uploads at

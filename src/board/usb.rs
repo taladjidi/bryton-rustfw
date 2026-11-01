@@ -265,6 +265,8 @@ pub struct Link {
     /// A packet timed out (nobody reading): output is dropped until the host sends a packet again, so a killed client
     /// costs one second, not one a packet.
     dead: bool,
+    /// The CDC line state's DTR at the last poll: a change is a client opening or closing the port.
+    dtr: bool,
 }
 
 fn wait(cond: impl Fn() -> bool, ms: u32) -> bool {
@@ -357,6 +359,7 @@ pub fn start() -> Option<Link> {
         watcher: dev::Watcher::new(),
         worked: false,
         dead: false,
+        dtr: false,
     })
 }
 
@@ -370,7 +373,13 @@ impl Link {
             if core::mem::take(&mut self.msc.reset) {
                 app.drive_reset();
             }
-            if core::mem::take(&mut self.msc.bus_reset) {
+            // a new client: a bus reset or a DTR change ends the drop of output
+            let (bus_reset, dtr) = (core::mem::take(&mut self.msc.bus_reset), self.cdc.dtr());
+            if bus_reset || dtr != self.dtr {
+                self.dead = false;
+            }
+            self.dtr = dtr;
+            if bus_reset {
                 app.drive_bus_reset();
             }
             if let Ok(n @ 1..) = self.msc.out.read(&mut buf) {
@@ -446,6 +455,7 @@ impl Link {
         delay_ms(100); // asleep; it takes over SysTick, so the slice's end is lost: `worked` ends it
         self.worked = true;
         modify(DCTL, 1 << 1, 0);
+        self.dead = false;
         self.watcher.reconnected(now_ms);
     }
 
@@ -513,6 +523,10 @@ impl Host for Link {
 
     fn flush(&mut self) {
         Link::flush(self);
+    }
+
+    fn dead(&self) -> bool {
+        self.dead
     }
 
     // The computer's addresses reach rd / wr only here, checked again whatever the caller (dev.rs checks them too):
