@@ -469,6 +469,10 @@ impl App {
         }
         let local = self.rec_local();
         self.profile_to_recorders(); // before a checkpoint (a ride switched off or cut while paused)
+        // the totals after this pass's second (power.rs runs after the recorder's second): a resume goes on from them
+        let more = self.ride.more_words(&self.power);
+        self.rec.clean.set_more(more);
+        self.rec.full.set_more(more);
         if self.rec.clean.phase() != recorder::Phase::Done {
             self.rec.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)
         }
@@ -495,7 +499,10 @@ impl App {
             recorder::Outcome::Nothing => {}
             recorder::Outcome::Resumed(words, name) => {
                 // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it
-                self.ride = ride::Ride::resumed(&words);
+                // its totals from the record (one of a build before them: zeros, counted from the resume), at the boot
+                // and when the card answered late alike (both reach here)
+                let more = self.rec.clean.more();
+                self.ride = ride::Ride::resumed(&words, &more);
                 // the record keeps GRAVEL, CX and COMMUTE as ROAD: BIKE (settings.bin) says which, read now
                 if !self.settings_store.file.loaded {
                     self.load_settings(b);
@@ -516,10 +523,9 @@ impl App {
                 let two = |i: usize| digit(i) * 10 + digit(i + 1);
                 self.ride_started = RideStart::new((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
-                // the recovery record keeps the ride's totals, not power.rs's sums: the end card's NP, TSS and kJ
-                // cover the part after the restart only (the file has every second's power: the history's and a
-                // computer's cover the whole ride)
-                self.power.new_ride();
+                // NP, TSS, kJ, max power and W' balance go on from the checkpoint (the NP window refills: 29 s with
+                // no NP sample)
+                self.power.resume(&ride::power_words(&more));
                 self.reset_ride_curve();
                 // the zone times and the hrTSS restart after a resume, as the laps do
                 self.zone_s = ride::ZoneTime::default();

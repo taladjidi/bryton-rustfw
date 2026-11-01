@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::new_with`, `App::step`). The app's cell is <!-- n:app -->41 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->49 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::new_with`, `App::step`). The app's cell is <!-- n:app -->41 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->29 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -272,7 +272,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   2.0, ghidra/recovered_src/ride/route_climb.c): the snap to the nearest road (heading-aware), the trace (same way, else
   same class, else the smallest turn under 110 degrees, tiles asked for as it goes), stock's 9-tap smoothing, and the
   climbs by the course's own Garmin definition (`Course::climbs_of`), the rider placed on the trace each second, the
-  climb said once. About <!-- n:ahead -->106 KB<!-- /n --> in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
+  climb said once. About <!-- n:ahead -->126 KB<!-- /n --> in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
   `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
   beep at a climb's start and the CLIMB fields when no course is followed.
 - `src/nav/segment.rs`: a live segment file, `\Rustfw\Segments\<id>.seg` (stock's live segment package unzipped; docs/segments.md,
