@@ -162,6 +162,27 @@ fn a_cut_delete_not_finished_lends_the_drive_read_only() {
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
 }
 
+/// The review of 2026-10-31 (storage, 1) and of 2026-11-01: a delete a cut left halfway on a card that has since
+/// filled up (no cluster for `\Rustfw\Deleted` to take the name) cannot be finished: put back before the drive is
+/// lent (it was lent writable, the ride's chain named only by delete.rec; then kept pending for good, the drive read
+/// only), the ride in `\Activities` again, the drive writable.
+#[test]
+fn a_delete_left_pending_on_a_full_card_is_put_back_before_lending() {
+    use crate::storage::trash::tests::{cut_midway, file, no_room};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = cut_midway();
+    no_room(&mut sim.emmc.image, true);
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.trash_check);
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert!(!app.trash_check, "settled: put back");
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE ON");
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "the ride back in \\Activities");
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
 /// The review of 2026-10-29, S3: a reset mid-ride that lost the boot's marker (a flat battery), so no ride comes
 /// back, while the card's record says "recording": USB DRIVE lends it write protected (no computer's fsck frees the
 /// chain the record may name alone). The next ride's Start takes the old one up; once saved, the drive is writable.

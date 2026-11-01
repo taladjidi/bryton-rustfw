@@ -201,23 +201,6 @@ impl Fat {
         self.clusters
     }
 
-    /// The free cluster count of the FSInfo sector, if the sector is whole and the count is in range (Microsoft's
-    /// FAT32 specification: the three signatures at 0, 484 and 508, the count at 488; 0xffffffff is "not known").
-    /// None otherwise, and when the volume has no FSInfo sector.
-    pub fn fsinfo_free(&self, d: &mut impl Disk) -> Option<u32> {
-        if self.fsinfo == 0 {
-            return None;
-        }
-        let mut s = [0u8; SECTOR];
-        self.read(d, self.fsinfo, &mut s).ok()?;
-        let sig = |at: usize, v: u32| u32_at(&s, at) == v;
-        if !(sig(0, 0x4161_5252) && sig(484, 0x6141_7272) && sig(508, 0xaa55_0000)) {
-            return None;
-        }
-        let n = u32_at(&s, 488);
-        (n <= self.clusters).then_some(n)
-    }
-
     /// Counts the free clusters (FAT entries of 0) from cluster `*next` on, at most `sectors` FAT sectors a call: the
     /// count so far is `*free`, and `*next` starts at 2. True once all are counted. Reads the first FAT copy only.
     pub fn count_free(&self, d: &mut impl Disk, next: &mut u32, free: &mut u32, sectors: u32) -> Result<bool, Error> {
