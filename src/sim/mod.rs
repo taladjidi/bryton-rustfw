@@ -119,6 +119,8 @@ pub struct Sim {
     pub powered: bool,
     pub asleep: bool,
     pub display_on: bool,
+    /// The panel's timing and sleep rules ([`PanelRules`]).
+    pub panel: PanelRules,
     colmod: u8,
     ramctrl: [u8; 2],
     pub backlight: bool,
@@ -537,6 +539,8 @@ pub const FIX_LON: i32 = 4_234_567;
 /// A simulated ride's position over time: ms to latitude, longitude (degrees x 1e-7) and heading (degrees x 1e-5).
 pub type Route = fn(u64) -> (i32, i32, i32);
 
+mod panel_model;
+pub use panel_model::PanelRules;
 mod gnss_model;
 pub use gnss_model::Gnss;
 
@@ -1263,6 +1267,7 @@ impl Sim {
             powered: false,
             asleep: true,
             display_on: false,
+            panel: PanelRules::default(),
             colmod: 0x06,
             ramctrl: [0x10, 0xf0],
             backlight: false,
@@ -1450,11 +1455,13 @@ impl Board for Sim {
     fn panel_power_on(&mut self) {
         self.powered = true;
         self.ms += 150;
+        self.panel = PanelRules::default();
     }
 
     fn panel_cmd(&mut self, cmd: u8, params: &[u8]) {
         assert!(self.powered, "command 0x{cmd:02x} to an unpowered panel");
         self.pay(P_PANEL, self.cost.panel_cmd_ns + params.len() as u64 * self.cost.panel_byte_ns, true);
+        self.panel.command(cmd, self.ms);
         self.cmds.push(cmd);
         match cmd {
             SWRESET => (self.asleep, self.display_on) = (true, false),
@@ -1477,6 +1484,7 @@ impl Board for Sim {
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");
         self.pay(P_PANEL, self.cost.panel_cmd_ns, true);
+        self.panel.ram_write(self.ms, self.asleep || !self.display_on);
         self.pay(P_PANEL, u64::from(count) * self.cost.panel_pixel_ns, false);
         self.pixels += u64::from(count);
         self.windows += 1;
@@ -1743,6 +1751,8 @@ mod map_tests;
 mod menu_tests;
 #[cfg(test)]
 mod nrf_emu_tests;
+#[cfg(test)]
+mod panel_model_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
