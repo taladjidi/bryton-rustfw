@@ -45,7 +45,7 @@ const IN_MAX: usize = 1024;
 /// The configuration items the model knows: key, name, where it is described (interface description section).
 /// A key not here is refused like an unknown one: add a row, with its source, when the firmware starts to use one.
 pub(super) const KEYS: [(u32, &str, &str); 11] = [
-    (0x2091_000a, "CFG-MSGOUT-UBX_NAV_PVT_SPI", "4.9.x CFG-MSGOUT"),
+    (0x2091_000a, "CFG-MSGOUT-UBX_NAV_PVT_SPI", "4.9 CFG-MSGOUT, inferred"),
     (0x107a_0002, "CFG-SPIOUTPROT-NMEA", "4.9.24"),
     (0x1023_0001, "CFG-ANA-USE_ANA", "4.9.2"),
     (0x20d0_0001, "CFG-PM-OPERATEMODE", "4.9.15"),
@@ -53,7 +53,7 @@ pub(super) const KEYS: [(u32, &str, &str); 11] = [
     (0x1031_0021, "CFG-SIGNAL-GAL_ENA", "4.9.21 table 42"),
     (0x1031_0022, "CFG-SIGNAL-BDS_ENA", "4.9.21 table 42"),
     (0x1031_0025, "CFG-SIGNAL-GLO_ENA", "4.9.21 table 42"),
-    (0x1011_0025, "CFG-NAVSPG-ACKAIDING", "4.9.x CFG-NAVSPG"),
+    (0x1011_0025, "CFG-NAVSPG-ACKAIDING", "4.9 CFG-NAVSPG, inferred"),
     (0x2064_0001, "CFG-SPI-MAXFF", "4.9.22 table 43"),
     (0x1064_0005, "CFG-SPI-EXTENDEDTIMEOUT", "4.9.22 table 43"),
 ];
@@ -112,6 +112,8 @@ pub struct Gnss {
     /// Messages dropped for a full output buffer (G1), and NAV-PVT epochs lost to the stream time-out (G2).
     pub dropped: u32,
     pub lost_epochs: u32,
+    /// The longest gap between two SPI transfers while powered, ms: the stream's time-out (G2) must not be reached.
+    pub longest_gap_ms: u64,
     /// The time aiding was wrong by more than its accuracy (G8).
     pub degraded: bool,
     /// The configuration in force (RAM layer; the receiver's defaults at power-up).
@@ -138,6 +140,19 @@ pub struct Gnss {
 }
 
 impl Gnss {
+    /// Asserts the stream was read often enough: the longest gap and the epochs lost to the time-out stay within the
+    /// bounds a test measured (plus 10 %). Prints the figures with the test's name (`--nocapture`).
+    pub fn assert_reads(&self, max_gap_ms: u64, max_lost: u32) {
+        std::eprintln!(
+            "gnss reads: longest gap {} ms, lost epochs {} ({:?})",
+            self.longest_gap_ms,
+            self.lost_epochs,
+            std::thread::current().name()
+        );
+        assert!(self.longest_gap_ms <= max_gap_ms, "longest unread gap {} ms > {max_gap_ms}", self.longest_gap_ms);
+        assert!(self.lost_epochs <= max_lost, "{} epochs lost > {max_lost}", self.lost_epochs);
+    }
+
     /// The receiver's defaults (RAM layer): lost with the supply.
     fn defaults(&mut self) {
         (self.pm_mode, self.signals_on) = (0, [true, true, true, false]); // GPS, Galileo, BeiDou B1I (data sheet)
@@ -167,6 +182,9 @@ impl Gnss {
     /// One SPI transfer (one chip select) at `now`: `buf` in, the receiver's bytes out.
     pub(super) fn transfer(&mut self, now: u64, utc: i64, buf: &mut [u8]) {
         self.utc = utc;
+        if self.powered {
+            self.longest_gap_ms = self.longest_gap_ms.max(now.saturating_sub(self.last_xfer));
+        }
         self.tick(now);
         (self.ff, self.rx_off, self.in_xfer) = (0, false, true);
         for b in buf.iter_mut() {
@@ -202,6 +220,7 @@ impl Gnss {
         f.extend([a, b]);
         if self.out.len() + self.late.len() + f.len() > OUT_MAX {
             self.dropped += 1;
+            self.violate("output buffer full (G1)");
         } else if self.in_xfer {
             self.late.extend(f);
         } else {
@@ -272,6 +291,9 @@ impl Gnss {
         if b == 0xff {
             self.ff = self.ff.saturating_add(1);
             self.rx_off = self.maxff != 0 && self.ff >= self.maxff;
+            if self.rx_off {
+                self.rx.clear(); // the partial frame goes with reception (inferred, BOARD.md 13 G3)
+            }
         } else {
             self.ff = 0;
         }
@@ -434,8 +456,13 @@ impl Gnss {
             }
             (0x40, Some(0x01), 20) => (1, 0),
             _ => {
+                // 3: a known type of the wrong size; 6: a type the receiver does not know (MGA-ACK infoCode)
+                let info = match (id, p.first().copied()) {
+                    (0x40, Some(0x10 | 0x01)) | (0x20, _) => 3,
+                    _ => 6,
+                };
                 self.violate("MGA message of the wrong length or type: info code 3 or 6 (G7)");
-                (0, 3)
+                (0, info)
             }
         };
         if self.ack_aiding {

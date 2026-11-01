@@ -221,11 +221,13 @@ fn the_stream_stops_after_the_timeout_and_restarts_at_the_next_read() {
         xfer(&mut g, 5000, &[]);
         assert_eq!(g.lost_epochs, 0, "{timeout:?} {ext}");
     }
+    g.assert_reads(2640, 2);
 }
 
 #[test]
 fn the_output_buffer_holds_4_kb_and_drops_the_rest() {
     let mut g = on();
+    g.expect = Some("output buffer full");
     g.extended_timeout = true; // so the stream goes on unread
     for s in 1..=60u64 {
         xfer(&mut g, 2000 + 1000 * s, &[]);
@@ -347,4 +349,5 @@ fn a_long_pass_loses_the_epochs_after_the_timeout_and_the_app_recovers() {
     run(&mut sim, &mut app, 2000);
     assert!(sim.gnss.lost_epochs >= 1 && sim.gnss.violations.len() > at, "{}", sim.gnss.lost_epochs);
     assert!(app.gps.pvt.is_some_and(|p| p.good()) && app.gps.pvt_ms < 1500, "fixes again: {}", app.gps.pvt_ms);
+    sim.gnss.assert_reads(3631, 3);
 }

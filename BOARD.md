@@ -690,7 +690,8 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
     CFG-SPI-EXTENDEDTIMEOUT 0x10640005 "disable timeouting the interface after 1.5s", 4.9.22 (key and 1.5 s verified; the
     stream stopping is the I2C text, **inferred** for SPI). The model's time-out is a parameter (`Gnss::timeout_ms`).
   - G3 CFG-SPI-MAXFF 0x20640001 (default 50, 0: off): "number of bytes containing 0xFF to receive before switching off
-    reception", 4.9.22 (verified); consecutive, counted per chip select: **inferred**. The firmware's transfers are 32 bytes.
+    reception", 4.9.22 (verified); consecutive, counted per chip select, and the partial frame is dropped with it: **inferred**. The firmware's transfers are
+    32 bytes.
   - G4 a frame with a bad checksum or a length over the input buffer is dropped without an answer: **inferred** (3.4, 3.5).
   - G5 UBX-ACK-ACK / NAK for every CFG message within a second; CFG-VALSET refused (nothing applied) for an unknown key,
     no layer, an invalid configuration (checked for the RAM layer only), more than 64 pairs: 3.9.1, 3.9.2, 3.10.5.1 (verified).

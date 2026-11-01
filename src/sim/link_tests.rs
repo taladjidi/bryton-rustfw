@@ -57,7 +57,7 @@ fn a_stray_byte_is_resynced() {
 #[test]
 fn a_hung_chip_is_reset() {
     let (mut sim, mut app) = riding();
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     let t0 = sim.ms - 5000;
     sim.nordic.hung = true;
     run(&mut sim, &mut app, 20_000);
@@ -70,6 +70,7 @@ fn a_hung_chip_is_reset() {
     assert_eq!(app.live.get(Metric::Hr), Some(72), "the strap is back");
     assert_eq!(app.radio.sensors[Kind::Hr as usize], Sensor::Paired(STRAP));
     ride_ok(&app, t0, &sim);
+    sim.gnss.assert_reads(3048, 3);
 }
 
 /// The bonded phone is connected when the chip hangs; after the reset the server is set up again and the unit
@@ -77,7 +78,7 @@ fn a_hung_chip_is_reset() {
 #[test]
 fn the_phone_comes_back_after_a_reset() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.emmc.image = crate::fat::tests::image();
     let mut p = PhoneSim::new(true);
     p.connect_at = 1000;
@@ -91,6 +92,7 @@ fn the_phone_comes_back_after_a_reset() {
     assert_eq!(app.watch.resets, 1);
     assert_ne!(app.phone.link(), Link::NoBle);
     assert!(sim.nordic.server.adv.is_some() || app.phone.link() == Link::Secure, "advertising, or already back");
+    sim.gnss.assert_reads(3048, 2);
 }
 
 /// No sensor, no phone, a sensor paired that is not in range: 30 minutes of a quiet healthy link are never a
@@ -113,7 +115,7 @@ fn a_quiet_healthy_link_is_left_alone() {
 #[test]
 fn repeated_failures_back_off() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.nordic.dead = true;
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 9 * 60 * 1000);
@@ -127,6 +129,7 @@ fn repeated_failures_back_off() {
     sim.nordic.dead = false;
     run(&mut sim, &mut app, 6 * 60 * 1000);
     assert!(app.ble.is_some() && app.ant, "started at last");
+    sim.gnss.assert_reads(2475, 3);
 }
 
 /// Fuzz: bytes of the chip's stream dropped, added and flipped at random, over long rides, seeds fixed. No panic,
@@ -137,7 +140,7 @@ fn a_damaged_stream_is_recovered_from() {
     let (mut resyncs, mut resets) = (0, 0);
     for (seed, per_mille) in [(1u32, 1), (2, 2), (3, 5), (4, 20), (5, 100)] {
         let (mut sim, mut app) = riding();
-        sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
+        sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
         let t0 = sim.ms - 5000;
         sim.nordic.chaos = Some((0x9e37_79b9 ^ seed.wrapping_mul(2_654_435_761), per_mille));
         run(&mut sim, &mut app, 40 * 60 * 1000);
@@ -160,6 +163,7 @@ fn a_damaged_stream_is_recovered_from() {
             w.resyncs,
             sim.nordic.channels[0].open
         );
+        sim.gnss.assert_reads(3323, 7);
         ride_ok(&app, t0, &sim);
     }
     assert!(resyncs > 20, "{resyncs} resyncs reached");
@@ -181,7 +185,7 @@ fn ant_refused_is_not_a_broken_link() {
 #[test]
 fn a_refusal_at_a_restart_is_not_retried_by_reset() {
     let (mut sim, mut app) = riding();
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.nordic.dead = true; // a real fault: one reset
     run(&mut sim, &mut app, 40_000);
     sim.nordic.dead = false;
@@ -191,6 +195,7 @@ fn a_refusal_at_a_restart_is_not_retried_by_reset() {
     assert!(n <= 3, "reset {n} times");
     run(&mut sim, &mut app, 60 * 60 * 1000);
     assert_eq!(app.watch.resets, n, "still resetting a chip that answers");
+    sim.gnss.assert_reads(3598, 3);
 }
 
 /// Review: a resync dropped the bytes of a connection's end, and the unit stayed "connected" for ever, advertising
@@ -236,7 +241,7 @@ fn a_silent_probe_keeps_the_last_failure() {
 #[test]
 fn a_reset_during_pairing_goes_on_pairing() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the receiver's stream stops after 1.5 s
+    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 4000);
@@ -248,4 +253,5 @@ fn a_reset_during_pairing_goes_on_pairing() {
     run(&mut sim, &mut app, 60_000);
     assert!(app.watch.resets >= 1);
     assert_eq!(app.phone.link(), Link::Pairing, "pairing resumed");
+    sim.gnss.assert_reads(3048, 3);
 }

@@ -20,8 +20,9 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 - **The receiver's answers and its SPI limits (2026-11-01, BOARD.md 13 "The receiver's rules"):** with `tools/gnss.py`, read
   back (VALGET) the four CFG-SIGNAL keys after the start-up and CFG-SPI-MAXFF / CFG-SPI-EXTENDEDTIMEOUT; MON-COMMS
-  (txErrors, tx buffer usage) after a ride; a deliberate 2 s gap between reads to see the stream stop (the Nordic reset
-  blocks a pass for 2 to 3 s in the simulator, so one or two NAV-PVT epochs go missing then); the MGA-ACK info codes for
+  (txErrors, tx buffer usage) after a ride; a deliberate 2 s gap between reads to see the stream stop (in the simulator the
+  longest unread gap is 2.2 to 3.3 s in the link, recorder and segment tests and 6.1 s in the 20 us hang test: the Nordic
+  reset's 950 ms, the start-up after it, against the receiver's 1.5 s time-out, so one to three NAV-PVT epochs go missing); the MGA-ACK info codes for
   ANO with CFG-NAVSPG-ACKAIDING on. Until then G1 to G4 and G6 are inferred.
 - **The radio receive's wait (main.rs `nrf_recv`): the short wait of finding 8 (2026-10-31) was taken out on 2026-11-01**,
   back to 200 us after every byte. The chip's app needs more than 20 us (inferred) to pull and encode its next event, so the

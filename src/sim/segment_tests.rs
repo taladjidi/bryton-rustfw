@@ -222,6 +222,7 @@ fn reset_drops_the_segment() {
     app.set_segment_memory(Box::leak(Box::new(Segments::new())));
     run(&mut sim, &mut app, 1000);
     assert!(app.segment_now().is_none());
+    sim.gnss.assert_reads(2404, 2);
 }
 
 /// A good header over a broken body (a flipped byte in the FIT course, or in the time table): the file is read once,

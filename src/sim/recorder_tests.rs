@@ -202,6 +202,7 @@ fn seconds_caught_up_keep_their_own_time() {
     assert_eq!(times.last().copied(), Some(now), "the last record at the clock's time");
     // the full copy (developer fields): the same records, in \Rustfw\Activities under the same name
     assert_eq!(record_times(&sim.emmc.image, &std::format!("Rustfw/{path}")), times);
+    sim.gnss.assert_reads(4180, 3);
 }
 
 /// A full copy that cannot be made (here a file in the way of its folder) is said once, and the ride is recorded
@@ -542,6 +543,7 @@ fn a_card_busy_past_the_drivers_second_fails_the_write_and_the_ride_goes_on() {
     let dropped = app.rec.clean.dropped;
     assert!(times.len() as u32 + dropped + 2 >= timer, "{} records, {dropped} dropped, of {timer} s", times.len());
     crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    sim.gnss.assert_reads(2426, 2);
 }
 
 /// The review of 2026-11-01, finding 33: a multi-sector checkpoint write that lands its first sector, then fails

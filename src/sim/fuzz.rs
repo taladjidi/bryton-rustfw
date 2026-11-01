@@ -7487,8 +7487,9 @@ fn gnss_receiver_input() {
         let mut now = 2000;
         // the acknowledgements of assistance messages on, through the table's own key
         let mut on = ubx_frame(0x06, 0x8a, &[0, 1, 0, 0, 0x25, 0x00, 0x11, 0x10, 1]);
-        on.resize(12, 0xff);
+        on.resize(20, 0xff); // the frame is 17 bytes: its checksum must come through
         g.transfer(now, 1_800_000_000, &mut on);
+        assert!(g.ack_aiding, "the ACKAIDING key is applied");
         for _ in 0..1500 {
             let mut f = match r() % 5 {
                 0..=2 => {

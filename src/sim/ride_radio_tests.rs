@@ -66,6 +66,7 @@ fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
         sim.nordic.high_water,
         sim.nordic.hangs
     );
+    sim.gnss.assert_reads(6678, 31);
     Outcome {
         hangs: sim.nordic.hangs,
         high_water: sim.nordic.high_water,

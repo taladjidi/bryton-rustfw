@@ -146,7 +146,9 @@ impl App {
     /// The receiver's answer to a message ([`gnss::Ack`]) counted in `gps.answers` (taken, refused, given up, assistance
     /// not used). A refused configuration (UBX-ACK-NAK of CFG-VALSET) is sent once more, then given up: the receiver
     /// keeps its previous settings, which only cost power or the systems chosen, and the ride is not touched. One retry
-    /// per power-up of the receiver (`gps.retried`), so a message that is always refused cannot make a loop.
+    /// per change of the receiver's settings (`gps.retried`, cleared by the menus), so a message that is always refused
+    /// cannot make a loop. `gps.answers`: [0] taken, [1] CFG-VALSET refused and retried, [2] CFG-VALSET given up,
+    /// [3] MGA-ACK refused; the NAKs of other messages are not counted.
     fn note_ack(&mut self, a: gnss::Ack) {
         let n = match a {
             gnss::Ack::Ack(..) => 0,
@@ -155,7 +157,7 @@ impl App {
                 1
             }
             gnss::Ack::Nak(0x06, 0x8a) => 2,
-            gnss::Ack::Nak(..) => 1,
+            gnss::Ack::Nak(..) => return,
             gnss::Ack::Mga(true, _) => return,
             gnss::Ack::Mga(false, _) => 3,
         };
