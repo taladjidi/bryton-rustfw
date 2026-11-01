@@ -352,7 +352,10 @@ impl Fat {
         let cluster = u32::from(u16_at(e, 20)) << 16 | u32::from(u16_at(e, 26));
         let dir = e[11] & 0x10 != 0;
         match cluster {
-            0 if dir => Ok(self.root()), // ".." in a folder of the root
+            0 if dir && (e[..11] == *b"..         " || e[..11] == *b".          ") => Ok(self.root()), // in the root's
+            // any other folder on cluster 0 is a damaged entry (a sector torn inside it, its name new, its cluster
+            // old: the review of 2026-11-01), never the root, which its writes would then go into
+            0 if dir => Err(Error::Corrupt),
             c if c != 0 && !self.valid(c) => Err(Error::Corrupt),
             _ => Ok(File { cluster, size: if dir { 0 } else { u32_at(e, 28) }, dir }),
         }
