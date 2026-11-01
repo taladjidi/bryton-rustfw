@@ -23,10 +23,13 @@ pub const CRC_AT: usize = 508;
 /// use bryton_rustfw::copies::newest;
 /// let mut file = [0u8; 1024];
 /// (file[0], file[512]) = (3, 4);
-/// let read = |s: &[u8; 512]| (s[0] != 0).then_some(s[0]);
-/// assert_eq!(newest(&file, read, |&n| u32::from(n)), Some(4));
+/// let read = |s: &[u8; 512]| (s[0] != 0).then_some([s[0], s[1]]); // [seq, data]
+/// let seq = |c: &[u8; 2]| u32::from(c[0]);
+/// assert_eq!(newest(&file, read, seq), Some([4, 0]));
 /// file[512] = 0; // the newer one damaged: the older
-/// assert_eq!(newest(&file, read, |&n| u32::from(n)), Some(3));
+/// assert_eq!(newest(&file, read, seq), Some([3, 0]));
+/// (file[512], file[513]) = (3, 1); // a tie: the first
+/// assert_eq!(newest(&file, read, seq), Some([3, 0]));
 /// ```
 pub fn newest<C>(file: &[u8; 1024], read: impl Fn(&[u8; 512]) -> Option<C>, seq: impl Fn(&C) -> u32) -> Option<C> {
     let copy = |k: usize| read(file.get(512 * k..512 * (k + 1))?.try_into().ok()?);

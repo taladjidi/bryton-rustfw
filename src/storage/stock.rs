@@ -1151,6 +1151,7 @@ pub(crate) mod tests {
     extern crate std;
     use super::*;
     use crate::fat::tests::{Ram, image};
+    use crate::fat::write::tests::Cut;
     use crate::power_curve::fit_cp;
 
     const TODAY: (u16, u8, u8) = (2026, 10, 23);
@@ -1520,28 +1521,6 @@ pub(crate) mod tests {
             let (c, _) = scan(&mut d, Some(cache()), 1 << 20);
             assert_eq!((c.read, c.out.all), (0, first.out.all), "written whole again");
             assert_eq!(crate::fat::write::tests::fsck(&d.0), Ok(1), "the old cache's chain: the test's remove");
-        }
-    }
-
-    /// A disk whose power goes after `.1` more sector writes: nothing written from then on.
-    struct Cut(Ram, u32);
-
-    impl Disk for Cut {
-        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), fat::Error> {
-            self.0.read(lba, buf)
-        }
-    }
-
-    impl DiskWrite for Cut {
-        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), fat::Error> {
-            for (i, s) in buf.chunks(fat::SECTOR).enumerate() {
-                if self.1 == 0 {
-                    return Err(fat::Error::Io);
-                }
-                self.1 -= 1;
-                self.0.write(lba + i as u32, s)?;
-            }
-            Ok(())
         }
     }
 
