@@ -696,7 +696,13 @@ fn climb_page_without_a_course() {
         run(&mut sim, &mut app, 1000);
         assert!(!app.page_on(crate::CLIMB), "not before the warning: {}", sim.ms - t0);
     }
-    run(&mut sim, &mut app, 15_000);
+    // the app's own clock lags the simulated one by the panel's DMA waits (the CPU sleeps in them, as on the unit)
+    for _ in 0..60 {
+        if app.screen() == Screen::Ride(crate::CLIMB) {
+            break;
+        }
+        run(&mut sim, &mut app, 500);
+    }
     assert!(app.page_on(crate::CLIMB));
     assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
     // the road ahead's climb has a plan too (the pacer's cell stays on the page)

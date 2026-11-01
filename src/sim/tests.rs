@@ -1835,11 +1835,9 @@ fn font_smooth_keeps_layouts() {
         }
         assert!(app.settings.face == Face::Pixel && sim.backup[POWER_BKP] & 1 << 24 == 0);
         let again = render_all(&app);
-        assert!(
-            again.iter().zip(&pixel).filter(|(a, b)| a != b).count() < 1200,
-            "PIXEL back (only the clock moved): {}",
-            again.iter().zip(&pixel).filter(|(a, b)| a != b).count()
-        );
+        let moved = again.iter().zip(&pixel).filter(|(a, b)| a != b).count();
+        std::eprintln!("font_smooth: {moved} pixels moved after the round trip (ride page {ride_page})");
+        assert!(moved < 200, "PIXEL back (only the clock moved): {moved}");
     }
 }
 

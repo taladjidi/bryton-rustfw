@@ -47,12 +47,10 @@ type KeyScript = Box<dyn Fn(u64) -> u8>;
 type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 
 /// What the transfers cost in time on the unit, ns. Computed values say where they come from; "inferred" ones are
-/// assumptions until a silent bench on the unit (docs/status.md, "Not yet seen on the unit"). `on: false` makes every
-/// transfer free, as the simulator was before 2026-11-01.
+/// assumptions until a silent bench on the unit (docs/status.md, "Not yet seen on the unit"). The costs are always paid
+/// (the simulator was free before 2026-11-01); `work_ns_per_byte` is the read side and is zero unless a test sets it.
 #[derive(Clone, Copy)]
 pub struct Cost {
-    /// Master switch.
-    pub on: bool,
     /// A panel pixel: 16 bits at SPI1's 50 MHz (main.rs `spi_init`, BOARD.md 6): 320 ns.
     pub panel_pixel_ns: u64,
     /// A panel command or window: the DC toggle and the wait for the end of transfer (inferred, 1 us).
@@ -68,7 +66,11 @@ pub struct Cost {
     pub gnss_byte_ns: u64,
     /// A GNSS transfer's chip select and polling (inferred, 5 us).
     pub gnss_xfer_ns: u64,
-    /// A card sector written (inferred: 0.2 ms, 2.5 MB/s like the measured read; the survey guessed 2 ms, which makes ride start a 1.6 s pass and fails 60 tests: to measure with a write bench).
+    /// A card write command's own time: the busy after CMD24 / CMD25 and the CMD13 polls that wait it out (inferred,
+    /// 1 ms: eMMC 5.x programming busy is typically 0.5 to 2 ms, JESD84-B51 "busy after write"; not looked up on the part).
+    pub write_cmd_ns: u64,
+    /// A card sector written, on top of the command's: 0.2 ms optimistic (2.5 MB/s like the measured read) or 2 ms
+    /// pessimistic (the survey's guess); the budget gate runs at both ([`Cost::pessimistic`]).
     pub write_sector_ns: u64,
     /// The card's stall after this many sectors written (inferred: every 1024 sectors; 0: none).
     pub stall_every: u64,
@@ -76,10 +78,25 @@ pub struct Cost {
     pub stall_ms: u64,
 }
 
+impl Cost {
+    /// The survey's pessimistic card: 2 ms a written sector.
+    pub fn pessimistic() -> Self {
+        Self { write_sector_ns: 2_000_000, ..Self::default() }
+    }
+}
+
+/// Where the paid time went ([`Sim::paid_ns`]).
+pub const PAID: [&str; 6] = ["panel", "i2c", "gnss", "card wr", "card rd", "stall"];
+const P_PANEL: usize = 0;
+const P_I2C: usize = 1;
+const P_GNSS: usize = 2;
+const P_WRITE: usize = 3;
+const P_READ: usize = 4;
+const P_STALL: usize = 5;
+
 impl Default for Cost {
     fn default() -> Self {
         Self {
-            on: true,
             panel_pixel_ns: 320,
             panel_cmd_ns: 1000,
             panel_byte_ns: 160,
@@ -87,6 +104,7 @@ impl Default for Cost {
             i2c_frame_ns: 9_000,
             gnss_byte_ns: 2000,
             gnss_xfer_ns: 5000,
+            write_cmd_ns: 1_000_000,
             write_sector_ns: 200_000,
             stall_every: 1024,
             stall_ms: 300,
@@ -136,8 +154,11 @@ pub struct Sim {
     pub emmc: EmmcCard,
     pub bus: Bus,
     pub touch: TouchChip,
-    /// The work an eMMC read costs, ns a byte (reading and parsing what was read: about 430 on the unit, 2.3 MB/s,
-    /// `tools/dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`prof::Clock::us`]. 0 (the default): free.
+    /// The time an eMMC read costs, ns a byte: about 430 on the unit, the measured end-to-end rate of a scan (2.3 MB/s,
+    /// `tools/dev.py bench scan`), that is the card's own read time (about 95 ns a byte at its raw 10.5 MB/s) plus
+    /// parsing, so a bulk read that is not parsed is overcharged. It moves the clock ([`Sim::ms`]) and
+    /// [`prof::Clock::us`]. 0 (the default): most tests do not mind the time and it would move the clock under all of
+    /// them; the budget gate (budget_tests.rs) and the scan tests set it.
     pub work_ns_per_byte: u64,
     /// Work done so far, ns. Must not advance by more than 21 s between two Clock reads: the u32 cycle counter wraps
     /// at 21.47 s of work (200 MHz) and Clock catches one wrap only.
@@ -150,6 +171,15 @@ pub struct Sim {
     last_keys_ms: u64,
     /// Sectors written so far, for the card's periodic stall.
     sectors_written: u64,
+    /// The RTC stands at this many seconds after its start, whatever the time: for a screen hashed against a reference.
+    pub frozen_s: Option<u64>,
+    /// Time paid so far per [`PAID`] category, ns; and, for the longest gap between GNSS transfers, its length and what
+    /// was paid inside it (the test's breakdown of a gap).
+    pub paid_ns: [u64; 6],
+    paid_at_gnss: [u64; 6],
+    pub worst_gnss_gap: (u64, [u64; 6]),
+    /// What was paid inside every gap past the receiver's 1.5 s time-out, summed, and how many such gaps.
+    pub long_gnss_gaps: (u32, [u64; 6]),
     /// The cycle counter ([`Board::cycles`]): each read moves it on by [`Sim::cycles_step`], wrapping as CYCCNT does.
     pub cycles: u32,
     /// What each read of the cycle counter adds (0, the default: the counter stands still).
@@ -1313,12 +1343,13 @@ fn to_bcd(v: u64) -> u32 {
 }
 
 impl Sim {
-    /// Time spent by a transfer: the clock and the work counter move on by `ns`.
-    fn pay(&mut self, ns: u64) {
-        if !self.cost.on {
-            return;
+    /// Time spent by a transfer of kind `what` ([`PAID`]): the clock moves on by `ns`, and the work counter too when
+    /// the CPU works through it (`cpu`; the panel's pixels go by DMA and the CPU sleeps, BOARD.md 6).
+    fn pay(&mut self, what: usize, ns: u64, cpu: bool) {
+        self.paid_ns[what] += ns;
+        if cpu {
+            self.awake_ns += ns;
         }
-        self.awake_ns += ns;
         self.cost_rem += ns;
         self.ms += self.cost_rem / 1_000_000;
         self.cost_rem %= 1_000_000;
@@ -1399,6 +1430,11 @@ impl Sim {
             longest_key_gap_ms: 0,
             last_keys_ms: 0,
             sectors_written: 0,
+            frozen_s: None,
+            paid_ns: [0; 6],
+            paid_at_gnss: [0; 6],
+            worst_gnss_gap: (0, [0; 6]),
+            long_gnss_gaps: (0, [0; 6]),
             awake_ns: 0,
             cycles: 0,
             cycles_step: 0,
@@ -1499,7 +1535,7 @@ impl Board for Sim {
 
     fn panel_cmd(&mut self, cmd: u8, params: &[u8]) {
         assert!(self.powered, "command 0x{cmd:02x} to an unpowered panel");
-        self.pay(self.cost.panel_cmd_ns + params.len() as u64 * self.cost.panel_byte_ns);
+        self.pay(P_PANEL, self.cost.panel_cmd_ns + params.len() as u64 * self.cost.panel_byte_ns, true);
         self.cmds.push(cmd);
         match cmd {
             SWRESET => (self.asleep, self.display_on) = (true, false),
@@ -1521,7 +1557,8 @@ impl Board for Sim {
         assert_eq!(self.colmod & 0x07, 0x05, "pixel format is not 16-bit");
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");
-        self.pay(self.cost.panel_cmd_ns + u64::from(count) * self.cost.panel_pixel_ns);
+        self.pay(P_PANEL, self.cost.panel_cmd_ns, true);
+        self.pay(P_PANEL, u64::from(count) * self.cost.panel_pixel_ns, false);
         self.pixels += u64::from(count);
         self.windows += 1;
         for y in y0..=y1 {
@@ -1549,7 +1586,7 @@ impl Board for Sim {
 
     fn rtc(&mut self) -> (u32, u32) {
         // 2026-10-23 at the start; the day rolls over at midnight
-        let t = self.start_s + self.ms / 1000;
+        let t = self.start_s + self.frozen_s.unwrap_or(self.ms / 1000);
         let (y, mo, d) = crate::civil_from_days(crate::days_from_civil(2026, 10, 23) + (t / 86400) as i32);
         let t = t % 86400;
         let tr = to_bcd(t / 3600) << 16 | to_bcd(t / 60 % 60) << 8 | to_bcd(t % 60);
@@ -1669,7 +1706,19 @@ impl Board for Sim {
 
     fn gnss_transfer(&mut self, buf: &mut [u8]) {
         assert_eq!(buf.len() % 4, 0, "SPI transfers move 4 bytes at a time");
-        self.pay(self.cost.gnss_xfer_ns + buf.len() as u64 * self.cost.gnss_byte_ns);
+        self.pay(P_GNSS, self.cost.gnss_xfer_ns + buf.len() as u64 * self.cost.gnss_byte_ns, true);
+        if self.gnss.powered {
+            let gap = self.ms.saturating_sub(self.gnss.last_xfer);
+            let paid: [u64; 6] = core::array::from_fn(|i| self.paid_ns[i] - self.paid_at_gnss[i]);
+            if gap > self.worst_gnss_gap.0 {
+                self.worst_gnss_gap = (gap, paid);
+            }
+            if gap > 1500 {
+                self.long_gnss_gaps.0 += 1;
+                self.long_gnss_gaps.1 = core::array::from_fn(|i| self.long_gnss_gaps.1[i] + paid[i]);
+            }
+        }
+        self.paid_at_gnss = self.paid_ns;
         let (tr, dr) = self.rtc();
         let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
         let utc = crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600; // the RTC runs on UTC + 2 h
@@ -1708,9 +1757,7 @@ impl Board for Sim {
     }
 
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
-        if self.work_ns_per_byte > 0 {
-            self.pay(buf.len() as u64 * self.work_ns_per_byte); // the work takes time as well
-        }
+        self.pay(P_READ, buf.len() as u64 * self.work_ns_per_byte, true); // the work takes time as well
         self.emmc.read(index, arg, buf)
     }
 
@@ -1726,27 +1773,27 @@ impl Board for Sim {
 
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {
         let sectors = buf.len().div_ceil(512) as u64;
-        self.pay(sectors * self.cost.write_sector_ns);
+        self.pay(P_WRITE, self.cost.write_cmd_ns + sectors * self.cost.write_sector_ns, true);
         let before = self.sectors_written;
         self.sectors_written += sectors;
         let c = self.cost;
         if c.stall_every > 0 && self.sectors_written / c.stall_every > before / c.stall_every {
-            self.pay(c.stall_ms * 1_000_000);
+            self.pay(P_STALL, c.stall_ms * 1_000_000, true);
         }
         self.emmc.write(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
-        self.pay((3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns);
+        self.pay(P_I2C, (3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns, true);
         self.bus.read(self.ms, addr, reg, buf)
     }
 
     fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool {
-        self.pay((2 + data.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns);
+        self.pay(P_I2C, (2 + data.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns, true);
         self.bus.write(self.ms, addr, reg, data)
     }
 
     fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool {
-        self.pay((3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns);
+        self.pay(P_I2C, (3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns, true);
         self.touch.read(self.ms, reg, buf)
     }
 

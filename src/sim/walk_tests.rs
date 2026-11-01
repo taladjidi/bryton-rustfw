@@ -94,7 +94,12 @@ impl Walk {
             self.cur.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
         let name = format!("{:03}-{file}", self.n);
         sim.save(&format!("walk/{name}"));
-        let h = sim.screen.iter().fold(0x811c_9dc5, |h, p| crate::fnv(h, &p.to_le_bytes()));
+        // The GPS screen's UTC is the last epoch's: the second it shows depends on where the read fell, which the transfers'
+        // time moves. Its value box is left out of that screen's hash (x from 120, the rows of UTC and below).
+        let gps = self.cur.ends_with("gps");
+        let h = (0..sim.screen.len())
+            .filter(|i| !(gps && i % W as usize >= 120 && i / W as usize >= 270))
+            .fold(0x811c_9dc5, |h, i| crate::fnv(h, &sim.screen[i].to_le_bytes()));
         self.hashes.push(format!("{name} {h:08x}"));
         self.paths.push((self.cur.clone(), self.keys.clone()));
     }

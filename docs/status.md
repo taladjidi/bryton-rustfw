@@ -18,14 +18,16 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
-- **Transfer times behind the simulator's cost model (2026-11-01, `Sim::cost`, src/sim/mod.rs):** the card's write
-  time per sector and its stall tail are *inferred* (0.2 ms a sector, 300 ms after every 1024 sectors); the panel,
-  I2C and GNSS times are computed from the clocks (main.rs). To take, silently (`tools/dev.py` only: no key presses, no
-  eMMC writes from the owner's rides): the DWT cycles of one 512-byte `emmc_write` and of a 64-sector run on a spare
-  scratch file in `\Rustfw` (needs the write build and the owner present, so later); the cycles of one `gnss_transfer`
-  of 32 bytes and of one `i2c_read` of 6 bytes on I2C4 and I2C1 (`dev.py info`'s DWT counter around a poke of the
-  firmware's own read, or `prof`); the longest pass while a ride starts (the gate shows 0.9 s: about 2 MB read and 378
-  sectors written at ride start, a candidate to split).
+- **Transfer times behind the simulator's cost model (2026-11-01, `Sim::cost`, src/sim/mod.rs):** the card's write time
+  (1 ms a write command, 0.2 or 2 ms a sector: the gate runs at both) and its stall tail (300 ms after every 1024
+  sectors) are *inferred*; the panel, I2C and GNSS times are computed from the clocks (main.rs); the read is 430 ns a byte
+  (a scan's measured end-to-end rate). To take, silently (`tools/dev.py` only: no key presses, no eMMC writes from the
+  owner's rides): the DWT cycles of one 512-byte `emmc_write` and of a 64-sector run on a spare scratch file in
+  `\Rustfw` (needs the write build and the owner present, so later); the cycles of one `gnss_transfer` of 32 bytes and of
+  one `i2c_read` of 6 bytes on I2C4 and I2C1 (`dev.py info`'s DWT counter around a poke of the firmware's own read, or
+  `prof`). The gate's named exemptions (`EXEMPT` in src/sim/budget_tests.rs, the owner's performance worklist) are the
+  passes that break a limit with these costs: ride start (about 1.1 s of keys unread at 0.2 ms a sector, 1.8 s at 2 ms),
+  the checkpoint under a card stall, the save's read-back of a 3 h file, the screenshot's write.
 - **The receiver's answers and its SPI limits (2026-11-01, BOARD.md 13 "The receiver's rules"):** with `tools/gnss.py`, read
   back (VALGET) the four CFG-SIGNAL keys after the start-up and CFG-SPI-MAXFF / CFG-SPI-EXTENDEDTIMEOUT; MON-COMMS
   (txErrors, tx buffer usage) after a ride; a deliberate 2 s gap between reads to see the stream stop (in the simulator the

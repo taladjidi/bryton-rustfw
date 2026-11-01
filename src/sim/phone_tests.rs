@@ -6,6 +6,17 @@ use super::*;
 use crate::phone::Stored;
 
 /// `\Rustfw\ble.bin` as the card holds it.
+/// Runs until the bond is on the card, 12 s at most. The app's own clock lags the simulated one by the panel's DMA
+/// waits (the CPU sleeps in them and its counter stops, as on the unit), so the bond's 3 s are a little longer here.
+fn until_bonded(sim: &mut Sim, app: &mut App) {
+    for _ in 0..48 {
+        if stored(sim).and_then(|s| s.bond).is_some() {
+            break;
+        }
+        run(sim, app, 250);
+    }
+}
+
 fn stored(sim: &Sim) -> Option<Stored> {
     let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
@@ -204,7 +215,7 @@ fn a_call_on_a_more_page() {
 fn the_bonded_phone_comes_back() {
     let (mut sim, mut app) = unit(iphone(Vec::new()));
     app.activate(&mut sim, Menu::Phone, 1);
-    run(&mut sim, &mut app, 3000);
+    until_bonded(&mut sim, &mut app);
     assert!(stored(&sim).and_then(|s| s.bond).is_some());
 
     let mut sim2 = Sim::new(9, 5, 0);
@@ -247,7 +258,7 @@ fn the_bonded_phone_comes_back() {
 fn the_bond_waits_for_the_ride_to_settle() {
     let (mut sim, mut app) = unit(iphone(Vec::new()));
     app.activate(&mut sim, Menu::Phone, 1);
-    run(&mut sim, &mut app, 3000);
+    until_bonded(&mut sim, &mut app);
     let mut sim2 = Sim::new(9, 5, 0);
     sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
     crate::fat::write::tests::fill(&mut sim2.emmc.image, 0, true);

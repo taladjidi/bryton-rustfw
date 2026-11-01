@@ -543,7 +543,8 @@ fn a_card_busy_past_the_drivers_second_fails_the_write_and_the_ride_goes_on() {
     let dropped = app.rec.clean.dropped;
     assert!(times.len() as u32 + dropped + 2 >= timer, "{} records, {dropped} dropped, of {timer} s", times.len());
     crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
-    sim.gnss.assert_reads(3091, 2);
+    super::budget_tests::print_gap_breakdown(&sim, "card busy");
+    sim.gnss.assert_reads(2426, 2);
 }
 
 /// The review of 2026-11-01, finding 33: a multi-sector checkpoint write that lands its first sector, then fails
