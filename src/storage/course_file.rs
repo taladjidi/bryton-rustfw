@@ -734,7 +734,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore]
     fn owner_routes() {
-        let dir = std::env::var("BRYTON_PLANTRIP").expect("BRYTON_PLANTRIP");
+        let dir = std::env::var("BRYTON_PLANTRIP").expect("BRYTON_PLANTRIP not set (tools/real.sh)");
         for f in std::fs::read_dir(dir).unwrap() {
             let path = f.unwrap().path();
             if path.extension().is_none_or(|e| e != "fit") {

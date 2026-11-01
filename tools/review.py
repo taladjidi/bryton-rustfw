@@ -3,7 +3,8 @@
 
 What reviewers checked by hand, as a tool (check.sh runs only its selftest; the report is run per branch):
   mutants  cargo-mutants (config .cargo/mutants.toml) on `git diff BASE...HEAD` only: a MISSED mutant is a change in
-           the branch's code that no host test notices. TIMEOUT mutants are listed but do not fail the exit code.
+           the branch's code that no host test notices. A TIMEOUT mutant under src/storage/ fails (a mutant that hangs the
+           tests is one they do not catch, and the recorder's code is there); elsewhere it is listed only.
            The unmutated baseline must pass first. --quick runs them only on the changed files under src/storage/
            (the recorder, FAT, file writes); with no such change there are no mutants.
   clones   jscpd (jscpd-rs) on src/ and tools/ at BASE and at HEAD: clones at HEAD whose fragment text is not
@@ -49,7 +50,8 @@ def mutant_report(o, missed, timeout):
     n = {k: o.get(k, 0) for k in ("caught", "missed", "unviable", "timeout")}
     lines = ["caught %(caught)d, missed %(missed)d, unviable %(unviable)d, timeout %(timeout)d" % n]
     lines += ["MISSED " + m for m in mutant_lines(missed)] + ["TIMEOUT " + m for m in mutant_lines(timeout)]
-    return lines, n["missed"]
+    lines_t = [m for m in mutant_lines(timeout) if m.startswith("src/storage/")]
+    return lines, n["missed"] + len(lines_t)
 
 
 def clone_keys(report):
@@ -163,7 +165,8 @@ def selftest():
     lines, bad = mutant_report(o, "src/a.rs:1: x\n", "src/b.rs:2: y\n")
     assert bad == 1
     assert lines == ["caught 3, missed 1, unviable 2, timeout 1", "MISSED src/a.rs:1: x", "TIMEOUT src/b.rs:2: y"]
-    assert mutant_report({"timeout": 5}, "", "t\n")[1] == 0  # a timeout does not fail the review
+    assert mutant_report({"timeout": 5}, "", "t\n")[1] == 0  # a timeout elsewhere does not fail the review
+    assert mutant_report({"timeout": 1}, "", "src/storage/fat/write.rs:9: x\n")[1] == 1  # one in src/storage/ does
     assert mutant_report({"caught": 4, "unviable": 1}, "", "") == (["caught 4, missed 0, unviable 1, timeout 0"], 0)
     assert quick_files(["src/storage/fat.rs", "src/ui/x.rs", "src/storage/notes.md", "src/storage/fit/a.rs"]) == [
         "src/storage/fat.rs", "src/storage/fit/a.rs"]

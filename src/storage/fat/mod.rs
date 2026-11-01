@@ -543,6 +543,13 @@ pub(crate) mod tests {
         img
     }
 
+    /// Writes volume `img` to target/fat/`name`.img for check.sh's fsck_msdos / fsck.vfat (an independent FAT checker).
+    pub fn dump(name: &str, img: &[u8]) {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/fat");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(std::string::String::from(name) + ".img"), img).unwrap();
+    }
+
     /// A disk in memory, zeros past its end, with a count of the reads.
     pub struct Ram(pub Vec<u8>, pub u32);
 

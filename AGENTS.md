@@ -161,8 +161,8 @@ main first.
 First, in order and sequential (seconds): the guards, `tools/lint.py`, `cargo fmt --check`. Then three lanes in
 parallel, each logging to `target/check/<lane>.log` (shown on failure, or with `-v`); every step prints its wall
 seconds, and the run ends with all of them and a total:
-- the layout guard: `src/lib.rs` keeps `#![forbid(unsafe_code)]`, and `unsafe` appears only in hw.rs (plus usb.rs's
-  marker line), so the library cannot reach a register;
+- the layout guard: `src/lib.rs` keeps `#![forbid(unsafe_code)]`, and `unsafe` (comments stripped) appears only in hw.rs
+  (plus usb.rs's allow and its one marker line, exactly), so the library cannot reach a register;
 - the merge guard: no conflict marker in a tracked text file;
 - the docs guard: every file of `src` and `tools` is named in docs/layout.md, and no doc names a retired flat file
   (the list is in check.sh);
@@ -170,13 +170,18 @@ seconds, and the run ends with all of them and a total:
   tracked files, dead functions in `tools/`, and ruff's pyflakes checks when ruff is installed;
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - **lane F, the firmware:** `cargo clippy --release -- -D warnings`, the firmware build, `tools/stack_check.py` and its
-  selftest (the stack frames against their budgets), `tools/panics.py --max 0` (every panic site of the release ELF: there must be none; the panic handler's own sites are excluded), `tools/pack.py`; after the lanes, if Renode is installed, `renode/run.py`
+  selftest (the stack frames against their budgets, and the longest static call chain against the stack minus 8 KB),
+  `tools/panics.py --max 0` (every branch to a panic entry in the release ELF: there must be none; only the panic
+  handler's own reset loop is excluded), `tools/pack.py`, then the ride build (`EMMC_WRITE=1`, `target/ride/`) through
+  stack_check and panics; after the lanes, if Renode is installed, `renode/run.py`
   (the boot, then the cable in) and `--off` (docs/devloop.md, Emulation), in sequence (`RENODE_PARALLEL=1` runs both
   together), each killed after 300 s (`RENODE_TIMEOUT`) and failing;
 - **lane H, the host:** clippy on the tests and the simulator, `cargo test-host` (unit tests, simulator tests and doc
   tests on the Mac; writes `target/sim/preview.bmp`), `RUSTDOCFLAGS="-D warnings" cargo doc` (no broken or private
-  links), `cargo deny check` (when installed), then what the tests wrote: `tools/fit_check.py` on the test rides when
-  fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's Python) and `tools/walk.py selftest`;
+  links), `cargo deny check` (when installed; `--offline` when the advisory database cannot be fetched), then what the
+  tests wrote: `fsck_msdos -n` / `fsck.vfat -n` (an independent FAT checker) on the volumes in `target/fat/*.img`,
+  `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
+  Python; on main or `--full` they are required) and `tools/walk.py selftest`;
 - **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `sync.py`, `assist.py`, `segments.py`,
   `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py`, `iaprecover.py`, `fetch_firmware.py` and
   `theme.py selftest`, and
@@ -189,12 +194,12 @@ seconds, and the run ends with all of them and a total:
 **Skips, only on a branch** (never on main; each prints a `skip:` line and ends up in the `SKIPPED:` summary): the Python
 self-tests when nothing under `tools/`, `test-data/`, `renode/`, `docs/theming.md`, `src/ui/tiles.rs` or `check.sh`
 changed (the walk selftest: `src/sim/walk_tests.rs` instead of `src/ui/tiles.rs`); the font regeneration when
-`tools/font.py`, `tools/pixel_font.py`, `tools/fonts/` and `src/ui/fonts.rs` are untouched; Renode when `src/main.rs`,
-`src/lib.rs`, `src/app/pass.rs`, `src/board/`, `src/drivers/panel.rs`, `src/ui/strip.rs`, `src/ui/overview.rs`,
-`link.x`, `build.rs`, `Cargo.toml`, `Cargo.lock` and `renode/` are untouched. Renode runs after the lanes, only when they
+`tools/font.py`, `tools/pixel_font.py`, `tools/fonts/` and `src/ui/fonts.rs` are untouched; Renode when the change is limited to
+docs, `tools/`, `test-data/`, tests and the simulator (anything else, `.cargo/config.toml`, `src/drivers/` and
+`src/storage/` included, runs it). Renode runs after the lanes, only when they
 passed (it needs the image and the simulator's preview). The changes are the diff against the merge base with
 `origin/main` plus the working tree; a detached HEAD skips nothing. `./check.sh --full` forces everything. `./check.sh --quick` is the
-iteration tier and **not the gate**: the guards, lint, fmt, host clippy and `cargo test-host`. Commit after the full
+iteration tier and **not the gate**: the guards, lint, fmt, firmware clippy, host clippy and `cargo test-host`. Commit after the full
 `./check.sh` exits 0.
 
 Look at `target/sim/preview.bmp` after any drawing change, and at `target/sim/fonts.bmp` (every font, written by

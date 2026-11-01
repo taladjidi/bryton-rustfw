@@ -62,11 +62,12 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
 ## The gate: tiers, lanes and skips
 
 `./check.sh` (AGENTS.md "Before every commit" lists what it checks):
-- **Tiers:** `./check.sh --quick` (guards, lint, fmt, host clippy, `cargo test-host`; prints that it is not the gate) for
+- **Tiers:** `./check.sh --quick` (guards, lint, fmt, firmware clippy, host clippy, `cargo test-host`; prints that it is not the gate) for
   iterating; `./check.sh` is the gate; `--full` runs everything whatever the diff; `-v` prints every lane's log.
 - **Lanes:** after the guards, lint and fmt, three lanes run in parallel, each in a subshell with its own log in
-  `target/check/` (F: firmware clippy, build, stack_check, pack; H: host clippy, tests, doc, deny, fit_check,
-  walk selftest; P: the Python self-tests and the font regeneration). F and H take different cargo locks
+  `target/check/` (F: firmware clippy, build, stack_check, panics, pack, then the same three checks on the ride build
+  (`EMMC_WRITE=1`, `target/ride/`); H: host clippy, tests, doc, deny, fsck of the volumes the tests wrote
+  (`target/fat/*.img`: `fsck_msdos -n` or `fsck.vfat -n`), fit_check, walk selftest; P: the Python self-tests and the font regeneration). F and H take different cargo locks
   (`target/thumbv7em-none-eabihf/release` and `target/aarch64-apple-darwin/debug`), so they do not block each other.
   Any failed lane fails the gate and its log is printed. Every step's wall seconds and a total end the output.
 - **Renode is bounded:** `renode/run.py` kills Renode after 300 s (`RENODE_TIMEOUT`) and fails with
@@ -78,7 +79,18 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
   `src/ui/fonts.rs`; Renode only for `src/main.rs`, `src/lib.rs`, `src/app/pass.rs`, `src/board/`, `src/drivers/panel.rs`,
   `src/ui/strip.rs`, `src/ui/overview.rs`, `link.x`, `build.rs`, `Cargo.toml`, `Cargo.lock`, `renode/`. Each skip is
   printed with its reason and repeated in the `SKIPPED:` line. On main, on a detached HEAD and with `--full` nothing is
-  skipped.
+  skipped, and a missing fitdecode / garmin-fit-sdk fails the gate instead of skipping.
+  (Renode is the other way round: it is skipped only when the change is limited to docs, `tools/`, `test-data/`, tests
+  and the simulator, so `.cargo/config.toml`, `rust-toolchain.toml`, `src/drivers/` and `src/storage/` run it.)
+- **Stale files:** `target/fit`, `target/sim` and `target/fat` are removed at the start, so a test that stops writing a
+  file cannot leave an old one to pass fit_check, fsck or Renode.
+- **No network:** when `cargo deny` cannot fetch the advisory database, the gate retries `cargo deny --offline check -s`
+  and prints a skip line for the fetch.
+- **Real data, before a ride build:** the `#[ignore]` tests that read the owner's rides, drive, tiles, routes and
+  segments run with `tools/real.sh` (`cargo test-host -- --ignored`), the variables (`BRYTON_RIDES`, `BRYTON_DRIVE`,
+  `BRYTON_TILES`, `BRYTON_ROUTE_DAT`, `BRYTON_PLANTRIP`, `IGN_PACKS`, `HRVT_FILES`, `SEGMENTS_DIR`) exported by the
+  gitignored `tools/real.env`; a test panics with its variable's name when it is unset, so the run cannot pass
+  empty. Paths and data never enter the repository.
 - **Renode runs last,** after the three lanes and only when they passed: it compares the boot screen with the
   `target/sim/preview.bmp` that lane H writes (it fails when that file is missing) and needs lane F's image.
 - **Live numbers:** `tools/numbers.py --write` runs on main (or `--full`) only. On a branch `--check` reports the stale
