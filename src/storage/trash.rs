@@ -208,10 +208,7 @@ fn ready(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, room: bool, t: (u16
 #[inline(never)] // in its own frame, not the main loop's
 pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), Error> {
     let mut fat = Fat::mount(d)?;
-    // a pending move that cannot even be put back: not this delete's refusal (Refused: nothing pending, the card
-    // full), so a card error to the app, which then keeps finishing it
-    let left = finish_on(&mut fat, d, t).map_err(|e| if e == Error::Refused { Error::Io } else { e })?;
-    if left.is_some_and(|r| r.files[0].map(|f| f.0) == Some(ride.cluster)) {
+    if finish_on(&mut fat, d, t)?.is_some_and(|r| r.files[0].map(|f| f.0) == Some(ride.cluster)) {
         return Ok(());
     }
     // the name the chain has in \Activities
@@ -286,7 +283,8 @@ fn settle(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, 
     let moved = match moves(fat, d, r, rec, t) {
         Ok(()) => true,
         Err(Error::Refused) => {
-            put_back(fat, d, r, t)?;
+            // a put back refused leaves the move pending: never `Refused` out of here ([`delete`]: nothing pending)
+            put_back(fat, d, r, t).map_err(|e| if e == Error::Refused { Error::Io } else { e })?;
             false
         }
         Err(e) => return Err(e),
@@ -296,9 +294,13 @@ fn settle(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, 
     Ok(moved)
 }
 
-/// Each file of `r` named by no entry (neither moved nor still in its old place) linked back under its old name in
-/// its old folder, if its chain is still the ride's: a move undone ([`settle`]). Room made first, so a card still
-/// full refuses before any entry changes and the move stays pending. Nothing is made: a folder gone is an error.
+/// A move undone ([`settle`]): each file of `r` back in its old folder, under its old name (the first suffix free
+/// there if a computer gave that name to another file), if its chain is still the ride's. A file moved already is
+/// taken out of its new folder first (so neither copy stays half deleted); room is made before anything changes.
+/// When the old folder cannot take a name (the card full, its last slot used), a file named by no entry gets its
+/// old entry back ([`Fat::revive`]: no cluster), and a file moved already stays moved (in sight, nothing lost).
+/// Nothing is made: a folder gone is an error. A file put back in none of these ways: [`Error::Io`], the move
+/// left pending.
 fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Result<(), Error> {
     let mut buf = [0u8; 20];
     for k in 0..2 {
@@ -307,23 +309,50 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
         else {
             continue;
         };
-        let moved = match fat.open(d, to) {
-            Ok(dst) => fat.find(d, dst, file_name(&r.name, r.suffix, &mut buf)?).is_ok_and(|f| f.cluster == first),
-            Err(Error::NotFound) => false,
-            Err(e) => return Err(e),
-        };
         let src = fat.open(d, from)?;
-        let name = file_name(&r.name, 0, &mut buf)?;
-        let there = match fat.locate(d, src, name) {
-            Ok(h) => h.first == first,
-            Err(Error::NotFound | Error::Refused) => false,
+        // the first name of the old folder that is the file's already (nothing to do) or free
+        let mut target = None;
+        for j in 0..=SUFFIXES {
+            match fat.find(d, src, file_name(&r.name, j, &mut buf)?) {
+                Ok(f) if f.cluster == first => break,
+                Ok(_) => {}
+                Err(Error::NotFound) => {
+                    target = Some(j);
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        let Some(j) = target else { continue }; // there already (or 100 names taken: see below)
+        let moved = match fat.open(d, to) {
+            Ok(dst) => match fat.locate(d, dst, file_name(&r.name, r.suffix, &mut buf)?) {
+                Ok(h) if h.first == first => Some(h),
+                Ok(_) | Err(Error::NotFound | Error::Refused) => None,
+                Err(e) => return Err(e),
+            },
+            Err(Error::NotFound) => None,
             Err(e) => return Err(e),
         };
-        if moved || there || !(first == 0 || still_ours(fat, d, first, size, crc, true)?) {
+        let name = file_name(&r.name, j, &mut buf)?;
+        let room = match fat.make_room(d, src, name) {
+            Ok(()) => true,
+            Err(Error::Refused) => false,
+            Err(e) => return Err(e),
+        };
+        if let Some(h) = moved {
+            if !room {
+                continue;
+            }
+            fat.remove(d, &h)?;
+        }
+        if !(first == 0 || still_ours(fat, d, first, size, crc, true)?) {
             continue;
         }
-        fat.make_room(d, src, name)?;
-        fat.link(d, src, name, &Handle { first, size, ..Handle::default() }, t)?;
+        if room {
+            fat.link(d, src, name, &Handle { first, size, ..Handle::default() }, t)?;
+        } else if !(j == 0 && fat.revive(d, src, name, first, size)?) {
+            return Err(Error::Io);
+        }
     }
     Ok(())
 }
@@ -519,6 +548,9 @@ pub(crate) mod tests {
         to_dir(&mut fat, &mut d, 1, T).unwrap();
         rec_file(&mut fat, &mut d, T).unwrap();
         no_room(&mut d.0, false);
+        let mut whole = Ram(d.0.clone(), 0);
+        delete(&mut whole, &cluster(&d.0, RIDE), T).unwrap();
+        assert_eq!(dir_clusters(&whole.0, TO[0]), dir_clusters(&d.0, TO[0]) + 1, "the folder grew");
         cut_every_sector(d.0, true);
     }
 
@@ -645,19 +677,33 @@ pub(crate) mod tests {
     /// but two, as many deletes leave), on a card with no free cluster if `full` (the owner's, nearly full of map
     /// tiles).
     pub(crate) fn no_room(img: &mut [u8], full: bool) {
+        crowd(img, TO[0]);
+        if full {
+            crate::fat::write::tests::fill(img, 0, true);
+        }
+    }
+
+    /// Folder `path` with all the slots of its last cluster used but two (deleted entries, as many deletes leave):
+    /// no room for one more name without a new cluster.
+    fn crowd(img: &mut [u8], path: &str) {
         let mut d = Ram(img.to_vec(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
-        let del = fat.open(&mut d, TO[0]).unwrap();
-        assert_eq!(fat.chain(&mut d, del.cluster).unwrap().clusters, 1, "one cluster");
-        let (lba, slots) = (fat.lba(del.cluster) as usize * SECTOR, fat.cluster_bytes() as usize / 32);
+        let dir = fat.open(&mut d, path).unwrap();
+        let last = fat.chain(&mut d, dir.cluster).unwrap().last;
+        let (lba, slots) = (fat.lba(last) as usize * SECTOR, fat.cluster_bytes() as usize / 32);
         let end = (0..slots).find(|k| img[lba + k * 32] == 0).unwrap();
         for k in end..slots - 2 {
             img[lba + k * 32] = 0xe5;
             img[lba + k * 32 + 11] = 0x20;
         }
-        if full {
-            crate::fat::write::tests::fill(img, 0, true);
-        }
+    }
+
+    /// The clusters of folder `path`'s chain.
+    fn dir_clusters(img: &[u8], path: &str) -> u32 {
+        let mut d = Ram(img.to_vec(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, path).unwrap();
+        fat.chain(&mut d, dir.cluster).unwrap().clusters
     }
 
     /// [`volume`] with the folders and the record made, on a full card ([`no_room`]).
@@ -689,10 +735,8 @@ pub(crate) mod tests {
         assert_eq!(fsck(&d.0), Ok(0));
     }
 
-    /// The review of 2026-11-01: the clean copy moved already under the record's suffix, the full copy's name then
-    /// taken there: no later suffix for both (the clean chain linked a second time), the move put back instead.
-    #[test]
-    fn a_file_moved_already_keeps_its_suffix() {
+    /// The clean copy moved already under the record's suffix, then the full copy's name taken there.
+    fn moved_then_taken() -> Vec<u8> {
         let ride = cluster(&volume(), RIDE);
         let mut d = Ram(cut_midway(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
@@ -701,12 +745,88 @@ pub(crate) mod tests {
         fat.link(&mut d, del, "261020080000.fit", &h, T).unwrap(); // as the finish's first half
         let full = fat.open(&mut d, TO[1]).unwrap();
         fat.create(&mut d, full, "261020080000.fit", T).unwrap();
+        d.0
+    }
+
+    /// The review of 2026-11-01: the clean copy moved already under the record's suffix, the full copy's name then
+    /// taken there: no later suffix for both (the clean chain linked a second time), the move put back instead,
+    /// the moved copy too (it stayed in `\Rustfw\Deleted`, the full copy where it was: a delete half done).
+    #[test]
+    fn a_file_moved_already_keeps_its_suffix() {
+        let mut d = Ram(moved_then_taken(), 0);
         assert_eq!(finish(&mut d, T), Ok(false));
         assert_eq!(fsck(&d.0), Ok(0), "no chain named twice");
-        assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some_and(|f| !f.is_empty()));
+        assert!(file(&d.0, RIDE).is_some_and(|f| !f.is_empty()), "the clean copy back");
+        assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_none());
         assert!(file(&d.0, "Rustfw/Deleted/261020080000-1.fit").is_none());
         assert!(file(&d.0, "Rustfw/Activities/261020080000.fit").is_some(), "the full copy where it was");
         assert_eq!(finish(&mut d, T), Ok(false), "nothing pending");
+    }
+
+    /// The review of 2026-11-01: a move that cannot finish on a card so full that `\Activities` cannot take the name
+    /// either: the ride's old entry made live again (no cluster), under its long name, the record done; with that
+    /// name given to another file meanwhile, nothing can be done: a card error (`Io`, never `Refused`, which says
+    /// nothing is pending), the record still pending.
+    #[test]
+    fn a_ride_that_cannot_be_linked_back_gets_its_entry_back() {
+        let clean = file(&volume(), RIDE).unwrap();
+        let mut img = cut_midway();
+        no_room(&mut img, true);
+        crowd(&mut img, ACTIVITIES);
+        let mut d = Ram(img.clone(), 0);
+        assert_eq!(finish(&mut d, T), Ok(false), "put back");
+        assert!(file(&d.0, RIDE) == Some(clean), "by its long name");
+        assert_eq!(fsck(&d.0), Ok(0));
+        assert_eq!(finish(&mut d, T), Ok(false), "nothing pending");
+        // the name taken (made before the card filled: it takes a cluster)
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+        fat.create(&mut d, acts, "261020080000.fit", T).unwrap();
+        no_room(&mut d.0, true);
+        crowd(&mut d.0, ACTIVITIES);
+        assert_eq!(finish(&mut d, T), Err(Error::Io));
+        assert_eq!(finish(&mut d, T), Err(Error::Io), "still pending");
+        assert!(fsck(&d.0).is_ok_and(|lost| lost > 0), "the ride's chain named only by the record");
+    }
+
+    /// The review of 2026-11-01: a put back cut at every sector it writes (a link back, a moved copy taken out
+    /// first, an entry made live again), then the next start: each copy in exactly one place, the volume whole,
+    /// the record done.
+    #[test]
+    fn a_put_back_survives_a_cut_at_every_sector() {
+        let full_card = |mut img: Vec<u8>, crowded: bool| {
+            no_room(&mut img, true);
+            if crowded {
+                crowd(&mut img, ACTIVITIES);
+            }
+            img
+        };
+        let states = [
+            ("linked back", full_card(cut_midway(), false)),
+            ("moved copy back", full_card(moved_then_taken(), false)),
+            ("entry back", full_card(cut_midway(), true)),
+        ];
+        let count = |img: &[u8], paths: &[&str]| paths.iter().filter(|p| file(img, p).is_some()).count();
+        let clean = [RIDE, "Rustfw/Deleted/261020080000.fit", "Rustfw/Deleted/261020080000-1.fit"];
+        let full = ["Rustfw/Activities/261020080000.fit", "Rustfw/Deleted/Full/261020080000-1.fit"];
+        for (what, img) in states {
+            let mut whole = Cut(img.clone(), u64::MAX);
+            assert_eq!(finish(&mut whole, T), Ok(false), "{what}");
+            let writes = u64::MAX - whole.1;
+            assert!(writes >= 2, "{what}: {writes} writes");
+            for budget in 0..writes {
+                let mut d = Cut(img.clone(), budget);
+                assert_eq!(finish(&mut d, T), Err(Error::Io), "{what}, cut after {budget}");
+                d.1 = u64::MAX;
+                assert_eq!(finish(&mut d, T), Ok(false), "{what}, cut after {budget}, then the start");
+                let at = std::format!("{what}, cut after {budget} of {writes}");
+                assert_eq!(fsck(&d.0).map_err(|e| std::format!("{at}: {e}")), Ok(0));
+                assert_eq!((count(&d.0, &clean), count(&d.0, &full)), (1, 1), "{at}");
+                assert!(file(&d.0, RIDE).is_some(), "{at}: put back");
+                assert_eq!(finish(&mut d, T), Ok(false), "{at}: nothing pending");
+            }
+        }
     }
 
     /// The review of 2026-10-31 (storage, 1): a delete on a full card whose `\Rustfw\Deleted` needs a cluster for
