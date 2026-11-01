@@ -153,6 +153,12 @@ pub(crate) struct Gps {
     pub(crate) quiet_ms: u32,
     pub(crate) fixed: bool,
     pub(crate) slept: bool,
+    /// What the receiver answered (app/gps.rs `note_ack`): CFG messages taken, refused (UBX-ACK-NAK), configurations
+    /// given up after their one retry, and assistance messages it did not use. Counters for the debug info; nothing
+    /// reads them on the ride path.
+    pub(crate) answers: [u16; 4],
+    /// The one retry of a refused configuration is spent (until the receiver is switched on again).
+    pub(crate) retried: bool,
     /// Whether the screen shown holds a map, with the screen and MORE page it was worked out for (a page's boxes
     /// are built to find out: once per screen, not each pass).
     pub(crate) map_on: Option<(MapKey, bool)>,
@@ -183,6 +189,8 @@ impl Gps {
             quiet_ms: 0,
             fixed: false,
             slept: false,
+            answers: [0; 4],
+            retried: false,
             map_on: None,
         }
     }

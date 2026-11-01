@@ -183,6 +183,7 @@ fn off_mid_ride_keeps_every_second() {
 #[test]
 fn seconds_caught_up_keep_their_own_time() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the test holds the pass for seconds on purpose: the receiver's stream stops after 1.5 s
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 1000);
@@ -201,6 +202,7 @@ fn seconds_caught_up_keep_their_own_time() {
     assert_eq!(times.last().copied(), Some(now), "the last record at the clock's time");
     // the full copy (developer fields): the same records, in \Rustfw\Activities under the same name
     assert_eq!(record_times(&sim.emmc.image, &std::format!("Rustfw/{path}")), times);
+    sim.gnss.assert_reads(4180, 3);
 }
 
 /// A full copy that cannot be made (here a file in the way of its folder) is said once, and the ride is recorded
@@ -510,6 +512,7 @@ fn ride_70s() -> (Sim, App, std::string::String, u32) {
 #[test]
 fn a_card_busy_past_the_drivers_second_fails_the_write_and_the_ride_goes_on() {
     let mut s = Sim::new(9, 0, 0);
+    s.gnss.expect = Some("stream time-out"); // the test holds the pass for seconds on purpose: the receiver's stream stops after 1.5 s
     s.emmc.image = std::vec![0; 64 * 512];
     let card = crate::emmc::Card::init(&mut s).unwrap();
     s.emmc.prog_polls = 5;
@@ -524,6 +527,7 @@ fn a_card_busy_past_the_drivers_second_fails_the_write_and_the_ride_goes_on() {
     assert_eq!(card.write(&mut s, 5, &[9; 512]), Ok(()), "the card ready again");
 
     let (mut sim, mut app, name, _) = ride_70s();
+    sim.gnss.expect = Some("stream time-out"); // a checkpoint write the driver waits a second for blocks the pass
     let errors = app.rec.clean.errors;
     sim.emmc.prog_polls = crate::emmc::TRIES;
     run(&mut sim, &mut app, 55_000); // the checkpoint at 120 s: its first write lands, then the driver gives up
@@ -539,6 +543,7 @@ fn a_card_busy_past_the_drivers_second_fails_the_write_and_the_ride_goes_on() {
     let dropped = app.rec.clean.dropped;
     assert!(times.len() as u32 + dropped + 2 >= timer, "{} records, {dropped} dropped, of {timer} s", times.len());
     crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    sim.gnss.assert_reads(2426, 2);
 }
 
 /// The review of 2026-11-01, finding 33: a multi-sector checkpoint write that lands its first sector, then fails

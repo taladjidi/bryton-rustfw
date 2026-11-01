@@ -1219,6 +1219,7 @@ fn off_during_a_ride_asks_twice() {
 #[test]
 fn long_pass_loses_no_ride_time() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the test holds the pass for seconds on purpose: the receiver's stream stops after 1.5 s
     sim.gnss.route = Some(ride_route);
     sim.gnss.fix = Some(8000);
     let mut app = App::start(&mut sim, None);
@@ -1232,6 +1233,7 @@ fn long_pass_loses_no_ride_time() {
     sim.delay_ms(30_000); // the clock jumps (set from the GPS): counted up to MAX_CATCH_UP only
     run(&mut sim, &mut app, 100);
     assert!(app.ride.timer_s() <= t + 4 + u32::from(MAX_CATCH_UP) + 1);
+    sim.gnss.assert_reads(4180, 3);
 }
 
 /// Idle is free, and no pass stalls the loop: on the overview with nothing changing, nearly every pass sends
@@ -1956,6 +1958,7 @@ fn nordic_link_at_the_idle_rate() {
 #[test]
 fn idle_loop_ignores_bytes_from_a_chip_not_started() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the test holds the pass for seconds on purpose: the receiver's stream stops after 1.5 s
     sim.nordic.dead = true;
     let mut app = App::start(&mut sim, Some(KEY));
     run_loop(&mut sim, &mut app, 40_000);
@@ -1967,6 +1970,7 @@ fn idle_loop_ignores_bytes_from_a_chip_not_started() {
     }
     assert!(passes <= 44, "{passes} passes in 10 s");
     assert!(sim.nordic.out.is_empty(), "flushed");
+    sim.gnss.assert_reads(2640, 3);
 }
 
 /// A tone started after an idle pass of 250 ms keeps its whole length: the alert's first beep lasts its 100 ms

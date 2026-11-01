@@ -40,6 +40,7 @@ fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
     let mut phone = PhoneSim::new(true);
     (phone.connect_at, phone.script) = (1000, script);
     let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // a hung chip's reset blocks the pass for seconds: the receiver's stream stops after 1.5 s
     sim.own_settings();
     sim.emmc.image = crate::fat::tests::image();
     sim.backup[Kind::Hr.backup()] = Kind::Hr.to_word(SensorId { device: 9, trans: 1 });
@@ -65,6 +66,7 @@ fn ride(minutes: u64, pass_ms: u32, wait_us: u32) -> Outcome {
         sim.nordic.high_water,
         sim.nordic.hangs
     );
+    sim.gnss.assert_reads(6678, 31);
     Outcome {
         hangs: sim.nordic.hangs,
         high_water: sim.nordic.high_water,

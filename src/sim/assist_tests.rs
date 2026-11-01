@@ -159,3 +159,30 @@ fn without_an_offset_a_day_of_slack() {
     assert_eq!(days(Some(8)), [probe.2]);
     assert_eq!(days(None), [probe.2 + 1]);
 }
+
+/// The retry is per change of the receiver's settings: the start-up refusal used the retry, and a later SYSTEMS change
+/// refused once is sent once more.
+#[test]
+fn a_systems_change_gets_its_own_retry() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.classic_pages();
+    sim.gnss.nak_all = true;
+    sim.gnss.fix = Some(7000);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(app.gps.answers[1], 1, "the start-up refusal retried");
+    assert!(app.gps.answers[2] >= 1, "then given up: {:?}", app.gps.answers);
+    sim.gnss.nak_all = false;
+    sim.gnss.nak_next = true;
+    let (acks, naks) = (sim.gnss.acks, sim.gnss.naks);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::GnssSystems));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.gnss.naks - naks, 1, "refused once; the resend is accepted (acks {})", sim.gnss.acks - acks);
+    assert_eq!(app.gps.answers[1], 2, "the change's refusal gets its own retry");
+}

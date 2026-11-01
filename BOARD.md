@@ -681,6 +681,32 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   interface description) and the V_BCKP wiring are not known here, and a receiver that never woke would stay dead.
   Inferred: a warm start after the ride, no ephemeris kept. The same cut between rides once idle (app/gps.rs
   `gnss_idle`: 5 minutes without a fix, or 10 with one and no key), with the same sequencing when it comes back.
+- **The receiver's rules, as the simulator enforces them** (`src/sim/gnss_model.rs`; interface description = UBX-21035062
+  R02, "verified" = read in its text, "inferred" = a guess; the model fails a test loudly with the reason unless the test
+  says it expects it). Settle the inferred ones on the unit (status.md):
+  - G1 output buffer 4 kB, then new messages are dropped: MAX-M10S integration manual UBX-20053088 R01, 2.2.2.2, I2C
+    text; **inferred** for SPI.
+  - G2 about 1.5 s without a read stops the stream (the epochs are not scheduled; it restarts at the next access):
+    CFG-SPI-EXTENDEDTIMEOUT 0x10640005 "disable timeouting the interface after 1.5s", 4.9.22 (key and 1.5 s verified; the
+    stream stopping is the I2C text, **inferred** for SPI). The model's time-out is a parameter (`Gnss::timeout_ms`).
+  - G3 CFG-SPI-MAXFF 0x20640001 (default 50, 0: off): "number of bytes containing 0xFF to receive before switching off
+    reception", 4.9.22 (verified); consecutive, counted per chip select, and the partial frame is dropped with it: **inferred**. The firmware's transfers are
+    32 bytes.
+  - G4 a frame with a bad checksum or a length over the input buffer is dropped without an answer: **inferred** (3.4, 3.5).
+  - G5 UBX-ACK-ACK / NAK for every CFG message within a second; CFG-VALSET refused (nothing applied) for an unknown key,
+    no layer, an invalid configuration (checked for the RAM layer only), more than 64 pairs: 3.9.1, 3.9.2, 3.10.5.1 (verified).
+  - G6 at most three concurrent constellations in a valid configuration: **inferred** (integration manual, "limited to three").
+  - G7 UBX-MGA-ACK (0x13 0x60) after each MGA message with CFG-NAVSPG-ACKAIDING 0x10110025, types and info codes, 3.13.1
+    (verified); ANO is 76 bytes (3.13.2); an ANO before an accepted TIME_UTC gets info code 1. The firmware does not turn
+    ACKAIDING on (it reads the answers if it is on).
+  - G8 time aiding wrong by more than its stated accuracy degrades the receiver: 3.13 MGA-INI-TIME_UTC (verified). The
+    firmware sends 2 s accuracy with a learnt offset; a stale offset (the RTC set across a time zone or summer-time
+    change before the next fix) would be wrong by 15-minute steps. Recorded as `degraded`, asserted in the start-up tests.
+  - G10 the power line low for over a second before power-on (seen on the unit, above): the model refuses less.
+  - Not modelled: G9 PSMCT behaviour, G11 RXM-PMREQ, accuracy and time to first fix.
+  - Answers (this firmware, `gnss::ack`, app/gps.rs `note_ack`): a refused CFG-VALSET is sent once more (the configuration,
+    and the systems when it is a ride's end), then given up, one retry per power-up of the receiver; the counters are
+    `gps.answers` (taken, retried, given up, assistance not used).
 - **GNSS systems** (this firmware, GNSS SYSTEMS): UBX-CFG-VALSET to the RAM layer with CFG-SIGNAL-GPS_ENA 0x1031001f,
   GAL_ENA 0x10310021, BDS_ENA 0x10310022, GLO_ENA 0x10310025 (u-blox M10 SPG 5.10 interface description
   UBX-21035062, CFG-SIGNAL; ids cross-checked with pyubx2's `ubxtypes_configdb.py`; the receiver is an M10, so the

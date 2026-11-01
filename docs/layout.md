@@ -337,6 +337,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   check the simulated chip runs on every command it receives: what it cannot decode hangs it, and a test that did not
   expect that panics with the reason) and `chip_table_tests.rs` (every command rustfw builds, with boundary arguments,
   against the table; one test per fatal rule).
+  `gnss_model.rs` (the GNSS receiver, strict like the Nordic table: its rules G1 to G10 with their sources, ACK / NAK and
+  MGA-ACK answers, the 1.5 s stream time-out, MAXFF, the 4 kB buffer; a test that provokes a rule sets `gnss.expect`) and
+  `gnss_model_tests.rs` (each rule, every frame `gnss.rs` builds against the table, the retry of a refused configuration).
   `loop_model.rs` (not tests: the `Sim`'s side of the main loop, `LoopBoard` on the simulated clock, and `SimLink`, a
   scripted USB link that logs what the pass asks; `tests.rs` `run_loop` drives lib `MainLoop::pass`, the unit's own code).
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).

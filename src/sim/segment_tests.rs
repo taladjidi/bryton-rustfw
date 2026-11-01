@@ -216,11 +216,13 @@ fn without_memory_nothing_happens() {
 #[test]
 fn reset_drops_the_segment() {
     let (mut sim, app) = ride(pr_pace, 110, true);
+    sim.gnss.expect = Some("stream time-out"); // the app is dropped and started again: nothing reads the receiver meanwhile
     assert!(app.segment_now().is_some());
     let mut app = App::start(&mut sim, None);
     app.set_segment_memory(Box::leak(Box::new(Segments::new())));
     run(&mut sim, &mut app, 1000);
     assert!(app.segment_now().is_none());
+    sim.gnss.assert_reads(2404, 2);
 }
 
 /// A good header over a broken body (a flipped byte in the FIT course, or in the time table): the file is read once,

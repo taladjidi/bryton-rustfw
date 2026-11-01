@@ -1106,6 +1106,9 @@ impl App {
             self.update_light(b);
             self.gps.reconfig |= s == menu::Setting::GpsPower; // the receiver told at its next message
             self.gps.resys |= s == menu::Setting::GnssSystems;
+            if s == menu::Setting::GpsPower || s == menu::Setting::GnssSystems {
+                self.gps.retried = false; // a user's change gets its own retry
+            }
             if s == menu::Setting::Font {
                 self.font_changed(b);
             }
