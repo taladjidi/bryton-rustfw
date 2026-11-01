@@ -295,8 +295,8 @@ fn settle(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, 
     Ok(moved)
 }
 
-/// A move undone ([`settle`]): each file of `r` back in its old folder, under its old name (the first suffix free
-/// there if a computer gave that name to another file), if its chain is still the ride's. A file moved already is
+/// A move undone ([`settle`]): each file of `r` back in its old folder, under its old name (taken by another file
+/// meanwhile: a copy moved stays moved, a chain named by no entry stays pending), if its chain is still the ride's. A file moved already is
 /// linked back, then taken out of its new folder (so neither copy stays half deleted, and it has a name at every
 /// cut, whatever a computer did to its bytes); room is made before anything changes.
 /// When the old folder cannot take a name (the card full, its last slot used), a file named by no entry gets its
@@ -321,23 +321,8 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
             Err(Error::NotFound) => None,
             Err(e) => return Err(e),
         };
-        // the first name of the old folder that is the file's already (linked back before a cut) or free
-        let (mut target, mut there) = (None, false);
-        for j in 0..=SUFFIXES {
-            match fat.find(d, src, file_name(&r.name, j, &mut buf)?) {
-                Ok(f) if f.cluster == first => {
-                    there = true;
-                    break;
-                }
-                Ok(_) => {}
-                Err(Error::NotFound) => {
-                    target = Some(j);
-                    break;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        if there {
+        // named in the old folder already (linked back before a cut), under any name of the ride's
+        if named_in(fat, d, src, &r.name, first)?.is_some() {
             if let Some(h) = moved {
                 fat.remove(d, &h)?; // linked back already: its name in \Rustfw\Deleted goes now
             }
@@ -346,16 +331,18 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
         // only the ride's chain goes back (a copy in \Rustfw\Deleted a computer changed stays there, named), and a
         // chain named by no entry only if no computer's repair has named it meanwhile
         let ours = first == 0 || still_ours(fat, d, first, size, crc, true)?;
-        if !ours || moved.is_none() && kept_by_a_repair(fat, d, first)? {
+        if !ours || moved.is_none() && first != 0 && kept_by_a_repair(fat, d, first)? {
             continue;
         }
-        let Some(j) = target else {
-            if moved.is_some() {
-                continue; // 100 names taken: stays moved, in sight
-            }
-            return Err(Error::Io);
-        };
-        let name = file_name(&r.name, j, &mut buf)?;
+        // only under its old name, the one both firmwares' histories find: taken by another file meanwhile, a copy
+        // moved stays where it is named, and a chain named by no entry stays pending
+        let name = file_name(&r.name, 0, &mut buf)?;
+        match fat.find(d, src, name) {
+            Err(Error::NotFound) => {}
+            Ok(_) if moved.is_some() => continue,
+            Ok(_) => return Err(Error::Io),
+            Err(e) => return Err(e),
+        }
         let room = match fat.make_room(d, src, name) {
             Ok(()) => true,
             Err(Error::Refused) => false,
@@ -369,7 +356,7 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
             if let Some(h) = moved {
                 fat.remove(d, &h)?;
             }
-        } else if moved.is_none() && !(j == 0 && fat.revive(d, src, name, first, size)?) {
+        } else if moved.is_none() && !fat.revive(d, src, name, first, size)? {
             return Err(Error::Io);
         }
     }
@@ -379,7 +366,7 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
 /// The chain from `first` named by a computer's repair of a lost chain: a file of the root (Windows 9x's
 /// `FILE0000.CHK`, dosfsck's `FSCK0000.REC`), or of `\FOUND.nnn` (chkdsk /f) or `\LOST.DIR` (Android). Linked
 /// again, the two names would share the chain. The root and those folders only.
-fn kept_by_a_repair(fat: &mut Fat, d: &mut impl DiskWrite, first: u32) -> Result<bool, Error> {
+pub(crate) fn kept_by_a_repair(fat: &mut Fat, d: &mut impl DiskWrite, first: u32) -> Result<bool, Error> {
     let mut c = fat.cursor(fat.root())?;
     while let Some(e) = fat.list(d, &mut c)? {
         let name = e.name();
@@ -403,27 +390,45 @@ fn kept_by_a_repair(fat: &mut Fat, d: &mut impl DiskWrite, first: u32) -> Result
     Ok(false)
 }
 
-/// Every entry of folder `from` on the chain `first` under the ride's name, any suffix ([`put_back`] may have
-/// given one), marked deleted; true if there was one. A folder or entry that cannot be read: none there.
+/// Every entry of folder `from` on the chain `first` under a name of the ride's (`<name>*`: an older build's put
+/// back gave suffixes), marked deleted; true if there was one. A folder that cannot be read: none there.
 fn unlink_old(fat: &mut Fat, d: &mut impl DiskWrite, from: &str, name: &[u8; 12], first: u32) -> Result<bool, Error> {
     let src = match fat.open(d, from) {
         Ok(src) => src,
         Err(Error::NotFound | Error::Corrupt | Error::Refused) => return Ok(false),
         Err(e) => return Err(e),
     };
-    let (mut buf, mut any) = ([0u8; 20], false);
-    for j in 0..=SUFFIXES {
-        match fat.locate(d, src, file_name(name, j, &mut buf)?) {
-            Ok(h) if h.first == first => {
-                fat.remove(d, &h)?;
-                any = true;
-            }
-            Ok(_) | Err(Error::Corrupt | Error::Refused) => {}
-            Err(Error::NotFound) => break, // names are given in order: none after a free one
+    let mut any = false;
+    for _ in 0..=SUFFIXES {
+        let Some(e) = named_in(fat, d, src, name, first)? else { break };
+        let h = fat.locate(d, src, core::str::from_utf8(e.name()).map_err(|_| Error::Corrupt)?)?;
+        if h.first != first {
+            break; // another entry of that name first: never remove it
+        }
+        fat.remove(d, &h)?;
+        any = true;
+    }
+    Ok(any)
+}
+
+/// The first entry of folder `dir` on the chain `first` whose name starts with the ride's `name`: the whole folder
+/// read (not name by name, which a free name stopped). A folder that cannot be read past a point: none after it.
+fn named_in(
+    fat: &mut Fat,
+    d: &mut impl DiskWrite,
+    dir: File,
+    name: &[u8; 12],
+    first: u32,
+) -> Result<Option<crate::fat::Entry>, Error> {
+    let mut c = fat.cursor(dir)?;
+    loop {
+        match fat.list(d, &mut c) {
+            Ok(Some(e)) if !e.file.dir && e.file.cluster == first && e.name().starts_with(name) => return Ok(Some(e)),
+            Ok(Some(_)) => {}
+            Ok(None) | Err(Error::Corrupt) => return Ok(None),
             Err(e) => return Err(e),
         }
     }
-    Ok(any)
 }
 
 /// The chain from `first` is still the ride's: whole for `size`, and, if it is named by no entry (`gone`: a
@@ -880,6 +885,53 @@ pub(crate) mod tests {
         assert_eq!(fsck(&d.0), Ok(1), "one name on the chain (lost: the cluster of the file removed by hand)");
         assert!(file(&d.0, RIDE).is_none() && file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some());
         assert!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit").is_some_and(|f| !f.is_empty()));
+    }
+
+    /// The final review of the follow-up: a name an older build's put back gave in `\Activities` (`<name>-1.fit`,
+    /// the plain name then taken), the cut leaving the copy in `\Rustfw\Deleted` too, and the file in the way
+    /// deleted from outside meanwhile (stock's USB): the next start finds the chain's name whatever its suffix and
+    /// never links a second (it looked name by name and stopped at the free plain one). Through the put back (the
+    /// card full) and through the move (room).
+    #[test]
+    fn a_suffixed_name_left_behind_is_found() {
+        let ride = cluster(&volume(), RIDE);
+        for full in [true, false] {
+            let mut d = Ram(moved_then_taken(), 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+            let h = Handle { first: ride.cluster, size: ride.size, ..Handle::default() };
+            fat.link(&mut d, acts, "261020080000-1.fit", &h, T).unwrap();
+            if full {
+                no_room(&mut d.0, true);
+            } else {
+                let full = fat.open(&mut d, TO[1]).unwrap();
+                let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
+                fat.remove(&mut d, &other).unwrap(); // the move can finish (its cluster lost: fsck counts 1)
+            }
+            assert_eq!(finish(&mut d, T), Ok(!full), "full {full}");
+            assert_eq!(fsck(&d.0), Ok(u32::from(!full)), "full {full}: one name on the chain");
+            let names = ["Activities/261020080000-1.fit", RIDE, "Rustfw/Deleted/261020080000.fit"];
+            assert_eq!(names.iter().filter(|p| file(&d.0, p).is_some()).count(), 1, "full {full}");
+            assert_eq!(finish(&mut d, T), Ok(false), "full {full}: nothing pending");
+        }
+    }
+
+    /// The final review of the follow-up: a put back whose old name in `\Activities` a computer gave to another file
+    /// meanwhile: the copy moved stays in `\Rustfw\Deleted`, named, the record done; never a `<name>-1.fit` in
+    /// `\Activities`, which neither firmware's history lists.
+    #[test]
+    fn a_put_back_never_invents_a_suffix() {
+        let mut d = Ram(moved_then_taken(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+        fat.create(&mut d, acts, "261020080000.fit", T).unwrap();
+        no_room(&mut d.0, true);
+        assert_eq!(finish(&mut d, T), Ok(false));
+        assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some_and(|f| !f.is_empty()), "where it is named");
+        assert!(file(&d.0, "Activities/261020080000-1.fit").is_none());
+        assert_eq!(file(&d.0, RIDE), Some(Vec::new()), "the other file");
+        assert_eq!(fsck(&d.0), Ok(0));
+        assert_eq!(finish(&mut d, T), Ok(false), "nothing pending");
     }
 
     /// The re-review of beaa07a: a copy in `\Rustfw\Deleted` a computer made longer, put back: linked with its own
