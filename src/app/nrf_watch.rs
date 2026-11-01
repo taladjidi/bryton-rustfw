@@ -139,7 +139,7 @@ impl App {
         let ant_down = (self.ant_key.is_some() && !self.ant && !self.watch.refused)
             || self.watch.phone_owed
             || self.watch.owed.iter().any(|&s| s != Sensor::Off);
-        let broken = self.ble.is_none() || ant_down || self.rx.strikes >= 2 || self.rx.timeouts >= 2;
+        let broken = self.ble.is_none() || ant_down || self.rx.broken || self.rx.strikes >= 2 || self.rx.timeouts >= 2;
         if !broken {
             if self.watch.quiet_ms >= PROBE_MS {
                 // a probe that gets no answer is asked again in a second (one time-out may be a busy chip); two
@@ -149,7 +149,8 @@ impl App {
             return;
         }
         // 1. start reading at a frame boundary and ask again
-        if self.ble.is_some() && !ant_down {
+        // (not after a frame went out partly: the chip is mis-framed, only a reset cures it)
+        if self.ble.is_some() && !ant_down && !self.rx.broken {
             drain(b);
             self.rx.resync();
             if self.probe(b) {

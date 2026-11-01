@@ -30,6 +30,16 @@ pub(super) const ANT_QUEUE: usize = 32;
 const HUNG_TAKES: u8 = 4;
 
 impl Nordic {
+    /// The real chip's side of an event the fuzzes make up for the app: a DISCONNECTED or AUTH_STATUS frees a security
+    /// context, and it asks for pairing (SEC_PARAMS_REQUEST) only after the last pairing ended, so a made-up request
+    /// with all contexts live stands for an AUTH_STATUS that came before. The limit of 8 stays on.
+    pub(super) fn frees_context(&mut self, event: &[u8]) {
+        let full = self.sec >= self.limits.sec_contexts;
+        if matches!(event, [2, 0x11 | 0x19, 0, ..]) || (full && matches!(event, [2, 0x13, 0, ..])) {
+            self.sec = self.sec.saturating_sub(1);
+        }
+    }
+
     /// The clock follows the simulated time.
     pub(super) fn sync(&mut self, ms: u64) {
         self.now_ms = ms;
@@ -168,17 +178,19 @@ impl Nordic {
                 break;
             }
         }
+        if n > 0 {
+            self.t += u64::from(self.limits.parse_us); // the host decodes what it got before it reads again
+        }
         n
     }
 
-    /// `nrf_send`: the bytes our TX FIFO takes. While the chip holds CTS it fills (16) and then refuses: the board waits
-    /// `nrf::PUT_WAIT_US` for room and returns how many it took.
+    /// `nrf_send`: the bytes our TX FIFO takes. While the chip holds CTS it fills (16) and then refuses: the board
+    /// returns at once with how many it took (the library sleeps and offers the rest again).
     pub(super) fn send(&mut self, data: &[u8], ms: u64) -> usize {
         self.sync(ms);
         self.run();
         for (i, &b) in data.iter().enumerate() {
             if self.txq.len() >= FIFO {
-                self.t += crate::nrf::PUT_WAIT_US;
                 return i;
             }
             self.txq.push_back(b);

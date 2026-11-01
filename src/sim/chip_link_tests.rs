@@ -223,3 +223,125 @@ fn a_chip_that_holds_cts_for_ever_fails_the_send_in_bounded_time() {
     assert_eq!(nrf::call(&mut s, &mut rx, &[0, 0x65, 1], &mut [0; 8]), Err(nrf::Error::Timeout));
     assert_eq!(rx.timeouts, 1);
 }
+
+/// Nine pairings in a row in the app's real flow (the phone asks, the app accepts, the chip ends the pairing with
+/// AUTH_STATUS or DISCONNECTED) never hold more than one context: the app does not leak them.
+#[test]
+fn nine_pairings_in_a_row_never_exceed_8_live_contexts() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    let mut most = 0;
+    for i in 0..9 {
+        app.phone_event(&mut s, &[2, 0x13, 0, 0, 0]); // SEC_PARAMS_REQUEST, connection 0
+        most = most.max(s.nordic.sec);
+        assert!(!s.nordic.hung, "pairing {i}: {:?}", s.nordic.hang_reason);
+        s.nordic.queue(&[2, 0x11, 0, 0, 0, 0x13]); // the pairing ends
+    }
+    assert!((1..=8).contains(&most), "{most} live contexts at most");
+}
+
+/// A call timed out; its answer arrives while the next call's send is held by CTS (the in-flight event frame keeps
+/// the response waiting). The drain in `send` swallows it, so the next call gets its own answer.
+#[test]
+fn a_late_answer_arriving_while_the_send_is_held_is_swallowed() {
+    let mut s = chip();
+    ant(&mut s, 3);
+    s.nordic.has_bytes(s.ms); // the first event frame is in flight, stalled on our full FIFO
+    s.nordic.queue(&[1, 0x7f, 5, 0, 0, 0]); // the late answer: waits behind the event frame in flight
+    let mut rx = nrf::Rx::new();
+    rx.late = Some(0x7f);
+    // sd_ble_gap_sec_params_reply: a command longer than the TX FIFO, so its send is held and drains
+    assert_eq!(crate::ble::sec_params_reply(&mut s, &mut rx, 0, true), Ok(()), "its own answer, not the late one");
+    assert_eq!(rx.late, None);
+}
+
+/// A send that fails leaves the swallow armed: the late answer may still come.
+#[test]
+fn a_failed_send_keeps_the_late_answer_armed() {
+    let mut s = chip();
+    s.nordic.hung = true;
+    let mut rx = nrf::Rx::new();
+    rx.late = Some(0x61);
+    // longer than the TX FIFO and the 4 bytes a hung chip takes: the send fails
+    assert_eq!(nrf::call(&mut s, &mut rx, &WRITE20, &mut [0; 8]), Err(nrf::Error::Timeout));
+    assert_eq!(rx.late, Some(0x61));
+}
+
+/// A frame cut short (the chip holds CTS for ever mid-payload) leaves the chip mis-framed: no later frame is sent to
+/// it, and the watchdog resets it on the next pass instead of after two time-outs.
+#[test]
+fn a_truncated_frame_has_the_watchdog_reset_the_chip_at_once() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    s.nordic.hung = true;
+    let resets = s.nordic.resets.len();
+    assert_eq!(nrf::send(&mut s, &mut app.rx, &WRITE20), Err(nrf::Error::Timeout));
+    assert!(app.rx.broken);
+    let (got, t0) = (s.nordic.got.len(), s.ms);
+    assert_eq!(nrf::send(&mut s, &mut app.rx, &[0, 0x65, 1]), Err(nrf::Error::Timeout));
+    assert_eq!((s.nordic.got.len(), s.ms), (got, t0), "nothing sent, no time spent");
+    app.step(&mut s);
+    assert_eq!(s.nordic.resets.len(), resets + 1, "reset on the next pass");
+    assert!(!app.rx.broken && !s.nordic.hung);
+}
+
+/// The most a dead chip costs: one call, and a whole pass of the main loop (a probe, then the restart), ms.
+#[test]
+fn a_dead_chip_costs_a_bounded_time() {
+    let mut s = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut s, None);
+    run(&mut s, &mut app, 2000);
+    s.nordic.hung = true;
+    let t0 = s.ms;
+    let _ = nrf::call(&mut s, &mut app.rx, &[0, 0x65, 1], &mut [0; 8]);
+    let call = s.ms - t0;
+    let mut pass = 0;
+    for _ in 0..4000 {
+        let t = s.ms;
+        app.step(&mut s);
+        pass = pass.max(s.ms - t);
+        s.delay_ms(50);
+        s.nordic.hung = true; // dead for ever, whatever a reset does
+    }
+    std::println!("dead chip: one call {call} ms, worst pass {pass} ms");
+    assert!(call <= u64::from(nrf::TIMEOUT_MS) + 20, "{call}");
+    assert!(pass <= 3 * u64::from(nrf::TIMEOUT_MS) + 1000, "{pass}");
+}
+
+/// nordic-app.md section 2, "One event in flight": the response is queued behind the event frame in flight, and the
+/// chip holds CTS exactly until that frame has left its TX buffer, not before and not after.
+#[test]
+fn cts_is_released_when_the_event_frame_in_flight_ends() {
+    let mut s = chip();
+    ant(&mut s, 3);
+    s.delay_ms(1);
+    assert_eq!(s.nrf_send(&[3, 0, 0, 0x65, 1]), 5);
+    assert_eq!(s.nrf_send(&[34, 0]), 2); // the next header: CTS is held from here
+    assert!(s.nordic.blocked());
+    let on_chip = s.nordic.out.len(); // what of the event frame is still in the chip's TX buffer
+    let mut one = [0u8; 1];
+    for read in 1..=on_chip {
+        assert_eq!(s.nrf_recv(&mut one), 1);
+        s.nordic.has_bytes(s.ms); // the byte that took the freed place has had its 10 us on the wire
+        assert_eq!(s.nordic.blocked(), read < on_chip, "after {read} of {on_chip} bytes read");
+    }
+}
+
+/// The ANT search time-out (30 s) after a chip reset: every channel times out together, and one SoftDevice pass brings
+/// SEARCH_TIMEOUT and CHANNEL_CLOSED for each, on top of a queue already at the ride's high-water mark.
+#[test]
+fn the_search_timeouts_of_all_channels_together_stay_under_the_hang_limit() {
+    let mut s = chip();
+    ant(&mut s, 22); // the ride's high-water mark with the 100 ms pass (ride_radio_tests)
+    s.nordic.has_bytes(s.ms); // the pass
+    for ch in 0..8u8 {
+        s.nordic.ant_event(&[1, 0x40, ch, 1, 1], 1, ch);
+        s.nordic.ant_event(&[1, 0x40, ch, 1, 7], 7, ch);
+    }
+    s.nordic.has_bytes(s.ms);
+    std::println!("search timeout burst: high-water {}", s.nordic.high_water);
+    assert!(!s.nordic.hung, "{:?}", s.nordic.hang_reason);
+    assert!(s.nordic.high_water < 48, "{}", s.nordic.high_water);
+}

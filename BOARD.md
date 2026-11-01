@@ -558,11 +558,15 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   - *Security contexts:* 8, taken by `sd_ble_gap_sec_params_reply` (accepting), freed by BLE_GAP_EVT_AUTH_STATUS or
     DISCONNECTED; a 9th hangs the app.
   - *A hung chip* never sends again, takes 2 to 6 more bytes (4 in the model) and holds CTS until a reset.
-  - *Our `nrf_send`* (main.rs) returns how many bytes the TX FIFO took; one that finds no room for 500 us is a held
-    CTS. Until 2026-11-01 it gave up after 10 ms on one byte and returned **mid-frame**: the chip then got a frame
-    shorter than its header said and hung for ever. `nrf::send` now keeps reading the chip's bytes into `Rx` while CTS
-    is held (which lets the chip finish its event frame, queue the response and release CTS), and fails with
-    `Timeout` only after 500 ms without a byte either way (a hung chip: the radio watchdog resets it through PA6).
+  - *Our USART2 setup* (main.rs `nrf_reset`): `USART_CR1` FIFOEN (bit 29) is set, so both FIFOs are on (16 bytes each, RM0399
+    USART FIFO mode), and `USART_CR3` has RTSE (bit 8) and CTSE (bit 9) set: hardware RTS drops when the RX FIFO is full
+    and the transmitter waits while CTS is high (RM0399 USART, hardware flow control).
+  - *Our `nrf_send`* (main.rs) returns at once how many bytes the TX FIFO took (no spinning). Until 2026-11-01 it gave
+    up after 10 ms on one byte and returned **mid-frame**: the chip then got a frame shorter than its header said and
+    hung for ever. `nrf::send` now puts the header and the payload as one frame, keeps reading the chip's bytes into
+    `Rx` while CTS is held (which lets the chip finish its event frame, queue the response and release CTS), sleeps 1 ms
+    when nothing moved, and fails with `Timeout` after 500 ms without a byte either way (a hung chip). A frame that went
+    out partly marks the link broken: no frame is sent before the watchdog resets the chip through PA6, on its next pass.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.
 - **SoftDevice API version 5** (S132 / S332 v5.x, nRF5 SDK 14): stock's GATTS request encoders use 0xa0 service add,

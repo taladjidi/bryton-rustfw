@@ -821,6 +821,9 @@ pub struct ChipLimits {
     pub frame_gap_us: u32,
     /// How long one `nrf_recv` waits for the next byte, us: the board's `nrf_wait_cycles` (200; 20 before 2026-11-01).
     pub wait_us: u32,
+    /// The host's time to parse the bytes one `nrf_recv` returned, before it calls again, us. Inferred (not measured on
+    /// the unit): a frame's decode at 200 MHz is a few thousand cycles. 0: back to back.
+    pub parse_us: u32,
     /// Security contexts: `sd_ble_gap_sec_params_reply` takes one, AUTH_STATUS or DISCONNECTED frees it (8). The
     /// link fuzz injects pairing requests the chip would never send in a row, and lifts this.
     pub sec_contexts: u8,
@@ -834,7 +837,7 @@ pub(crate) fn board_wait_us() -> u32 {
 
 impl Default for ChipLimits {
     fn default() -> Self {
-        Self { slots: 96, frame_gap_us: 15, wait_us: board_wait_us(), sec_contexts: 8 }
+        Self { slots: 96, frame_gap_us: 15, wait_us: board_wait_us(), parse_us: 20, sec_contexts: 8 }
     }
 }
 
@@ -1146,9 +1149,7 @@ impl Nordic {
             [8, ..] if self.sd_ant.len() >= chip_link::ANT_QUEUE => self.ant_dropped += 1,
             [8, ..] => self.sd_ant.push_back(frame),
             _ => {
-                if let [2, 0x11 | 0x19, 0, ..] = payload {
-                    self.sec = self.sec.saturating_sub(1); // DISCONNECTED / AUTH_STATUS free the context
-                }
+                self.frees_context(payload);
                 self.sd_ble.push(frame);
             }
         }

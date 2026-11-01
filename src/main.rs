@@ -903,21 +903,19 @@ fn nrf_reset() {
     wr(U_ICR, 0xf); // PE, FE, NE, ORE
 }
 
-/// Puts bytes in the TX FIFO as it takes them, and returns how many. A byte that finds no room for
-/// `PUT_WAIT_US` (the FIFO drains one byte per 10 us when CTS allows) ends the call: the chip holds CTS, and the
-/// caller (lib `nrf::send`) drains the receive side and offers the rest again; a frame is never cut short.
+/// Puts bytes in the TX FIFO as far as it has room, and returns how many, at once: when the chip holds CTS the FIFO
+/// does not drain, and the caller (lib `nrf::send`) reads the receive side, sleeps and offers the rest again. No
+/// spinning here (AGENTS.md "Never spin"); a frame is never cut short because the caller goes on until it is whole.
 fn nrf_send(data: &[u8]) -> usize {
-    let wait = CPU_HZ / 1_000_000 * bryton_rustfw::nrf::PUT_WAIT_US as u32;
-    for (n, &b) in data.iter().enumerate() {
-        let t0 = cycles();
-        while rd(U_ISR) & ISR_TXFNF == 0 {
-            if cycles().wrapping_sub(t0) > wait {
-                return n;
-            }
+    let mut n = 0;
+    for &b in data {
+        if rd(U_ISR) & ISR_TXFNF == 0 {
+            break;
         }
         wr(U_TDR, u32::from(b));
+        n += 1;
     }
-    data.len()
+    n
 }
 
 /// Reads what has arrived, and while bytes keep coming waits for the next one as long as

@@ -144,70 +144,16 @@ impl App {
     pub(crate) fn poll_nrf(&mut self, b: &mut impl Board) {
         let mut title = false;
         let mut buf = [0; 64];
+        let mut ev = [0; nrf::KEPT];
         for _ in 0..64 {
             let n = b.nrf_recv(&mut buf);
             for &byte in buf.get(..n).unwrap_or(&[]) {
                 let Some(p) = self.rx.push(byte) else { continue };
-                let mut phone = false;
-                if let Some(r) = nrf::adv_report(p) {
-                    let listed = self.radio.nearby.add(&r);
-                    title |= listed;
-                    self.list_dirty |= listed | self.ftms.found(&r);
-                } else if let Some((ch, data)) = nrf::ant_broadcast(p)
-                    && let Some(kind) = Kind::from_channel(ch)
-                {
-                    if self.radio.heard_ms.at(kind) >= sensors::STALE_MS {
-                        // back after a drop-out: its counters may have moved on by any amount; the beats before it
-                        // are not part of this series (and the beat time may have wrapped, a false interval)
-                        self.decoders.restart(kind);
-                        if kind == Kind::Hr {
-                            self.hrv = Default::default();
-                        }
-                        if kind == Kind::Trainer {
-                            self.trainer.lost();
-                        }
-                    }
-                    self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
-                    if let (Kind::Power, Some(r)) = (kind, powercal::reply(data)) {
-                        self.powercal.heard(r); // page 0x01: the calibration's answer (decode ignores it)
-                    }
-                    if kind == Kind::Trainer {
-                        fec::decode(data, &mut self.trainer.reading);
-                        self.fold_trainer();
-                    }
-                    for &rr in self.decoders.beats.rr().iter().filter(|_| kind == Kind::Hr) {
-                        self.hrv.push(rr);
-                        self.rec.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: storage/recorder/mod.rs)
-                    }
-                    if matches!(kind, Kind::Shifting | Kind::Di2) {
-                        self.shifted(); // its presses wait in the decoders until the stream is read (below)
-                    }
-                    *self.radio.heard_ms.at_mut(kind) = 0;
-                    let heard = self.radio.broadcasts.at_mut(kind);
-                    *heard = heard.saturating_add(1);
-                    *self.radio.misses.at_mut(kind) = 0;
-                    if self.radio.sensors.at(kind) == Sensor::Search {
-                        self.radio.ask |= 1 << ch;
-                    }
-                } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
-                    // its search timed out: reopened after a rest, longer for each search in a row that found nothing
-                    *self.radio.resting_ms.at_mut(kind) = 0;
-                    let m = self.radio.misses.at_mut(kind);
-                    *m = m.saturating_add(1);
-                } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {
-                    self.powercal.unsent(); // a calibration request the meter did not take: sent again
-                } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
-                    self.trainer.unsent(); // an acknowledged message the trainer did not take: sent again
-                    self.tlink.fails = self.tlink.fails.saturating_add(1);
-                } else if nrf::ant_tx_completed(p) == Some(Kind::Trainer.channel()) {
-                    self.trainer.acked(); // a release taken is not sent again
-                } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) && p.get(5) == Some(&1) {
-                    self.radio.scanning = false; // the scan's (source 1)
-                    title = true;
-                } else {
-                    phone = nrf::event_id(p).is_some();
-                }
-                if phone {
+                // a copy: the packet's handling borrows the app whole (every packet it handles fits KEPT)
+                let Some(dst) = ev.get_mut(..p.len()) else { continue };
+                dst.copy_from_slice(p);
+                let len = p.len();
+                if self.nrf_packet(ev.get(..len).unwrap_or(&[]), &mut title) {
                     self.rx.keep_last(); // acted on below, the stream read
                 }
             }
@@ -217,10 +163,14 @@ impl App {
         }
         // the phone's events: those kept while a command waited, and those just read; acting on them may send
         // commands, whose waits keep more
-        let mut ev = [0; nrf::KEPT];
         for _ in 0..32 {
             let Some(n) = self.rx.pop(&mut ev) else { break };
-            self.phone_event(b, ev.get(..n).unwrap_or(&[]));
+            let p = ev.get(..n).unwrap_or(&[]);
+            // ANT events that arrived while a command waited (broadcasts, channel closes) are handled as they would
+            // have been; a BLE event is the phone's
+            if self.nrf_packet(p, &mut title) {
+                self.phone_event(b, p);
+            }
         }
         if title && self.screen == Screen::Nearby {
             ui::draw_nearby(&mut Panel(b, self.area(), self.look()), self.radio.nearby.count(), self.radio.scanning);
@@ -229,6 +179,71 @@ impl App {
         for p in core::mem::take(&mut self.decoders.press).into_iter().flatten() {
             self.remote(b, p);
         }
+    }
+
+    /// One packet from the chip: handled if it is an advertising report, an ANT event or the scan's end. True: a BLE
+    /// event for the phone link (app/phone.rs), to be kept and acted on once the stream is read.
+    fn nrf_packet(&mut self, p: &[u8], title: &mut bool) -> bool {
+        let mut phone = false;
+        if let Some(r) = nrf::adv_report(p) {
+            let listed = self.radio.nearby.add(&r);
+            *title |= listed;
+            self.list_dirty |= listed | self.ftms.found(&r);
+        } else if let Some((ch, data)) = nrf::ant_broadcast(p)
+            && let Some(kind) = Kind::from_channel(ch)
+        {
+            if self.radio.heard_ms.at(kind) >= sensors::STALE_MS {
+                // back after a drop-out: its counters may have moved on by any amount; the beats before it
+                // are not part of this series (and the beat time may have wrapped, a false interval)
+                self.decoders.restart(kind);
+                if kind == Kind::Hr {
+                    self.hrv = Default::default();
+                }
+                if kind == Kind::Trainer {
+                    self.trainer.lost();
+                }
+            }
+            self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
+            if let (Kind::Power, Some(r)) = (kind, powercal::reply(data)) {
+                self.powercal.heard(r); // page 0x01: the calibration's answer (decode ignores it)
+            }
+            if kind == Kind::Trainer {
+                fec::decode(data, &mut self.trainer.reading);
+                self.fold_trainer();
+            }
+            for &rr in self.decoders.beats.rr().iter().filter(|_| kind == Kind::Hr) {
+                self.hrv.push(rr);
+                self.rec.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: storage/recorder/mod.rs)
+            }
+            if matches!(kind, Kind::Shifting | Kind::Di2) {
+                self.shifted(); // its presses wait in the decoders until the stream is read (below)
+            }
+            *self.radio.heard_ms.at_mut(kind) = 0;
+            let heard = self.radio.broadcasts.at_mut(kind);
+            *heard = heard.saturating_add(1);
+            *self.radio.misses.at_mut(kind) = 0;
+            if self.radio.sensors.at(kind) == Sensor::Search {
+                self.radio.ask |= 1 << ch;
+            }
+        } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
+            // its search timed out: reopened after a rest, longer for each search in a row that found nothing
+            *self.radio.resting_ms.at_mut(kind) = 0;
+            let m = self.radio.misses.at_mut(kind);
+            *m = m.saturating_add(1);
+        } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {
+            self.powercal.unsent(); // a calibration request the meter did not take: sent again
+        } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
+            self.trainer.unsent(); // an acknowledged message the trainer did not take: sent again
+            self.tlink.fails = self.tlink.fails.saturating_add(1);
+        } else if nrf::ant_tx_completed(p) == Some(Kind::Trainer.channel()) {
+            self.trainer.acked(); // a release taken is not sent again
+        } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) && p.get(5) == Some(&1) {
+            self.radio.scanning = false; // the scan's (source 1)
+            *title = true;
+        } else {
+            phone = nrf::event_id(p).is_some();
+        }
+        phone
     }
 
     /// The gear just decoded: a change while riding is a shift, counted and recorded (a gear change event, the

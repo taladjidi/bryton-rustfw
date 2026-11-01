@@ -67,7 +67,7 @@ pub struct Rx {
     head: usize,
     kept_n: usize,
     /// The op of a call that timed out, whose answer may still come: the next call swallows one answer of that op.
-    late: Option<u8>,
+    pub(crate) late: Option<u8>,
     /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
     /// PHONE menu shows it when the link could not be set up.
     pub failed: Option<(u8, u32)>,
@@ -78,6 +78,9 @@ pub struct Rx {
     pub strikes: u8,
     /// Commands in a row that got no response, since the last good frame.
     pub timeouts: u8,
+    /// A frame went out partly (the chip held CTS for ever): the chip is mis-framed. No frame goes to it until it is
+    /// reset ([`Rx::reset`]); the watchdog resets it at once (`app/nrf_watch.rs`).
+    pub broken: bool,
 }
 
 impl Default for Rx {
@@ -104,6 +107,7 @@ impl Rx {
             heard: false,
             strikes: 0,
             timeouts: 0,
+            broken: false,
         }
     }
 
@@ -118,35 +122,51 @@ impl Rx {
     /// [`Rx::resync`] after a chip reset: the events kept belong to a link that is gone, too.
     pub fn reset(&mut self) {
         self.resync();
-        (self.kept_n, self.head, self.late) = (0, 0, None);
+        (self.kept_n, self.head, self.late, self.broken) = (0, 0, None, false);
     }
 
-    /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits ([`KEPT_N`]
-    /// at most; when full, the oldest notification ([`EVT_HVX`]) makes room for another kind of event, else the new
-    /// one is dropped). The main loop keeps them too, and acts on them once the bytes read are all
+    /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report, or an ANT event,
+    /// and fits ([`KEPT_N`] at most). When full, room is made by the oldest ANT broadcast (a newer one is on its way,
+    /// and a lost one is a missed beat); failing that the oldest notification ([`EVT_HVX`]) makes room for another
+    /// kind of BLE event; else the new one is dropped. A connection's end, a channel's close or any other BLE
+    /// event is never pushed out. The main loop keeps packets too, and acts on them once the bytes read are all
     /// framed: a command sent from the middle of a read would take the rest of the stream out of order.
     pub fn keep_last(&mut self) {
         let p = self.buf.get(..self.last).unwrap_or(&[]);
         let id = event_id(p);
-        if id.is_none_or(|id| id == EVT_ADV_REPORT) || p.len() > KEPT {
+        let broadcast = ant_broadcast(p).is_some();
+        if p.first() == Some(&ANT_EVT) {
+            // kept
+        } else if id.is_none_or(|id| id == EVT_ADV_REPORT) {
             return;
         }
-        // full: the oldest notification from the phone makes room for any other event (a connection's end, a GATT
-        // answer the discovery waits for), so a flood of ANCS notifications cannot hide them
-        if self.kept_n == self.kept.len()
-            && id != Some(EVT_HVX)
-            && let Some(i) =
-                (0..self.kept_n).find(|&i| self.kept.get(self.slot(i)).is_some_and(|k| event_id(k) == Some(EVT_HVX)))
-        {
-            for j in i..self.kept_n - 1 {
-                let (a, b) = (self.slot(j), self.slot(j + 1));
-                if let (Some(&row), Some(&len)) = (self.kept.get(b), self.kept_len.get(b))
-                    && let (Some(r), Some(l)) = (self.kept.get_mut(a), self.kept_len.get_mut(a))
-                {
-                    (*r, *l) = (row, len);
+        if p.len() > KEPT {
+            return;
+        }
+        if self.kept_n == self.kept.len() {
+            let is = |me: &Self, i: usize, f: fn(&[u8]) -> bool| {
+                let at = me.slot(i);
+                me.kept
+                    .get(at)
+                    .zip(me.kept_len.get(at))
+                    .is_some_and(|(k, &l)| f(k.get(..usize::from(l)).unwrap_or(&[])))
+            };
+            let victim = (0..self.kept_n).find(|&i| is(self, i, |k| ant_broadcast(k).is_some())).or_else(|| {
+                (!broadcast && id != Some(EVT_HVX))
+                    .then(|| (0..self.kept_n).find(|&i| is(self, i, |k| event_id(k) == Some(EVT_HVX))))
+                    .flatten()
+            });
+            if let Some(i) = victim {
+                for j in i..self.kept_n - 1 {
+                    let (a, b) = (self.slot(j), self.slot(j + 1));
+                    if let (Some(&row), Some(&len)) = (self.kept.get(b), self.kept_len.get(b))
+                        && let (Some(r), Some(l)) = (self.kept.get_mut(a), self.kept_len.get_mut(a))
+                    {
+                        (*r, *l) = (row, len);
+                    }
                 }
+                self.kept_n -= 1;
             }
-            self.kept_n -= 1;
         }
         let at = self.slot(self.kept_n);
         if self.kept_n < KEPT_N
@@ -235,44 +255,70 @@ pub enum Error {
     Code(u32),
 }
 
-/// How long [`Board::nrf_send`] waits for room in the TX FIFO before it returns what it took, us: a full 16-byte FIFO
-/// drains in 160 us when CTS allows, so more than that is the chip holding CTS.
-pub const PUT_WAIT_US: u64 = 500;
-
-/// Sends one packet: the length header, then `payload`. A frame is never cut short: while the chip holds CTS (it has
-/// read a command's header, and the previous response waits for an event frame that waits for our RTS) the chip's
-/// bytes are read into `rx`, which lets it finish the event, queue the response and release CTS; the rest goes on
-/// from there. Bounded by [`TIMEOUT_MS`] without a byte either way (the chip is hung: a reset cures it), then
-/// `Err(Timeout)`. What arrives meanwhile is treated as in [`call`]'s wait: BLE events kept, the rest dropped.
+/// Sends one packet, the length header and `payload` as one put, so no byte of it is ever sent alone. A frame is never
+/// cut short while the chip lets us on: while it holds CTS (it has read a command's header, and the previous response
+/// waits for an event frame that waits for our RTS) the chip's bytes are read into `rx`, which lets it finish the
+/// event, queue the response and release CTS; the rest goes on from there. The bound is time without progress: no
+/// byte moved either way for [`TIMEOUT_MS`] (the chip is hung: a reset cures it), then `Err(Timeout)`; each wait
+/// sleeps 1 ms, nothing spins. If some bytes went and not all, the chip is mis-framed: `rx.broken` is set, the
+/// watchdog resets it at once and no frame is sent to it before. What arrives meanwhile is treated as in [`call`]'s
+/// wait: BLE and ANT events kept, an answer to a call that timed out swallowed (`rx.late`), the rest dropped.
+#[inline(never)] // its 386-byte frame in its own stack frame
 pub fn send(b: &mut impl Board, rx: &mut Rx, payload: &[u8]) -> Result<(), Error> {
-    put(b, &(payload.len() as u16).to_le_bytes(), |x| rx_byte(rx, x))?;
-    put(b, payload, |x| rx_byte(rx, x))
+    if rx.broken {
+        return Err(Error::Timeout);
+    }
+    let mut frame = [0u8; 2 + MAX_CMD];
+    let Some(dst) = frame.get_mut(2..2 + payload.len()) else { return Err(Error::Code(u32::MAX)) };
+    dst.copy_from_slice(payload);
+    frame[..2].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+    let all = frame.get(..2 + payload.len()).unwrap_or(&[]);
+    put(b, Some(rx), all, TIMEOUT_MS).map_err(|taken| {
+        rx.broken |= taken > 0;
+        Error::Timeout
+    })
 }
 
+/// The longest command payload: `sd_ble_gattc_write` of 20 bytes is 34, ANT's longest about 20; room for a 384-byte
+/// ATT value.
+const MAX_CMD: usize = 384;
+
+/// A packet arrived while a command is being sent: an answer of a timed-out call is swallowed, events are kept.
 fn rx_byte(rx: &mut Rx, x: u8) {
-    if rx.push(x).is_some() {
+    let Some(p) = rx.push(x) else { return };
+    let answer = if let [RESP, o, ..] = *p { Some(o) } else { None };
+    if answer.is_some() && answer == rx.late {
+        rx.late = None;
+    } else {
         rx.keep_last();
     }
 }
 
-/// `data` to the chip whole, reading (`each` byte) whatever it sends while it holds CTS.
-fn put(b: &mut impl Board, mut data: &[u8], mut each: impl FnMut(u8)) -> Result<(), Error> {
-    let (mut idle_ms, mut bytes) = (0, 0u32);
+/// `data` to the chip whole, reading whatever it sends while it holds CTS into `rx` (if any). `Err`: how many bytes
+/// went before `limit_ms` without progress.
+fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u32) -> Result<(), usize> {
+    let total = data.len();
+    let (mut idle_ms, mut moved) = (0, 0u32);
     loop {
-        data = data.get(b.nrf_send(data)..).unwrap_or(&[]);
+        let took = b.nrf_send(data);
+        data = data.get(took..).unwrap_or(&[]);
         if data.is_empty() {
             return Ok(());
         }
         let mut buf = [0; 16];
         let n = b.nrf_recv(&mut buf);
-        buf.get(..n).unwrap_or(&[]).iter().for_each(|&x| each(x));
-        bytes += n as u32;
-        if n == 0 {
+        if let Some(rx) = rx.as_deref_mut() {
+            buf.get(..n).unwrap_or(&[]).iter().for_each(|&x| rx_byte(rx, x));
+        }
+        moved += (took + n) as u32;
+        if took + n > 0 {
+            idle_ms = 0;
+        } else {
             b.delay_ms(1); // sleep, not spin: the chip needs the host's reads, not its time
             idle_ms += 1;
         }
-        if idle_ms >= TIMEOUT_MS || bytes >= 0x1_0000 {
-            return Err(Error::Timeout);
+        if idle_ms >= limit_ms || moved >= 0x1_0000 {
+            return Err(total - data.len());
         }
     }
 }
@@ -302,12 +348,13 @@ fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T
 /// and returns their length. Packets that arrive meanwhile are dropped, BLE events but advertising reports kept
 /// ([`Rx::pop`]).
 pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
+    // a failed send leaves `rx.late` as the drain left it (an answer swallowed there stays swallowed)
     let sent = send(b, rx, payload);
     let op = payload.get(1).copied();
     // a call that timed out may still be answered: that late answer is not this call's (the next channel's open has
     // the same op), so one answer of its op is swallowed. If it never came, this call fails once (it swallowed the
     // real answer) and does not arm another: the next call is clean.
-    let armed = rx.late.take();
+    let armed = if sent.is_ok() { rx.late.take() } else { None };
     let mut late = armed;
     let response = |p: &[u8]| match *p {
         [RESP, o, ..] if late == Some(o) => {
@@ -406,7 +453,8 @@ fn start_as(b: &mut impl Board, level: u8) -> Result<Version, Error> {
 
 /// Powers the chip down until its next reset (stock's power-off; the next start's reset pulse wakes it).
 pub fn system_off(b: &mut impl Board) {
-    let _ = put(b, &2u16.to_le_bytes(), |_| ()).and_then(|()| put(b, &[CMD, SD_POWER_SYSTEM_OFF], |_| ()));
+    // one put, short: power goes off next, so a chip that holds CTS is not worth waiting for
+    let _ = put(b, None, &[2, 0, CMD, SD_POWER_SYSTEM_OFF], 20);
 }
 
 /// Starts an active scan for `seconds` (0: until stopped), with stock's low-power timing: a 30 ms window every
@@ -891,6 +939,52 @@ mod tests {
         sim.nordic.unhang();
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: its answer swallowed");
         assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "C: clean");
+    }
+
+    #[test]
+    fn a_late_answer_read_during_a_send_is_swallowed_there() {
+        let mut rx = Rx::new();
+        rx.late = Some(0x65);
+        for b in [6, 0, RESP, 0x66, 0, 0, 0, 0] {
+            rx_byte(&mut rx, b); // another op's answer: not the late one
+        }
+        assert_eq!(rx.late, Some(0x65));
+        for b in [6, 0, RESP, 0x65, 5, 0, 0, 0] {
+            rx_byte(&mut rx, b);
+        }
+        assert_eq!(rx.late, None, "swallowed in the drain, so the next answer of that op is the real one");
+    }
+
+    #[test]
+    fn ant_events_are_kept_and_a_broadcast_makes_room_for_anything_else() {
+        let mut rx = Rx::new();
+        let mut bcast = [0u8; 44];
+        (bcast[0], bcast[2]) = (ANT_EVT, 0x4e);
+        let mut closed = [0u8; 44];
+        (closed[0], closed[42], closed[43]) = (ANT_EVT, EVENT_CHANNEL_CLOSED, 3);
+        for _ in 0..KEPT_N {
+            keep(&mut rx, &bcast);
+        }
+        keep(&mut rx, &closed); // full of broadcasts: the oldest one makes room
+        keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]); // and for a disconnection
+        let mut out = [0; KEPT];
+        let mut kinds = (0, 0, 0);
+        while let Some(n) = rx.pop(&mut out) {
+            let p = &out[..n];
+            kinds.0 += usize::from(ant_broadcast(p).is_some());
+            kinds.1 += usize::from(ant_closed(p).is_some());
+            kinds.2 += usize::from(event_id(p) == Some(0x11));
+        }
+        assert_eq!(kinds, (KEPT_N - 2, 1, 1));
+        for _ in 0..KEPT_N {
+            keep(&mut rx, &closed);
+        }
+        keep(&mut rx, &bcast); // full of closes: a broadcast never pushes one out
+        let mut n = 0;
+        while rx.pop(&mut out).is_some() {
+            n += 1;
+        }
+        assert_eq!(n, KEPT_N);
     }
 
     #[test]
