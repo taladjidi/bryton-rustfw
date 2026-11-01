@@ -367,7 +367,10 @@ impl App {
             // the card is down: the pairing an earlier build kept in the register is used meanwhile (not kept: the
             // file's read decides, `applied` stays false)
             if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
+                // set_sensor keeps the pairing (dirty): undone, so the file is still read and wins or merges
+                let kept = (self.sensors_store.dirty, self.sensors_store.trainer);
                 self.set_sensor(b, Kind::Trainer, Sensor::Paired(id));
+                (self.sensors_store.dirty, self.sensors_store.trainer) = kept;
             }
         }
         if self.sensors_store.loaded && !self.sensors_store.applied && self.ant {

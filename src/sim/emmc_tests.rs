@@ -273,3 +273,23 @@ fn a_busy_card_is_identified_once_per_backoff_period() {
     }
     assert_eq!(buf, emmc_sector(7));
 }
+
+/// A card that identifies fine but fails its reads: asked every second for 130 s, it is identified (and the read
+/// tried) once per backoff period, not at every ask.
+#[test]
+fn a_card_that_fails_its_reads_costs_one_try_per_backoff_period() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.unreadable = std::vec![0..u32::MAX];
+    let (mut emmc, mut buf) = (Emmc::new(), [0u8; SECTOR]);
+    for _ in 0..130 {
+        let r = emmc.read(&mut sim, 7, &mut buf);
+        assert!(r.is_err());
+        emmc.advance(1000);
+    }
+    let inits = sim.emmc.cmds.iter().filter(|c| c.0 == 0).count();
+    assert_eq!(inits, 5, "at 0, 5, 15, 35 and 75 s");
+    sim.emmc.unreadable.clear();
+    emmc.retry_now();
+    emmc.read(&mut sim, 7, &mut buf).unwrap();
+    assert_eq!(buf, emmc_sector(7));
+}

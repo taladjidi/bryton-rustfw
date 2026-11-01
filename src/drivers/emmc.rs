@@ -381,6 +381,9 @@ pub struct Emmc {
     /// The longest wait the next failure may set: [`BACKOFF_FIRST_MS`] while a ride is open or waits to be resumed
     /// ([`Emmc::urgent`]), else [`BACKOFF_MAX_MS`].
     cap_ms: u32,
+    /// A transfer succeeded since the last identification: the next failure is a glitch of a card that worked (one
+    /// immediate retry), not a card that identifies and then fails (which waits).
+    proven: bool,
 }
 
 impl Emmc {
@@ -393,6 +396,7 @@ impl Emmc {
             wait_ms: 0,
             next_ms: BACKOFF_FIRST_MS,
             cap_ms: BACKOFF_MAX_MS,
+            proven: false,
         }
     }
 
@@ -429,6 +433,9 @@ impl Emmc {
     /// (a checkpoint should not wait a minute for a card that came back).
     pub fn urgent(&mut self, on: bool) {
         self.cap_ms = if on { BACKOFF_FIRST_MS } else { BACKOFF_MAX_MS };
+        if on {
+            self.wait_ms = self.wait_ms.min(BACKOFF_FIRST_MS); // a wait already running is cut too
+        }
     }
 
     /// The card (identified if needed): its layout and its reliable write parameters.
@@ -446,12 +453,11 @@ impl Emmc {
             None if self.wait_ms > 0 && !self.lent => return Err(Error::Backoff),
             None => match Card::init(b) {
                 Ok(c) => {
-                    self.next_ms = BACKOFF_FIRST_MS;
+                    self.proven = false;
                     c
                 }
                 Err(e) => {
-                    self.wait_ms = self.next_ms.min(self.cap_ms);
-                    self.next_ms = (self.next_ms * 2).min(BACKOFF_MAX_MS);
+                    self.back_off();
                     return Err(e);
                 }
             },
@@ -472,11 +478,31 @@ impl Emmc {
         self.forget_on_error(r)
     }
 
+    /// A failure: no new identification for the wait, which doubles for the next one.
+    fn back_off(&mut self) {
+        self.wait_ms = self.next_ms.min(self.cap_ms);
+        self.next_ms = (self.next_ms * 2).min(BACKOFF_MAX_MS);
+    }
+
+    /// A read or write ended as `r`: after an error the card is forgotten (identified again, after the wait: a card
+    /// that identifies but fails its transfers is not asked every pass, unless it had worked since its identification);
+    /// after a success the waits start over.
     fn forget_on_error(&mut self, r: Result<(), Error>) -> Result<(), Error> {
         if matches!(r, Err(Error::Bus(..) | Error::Busy | Error::Status(..))) {
             self.card = None;
+            if !self.lent && !self.proven {
+                self.back_off();
+            }
+            self.proven = false;
+        } else if r.is_ok() {
+            (self.next_ms, self.proven) = (BACKOFF_FIRST_MS, true);
         }
         r
+    }
+
+    /// The dev link's use: no wait (a person is at the other end and asked for it).
+    pub fn retry_now(&mut self) {
+        self.wait_ms = 0;
     }
 }
 

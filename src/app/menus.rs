@@ -957,6 +957,7 @@ impl App {
             Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {
                 self.rescan();
             }
+            Some(Row::Stock(menu::StockRow::Import)) if !self.settings_ready(b) => {}
             Some(Row::Stock(menu::StockRow::Import)) if self.confirmed(menu, sel, "IMPORT SETTINGS") => {
                 self.import_stock(b, false)
             }

@@ -275,6 +275,7 @@ impl App {
 
     /// The eMMC, shared with the dev link so there is one view of the card's state.
     pub fn emmc(&mut self) -> &mut emmc::Emmc {
+        self.emmc.retry_now(); // a command from the computer does not wait out the app's backoff
         &mut self.emmc
     }
 

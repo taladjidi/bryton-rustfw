@@ -1953,3 +1953,48 @@ fn the_quick_panel_waits_for_a_late_card() {
     app2.cycle_wkt_avg(&mut sim2);
     assert_ne!(app2.settings.wkt_avg, avg, "works once the file is read");
 }
+
+/// The trainer an earlier build kept in register 14 is used while the card is down, and the late read still finds
+/// the Bluetooth trainer in sensors.bin: both pairings are there afterwards, and the file keeps both.
+#[test]
+fn a_register_pairing_does_not_hide_the_file_after_a_late_card() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 8000);
+    let peer = [1, 6, 5, 4, 3, 2, 0xc1];
+    app.sensors_store.bt = Some(peer);
+    app.sensors_store.dirty = true;
+    run(&mut sim, &mut app, 5000);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = sim.emmc.image.clone();
+    sim2.backup = sim.backup;
+    sim2.backup[14] = Kind::Trainer.to_word(ID); // an earlier build's pairing
+    sim2.nordic.sensors.push(trainer_sensor());
+    sim2.emmc.dead = true;
+    let mut app2 = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+    run(&mut sim2, &mut app2, 6000);
+    assert_eq!(app2.radio.sensors.at(Kind::Trainer), Sensor::Paired(ID), "used while the card is down");
+    assert!(!app2.sensors_store.dirty && !app2.sensors_store.loaded);
+    sim2.emmc.dead = false;
+    run(&mut sim2, &mut app2, 70_000);
+    assert_eq!((app2.sensors_store.trainer, app2.sensors_store.bt), (Some(ID), Some(peer)));
+    let mut d = Ram(sim2.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let v: [u8; 512] = read_all(&mut fat, &mut d, "Rustfw/sensors.bin").unwrap().try_into().unwrap();
+    assert_eq!(crate::sensors::bt_from_sector(&v).map(|b| b.0), Some(peer), "the file keeps the BT trainer");
+}
+
+/// A ride started during a long backoff gets its card within 5 s: both recorder copies leave Starting.
+#[test]
+fn a_ride_cuts_the_backoff_short() {
+    let mut sim = Sim::new(9, 5, 0);
+    sim.own_settings();
+    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.dead = true;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 100_000); // attempts at 0, 5, 15, 35 and 75 s: the next one waits for 60 s more
+    sim.emmc.dead = false;
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 7000);
+    assert_ne!(app.rec.clean.phase(), crate::recorder::Phase::Starting);
+    assert_ne!(app.rec.full.phase(), crate::recorder::Phase::Starting);
+}
