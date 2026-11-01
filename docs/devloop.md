@@ -22,6 +22,8 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     ./dev.py prof [--reset] [--watch 5]   # the profiler: per section of the pass, calls/s, mean / max us, % of wall time
     ./dev.py where                # the screen and the cursor row's label (read-only)
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
+                                  # reset / load / find / bench / sector / poke answer `err ride open` while a ride or its save is
+                                  # open; a wedged recorder needs the four-button restart (Engineer Mode gesture, AGENTS.md)
     tools/profile.py --run        # run a build from RAM, then scripted scenarios (idle, pages, menu, a ride
                                   # discarded), a markdown table each
     tools/walk.py --build out/IMG.bin   # the unit walk: the simulator's screen walk replayed by key, unit vs sim
