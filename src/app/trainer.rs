@@ -78,7 +78,7 @@ impl App {
 
     /// The trainer sent something lately.
     pub(crate) fn trainer_heard(&self) -> bool {
-        self.radio.heard_ms.get(Kind::Trainer as usize).is_some_and(|&ms| ms < sensors::STALE_MS)
+        self.radio.heard(Kind::Trainer)
     }
 
     /// Keeps `kind`'s paired sensor: in its backup register, the trainer's in the sensors file (written between
@@ -136,10 +136,15 @@ impl App {
     /// The trainer's readings into the live values, where nothing better is heard: power from a power meter, cadence
     /// from the meter or a cadence sensor, speed from a speed sensor, heart rate from a strap.
     pub(crate) fn fold_trainer(&mut self) {
-        let heard = |k: Kind| self.radio.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS);
+        let heard = |k: Kind| self.radio.heard(k);
         let r = self.trainer.reading;
+        // a glitch past the trainer's own limit is no reading (the ANT+ meter's pages have the same cap)
         if let (Some(p), false) = (r.power, heard(Kind::Power)) {
-            self.live.set(Metric::Power, p);
+            if p <= trainer::MAX_W {
+                self.live.set(Metric::Power, p);
+            } else {
+                self.live.clear(Metric::Power); // no reading for this second, not the last one held
+            }
         }
         if let (Some(c), false) = (r.cadence, heard(Kind::Power) || heard(Kind::Cadence) || heard(Kind::SpeedCadence)) {
             self.live.set(Metric::Cadence, u16::from(c));
@@ -165,6 +170,7 @@ impl App {
         if before.is_some_and(|s| s != self.with_trainer_now(ui::trainer::shown)) {
             self.tlink.second = true;
         }
+        fec::age(&mut self.trainer.reading, self.dt_ms);
         self.tlink.pm_ms += self.dt_ms;
         if self.tlink.pm_ms >= 1000 {
             self.tlink.pm_ms -= 1000;

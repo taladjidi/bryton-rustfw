@@ -1002,7 +1002,7 @@ mod tests {
     fn projects_metres() {
         let mut t = Track::new();
         t.add(450_000_000, 60_000_000, 0);
-        t.add(450_000_000 + 8983, 60_000_000, 0); // 8983e-7 degrees of latitude: 100 m
+        t.add(450_000_000 + 8998, 60_000_000, 0); // 8998e-7 degrees of latitude at 45 N: 100 m
         assert_eq!(t.pos(), Some((0, 99)));
         t.add(450_000_000, 60_000_000 + 12_704, 0); // at 45 degrees, 100 m east
         let (x, _) = t.pos().unwrap();

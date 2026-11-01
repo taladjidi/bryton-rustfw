@@ -145,17 +145,29 @@ fn sleep() {
 }
 
 /// Sleeps (WFI) instead of spinning.
+///
+/// The touch line (EXTI9_5) and OTG_HS are disabled in the NVIC (ICER) for the delay: their flags are consumed only
+/// in the main loop's slice, so a finger or a host packet during a pass would pend them again after every `sleep`
+/// clear and the delay would spin its whole length. A disabled interrupt does not wake WFI (ARMv7-M ARM B1.5.19, WFI
+/// wake-up: an exception that would preempt were PRIMASK clear; B3.4.4 / B3.4.5 NVIC_ISER / NVIC_ICER). Their
+/// peripheral flags stay latched, so after the ISER restore the slice's sleep still ends on them (see `sleep`). Only
+/// the lines enabled before are enabled again (OTG_HS is on only with a cable in: usb.rs).
 fn delay_ms(ms: u32) {
+    let on = (rd(NVIC_ISER0) & EXTI9_5_IRQ, rd(NVIC_ISER0 + 8) & usb::OTG_HS_IRQ);
+    wr(NVIC_ICER0, on.0);
+    wr(NVIC_ICER0 + 8, on.1);
     let mut left = ms;
     while left > 0 {
         let chunk = left.min(TIMER_MAX_MS);
         left -= chunk;
         timer_start(chunk);
         while !timer_done() {
-            sleep(); // another wake-up (USB activity): sleep again
+            sleep(); // another wake-up (the DMA's line): sleep again
         }
         timer_stop();
     }
+    wr(NVIC_ISER0, on.0);
+    wr(NVIC_ISER0 + 8, on.1);
 }
 
 /// System reset (AIRCR SYSRESETREQ): bootloader, then the firmware on the eMMC.
@@ -331,7 +343,13 @@ fn spi_init() -> Option<hw::PanelDma> {
     modify(RCC_AHB1ENR, 0, 1); // DMA1EN
     let _ = rd(RCC_AHB1ENR);
     core::hint::black_box(&DMA_FAIL); // kept in the image though only peeked
-    let dma = hw::PanelDma::take()?; // stops whatever the bootloader left on stream 0
+    DMA_TIMEOUT_MS.store(dma_timeout_ms(mbr), Ordering::Relaxed);
+    // stops whatever the bootloader left on stream 0; when it will not stop, it may still write SPI1_TXDR, so the CPU
+    // must not either (hw.rs PanelDma::stop): the SPI is dead (spi_wait), the panel blank, the loop and USB running
+    let Some(dma) = hw::PanelDma::take() else {
+        SPI_TIMEOUTS.store(1, Ordering::Relaxed);
+        return None;
+    };
     wr(DMAMUX1_C0CR, SPI1_TX_REQ);
     wr(DMA1_LIFCR, 0x3d);
     wr(NVIC_ICPR0, DMA1_S0_IRQ);
@@ -400,9 +418,20 @@ fn spi_end() {
     wr(SPI_CR1, CR1_SSI);
 }
 
-/// A DMA wait's bound: the longest transfer, 0x7ffe pixels, takes 10.5 ms at 50 MHz (a first bound of 10 ms cut
-/// full-screen fills short, seen on the unit 2026-10-27).
-const DMA_TIMEOUT_MS: u32 = 30;
+/// A DMA wait's bound, ms, for SPI1's divider `mbr` (spi_init: 0 at 50 MHz, 1 at 16, 2 at 8): the longest transfer,
+/// 0x7ffe pixels (65 532 B), takes 10.5, 32.8 or 65.5 ms. 30 ms at 50 MHz (a first bound of 10 ms cut full-screen
+/// fills short, seen on the unit 2026-10-27), doubled per step, capped at SysTick's longest period.
+const fn dma_timeout_ms(mbr: u32) -> u32 {
+    let ms = 30 << mbr;
+    if ms < TIMER_MAX_MS { ms } else { TIMER_MAX_MS }
+}
+// each divider's bound covers its longest transfer: 65 532 B x 8 bits at 50 000, 16 000 and 8 000 kHz
+const _: () = assert!(dma_timeout_ms(0) == 30 && dma_timeout_ms(0) * 50_000 > 65_532 * 8);
+const _: () = assert!(dma_timeout_ms(1) * 16_000 > 65_532 * 8);
+const _: () = assert!(dma_timeout_ms(2) * 8_000 > 65_532 * 8);
+/// [`dma_timeout_ms`] of the divider spi_init chose, set there once before the DMA handle exists (0 keeps it in
+/// .bss: no .data).
+static DMA_TIMEOUT_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Sleeps until DMA1 stream 0 has sent its words: true, or false on a DMA error, a mode fault or a timeout.
 /// WFI wakes on the stream's interrupt line (TCIE / TEIE / DMEIE: hw.rs PanelDma::start). The timeout: SysTick, when
@@ -413,8 +442,9 @@ const DMA_TIMEOUT_MS: u32 = 30;
 static DMA_FAIL: AtomicU32 = AtomicU32::new(0);
 fn dma_wait() -> bool {
     let own = !TIMER_ON.load(Ordering::Relaxed);
+    let limit = DMA_TIMEOUT_MS.load(Ordering::Relaxed);
     if own {
-        timer_start(DMA_TIMEOUT_MS);
+        timer_start(limit);
     }
     // DMA1 and SPI1 keep their clocks while the core sleeps, for this wait only (sleep_power_init clears their LPEN
     // bits: DMA1 alone is 37 uA/MHz, DS12930 table 48)
@@ -432,7 +462,7 @@ fn dma_wait() -> bool {
             break true;
         }
         let sr = rd(SPI_SR);
-        if sr & SR_MODF != 0 || (own && timer_done()) || cycles().wrapping_sub(t0) > DMA_TIMEOUT_MS * (CPU_HZ / 1000) {
+        if sr & SR_MODF != 0 || (own && timer_done()) || cycles().wrapping_sub(t0) > limit * (CPU_HZ / 1000) {
             DMA_FAIL.store(0x2000_0000 | (u32::from(own) << 24) | (sr & 0xffff) | (isr << 16), Ordering::Relaxed);
             break false;
         }

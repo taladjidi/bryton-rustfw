@@ -75,6 +75,17 @@ fn mark(kind: Kind, detail: u32) -> ! {
         barrier();
         wr(0xe000_ed0c, 0x05fa_0004); // AIRCR: SYSRESETREQ
     }
+    // Parked: nothing may wake WFI, or from thread mode ([`fault`]) a pending SysTick or a level OTG_HS or EXTI line
+    // ends every WFI at once and the unit spins at full clock. SysTick off (SYST_CSR 0) and its pending state cleared
+    // (ICSR PENDSTCLR), every NVIC line disabled and its pending bit cleared (ICER0..7, ICPR0..7): ARMv7-M ARM
+    // B3.3.3, B3.2.4, B3.4.4, B3.4.7; B1.5.19 for what wakes WFI. Only the four-button restart leaves the park.
+    wr(0xe000_e010, 0);
+    wr(0xe000_ed04, 1 << 25);
+    for k in 0..8 {
+        wr(0xe000_e180 + 4 * k, u32::MAX);
+        wr(0xe000_e280 + 4 * k, u32::MAX);
+    }
+    barrier();
     loop {
         wfi();
     }

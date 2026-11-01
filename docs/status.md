@@ -591,6 +591,10 @@ A feature not listed here was seen on the unit.
   - the cog opening settings during a ride.
 - A tap on the panel after the stuck-IRQ fixes (touch IRQ 23, panel DMA IRQ 11, main.rs `sleep`).
 - The flattened menus and the quick panel (f935c0f), and refactors B1 to B3: only booted and profiled.
+  Seen 2026-11-01 (main 51ad015, `tools/walk.py --build out/IMG.bin --rides`, RAM run): 132 paths, 53 walked
+  (the menus, the sub-struct screens and the four ride pages), 79 refused by the walk's own rules (62 imperial, 5 rows
+  not on the unit, 4 KEYS, 4 rows that act, 2 INDOOR, 2 NEARBY), 0 title drift, 0 failed, no reset or fault, the
+  ride idle at the end, 1.04 % awake idle on the overview, 1 489 s. Still to see: the imperial pages (a human check).
 - The panel at 50 MHz SPI: an owner's look for noise or shifted pixels; if any, MBR /4 (25 MHz) in `spi_init`.
 
 ## Known problems

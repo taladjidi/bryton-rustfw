@@ -480,7 +480,8 @@ MENU
   a second Start forgets it; a paired one silent searches for it again at once (not after its rest), and a second
   Start forgets it. DI2 KEYS: what each Di2 hood button press does. PHONE: LINK (OFF, PAIRING, WAITING, LINKED,
   SECURE; ERR and a command's code if the radio refused the set-up), PAIR, REMOTE (the media remote), NOTIFY on /
-  off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
+  off, MEDIA KEY on / off, FORGET (BONDED while a phone is). The bond's key (LTK, ediv, rand) is kept in clear in
+  `\Rustfw\ble.bin`, on the volume a computer can read: whoever mounts the drive can impersonate the unit to that phone.
 - **Taps act:** one tap on a menu row acts on it, as Start on that row (a destructive row still asks first). While the
   ride runs and moves a tap only selects the row and a second one acts, so a bump or a wet glove does nothing.
 - **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the

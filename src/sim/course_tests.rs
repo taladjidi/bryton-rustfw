@@ -20,7 +20,7 @@ pub(super) fn course_route(ms: u64) -> (i32, i32, i32) {
         y -= 150.0;
     }
     let m_per_unit = 0.011_132; // metres per 1e-7 degree, as map.rs (at 0 N the same east and north)
-    ((y / m_per_unit) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
+    ((y / 0.011_057_431) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
 }
 
 /// The list row of stock's hill (in \PlanTrip: the first HILL listed).
@@ -236,8 +236,10 @@ fn course_ride() {
 /// The made-up road of the synthetic map file (tools/route_pack.py, `\Map\MapData\Test` on the test volume): ridden
 /// east at 8 m/s from 100 m along it.
 fn ahead_route(ms: u64) -> (i32, i32, i32) {
-    let (lat, lon) = crate::route::tests::metres(100.0 + ms as f64 * 0.008, 0.0);
-    (lat, lon, 9_000_000)
+    // east along the origin's parallel, by the firmware's own length of a degree there (math.rs)
+    let (lat, lon0) = crate::route::tests::metres(0.0, 0.0);
+    let east = crate::math::mm_per_degree(crate::math::cos_q16(lat)).1 as f64 / 1e10;
+    (lat, lon0 + ((100.0 + ms as f64 * 0.008) / east) as i32, 9_000_000)
 }
 
 /// An MTB ride turns climbs ahead's trails mode on; a road ride leaves it off.
@@ -408,7 +410,7 @@ fn zigzag_route(ms: u64) -> (i32, i32, i32) {
         (s, at) = (s - len, (b.0, b.1, heading));
     }
     let m_per_unit = 0.011_132;
-    ((at.1 / m_per_unit) as i32, (at.0 / m_per_unit) as i32, (at.2 * 1e5) as i32)
+    ((at.1 / 0.011_057_431) as i32, (at.0 / m_per_unit) as i32, (at.2 * 1e5) as i32)
 }
 
 /// Turn-by-turn on the zigzag's GPX track (its turns found on its shape): each turn said in the banner with its
@@ -821,7 +823,7 @@ fn climb_page_picture() {
             s => (s - 4000.0, 500.0, 90.0),
         };
         let m_per_unit = 0.011_132;
-        ((y / m_per_unit) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
+        ((y / 0.011_057_431) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
     }
     // 4, 7, 10 and 6 % in 500 m sections from 2000 m
     fn alt_m(s: f64) -> f64 {
@@ -1214,12 +1216,12 @@ fn reverse_route(ms: u64) -> (i32, i32, i32) {
         s if s < 3000.0 => (0.0, 500.0 - (s - 1000.0), 180.0),
         s => (-(s - 3000.0), -1500.0, 270.0),
     };
-    ((y / 0.011_132) as i32, (x / 0.011_132) as i32, (heading * 1e5) as i32)
+    ((y / 0.011_057_431) as i32, (x / 0.011_132) as i32, (heading * 1e5) as i32)
 }
 
 /// 400 m south of the hill's start (2 km west, 1.5 km south of the origin), still.
 fn south_of_start(_: u64) -> (i32, i32, i32) {
-    ((-1900.0 / 0.011_132) as i32, (-2000.0 / 0.011_132) as i32, 0)
+    ((-1900.0 / 0.011_057_431) as i32, (-2000.0 / 0.011_132) as i32, 0)
 }
 
 fn course_app(sim: &mut Sim) -> App {

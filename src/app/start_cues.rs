@@ -37,16 +37,9 @@ impl App {
     /// The bike moves: GPS over 8 km/h, a wheel sensor heard turning, or power above 0.
     fn bike_moving(&self) -> bool {
         let gps = self.gps.pvt.is_some_and(|p| p.good() && p.speed_mm_s > MOVING_MM_S);
-        let wheel = [Kind::Speed, Kind::SpeedCadence].iter().any(|&k| self.sensor_heard(k))
+        let wheel = [Kind::Speed, Kind::SpeedCadence].iter().any(|&k| self.radio.paired_heard(k))
             && self.live.get(Metric::Speed).is_some_and(|v| v > 0);
         gps || wheel || self.live.get(Metric::Power).is_some_and(|v| v > 0)
-    }
-
-    /// The sensor of `kind` is paired and was heard in the last [`sensors::STALE_MS`].
-    fn sensor_heard(&self, kind: Kind) -> bool {
-        let i = kind as usize;
-        matches!(self.radio.sensors.get(i), Some(Sensor::Paired(_)))
-            && self.radio.heard_ms.get(i).is_some_and(|&ms| ms < sensors::STALE_MS)
     }
 
     /// Once a second: counts the movement, and says START THE RIDE? when it held for 10 s (see the module doc).
@@ -93,11 +86,13 @@ impl App {
         // they may stay silent at a standstill); the second line is the warning, names cut with "+N" to fit
         let counted = |k: &&Kind| {
             let paired = matches!(self.radio.sensors.get(**k as usize), Some(Sensor::Paired(_)));
-            paired && **k != Kind::Trainer && (!matches!(**k, Kind::Shifting | Kind::Di2) || self.sensor_heard(**k))
+            paired
+                && **k != Kind::Trainer
+                && (!matches!(**k, Kind::Shifting | Kind::Di2) || self.radio.paired_heard(**k))
         };
         let mut names = [""; Kind::ALL.len()];
         let mut miss = 0;
-        for k in Kind::ALL.iter().filter(counted).filter(|k| !self.sensor_heard(**k)) {
+        for k in Kind::ALL.iter().filter(counted).filter(|k| !self.radio.paired_heard(**k)) {
             if let Some(n) = names.get_mut(miss) {
                 *n = k.short();
             }

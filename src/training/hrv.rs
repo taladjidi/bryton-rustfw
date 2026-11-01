@@ -9,6 +9,14 @@
 //!   least-squares line in each, F(n) the RMS of the residuals; alpha1 is the slope of log F(n) against log n. This
 //!   is the short-term exponent of Rogers et al. 2021 (Front. Physiol. 11:596567, about 0.75 at the aerobic
 //!   threshold), with the 5 % artifact rule of their FatMaxxer / AlphaHRV apps as P9 has it.
+//! - **No smoothness-priors detrending here.** Rogers et al. 2021 and FatMaxxer (Android, MainActivity.java
+//!   `smoothnessPriorsDetrending`, a Lambda setting, github.com/IanPeake/FatMaxxer, checked 2026-11-01; Kubios and
+//!   Runalyzer do the same) remove the slow trend from the RR series with the smoothness priors method (Tarvainen
+//!   et al. 2002, IEEE TBME 49:172) before the DFA, which this port (P9) does not: its alpha1 is the one of the
+//!   plain box-wise detrending and can read differently on a drifting series. The method solves
+//!   (I + lambda^2 D2'D2) z = RR for a pentadiagonal (banded) system, so a banded Cholesky would run in O(n) time and
+//!   memory for the window's n beats (no n x n matrix, which FatMaxxer builds): bounded, fit for this MCU, left for
+//!   a separate change. The tests below check this port against P9's reference values, not against FatMaxxer's.
 //! - **RMSSD** (Task Force of the ESC and NASPE 1996, Circulation 93:1043): the root mean square of successive
 //!   differences over the last 60 s of beats. A pair is left out when its beats differ by more than 20 % of the
 //!   first (Malik et al. 1989's rule, the usual correction for ectopic beats), so a missed or extra beat drops
