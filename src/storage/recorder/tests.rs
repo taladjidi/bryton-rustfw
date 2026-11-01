@@ -809,6 +809,23 @@ fn open_ride(d: &mut Card, secs: u32) -> Recorder {
     r
 }
 
+/// B1b-2's review (2): a `ride.rec` of size 0 on a cluster (an older build's create cut before its sectors were
+/// written, the cluster an old ride.rec's, its records still there) holds no record: the boot resumes nothing.
+#[test]
+fn a_ride_rec_without_its_size_holds_no_record() {
+    let mut d = card(crate::fat::tests::image());
+    let _ = open_ride(&mut d, 200);
+    let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let dir = fat.open(&mut ram, DIR).unwrap();
+    let h = fat.locate(&mut ram, dir, Kind::Clean.rec()).unwrap();
+    let at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32 + 28;
+    let mut sized = card(d.img.clone());
+    assert!(matches!(Recorder::new().recover(&mut sized, local(201)), Outcome::Resumed(..)), "sized: resumed");
+    d.img[at..at + 4].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(Recorder::new().recover(&mut d, local(201)), Outcome::Nothing);
+}
+
 /// Calls io (as the main loop would, `RETRY` waits included) until it has nothing left to do: what it said.
 fn io_all(r: &mut Recorder, d: &mut impl DiskWrite, t: u32) -> Vec<Outcome> {
     let mut out = Vec::new();

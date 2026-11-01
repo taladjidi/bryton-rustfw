@@ -361,9 +361,11 @@ impl Fat {
                 // a file with no cluster yet (just made, or emptied as a computer leaves one): its entry gets the
                 // chain with its size, in one write ([`Fat::set_size`]): a cut before leaves a lost chain, never a
                 // size on cluster 0 (2026-10-25 review) nor an empty file on a cluster (fsck_msdos: "too many
-                // clusters allocated", the review of 2026-11-01, 84)
+                // clusters allocated", the review of 2026-11-01, 84). A size there with no chain is no size: 0, so
+                // a caller that sets the size only when it differs (the app's one-sector files) still sets it, and
+                // with it the cluster (B1b-2's review: else a cluster lost at each save, the data never read back)
                 self.set_entries(d, &[(c, EOC)])?;
-                h.first = c;
+                (h.first, h.size) = (c, 0);
             } else {
                 // two writes even in one FAT sector: a torn write of both could land the link without the end
                 self.set_entries(d, &[(c, EOC)])?;
@@ -1959,6 +1961,34 @@ pub(crate) mod tests {
             made += usize::from(got.is_ok_and(|g| g.0));
         }
         assert!(empty >= 3 && made == 1, "{empty} empty, {made} whole of {writes} writes");
+    }
+
+    /// B1b-2's review (1): an entry with a size on cluster 0 (as `\Rustfw\scan.bin` was on the card, 2026-10-25),
+    /// saved twice as the app's one-sector files are (app/barometer.rs: the sector written, then the size only if it
+    /// differs): the cluster the first save took is in the entry, the second save reads it back and writes there, no
+    /// cluster lost.
+    #[test]
+    fn a_size_on_cluster_0_gets_its_cluster_with_the_size() {
+        fn save(fat: &mut Fat, d: &mut Ram, dir: File, byte: u8) {
+            let mut h = fat.locate(d, dir, "altcal.bin").unwrap();
+            fat.write_sectors(d, &mut h, 0, &[byte; SECTOR]).unwrap();
+            if h.size != 512 {
+                fat.set_size(d, &mut h, 512, T).unwrap();
+            }
+        }
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.ensure_dir(&mut d, fat.root(), "Rustfw", T).unwrap();
+        let h = fat.create(&mut d, dir, "altcal.bin", T).unwrap();
+        let at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32 + 28;
+        d.0[at..at + 4].copy_from_slice(&512u32.to_le_bytes());
+        let (free, _) = free_counts(&d.0);
+        save(&mut fat, &mut d, dir, 1);
+        assert_eq!(read_all(&mut fat, &mut d, "Rustfw/altcal.bin"), [1; SECTOR], "the first save read back");
+        save(&mut fat, &mut d, dir, 2);
+        assert_eq!(read_all(&mut fat, &mut d, "Rustfw/altcal.bin"), [2; SECTOR], "the second");
+        assert_eq!(free_counts(&d.0), (free - 1, free - 1), "one cluster taken, FSInfo the same");
+        assert_eq!(fsck(&d.0), Ok(0), "none lost");
     }
 
     /// An entry `name` in `dir` written as it is, no name check (as stock, a computer or a torn write may leave it):

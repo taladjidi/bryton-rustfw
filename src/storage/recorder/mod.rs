@@ -1451,8 +1451,9 @@ impl Recorder {
     fn read_records(&mut self, fat: &mut Fat, d: &mut impl DiskWrite) -> Result<Option<Rec>, Error> {
         let rec = self.rec.ok_or(Error::NotFound)?;
         let mut best: Option<Rec> = None;
-        // a ride.rec made and cut before its first write has no cluster yet (`Fat::create`): no record
-        for k in 0..if rec.clusters == 0 { 0 } else { 2 } {
+        // a ride.rec made and cut before its sectors and size were written (no cluster yet: `Fat::create`; or an
+        // older build's, on a cluster whose stale sectors may hold another ride.rec's records): no record
+        for k in 0..if rec.size < REC_SECTORS * SECTOR_U32 { 0 } else { 2 } {
             let mut s = [0u8; SECTOR];
             fat.read_sector(d, &rec, 3 * k + 2, &mut s)?;
             if let Some(r) = Rec::from_sector(&s)
