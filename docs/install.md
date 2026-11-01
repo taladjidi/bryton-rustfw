@@ -46,7 +46,8 @@ bootloader's recovery mode, which this firmware cannot touch (it lives in the in
 - **From Engineer Mode** (any firmware, or a stuck unit): USB cable plugged **first**, then the four-button
   restart while holding **Page** until "Engineer Mode" shows (without the cable the bootloader ignores Page).
   Then `sudo python3 tools/iaprecover.py --write out/IMG.bin`: it checks the image as `tools/pack.py` and the updater
-  do, writes it in 2 KB chunks and reads each one back. Restart.
+  do, refuses any device but the bootloader (USB id 0483:5720 and the byte sum of R039's bootloader, so never the
+  BRYTON drive), writes it in 2 KB chunks and reads each one back. Restart.
   The computer will offer to initialise the raw disk: always Ignore or Cancel. Leave the mode by unplugging the cable.
   If the link drops mid-write, redo the write from the start and compare.
 - Expected: the overview (the date, today's card), "BLE" green, then "GPS" blinking.
