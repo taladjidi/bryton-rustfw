@@ -18,6 +18,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **The ride's hang, reproduced in the model (2026-11-01, `ride_radio_tests.rs` `the_bursts_of_a_ride_...`):** after the
+  differential test fixed the response order, the old configuration (100 ms pass, 20 us wait) keeps the queue near 70 to
+  88 of 96, and a burst on top hangs it: the phone's 12 notifications as 48 events in one pass (3 hangs in 5 minutes) and
+  32 ANT events after a suspend (1 hang); the 8 channels' search time-outs alone (16 events) do not. The production
+  configuration never hangs under the same bursts: worst high-water 48 of 96. Which burst the ride really had is still
+  open (the model shows it could be either).
 - **The sensor bus clear (2026-11-01, main.rs `i2c_clear`, BOARD.md 16 "Bus clear"):** nine SCL pulses and a STOP on
   PD12 / PD13, run at start when no chip answers and after 3 failed transfers in a row. Never run on the unit: check it
   with a scope or by holding SDA low from a test fixture, and that a healthy bus is left as `i2c_init` leaves it.
@@ -38,6 +44,8 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   sourced from Linux's mmc.h; the stall's length and period, and whether the unit's card raises URGENT_BKOPS
   (EXCEPTION_EVENT, R1 bit 6) at all, are *inferred*. To see on the unit, with the write bench above: the longest
   CMD13 busy over a few thousand sector writes, and R1 bit 6 in `tools/dev.py emmc`'s status.
+- **First ride on a fresh card (2026-11-01, src/sim/budget_tests.rs):** the recorder creates its 20 folders and files on the first ride (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms): the Start pass is 1051 to 1730 ms, the gate's one named exemption for it. On a card that already had a ride the Start pass is 53 to 97 ms, and the prepared-card rows (keys 108 to 136 ms, GNSS under 1.1 s) hold the general limits. Open owner decision: prepare the card's folders at boot or when idle, or buffer the first seconds in RAM (a branch's approach, not merged: the golden rule wants ride data on the eMMC as it goes).
+
 - **Review 3 of the chip's reset (2026-11-01):** nothing is sent while PA6 is low or the chip boots (the TX FIFO is flushed
   at the hold: USART_RQR TXFRQ, main.rs `nrf_hold`; to see: no `resyncs` after forcing a reset mid-command), the rider's
   sensor choice and the PAIR window during a reset are applied after it, the switch-off during a reset ends with the chip
