@@ -65,14 +65,15 @@ impl App {
         if self.chips.baro {
             let busy = self.ride.state() == ride::State::Running || self.alt.progress().is_some();
             self.baro_ms = self.baro_ms.saturating_add(self.dt_ms);
-            if self.baro_ms >= if busy { BARO_RIDE_MS } else { BATTERY_MS } {
+            if self.light.hold_ms == 0 && self.baro_ms >= if busy { BARO_RIDE_MS } else { BATTERY_MS } {
                 self.baro_ms = 0;
                 // the conversion started one period ago; the next one now (one-shot: the chip sleeps in between)
                 let read = ambient::baro_read_raw(b);
-                self.baro = read.map(|(p, t)| ((p * 10 + 2048) / 4096, t));
-                self.alt.feed(read.map(|(p, _)| p));
+                let ready = read.flatten(); // outer None: no answer; inner None: not ready
+                self.baro = ready.map(|(p, t)| ((p * 10 + 2048) / 4096, t));
+                self.alt.feed(ready.map(|(p, _)| p));
                 let started = ambient::baro_start(b);
-                self.sensor_ok(b, started);
+                self.sensor_ok(b, started && read.is_some());
             }
         }
         self.alt_storage(b);

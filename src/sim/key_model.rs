@@ -10,8 +10,9 @@ pub fn bounce(f: impl Fn(u64) -> u8 + 'static) -> impl Fn(u64) -> u8 + 'static {
     move |t| {
         let now = f(t);
         let mut mask = now;
-        for d in 0..10u64 {
-            let Some(e) = t.checked_sub(d) else { break };
+        for d in (0..10u64).rev() {
+            // oldest edge first, so the newest one has the last word
+            let Some(e) = t.checked_sub(d) else { continue };
             let (after, before) = (f(e), e.checked_sub(1).map_or(0, &f));
             for bit in 0..8 {
                 if (after ^ before) >> bit & 1 == 0 {
@@ -40,5 +41,16 @@ mod tests {
         assert!(edges >= 3, "{seen:?}");
         assert_eq!((f(98), f(110), f(500)), (0, 4, 4), "settled before and after");
         assert_eq!(bounce(|_| 4)(7), 4, "no edge, no bounce");
+    }
+
+    /// A tap shorter than the bounce: while the release bounces, the press's older train does not override it.
+    #[test]
+    fn a_fast_tap_follows_its_newest_edge() {
+        let tap = bounce(|t| if (100..104).contains(&t) { 4 } else { 0 });
+        let release = bounce(|t| if t < 104 { 4 } else { 0 }); // the release's edge alone
+        for t in 104..114 {
+            assert_eq!(tap(t), release(t), "t {t}");
+        }
+        assert_eq!(tap(114), 0);
     }
 }

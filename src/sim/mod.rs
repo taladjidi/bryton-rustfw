@@ -1486,8 +1486,8 @@ impl Board for Sim {
         self.bus.write(self.ms, addr, reg, data)
     }
 
-    fn i2c_recover(&mut self) {
-        self.bus.recover();
+    fn i2c_recover(&mut self) -> bool {
+        self.bus.recover()
     }
 
     fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool {

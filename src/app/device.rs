@@ -115,6 +115,16 @@ pub const LIGHT_MS: u32 = 500;
 /// Sensor bus transfers failing in a row before the bus is cleared (`App::sensor_ok`).
 pub const I2C_RECOVER_AFTER: u8 = 3;
 
+/// The longest the sensor bus is left alone after clears that did not help (`App::sensor_ok`): the wait starts at
+/// [`LIGHT_MS`] and doubles, so a bus the clear cannot fix costs a few transfers a minute, not a clear every 1.5 s.
+pub const I2C_BACKOFF_MAX_MS: u32 = 60_000;
+
+/// Touch reads failing in a row before the controller is reset (`App::touch_health`).
+pub const TOUCH_RECOVER_AFTER: u8 = 5;
+
+/// The first wait between two touch controller resets that did not help; it doubles up to [`I2C_BACKOFF_MAX_MS`].
+pub const TOUCH_BACKOFF_MS: u32 = 1000;
+
 /// How often the light is read when only THEME AUTO wants it (the backlight not following it, the menu not showing it):
 /// one reading each 5 s, each counting its 5 s of the switch's [`ui::theme::HOLD_S`] ([`ui::theme::DayNight`]), so the
 /// theme still switches after 30 s of the other light. The switch is decided and drawn while the screen is off too:
@@ -296,7 +306,8 @@ impl App {
     /// shows it, read every [`LIGHT_MS`]; while THEME AUTO alone wants it, read every [`THEME_LIGHT_MS`]; in standby
     /// otherwise.
     pub(crate) fn poll_light(&mut self, b: &mut impl Board) {
-        if !self.chips.light {
+        self.light.hold_ms = self.light.hold_ms.saturating_sub(self.dt_ms);
+        if !self.chips.light || self.light.hold_ms > 0 {
             return;
         }
         self.light.ms = self.light.ms.saturating_add(self.dt_ms);
@@ -331,11 +342,20 @@ impl App {
 
     /// A sensor bus transfer's outcome: after [`I2C_RECOVER_AFTER`] failures in a row the library asks the board to
     /// clear the bus (a chip may hold SDA low after a reset in the middle of a read; one pass of nine clock pulses).
+    /// Then the bus is left alone for `backoff_ms` ([`LIGHT_MS`], doubling to [`I2C_BACKOFF_MAX_MS`]) until a transfer
+    /// succeeds, so a bus the clear cannot fix is not clocked and polled every pass.
     pub(crate) fn sensor_ok(&mut self, b: &mut impl Board, ok: bool) {
-        self.light.fails = if ok { 0 } else { self.light.fails + 1 };
-        if self.light.fails >= I2C_RECOVER_AFTER {
-            self.light.fails = 0;
-            b.i2c_recover();
+        let l = &mut self.light;
+        if ok {
+            (l.fails, l.backoff_ms) = (0, 0);
+            return;
+        }
+        l.fails = l.fails.saturating_add(1);
+        if l.fails >= I2C_RECOVER_AFTER {
+            l.fails = 0;
+            l.backoff_ms = (l.backoff_ms * 2).clamp(LIGHT_MS, I2C_BACKOFF_MAX_MS);
+            l.hold_ms = l.backoff_ms;
+            let _ = b.i2c_recover(); // the next failures say whether it helped
         }
     }
 

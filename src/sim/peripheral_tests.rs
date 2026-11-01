@@ -36,7 +36,7 @@ fn the_firmware_reads_the_barometer_whole() {
     let chips = crate::ambient::init(&mut sim);
     assert!(chips.baro && crate::ambient::baro_start(&mut sim));
     sim.delay_ms(25);
-    let (p, _) = crate::ambient::baro_read_raw(&mut sim).expect("coherent read");
+    let (p, _) = crate::ambient::baro_read_raw(&mut sim).flatten().expect("coherent read");
     assert_eq!(p, 10_132 * 4096 / 10);
     assert!(sim.bus.violations.is_empty());
 }
@@ -96,6 +96,70 @@ fn s5_a_bus_that_sticks_mid_run_is_cleared_and_the_light_comes_back() {
     assert!(sim.bus.nacks >= 3 && !sim.bus.stuck_sda);
     run(&mut sim, &mut app, 3000);
     assert!(sim.bus.light_reads > reads, "the light is read again");
+}
+
+/// S5: a bus the clear cannot free (a dead chip, a short) is not clocked and polled every pass: the clears and the
+/// transfers back off, and the light is read again once the bus is free.
+#[test]
+fn s5_a_bus_the_clear_cannot_free_backs_off() {
+    let (mut sim, mut app) = started();
+    app.open(Screen::Menu(Menu::BuiltIn, 0));
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 3000);
+    sim.bus.stuck_sda = true;
+    sim.bus.stuck_hard = true;
+    let t0 = sim.bus.transactions;
+    run(&mut sim, &mut app, 600_000);
+    let (recovers, transfers) = (sim.bus.recovers, sim.bus.transactions - t0);
+    assert!((5..=20).contains(&recovers) && transfers <= 100, "{recovers} clears, {transfers} transfers in 10 min");
+    sim.bus.stuck_hard = false;
+    let reads = sim.bus.light_reads;
+    run(&mut sim, &mut app, 130_000);
+    assert!(sim.bus.light_reads > reads, "the light comes back once the clear works");
+}
+
+/// A barometer that never answers counts toward the clear (not "not ready", "no answer").
+#[test]
+fn the_barometer_not_answering_counts_toward_the_clear() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.bus.lux10 = None; // no light sensor: its good transfers would reset the count of failures in a row
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Start)); // a ride: the barometer is read each second
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(sim.bus.recovers, 0, "a healthy barometer, never a clear");
+    sim.bus.baro = None;
+    run(&mut sim, &mut app, 10_000);
+    assert!(sim.bus.recovers >= 1, "{}", sim.bus.recovers);
+}
+
+/// T4: the touch chip stops answering (wedged); five failed reads later the app pulses its reset and the next tap
+/// works.
+#[test]
+fn t4_a_wedged_touch_chip_is_reset_and_answers_again() {
+    let mut sim = Sim::new(9, 0, 0)
+        .finger(|t| ((6000..6300).contains(&t) || (12_000..12_150).contains(&t)).then_some((120, 160)));
+    sim.touch.idle_ms = None;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 3000);
+    let resets = sim.touch.resets;
+    sim.touch.wedged = true;
+    run(&mut sim, &mut app, 5000);
+    assert!(!sim.touch.wedged && sim.touch.resets == resets + 1, "{} resets", sim.touch.resets - resets);
+    let g = gestures(&mut sim, &mut app, 8000);
+    assert!(g.iter().any(|i| matches!(i, Input::Touch(Gesture::Tap(..)))), "{g:?}");
+}
+
+/// T4: a chip no reset frees is reset a handful of times in 10 minutes, not every few reads.
+#[test]
+fn t4_a_chip_no_reset_frees_is_reset_with_backoff() {
+    let mut sim = Sim::new(9, 0, 0).finger(|t| (t >= 6000).then_some((120, 160)));
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 3000);
+    let resets = sim.touch.resets;
+    sim.touch.wedged_hard = true;
+    run(&mut sim, &mut app, 600_000);
+    let n = sim.touch.resets - resets;
+    assert!((5..=20).contains(&n), "{n} resets in 10 min");
 }
 
 #[test]
@@ -220,7 +284,6 @@ fn fuzz_the_sensor_bus() {
             x
         };
         let (mut sim, mut app) = started();
-        sim.bus.expect = Some("S"); // the model's rules are recorded, not fatal, for raw transactions
         app.open(Screen::Menu(Menu::BuiltIn, 0));
         app.show(&mut sim);
         app.press(&mut sim, Press::Short(Key::Start));
@@ -230,12 +293,19 @@ fn fuzz_the_sensor_bus() {
                 1 => sim.bus.stuck_sda = true,
                 2 => {
                     let addr = [0x53, 0x5c, 0x18, (rnd() % 128) as u8][(rnd() % 4) as usize];
+                    // a raw write skips the light sensor's MEAS_RATE / GAIN (regs below 6): a chip that lost its set-up is not the app's rule to break
                     let mut buf = vec![0; 1 + (rnd() % 8) as usize];
+                    sim.bus.expect = Some("S"); // the raw transactions' violations are recorded; the app's still fail
                     if rnd() % 2 == 0 {
                         sim.i2c_read(addr, (rnd() % 0x30) as u8, &mut buf);
                     } else {
-                        sim.i2c_write(addr, (rnd() % 0x30) as u8, &buf);
+                        sim.i2c_write(
+                            addr,
+                            if addr == 0x53 { 6 + (rnd() % 0x10) as u8 } else { (rnd() % 0x30) as u8 },
+                            &buf,
+                        );
                     }
+                    sim.bus.expect = None;
                 }
                 _ => {}
             }

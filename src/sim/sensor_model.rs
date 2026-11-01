@@ -60,6 +60,8 @@ pub struct Bus {
     pub accel_ctrl1: u8,
     /// S5: a slave holds SDA low: every transfer fails until [`Bus::recover`].
     pub stuck_sda: bool,
+    /// The slave holds SDA low whatever the clear does (a dead chip, a short): [`Bus::recover`] does not free it.
+    pub stuck_hard: bool,
     /// The next this many transfers fail (a burst of NACKs).
     pub nack_left: u32,
     /// Transfers that failed so far.
@@ -91,6 +93,7 @@ impl Bus {
             baro_ctrl1: 0,
             accel_ctrl1: 0x77,
             stuck_sda: false,
+            stuck_hard: false,
             nack_left: 0,
             nacks: 0,
             recovers: 0,
@@ -109,9 +112,11 @@ impl Bus {
     }
 
     /// The nine clock pulses and the STOP ran (S5): the slave lets go of SDA.
-    pub(super) fn recover(&mut self) {
+    /// False if the bus is still stuck (`stuck_hard`).
+    pub(super) fn recover(&mut self) -> bool {
         self.recovers += 1;
-        self.stuck_sda = false;
+        self.stuck_sda = self.stuck_hard;
+        !self.stuck_sda
     }
 
     /// The transfer does not happen: a stuck bus or a NACK burst.
@@ -184,7 +189,7 @@ impl Bus {
                 let end = r + len; // one past the last register
                 // S1: with BDU, a read that starts inside the pressure (or temperature) bytes and stops short of
                 // the high byte leaves the output locked and mixes two conversions.
-                if self.baro_ctrl1 & 2 != 0 && ((0x28..0x2a).contains(&r) && end <= 0x2a || r == 0x2b && end <= 0x2c) {
+                if self.baro_ctrl1 & 2 != 0 && (r <= 0x29 && (0x29..=0x2a).contains(&end) || r <= 0x2b && end == 0x2c) {
                     self.violation("S1: BDU set, output read without its high byte (split read)");
                 }
                 if r <= 0x2a && end > 0x28 {
@@ -227,13 +232,19 @@ impl Bus {
                 true
             }
             BARO_ADDR if self.baro.is_some() => {
-                if reg == 0x10 {
-                    self.baro_ctrl1 = first;
-                }
-                let converting = self.baro_done.is_some_and(|d| now < d);
-                if reg == 0x11 && first & 1 != 0 && !converting && self.baro_ctrl1 & 0x70 == 0 {
-                    self.baro_done = Some(now + 20);
-                    self.baro_conversions += 1;
+                for (i, &v) in data.iter().enumerate() {
+                    // IF_ADD_INC: a multi-byte write goes on to the next register
+                    match usize::from(reg) + i {
+                        0x10 => self.baro_ctrl1 = v,
+                        0x11 => {
+                            let converting = self.baro_done.is_some_and(|d| now < d);
+                            if v & 1 != 0 && !converting && self.baro_ctrl1 & 0x70 == 0 {
+                                self.baro_done = Some(now + 20);
+                                self.baro_conversions += 1;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 true
             }

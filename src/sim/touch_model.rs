@@ -30,6 +30,13 @@ pub struct TouchChip {
     low_since: Option<u64>,
     /// The last reset was released after too short a low pulse: the chip never leaves Init (T1).
     pub dead: bool,
+    /// The chip stops answering I2C (a wedged state machine) until a proper reset pulse; INT still follows the
+    /// finger.
+    pub wedged: bool,
+    /// As `wedged`, but a reset does not help.
+    pub wedged_hard: bool,
+    /// Resets released so far.
+    pub resets: u32,
     pub(super) finger: FingerScript,
     /// A second finger, for a pinch.
     pub(super) finger2: FingerScript,
@@ -51,6 +58,9 @@ impl TouchChip {
             run_since: None,
             low_since: None,
             dead: false,
+            wedged: false,
+            wedged_hard: false,
+            resets: 0,
             finger: Box::new(|_| None),
             finger2: Box::new(|_| None),
             extra: Vec::new(),
@@ -76,6 +86,8 @@ impl TouchChip {
             self.run_since = None;
         } else if self.run_since.is_none() {
             self.dead = self.low_since.is_some_and(|t| ms - t < RESET_LOW_MS);
+            self.wedged &= self.dead || self.wedged_hard; // a proper pulse frees it
+            self.resets += 1;
             self.low_since = None;
             self.run_since = Some(ms);
             self.last_seen = ms;
@@ -102,6 +114,9 @@ impl TouchChip {
 
     pub(super) fn read(&mut self, ms: u64, reg: u8, buf: &mut [u8]) -> bool {
         let Some(t) = self.run_since else { return false }; // in reset: no acknowledge
+        if self.wedged || self.wedged_hard {
+            return false;
+        }
         let mut regs = [0u8; 0x40];
         regs[0x00] = 0x05; // version
         regs[0x01] = if self.dead || ms < t + INIT_MS { 0x01 } else { 0x00 }; // Normal, else Init

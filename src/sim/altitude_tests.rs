@@ -183,7 +183,7 @@ fn the_receiver_when_the_barometer_is_silent() {
     assert_eq!(app.alt_now().1, 0, "silent: the receiver's");
     assert!(app.ride.ascent_m() >= before + 40, "the climb counted on: {} m", app.ride.ascent_m());
     sim.bus.baro = baro;
-    run(&mut sim, &mut app, 20_000);
+    run(&mut sim, &mut app, 70_000); // the bus backed off up to 60 s while it was silent
     assert_ne!(app.alt_now().1, 0, "back");
 }
 

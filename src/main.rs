@@ -1427,33 +1427,45 @@ fn i2c_init() {
 }
 
 /// Bus clear (NXP UM10204 3.1.16, BOARD.md 16): a slave that was mid-read when the MCU reset may hold SDA low, and
-/// toggling PE does not free it. PE off, then up to nine SCL pulses (about 100 kHz) until SDA reads high, then a STOP
-/// (SDA low to high while SCL is high), then the pins and the peripheral as `i2c_init` left them. Both lines are open
-/// drain (`i2c_pins`), so "high" is released and the pull-ups do the rest.
-fn i2c_clear(i2c: u32, port: Port, scl: u32, sda: u32) {
+/// toggling PE does not free it. PE off, then up to nine SCL pulses (about 100 kHz), SDA sampled at the top of each
+/// (a released SDA needs none), then a STOP (a START immediately followed by a STOP: SDA low then high while SCL is
+/// high), then the pins and the peripheral as `i2c_init` left them. Both lines are open drain (`i2c_pins`), so
+/// "high" is released and the pull-ups do the rest. False if SCL stayed low 50 us after being released (a stretching
+/// slave or no pull-up: no STOP is sent) or SDA is still low after the pulses.
+fn i2c_clear(i2c: u32, port: Port, scl: u32, sda: u32) -> bool {
     let half = || {
         let _ = wait_us(5, || false); // a timed wait on purpose: half a clock period
     };
+    let high = |pin: u32| rd(gpio_base(port) + 0x10) & (1 << pin) != 0; // IDR reads the pin in any mode
     wr(i2c + I2C_CR1, 0);
     pin_set(port, scl, true);
     pin_set(port, sda, true);
     modify(gpio_base(port), 3 << (2 * scl), OUT << (2 * scl));
+    let mut scl_stuck = false;
     for _ in 0..9 {
+        if high(sda) {
+            break; // the slave let go
+        }
         pin_set(port, scl, false);
         half();
         pin_set(port, scl, true);
-        half();
-        if rd(gpio_base(port) + 0x10) & (1 << sda) != 0 {
-            break; // IDR: the slave let go
+        if !wait_us(50, || high(scl)) {
+            scl_stuck = true;
+            break;
         }
+        half();
     }
-    modify(gpio_base(port), 3 << (2 * sda), OUT << (2 * sda));
-    pin_set(port, sda, false);
-    half();
-    pin_set(port, sda, true);
-    half();
+    let freed = !scl_stuck && high(sda);
+    if !scl_stuck {
+        modify(gpio_base(port), 3 << (2 * sda), OUT << (2 * sda));
+        pin_set(port, sda, false);
+        half();
+        pin_set(port, sda, true);
+        half();
+    }
     i2c_pins(port, [scl, sda]);
     i2c_enable(i2c);
+    freed
 }
 
 /// Waits for `flag` in I2C_ISR; false on a NACK, a bus error or 1 ms (a byte takes 45 us). A failed transfer leaves
@@ -1625,8 +1637,8 @@ impl Board for S510 {
         self.io.2 = self.io.2.wrapping_add((buf.len() / bryton_rustfw::emmc::SECTOR) as u32);
         emmc_write(index, arg, buf)
     }
-    fn i2c_recover(&mut self) {
-        i2c_clear(I2C4, Port::D, 12, 13);
+    fn i2c_recover(&mut self) -> bool {
+        i2c_clear(I2C4, Port::D, 12, 13)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
         i2c_read(I2C4, addr, reg, buf)
