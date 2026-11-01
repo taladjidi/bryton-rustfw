@@ -340,6 +340,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `gnss_model.rs` (the GNSS receiver, strict like the Nordic table: its rules G1 to G10 with their sources, ACK / NAK and
   MGA-ACK answers, the 1.5 s stream time-out, MAXFF, the 4 kB buffer; a test that provokes a rule sets `gnss.expect`) and
   `gnss_model_tests.rs` (each rule, every frame `gnss.rs` builds against the table, the retry of a refused configuration).
+  `panel_model.rs` (the ST7789V's settle and sleep rules P1 to P3 with sources, strict: a command inside the window fails)
+  and `panel_model_tests.rs` (each rule, the firmware's init and off against them, the sim's SPI time against
+  `periph::panel_fill_us`, the pure fill time the DMA time-out in `periph::dma_timeout_ms` uses).
   `sensor_model.rs` (the sensor bus I2C4, strict like the GNSS model: rules S1 to S6 with sources, a stuck bus,
   NACK bursts, `bus.expect`), `touch_model.rs` (the touch chip: reset low time, Init, Idle and the lost first report,
   five contacts), `key_model.rs` (contact bounce for a key script) and `peripheral_tests.rs` (each rule, the bus

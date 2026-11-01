@@ -91,8 +91,7 @@ const SCB_ICSR: u32 = 0xe000_ed04;
 /// SysTick runs a period (timer_start to timer_stop): a DMA wait (dma_wait) leaves it alone then.
 static TIMER_ON: AtomicBool = AtomicBool::new(false);
 
-/// A SysTick period's longest, ms: its 24-bit counter at 200 MHz.
-const TIMER_MAX_MS: u32 = 80;
+use bryton_rustfw::periph::{TIMER_MAX_MS, dma_timeout_ms};
 
 /// Starts a SysTick period of `ms` (at most [`TIMER_MAX_MS`]). Its end makes the SysTick exception
 /// pending, which wakes WFI even with interrupts masked (ARMv7-M B1.5.19); the handler never runs.
@@ -416,17 +415,6 @@ fn spi_end() {
     wr(SPI_CR1, CR1_SSI);
 }
 
-/// A DMA wait's bound, ms, for SPI1's divider `mbr` (spi_init: 0 at 50 MHz, 1 at 16, 2 at 8): the longest transfer,
-/// 0x7ffe pixels (65 532 B), takes 10.5, 32.8 or 65.5 ms. 30 ms at 50 MHz (a first bound of 10 ms cut full-screen
-/// fills short, seen on the unit 2026-10-27), doubled per step, capped at SysTick's longest period.
-const fn dma_timeout_ms(mbr: u32) -> u32 {
-    let ms = 30 << mbr;
-    if ms < TIMER_MAX_MS { ms } else { TIMER_MAX_MS }
-}
-// each divider's bound covers its longest transfer: 65 532 B x 8 bits at 50 000, 16 000 and 8 000 kHz
-const _: () = assert!(dma_timeout_ms(0) == 30 && dma_timeout_ms(0) * 50_000 > 65_532 * 8);
-const _: () = assert!(dma_timeout_ms(1) * 16_000 > 65_532 * 8);
-const _: () = assert!(dma_timeout_ms(2) * 8_000 > 65_532 * 8);
 /// [`dma_timeout_ms`] of the divider spi_init chose, set there once before the DMA handle exists (0 keeps it in
 /// .bss: no .data).
 static DMA_TIMEOUT_MS: AtomicU32 = AtomicU32::new(0);
