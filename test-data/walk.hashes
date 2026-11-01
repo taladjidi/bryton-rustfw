@@ -49,7 +49,7 @@
 049-met_main_settings_bike_bikes_bike_3_tyre_f 5bb0941d
 050-met_main_settings_bike_bikes_bike_3_tyre_r c99a76fd
 051-met_main_settings_system efce8745
-052-met_main_settings_system_gps dc761f0d
+052-met_main_settings_system_gps 20cb126d
 053-met_main_settings_system_ble_nearby 380f31e5
 054-met_main_settings_system_built_in be68d835
 055-met_main_settings_system_storage 318463ed
@@ -119,7 +119,7 @@
 119-imp_main_settings_bike_bikes_bike_3_tyre_f 5bb0941d
 120-imp_main_settings_bike_bikes_bike_3_tyre_r c99a76fd
 121-imp_main_settings_system efce8745
-122-imp_main_settings_system_gps dc761f0d
+122-imp_main_settings_system_gps 20cb126d
 123-imp_main_settings_system_ble_nearby 380f31e5
 124-imp_main_settings_system_built_in be68d835
 125-imp_main_settings_system_storage 318463ed

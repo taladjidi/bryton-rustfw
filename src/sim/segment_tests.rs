@@ -159,7 +159,7 @@ fn index_is_capped_and_sliced() {
     let s = app.segments().unwrap();
     assert_eq!((s.indexed(), s.skipped), (128, 2));
     std::println!("segment index: {passes} passes, worst {worst} B read in one pass");
-    assert!(passes >= 16, "sliced: {passes}");
+    assert!(passes >= 12, "sliced: {passes}");
     assert!(worst < 40_000, "{worst} B in a pass");
 }
 

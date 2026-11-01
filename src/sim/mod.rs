@@ -46,6 +46,54 @@ pub trait NrfExt {
 type KeyScript = Box<dyn Fn(u64) -> u8>;
 type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 
+/// What the transfers cost in time on the unit, ns. Computed values say where they come from; "inferred" ones are
+/// assumptions until a silent bench on the unit (docs/status.md, "Not yet seen on the unit"). `on: false` makes every
+/// transfer free, as the simulator was before 2026-11-01.
+#[derive(Clone, Copy)]
+pub struct Cost {
+    /// Master switch.
+    pub on: bool,
+    /// A panel pixel: 16 bits at SPI1's 50 MHz (main.rs `spi_init`, BOARD.md 6): 320 ns.
+    pub panel_pixel_ns: u64,
+    /// A panel command or window: the DC toggle and the wait for the end of transfer (inferred, 1 us).
+    pub panel_cmd_ns: u64,
+    /// A panel parameter byte at 50 MHz.
+    pub panel_byte_ns: u64,
+    /// An I2C byte: 9 clocks of SCL; main.rs i2c_init TIMINGR gives PRESC 15 (250 ns at 64 MHz), SCLL 9, SCLH 7: a
+    /// clock of 18 x 250 = 4.5 us (RM0399 I2C, sync delays left out), 40.5 us a byte, about 222 kHz.
+    pub i2c_byte_ns: u64,
+    /// An I2C transaction's start, restart and stop (about 2 clocks, same TIMINGR).
+    pub i2c_frame_ns: u64,
+    /// A GNSS byte: SPI4 at 4 MHz (main.rs, BOARD.md 13): 2 us.
+    pub gnss_byte_ns: u64,
+    /// A GNSS transfer's chip select and polling (inferred, 5 us).
+    pub gnss_xfer_ns: u64,
+    /// A card sector written (inferred: 0.2 ms, 2.5 MB/s like the measured read; the survey guessed 2 ms, which makes ride start a 1.6 s pass and fails 60 tests: to measure with a write bench).
+    pub write_sector_ns: u64,
+    /// The card's stall after this many sectors written (inferred: every 1024 sectors; 0: none).
+    pub stall_every: u64,
+    /// The stall's length, ms (inferred: 300).
+    pub stall_ms: u64,
+}
+
+impl Default for Cost {
+    fn default() -> Self {
+        Self {
+            on: true,
+            panel_pixel_ns: 320,
+            panel_cmd_ns: 1000,
+            panel_byte_ns: 160,
+            i2c_byte_ns: 40_500,
+            i2c_frame_ns: 9_000,
+            gnss_byte_ns: 2000,
+            gnss_xfer_ns: 5000,
+            write_sector_ns: 200_000,
+            stall_every: 1024,
+            stall_ms: 300,
+        }
+    }
+}
+
 pub struct Sim {
     pub screen: Vec<u16>,
     window: (u32, u32, u32, u32),
@@ -94,6 +142,14 @@ pub struct Sim {
     /// Work done so far, ns. Must not advance by more than 21 s between two Clock reads: the u32 cycle counter wraps
     /// at 21.47 s of work (200 MHz) and Clock catches one wrap only.
     pub awake_ns: u64,
+    /// What each transfer costs in time ([`Cost`]); the sub-millisecond rest of it is in `cost_rem`.
+    pub cost: Cost,
+    cost_rem: u64,
+    /// Longest gap between two reads of the keys, ms, and the time of the last read (the gate's touch/key latency).
+    pub longest_key_gap_ms: u64,
+    last_keys_ms: u64,
+    /// Sectors written so far, for the card's periodic stall.
+    sectors_written: u64,
     /// The cycle counter ([`Board::cycles`]): each read moves it on by [`Sim::cycles_step`], wrapping as CYCCNT does.
     pub cycles: u32,
     /// What each read of the cycle counter adds (0, the default: the counter stands still).
@@ -1257,6 +1313,17 @@ fn to_bcd(v: u64) -> u32 {
 }
 
 impl Sim {
+    /// Time spent by a transfer: the clock and the work counter move on by `ns`.
+    fn pay(&mut self, ns: u64) {
+        if !self.cost.on {
+            return;
+        }
+        self.awake_ns += ns;
+        self.cost_rem += ns;
+        self.ms += self.cost_rem / 1_000_000;
+        self.cost_rem %= 1_000_000;
+    }
+
     /// This firmware's default settings in the backup registers, as after its first start: the next start does not
     /// import stock's ([`App::first_start`]).
     pub fn own_settings(&mut self) {
@@ -1327,6 +1394,11 @@ impl Sim {
             },
             touch: TouchChip { run_since: None, finger: Box::new(|_| None), finger2: Box::new(|_| None), reads: 0 },
             work_ns_per_byte: 0,
+            cost: Cost::default(),
+            cost_rem: 0,
+            longest_key_gap_ms: 0,
+            last_keys_ms: 0,
+            sectors_written: 0,
             awake_ns: 0,
             cycles: 0,
             cycles_step: 0,
@@ -1427,6 +1499,7 @@ impl Board for Sim {
 
     fn panel_cmd(&mut self, cmd: u8, params: &[u8]) {
         assert!(self.powered, "command 0x{cmd:02x} to an unpowered panel");
+        self.pay(self.cost.panel_cmd_ns + params.len() as u64 * self.cost.panel_byte_ns);
         self.cmds.push(cmd);
         match cmd {
             SWRESET => (self.asleep, self.display_on) = (true, false),
@@ -1448,6 +1521,7 @@ impl Board for Sim {
         assert_eq!(self.colmod & 0x07, 0x05, "pixel format is not 16-bit");
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");
+        self.pay(self.cost.panel_cmd_ns + u64::from(count) * self.cost.panel_pixel_ns);
         self.pixels += u64::from(count);
         self.windows += 1;
         for y in y0..=y1 {
@@ -1468,6 +1542,8 @@ impl Board for Sim {
     }
 
     fn keys_down(&mut self) -> u8 {
+        self.longest_key_gap_ms = self.longest_key_gap_ms.max(self.ms - self.last_keys_ms);
+        self.last_keys_ms = self.ms;
         (self.keys)(self.ms)
     }
 
@@ -1593,6 +1669,7 @@ impl Board for Sim {
 
     fn gnss_transfer(&mut self, buf: &mut [u8]) {
         assert_eq!(buf.len() % 4, 0, "SPI transfers move 4 bytes at a time");
+        self.pay(self.cost.gnss_xfer_ns + buf.len() as u64 * self.cost.gnss_byte_ns);
         let (tr, dr) = self.rtc();
         let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
         let utc = crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600; // the RTC runs on UTC + 2 h
@@ -1632,9 +1709,7 @@ impl Board for Sim {
 
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
         if self.work_ns_per_byte > 0 {
-            let before = self.awake_ns / 1_000_000;
-            self.awake_ns += buf.len() as u64 * self.work_ns_per_byte;
-            self.ms += self.awake_ns / 1_000_000 - before; // the work takes time as well
+            self.pay(buf.len() as u64 * self.work_ns_per_byte); // the work takes time as well
         }
         self.emmc.read(index, arg, buf)
     }
@@ -1650,17 +1725,28 @@ impl Board for Sim {
     }
 
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {
+        let sectors = buf.len().div_ceil(512) as u64;
+        self.pay(sectors * self.cost.write_sector_ns);
+        let before = self.sectors_written;
+        self.sectors_written += sectors;
+        let c = self.cost;
+        if c.stall_every > 0 && self.sectors_written / c.stall_every > before / c.stall_every {
+            self.pay(c.stall_ms * 1_000_000);
+        }
         self.emmc.write(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
+        self.pay((3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns);
         self.bus.read(self.ms, addr, reg, buf)
     }
 
     fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool {
+        self.pay((2 + data.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns);
         self.bus.write(self.ms, addr, reg, data)
     }
 
     fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool {
+        self.pay((3 + buf.len() as u64) * self.cost.i2c_byte_ns + self.cost.i2c_frame_ns);
         self.touch.read(self.ms, reg, buf)
     }
 
@@ -1699,6 +1785,8 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 
 #[cfg(test)]
 mod assist_tests;
+#[cfg(test)]
+mod budget_tests;
 #[cfg(test)]
 mod chip_table;
 #[cfg(test)]

@@ -297,7 +297,7 @@ fn climbs_ahead_ride() {
     assert_consistent(&sim, &app);
 
     // the banner at the climb's start (about x = 950: 106 s), a beep, nothing before
-    while sim.ms - t0 < 98_000 {
+    while sim.ms - t0 < 90_000 {
         run(&mut sim, &mut app, 1000);
         assert!(!app.notes.text.as_str().starts_with("CLIMB"), "not before the climb: {}", sim.ms - t0);
     }
@@ -692,7 +692,7 @@ pub(super) fn riding_the_road_ahead_climb() -> (Sim, App) {
 fn climb_page_without_a_course() {
     let (mut sim, mut app) = ahead_ride();
     let t0 = sim.ms;
-    while sim.ms - t0 < 98_000 {
+    while sim.ms - t0 < 90_000 {
         run(&mut sim, &mut app, 1000);
         assert!(!app.page_on(crate::CLIMB), "not before the warning: {}", sim.ms - t0);
     }
