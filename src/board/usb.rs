@@ -496,10 +496,14 @@ impl Link {
 
     /// Sends what is buffered; a transfer ending on a full packet needs a zero-length one to end it.
     pub fn flush(&mut self) {
-        if self.len > 0 || self.last_full {
+        if self.len > 0 {
             self.write(self.len);
         }
-        self.last_full = false;
+        // a reply of a whole number of packets (full speed: 64 B, `info` is 256 B at times) is ended by an empty one,
+        // or the computer holds it until the next packet (seen 2026-11-01: `info` unanswered until the next command)
+        if self.last_full {
+            self.write(0);
+        }
     }
 }
 
