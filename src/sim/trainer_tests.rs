@@ -1715,3 +1715,59 @@ fn a_reset_mid_course_resumes_the_ride_only() {
     run(&mut sim2, &mut app2, 5000);
     assert!(app2.courses.as_deref().unwrap().on.is_none() && app2.courses.as_deref().unwrap().base_m.is_none());
 }
+
+/// Finding 65 (review 2026-11-01): a reset mid-ride, the card answering at the boot or only 5 s later (the late-card
+/// resume): the power totals go on from the checkpoint (before, the end card's kJ, NP and TSS covered the time
+/// since the restart), and at the end they match the saved file's records: kJ their sum, max power theirs.
+#[test]
+fn power_totals_go_on_after_a_reset() {
+    for late in [false, true] {
+        let (mut sim, mut app) = unit();
+        run(&mut sim, &mut app, 6000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let name = crate::recorder::ride_name(app.rec_time().0);
+        run(&mut sim, &mut app, 150_000);
+        let (kj, tss) = (app.power.kj(), app.power.tss(app.settings.ftp).unwrap());
+        assert!(kj >= 20 && tss > 0, "{late}: {kj} kJ, TSS {tss}");
+        let (mut sim, mut app) = {
+            let mut sim2 = Sim::new(9, 5, 0);
+            sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+            sim2.backup = sim.backup;
+            sim2.nordic.sensors.push(trainer_sensor());
+            sim2.nordic.trainer.rider_w = 180;
+            sim2.emmc.dead = late;
+            let app = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+            (sim2, app)
+        };
+        run(&mut sim, &mut app, 5000);
+        sim.emmc.dead = false;
+        run(&mut sim, &mut app, 10_000);
+        let notes: Vec<_> = app.notes.list.iter().map(|n| n.as_str()).collect();
+        assert!(notes.iter().any(|n| n.ends_with("RIDE RESUMED")), "{late}: {notes:?}");
+        let back = app.power.kj();
+        assert!(back <= kj && back + 11 >= kj, "{late}: {back} kJ of {kj}: at most a minute at 180 W lost");
+        let tss_back = app.power.tss(app.settings.ftp).unwrap();
+        assert!(tss_back <= tss && tss_back + 2 >= tss, "{late}: TSS {tss_back} of {tss}");
+        // the trainer found again first (its pairing is on the card): a second without its power is 0 W (power.rs)
+        for _ in 0..30 {
+            if app.live.get(Metric::Power).is_some() {
+                break;
+            }
+            run(&mut sim, &mut app, 1000);
+        }
+        app.press(&mut sim, Press::Short(Key::Start)); // resume
+        run(&mut sim, &mut app, 60_000);
+        app.press(&mut sim, Press::Short(Key::Start)); // pause
+        let (kj_end, max, np) = (app.power.kj(), app.power.max(), app.power.np());
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 2000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{late}: {}", app.notes.list[0].as_str());
+        let powers: Vec<u32> = records(&sim, name).iter().filter_map(|r| r.0.map(u32::from)).collect();
+        let sum: u32 = powers.iter().sum();
+        assert!(sum / 1000 >= kj_end && sum / 1000 <= kj_end + 1, "{late}: the file's {sum} J, the card's {kj_end} kJ");
+        assert_eq!(max, powers.iter().max().map(|&w| w as u16), "{late}");
+        // a second or two without the trainer's power just after it is found again: 0 W there (power.rs); with the
+        // card late at the boot its pairing (sensors.bin) is not read in this test's minute: 0 W from the resume on
+        assert!(np.is_some_and(|w| if late { w < 180 } else { (178..=180).contains(&w) }), "{late}: NP {np:?}");
+    }
+}

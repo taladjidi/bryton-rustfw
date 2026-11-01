@@ -126,7 +126,7 @@ fn file_name<'a>(name: &[u8; 12], suffix: u8, out: &'a mut [u8; 20]) -> Result<&
 
 /// `\Rustfw\delete.rec`, made (one sector) if missing.
 fn rec_file(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Handle, Error> {
-    let dir = fat.ensure_dir(d, fat.root(), DIR, t)?;
+    let dir = fat.ensure_own_dir(d, fat.root(), DIR, t)?;
     let mut h = match fat.locate(d, dir, REC) {
         Ok(h) => h,
         Err(Error::NotFound) => fat.create(d, dir, REC, t)?,
@@ -141,9 +141,9 @@ fn rec_file(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Hand
 
 /// The folder file `k` of [`TO`] goes to, made if missing (a computer may have removed it since the record).
 fn to_dir(fat: &mut Fat, d: &mut impl DiskWrite, k: usize, t: (u16, u16)) -> Result<File, Error> {
-    let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
-    let deleted = fat.ensure_dir(d, mine, DELETED, t)?;
-    if k == 0 { Ok(deleted) } else { fat.ensure_dir(d, deleted, "Full", t) }
+    let mine = fat.ensure_own_dir(d, fat.root(), DIR, t)?;
+    let deleted = fat.ensure_own_dir(d, mine, DELETED, t)?;
+    if k == 0 { Ok(deleted) } else { fat.ensure_own_dir(d, deleted, "Full", t) }
 }
 
 /// The CRC of the first sector of the chain `h` (None for an empty file): what says, after a cut, that a chain
@@ -511,8 +511,8 @@ pub(crate) mod tests {
         let mut fat = Fat::mount(&mut d).unwrap();
         let mut data = read_all(&mut fat, &mut d, RIDE).unwrap();
         data.reverse(); // not the same bytes as the clean copy
-        let mine = fat.ensure_dir(&mut d, fat.root(), DIR, T).unwrap();
-        let dir = fat.ensure_dir(&mut d, mine, ACTIVITIES, T).unwrap();
+        let mine = fat.ensure_own_dir(&mut d, fat.root(), DIR, T).unwrap();
+        let dir = fat.ensure_own_dir(&mut d, mine, ACTIVITIES, T).unwrap();
         let mut h = fat.create(&mut d, dir, "261020080000.fit", T).unwrap();
         let mut padded = data.clone();
         padded.resize(data.len().div_ceil(SECTOR) * SECTOR, 0);

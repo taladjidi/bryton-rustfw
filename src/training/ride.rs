@@ -71,6 +71,13 @@ pub struct Input {
 
 /// Words of [`Ride::to_words`].
 pub const RIDE_WORDS: usize = 16;
+/// Words of [`Ride::more_words`]: the ride's 6, then its power's.
+pub const MORE_WORDS: usize = 6 + crate::power::POWER_WORDS;
+
+/// The power's words in [`Ride::more_words`], for [`crate::power::Power::resume`].
+pub fn power_words(more: &[u32; MORE_WORDS]) -> [u32; crate::power::POWER_WORDS] {
+    core::array::from_fn(|i| more.get(6 + i).copied().unwrap_or(0))
+}
 
 /// Under this speed (km/h x 10) the ride is auto-paused: the timer stops, nothing is added.
 pub const AUTO_PAUSE_X10: u16 = 20;
@@ -374,14 +381,30 @@ impl Ride {
             l as u32,
             (l >> 32) as u32,
             u32::from(self.max_hr),
-            0,
+            self.descent_mm, // 0 in the records of the builds before it, which ignore it
         ]
     }
 
-    /// A ride from [`Ride::to_words`], paused (a ride resumed after a reset: Start goes on, a long Start ends it).
-    /// The climbing window starts again.
-    pub fn resumed(w: &[u32; RIDE_WORDS]) -> Ride {
+    /// The totals [`Ride::to_words`] has no room for, with the ride's power's `p` ([`crate::power::Power::to_words`]),
+    /// for the recovery record ([`Ride::resumed`] and [`power_words`] read them back): uphill and downhill (2 words
+    /// each), the max altitude's presence (bit 0) and altitude reference (bits 8..16), the max altitude (mm).
+    pub fn more_words(&self, p: &crate::power::Power) -> [u32; MORE_WORDS] {
+        let (u, d, alt) = (self.up9, self.down9, self.max_alt_mm);
+        let head = [u as u32, (u >> 32) as u32, d as u32, (d >> 32) as u32];
+        let alt = [u32::from(alt.is_some()) | u32::from(self.alt_ref) << 8, alt.unwrap_or(0) as u32];
+        let mut w = [0; MORE_WORDS];
+        for (o, v) in w.iter_mut().zip(head.into_iter().chain(alt).chain(p.to_words())) {
+            *o = v;
+        }
+        w
+    }
+
+    /// A ride from [`Ride::to_words`] and [`Ride::more_words`], paused (a ride resumed after a reset: Start goes
+    /// on, a long Start ends it). The climbing window starts again. Zeros (a record of a build before them): no
+    /// descent, uphill, downhill or max altitude before the resume.
+    pub fn resumed(w: &[u32; RIDE_WORDS], more: &[u32; MORE_WORDS]) -> Ride {
         let at = |i: usize| w.get(i).copied().unwrap_or(0);
+        let m = |i: usize| more.get(i).copied().unwrap_or(0);
         let avg = |i: usize| Avg { sum: at(i), n: at(i + 1) };
         let dist9 = u64::from(w[1]) | u64::from(w[2]) << 32;
         let lap_dist9 = (u64::from(w[12]) | u64::from(w[13]) << 32).min(dist9);
@@ -399,6 +422,11 @@ impl Ride {
             lap_timer_s: w[11].min(w[0]),
             lap_dist9,
             max_hr: w[14] as u16,
+            descent_mm: w[15],
+            up9: u64::from(m(0)) | u64::from(m(1)) << 32,
+            down9: u64::from(m(2)) | u64::from(m(3)) << 32,
+            alt_ref: (m(4) >> 8) as u8,
+            max_alt_mm: (m(4) & 1 != 0).then_some(m(5) as i32),
             ..Ride::new()
         }
     }
@@ -1717,7 +1745,7 @@ mod tests {
         for _ in 0..50 {
             r.second(&Input { alt_mm: Some(100_000), ..at(200) });
         }
-        let back = Ride::resumed(&r.to_words());
+        let back = Ride::resumed(&r.to_words(), &[0; MORE_WORDS]);
         assert!(
             back.elapsed_s() >= back.timer_s() && back.elapsed_s() == 50,
             "trip {} timer {}",

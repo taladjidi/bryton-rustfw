@@ -162,6 +162,19 @@ pub struct EmmcCard {
     /// A cut tears the sector being written (garbage in it, as JEDEC allows for a plain write); a reliable write's
     /// sector keeps its old data.
     pub tear: bool,
+    /// With [`EmmcCard::tear`]: the torn sector keeps its first k bytes new and the rest old instead, a sector a
+    /// reader may accept (the review of 2026-11-01, finding 3; inferred model).
+    pub tear_prefix: Option<usize>,
+    /// CMD13 answers "programming" (state 7, not ready for data) this many times after each write, so the driver's
+    /// 1 ms retry runs; [`crate::emmc::TRIES`] or more: the driver gives up (`Busy`) though the write landed.
+    pub prog_polls: u32,
+    /// Writes touching [`EmmcCard::bad`] land their sectors before the first bad one, then fail: a multi-sector
+    /// write cut short, instead of one that lands nothing.
+    pub bad_partial: bool,
+    /// Writes to these sectors are dropped and still answered as done: a card that lies.
+    pub lie: Option<core::ops::Range<u32>>,
+    /// The "programming" answers left (see `prog_polls`).
+    prog_left: u32,
     /// EXT_CSD WR_REL_PARAM and REL_WR_SEC_C (emmc.rs): the reliable write offered; none by default.
     pub rel_param: u8,
     pub rel_sectors: u8,
@@ -189,6 +202,11 @@ impl Default for EmmcCard {
             unreadable: Vec::new(),
             bytes_read: 0,
             tear: false,
+            tear_prefix: None,
+            prog_polls: 0,
+            bad_partial: false,
+            lie: None,
+            prog_left: 0,
             rel_param: 0,
             rel_sectors: 0,
             count: None,
@@ -283,6 +301,10 @@ impl EmmcCard {
                 self.state = 4;
                 r1(before)
             }
+            (13, 4) if arg == 1 << 16 && self.prog_left > 0 => {
+                self.prog_left -= 1;
+                r1(7 << 9) // programming, not ready for data
+            }
             (13, _) if arg == 1 << 16 && self.state >= 3 => r1(before),
             (16, 4) => {
                 assert_eq!(arg, 512, "block length");
@@ -373,13 +395,20 @@ impl EmmcCard {
         }
         let end = u64::from(arg) + (buf.len() / 512) as u64;
         assert!(end <= u64::from(EMMC_SECTORS - crate::emmc::RESERVED), "a write at or past B: {arg:#x}");
-        if self.bad.iter().any(|b| u64::from(b.start) < end && arg < b.end) && self.bad_left != Some(0) {
+        let bad = self.bad.iter().filter(|b| u64::from(b.start) < end && arg < b.end).map(|b| b.start.max(arg)).min();
+        let bad = bad.filter(|_| self.bad_left != Some(0));
+        if bad.is_some() {
             self.bad_left = self.bad_left.map(|n| n - 1);
-            return Err(crate::emmc::BusError::Crc);
         }
+        // the sectors that land: all, or with `bad_partial` those before the first bad one
+        let lands = match bad {
+            Some(b) if self.bad_partial => (b - arg) as usize,
+            Some(_) => return Err(crate::emmc::BusError::Crc),
+            None => buf.len() / 512,
+        };
         assert!(!self.image.is_empty(), "a write to the card without an image");
         let s = self.status();
-        for (i, chunk) in buf.chunks_exact(512).enumerate() {
+        for (i, chunk) in buf.chunks_exact(512).enumerate().take(lands) {
             let at = (arg as usize + i) * 512;
             if self.image.len() < at + 512 {
                 self.image.resize(at + 512, 0);
@@ -387,16 +416,28 @@ impl EmmcCard {
             if self.cut_after.is_some_and(|c| self.sectors_written >= c) {
                 self.dead = true; // the power is gone: this sector and the rest never land
                 if self.tear && !reliable {
-                    // the sector being programmed is left half old, half new, the rest garbage (inferred model)
                     let s = &mut self.image[at..at + 512];
-                    s[..128].copy_from_slice(&chunk[..128]);
-                    s[256..].iter_mut().enumerate().for_each(|(k, b)| *b = (k as u8).wrapping_mul(97) ^ 0x5a);
+                    match self.tear_prefix {
+                        // a prefix new, the rest old
+                        Some(k) => s[..k].copy_from_slice(&chunk[..k]),
+                        // half old, half new, the rest garbage (inferred model)
+                        None => {
+                            s[..128].copy_from_slice(&chunk[..128]);
+                            s[256..].iter_mut().enumerate().for_each(|(k, b)| *b = (k as u8).wrapping_mul(97) ^ 0x5a);
+                        }
+                    }
                 }
                 return Err(Timeout);
             }
-            self.image[at..at + 512].copy_from_slice(chunk);
+            if !self.lie.as_ref().is_some_and(|l| l.contains(&(arg + i as u32))) {
+                self.image[at..at + 512].copy_from_slice(chunk);
+            }
             self.sectors_written += 1;
         }
+        if bad.is_some() {
+            return Err(crate::emmc::BusError::Crc);
+        }
+        self.prog_left = self.prog_polls;
         if index == 25 && count.is_none() {
             self.state = 6; // receiving until CMD12 (with CMD23 first, the count ends it)
         }
