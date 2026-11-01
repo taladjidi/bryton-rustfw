@@ -167,7 +167,8 @@ impl App {
     /// Each pass: the climb page enters the round after the page on screen when the warning fires, and leaves it
     /// at the top (shown then, the round goes on to the page after its home).
     pub(crate) fn settle_climb(&mut self, b: &mut impl Board) {
-        let on = self.page_on(CLIMB);
+        let on =
+            self.segment_now().is_some() || (self.settings.climb_page && self.on_climb() && !self.has_climb_page());
         // the anchor is the page shown when the page joins (any of the round); one that leaves the round (a set
         // switch, a page deleted, an indoor skip) is replaced by the page shown
         if on && (!self.climb.on || !self.page_on(self.climb.after)) {

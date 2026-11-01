@@ -117,6 +117,28 @@ pub trait Canvas {
     }
 }
 
+/// A canvas behind a reference: drawing code written for `impl Canvas` then has one copy for every canvas.
+impl Canvas for &mut dyn Canvas {
+    fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
+        (**self).fill(x, y, w, h, color);
+    }
+    fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
+        (**self).blit(x, y, w, h, px);
+    }
+    fn clip(&self) -> (u32, u32, u32, u32) {
+        (**self).clip()
+    }
+    fn face(&self) -> Face {
+        (**self).face()
+    }
+    fn ink(&self, c: u16) -> u16 {
+        (**self).ink(c)
+    }
+    fn theme(&self) -> &Theme {
+        (**self).theme()
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Ferris
 // ---------------------------------------------------------------------------------------------------------------

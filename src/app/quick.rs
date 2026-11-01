@@ -215,12 +215,12 @@ impl App {
                         ui::GREY
                     }
                     (B_TITLE, Some(t)) => {
-                        put(&mut l, q::window(t, ui::W - 16, self.quick.scroll.1));
+                        put(&mut l, q::window(t, ui::W - 16, self.quick.scroll.1 / 2));
                         ui::WHITE
                     }
                     _ => {
                         let a = if n.title.is_some() { n.artist } else { "" };
-                        put(&mut l, q::window(a, ui::W - 16, self.quick.scroll.1));
+                        put(&mut l, q::window(a, ui::W - 16, self.quick.scroll.1 / 2));
                         ui::GREY
                     }
                 }

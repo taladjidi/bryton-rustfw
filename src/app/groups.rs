@@ -155,6 +155,9 @@ pub(crate) struct Gps {
     pub(crate) quiet_ms: u32,
     pub(crate) fixed: bool,
     pub(crate) slept: bool,
+    /// Whether the screen shown holds a map, with the screen and MORE page it was worked out for (a page's boxes
+    /// are built to find out: once per screen, not each pass).
+    pub(crate) map_on: Option<((Screen, Option<usize>), bool)>,
 }
 
 impl Gps {
@@ -180,6 +183,7 @@ impl Gps {
             quiet_ms: 0,
             fixed: false,
             slept: false,
+            map_on: None,
         }
     }
 

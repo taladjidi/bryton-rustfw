@@ -77,6 +77,11 @@ fn ride_on(image: Vec<u8>, route: fn(u64) -> (i32, i32, i32), seconds: u64, memo
     (sim, app)
 }
 
+/// A ride at the PR's pace, 215 m into the test segment: the CLIMB page shows it (perf_tests `screen_budgets`).
+pub(super) fn riding_a_segment() -> (Sim, App) {
+    ride(pr_pace, 110, true)
+}
+
 fn events(app: &App) -> Vec<Event> {
     app.segments().unwrap().events().map(|(_, e)| e).collect()
 }

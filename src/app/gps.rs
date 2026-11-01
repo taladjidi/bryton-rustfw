@@ -173,7 +173,7 @@ impl App {
     /// menu, a course followed) or a ride starts. Keys alone do not wake it: indoors they would start the search again.
     fn gnss_idle(&mut self) -> bool {
         let needed = matches!(self.screen, Screen::Menu(Menu::Gps, _))
-            || self.first_map().is_some()
+            || self.screen_has_map()
             || self.courses.as_deref().is_some_and(|c| c.on.is_some());
         if needed {
             (self.gps.quiet_ms, self.gps.slept) = (0, false);
@@ -186,6 +186,19 @@ impl App {
             };
         }
         self.gps.slept
+    }
+
+    /// A page with a map is shown, worked out once per screen (and MORE page).
+    fn screen_has_map(&mut self) -> bool {
+        let key = (self.screen, self.more_shown());
+        match self.gps.map_on {
+            Some((k, on)) if k == key => on,
+            _ => {
+                let on = self.first_map().is_some();
+                self.gps.map_on = Some((key, on));
+                on
+            }
+        }
     }
 
     /// The next message for the receiver after power-up, one per pass: the configuration with the GNSS SYSTEMS, the time (UTC from the

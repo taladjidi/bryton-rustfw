@@ -10,7 +10,7 @@ impl App {
     /// unit, so one may go over it; the next waits for the next pass.
     const AHEAD_US: u32 = 6_000;
     /// Units of work per pass at most (where the CPU time is not measured, as in the simulation).
-    const AHEAD_STEPS: u32 = 6;
+    const AHEAD_STEPS: u32 = 24;
 
     /// The last tile of the road ahead read, inflated and decoded (all its slices), the longest so far, and the
     /// longest single call on a tile, in microseconds of CPU ([`prof::Clock::us`]; `tools/dev.py info`).

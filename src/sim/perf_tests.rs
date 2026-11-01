@@ -441,7 +441,64 @@ fn screen_budgets() {
     let (mut sim, mut app) = super::interaction_tests::quick_unit(true);
     app.open_quick();
     app.show(&mut sim);
-    got.push(("quick panel", steady(&mut sim, &mut app), (870, 3, 2400)));
+    // the stock scan's one read of the rides starts at 30 s (STOCK_SCAN_MS); past it the panel reads nothing
+    run(&mut sim, &mut app, 40_000);
+    got.push(("quick panel", steady(&mut sim, &mut app), (870, 3, 10)));
+    // the same panel with a title too long for its box: it scrolls
+    let (mut sim, mut app) = super::interaction_tests::quick_unit(true);
+    let at = sim.ms + 100;
+    let song = crate::sim::ble_sim::Act::Track("A VERY LONG SONG TITLE THAT OVERFLOWS", "Band");
+    if let Some(p) = sim.nordic.phone.as_mut() {
+        p.script.push((at, song));
+    }
+    app.open_quick();
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 40_000);
+    got.push(("quick panel, scrolling title", steady(&mut sim, &mut app), (8900, 36, 10)));
+    // the screens of the review's finding 37 (2026-11-01): the workout page, the GPS screen, the CLIMB page (a
+    // segment's, and the road ahead's), a settings value after an edit
+    let (mut sim, mut app) = {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        sim.gnss.route = Some(ride_route);
+        let mut app = App::start(&mut sim, Some(KEY));
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 5000);
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, crate::menu::Row::Open(Menu::Workouts));
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Start)); // the workouts, the first one's steps, START
+        }
+        assert!(app.plan.player.is_some());
+        app.screen = Screen::Ride(crate::WORKOUT);
+        app.show(&mut sim);
+        (sim, app)
+    };
+    got.push(("workout page", steady(&mut sim, &mut app), (2500, 8, 125)));
+    let (mut sim, mut app) = started();
+    sim.gnss.route = Some(ride_route);
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 5000);
+    app.open(Screen::Menu(Menu::Gps, 0));
+    app.show(&mut sim);
+    got.push(("GPS screen", steady(&mut sim, &mut app), (10_900, 28, 30)));
+    let (mut sim, mut app) = super::segment_tests::riding_a_segment();
+    assert!(app.page_on(crate::CLIMB));
+    app.screen = Screen::Ride(crate::CLIMB);
+    app.show(&mut sim);
+    got.push(("segment (CLIMB) page", steady(&mut sim, &mut app), (3000, 18, 145)));
+    let (mut sim, mut app) = super::course_tests::riding_the_road_ahead_climb();
+    assert!(app.page_on(crate::CLIMB));
+    app.screen = Screen::Ride(crate::CLIMB);
+    app.show(&mut sim);
+    got.push(("climb ahead (CLIMB) page", steady(&mut sim, &mut app), (3500, 15, 145)));
+    let (mut sim, mut app) = started();
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, crate::menu::Row::Set(crate::Setting::Light));
+    app.press(&mut sim, Press::Short(Key::Start));
+    got.push(("settings value edit", steady(&mut sim, &mut app), (870, 3, 30)));
     let mut over = std::vec::Vec::new();
     for (name, (px, win, by), (bp, bw, bb)) in got {
         std::println!("{name}: {px} px/s, {win} windows/s, {by} B/s read (budget {bp}, {bw}, {bb})");

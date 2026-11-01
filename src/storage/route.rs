@@ -265,8 +265,10 @@ pub struct Slice {
 }
 
 impl Slice {
-    /// The slice of a main loop pass: about a millisecond or two on the unit each (src/sim/ counts the operations).
-    pub const PASS: Slice = Slice { inflate: 1024, nodes: 48, sort: 200 };
+    /// The slice of a main loop pass: the unit measured a slice at 31 ms (2026-11-01, review finding 63) where the host
+    /// counts said 3, so each kind of work is a quarter of what it was (`pass_slices_are_small`); to be seen on the unit
+    /// (`tools/dev.py info`, "slice max").
+    pub const PASS: Slice = Slice { inflate: 256, nodes: 12, sort: 50 };
     /// The whole tile in one call.
     #[cfg(test)]
     pub const ALL: Slice = Slice { inflate: usize::MAX, nodes: usize::MAX, sort: usize::MAX };
@@ -1037,6 +1039,14 @@ pub(crate) mod tests {
     use super::*;
     use crate::fat::tests::{Ram, image};
     use std::vec::Vec;
+
+    /// A call of a pass does at most about a quarter of the work that took 31 ms on the unit (the instructions per
+    /// kind of work as in the ignored test below: a node 900, a sift 400, a byte out 30 and a byte in 200).
+    #[test]
+    fn pass_slices_are_small() {
+        let s = Slice::PASS;
+        assert!(s.nodes * 900 <= 12_000 && s.sort * 400 <= 20_000 && s.inflate * 230 <= 60_000, "{s:?}");
+    }
 
     /// The synthetic file's name: its z9 tile (tools/route_pack.py `fixture`).
     pub const NAME: &str = "9-49-342.dat";
