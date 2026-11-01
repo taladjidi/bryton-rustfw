@@ -451,6 +451,9 @@ def main():
     p.add_argument('lba', nargs='?', default='0x10000')
     p.add_argument('n', nargs='?', type=int, default=16)
     p.add_argument('count', nargs='?', type=int, default=128)
+    p = sub.add_parser('stepbench', help='run App::step N times back to back (2..16, default 8) and print each in us and the '
+                       'first-to-rest ratio: a ratio well over 1 means the pass is code fetch')
+    p.add_argument('n', nargs='?', type=int, default=8)
     p = sub.add_parser('mapbench', help='time the basemap of the full-page map at the unit\'s position: mapbench LEVEL '
                        '[STEPS]: STEPS views, each moved a screen east (cold re-centres)')
     p.add_argument('level', type=int)
@@ -546,6 +549,8 @@ def main():
                     sys.exit(f'dev.py: {e}')
                 Path(a.o).write_bytes(data)
                 print(f'{len(data)} bytes -> {a.o}')
+            elif a.cmd == 'stepbench':
+                print(command(s, f'bench step {a.n}'))
             elif a.cmd == 'mapbench':
                 # a screen east each time (240 px at the level's metres a pixel): a view never drawn before
                 mpp = [1, 1.5][a.level % 2] * 2 ** (a.level // 2)  # map.rs mpp16(level) / 16

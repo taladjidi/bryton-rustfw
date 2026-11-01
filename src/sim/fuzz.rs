@@ -488,7 +488,7 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 14] = [
+    let words: [&[u8]; 15] = [
         b"peek ",
         b"poke ",
         b"load ",
@@ -501,6 +501,7 @@ fn dev_link_input() {
         b"sector ",
         b"emmc\n",
         b"bench map ",
+        b"bench step ",
         b"prof ",
         b" -",
     ];
@@ -551,7 +552,7 @@ fn dev_link_input() {
             if k % 64 == 63 {
                 maps += usize::from(matches!(
                     session.feed(&buf, &app, Stats::default(), &mut pc),
-                    crate::dev::Effect::BenchMap(..)
+                    crate::dev::Effect::BenchMap(..) | crate::dev::Effect::BenchStep(_)
                 ));
                 buf.clear();
                 pc.got.clear();
@@ -596,6 +597,7 @@ fn dev_link_ride_open() {
             2 => std::format!("find {} {} {} {}\n", c[2], 1 + c[3], c[4], c[5]),
             3 => std::format!("bench {} {} {}\n", c[2], 1 + c[3] % 32, 1 + c[4]),
             4 => std::format!("bench scan {}\n", 1 + c[4]),
+            5 if c[1] % 2 == 0 => std::format!("bench step {}\n", c[2] % 20),
             5 => std::format!("bench map {} 0 0\n", c[2] % 61),
             6 => std::format!("sector {}\n", c[2]),
             7 => std::format!("poke {a} {}\n", c[3]),
@@ -613,6 +615,7 @@ fn dev_link_ride_open() {
                     | Effect::Bench(..)
                     | Effect::BenchScan(_)
                     | Effect::BenchMap(..)
+                    | Effect::BenchStep(_)
             ),
             "{line:?} got out with a ride open"
         );
