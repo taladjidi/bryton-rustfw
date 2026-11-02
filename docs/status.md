@@ -36,7 +36,7 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   stall), and a checkpoint follows at once. A step of the RTC forward by over an hour (`CLOCK_STEP_S`) or back counts
   one second; the phone's set (the only RTC setter, refused during a ride) moves the count with it; the GPS never sets
   the RTC. Seen in the simulator (`a_stall_of_10_min_is_all_on_the_timer`, the budget row "catch-up of a 10 min
-  stall"); not yet on the unit.
+  stall"); seen on the unit 2026-11-02 (`dev.py stall`: 60 s, 6 s, 4 s; the 2026-11-02 bullet).
 
 - **`ant events lost` in `dev.py info`** (2026-11-02, EVENT_QUE_OVERFLOW 0x35): that the real SoftDevice sends it, in a
   44-byte ANT event with the code at byte 42 (the layout is inferred from the other events), and that the count stays
@@ -45,7 +45,8 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 - **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel
   DMA, `delay_ms`) now count in `up_ms` and the uptime (time-outs, cadences counted in ms). Silent check: read
   `tools/dev.py info` (uptime) and the RTC time, wait 10 min on a screen that redraws (the main page), read both
-  again; the two differences must agree within a second (before the fix the uptime lagged by the redraw share).
+  again; the two differences must agree within a second. Seen 2026-11-02: drift 0.033 % with the cable, 0.003 % without,
+  over 20 min.
 - **The ride's hang, reproduced in the model (2026-11-01, `ride_radio_tests.rs` `the_bursts_of_a_ride_...`):** after the
   differential test fixed the response order, the old configuration (100 ms pass, 20 us wait) keeps the queue near 70 to
   88 of 96, and a burst on top hangs it: the phone's 12 notifications as 48 events in one pass (3 hangs in 5 minutes) and
@@ -668,14 +669,12 @@ A feature not listed here was seen on the unit.
 - **The radio chip's switch-off made certain (2026-11-02, BOARD.md 11 "Power off", drivers/nrf.rs `system_off`):** the
   command is read through (the chip's frame in flight drained), the chip *seen off* (USART2 TC set, CTS released for
   3 ms, then PD3 following a 1 ms pull-down: released, not driven by a hung chip), else reset and asked again, else held
-  in reset (lines left as they were); seen off, PD3..PD6 analog, no pull. The beep and the screen go off first. To see with the owner (the wake
-  needs a hand on the button): (1) the standby current from the battery with a meter, after a switch-off with sensors
-  and the phone connected, against stock's (System OFF is 0.3 uA; a chip left running is 0.3 mA and more); (2) the
-  unit starts again with the power button and the radio comes back (sensors, phone); (3) the time from the 3 s press
-  to the screen going off is unchanged (under 100 ms more; about 1 s more when the chip was in a reset). The chip's RTS
-  releasing in System OFF is seen (2026-11-02, `tools/dev.py nrfoff`, BOARD.md 11). Not checkable here: whether
-  PA2 (output high, purpose unknown, BOARD.md 4) gates a rail: measure the standby current with PA2 left as it is
-  before anyone tries it low.
+  in reset (lines left as they were); seen off, PD3..PD6 analog, no pull. The beep and the screen go off first. Seen 2026-11-02 (owner: fine): the unit starts again with the power button and the radio comes
+  back, and the time from the 3 s press to the screen off is unchanged. Still owed: the standby current from the battery
+  with a meter, after a switch-off with sensors and the phone connected, against stock's (System OFF is 0.3 uA; a chip
+  left running is 0.3 mA and more). The chip's RTS releasing in System OFF is seen (`tools/dev.py nrfoff`, BOARD.md 11).
+  PA2 driven low (2026-11-02) dropped the USB dev link after a few seconds, nothing else seen (inferred: the USB PHY's
+  enable or supply); in standby every STM32 pin is high-impedance anyway, so PA2 cannot change the standby current.
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
 - **The USB drive (mass storage, msc.rs): to do, high speed.** The drops, what was seen and what to try are in
@@ -690,10 +689,9 @@ A feature not listed here was seen on the unit.
 - **The power button starts the unit after a switch-off:** fixed in ea359a0 (IRQ 149 enabled before standby), seen
   on the unit 2026-10-25, installed and unplugged.
 - **AUTO OFF** (SYSTEM > AUTO OFF): switching off idle on battery confirmed by the owner 2026-10-28 (b0861d8; before
-  it, a powered trainer heard held it on). Still to see on the unit: 5 min idle on battery gives the banner and beeps at 10 s and
-  5 s, a key or touch cancels, the unit powers off; never with a ride or recorder busy, a cable in, the drive lent, a
-  write waiting, or movement; the power button starts it again; the setting survives a restart (register 18 bits
-  22..24).
+  it, a powered trainer heard held it on). Seen 2026-11-02: the banner, its beeps at 10 s and 5 s, a key cancelling, the power button
+  starting it again. Still to see on the unit: never with a ride or recorder busy, a cable in, the drive lent, a write
+  waiting, or movement; the setting survives a restart (register 18 bits 22..24).
 
 - **New since the installed build (2026-10-24), seen only from RAM or in the simulator, one line each:**
   - touch gestures by feel and their axes;
