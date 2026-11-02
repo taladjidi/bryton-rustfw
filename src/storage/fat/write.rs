@@ -35,7 +35,8 @@
 //! - **a write that fails after landing** (a card busy past the driver's bound lands its data and still answers an
 //!   error, 2026-11-02): at worst a cluster is lost (taken, named by nothing: fsck reports it), never freed while
 //!   anything may name it, since a freed cluster in a chain is a cross-link and a lost ride. No cluster is given
-//!   back; a link that landed in the first FAT is kept and written again for the other copies (`link_taken`).
+//!   back nor taken back: a link that failed (landed or not) is not taken by the handle; the next grow takes another
+//!   cluster and its link overwrites the failed one in every copy, so the copies agree and one cluster is lost.
 //!
 //! Never written: the boot sector, the volume label, the FAT's first two entries (media and dirty flags), any
 //! sector past the volume (and the eMMC driver refuses any sector at or past B, BOARD.md 15). Never a format.
@@ -373,29 +374,13 @@ impl Fat {
             } else {
                 // two writes even in one FAT sector: a torn write of both could land the link without the end
                 self.set_entries(d, &[(c, EOC)])?;
-                if let Err((e, linked)) = self.link_taken(d, h.last, c) {
-                    if linked {
-                        (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1); // in the chain on the card
-                    }
-                    return Err(e);
-                }
+                // a link that fails, landed or not, leaves `c` out of the handle: the next grow takes another
+                // (`c` is marked) and its link overwrites this one in every copy (`flush_fat`): `c` lost, nothing freed
+                self.set_entries(d, &[(h.last, c)])?;
             }
             (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1);
         }
         Ok(())
-    }
-
-    /// Links `c` (just marked a chain's end) after `last`. A link that failed may have landed in the first FAT:
-    /// read back, it names `c`, so `c` is in the chain on the card (`true` with the error: the caller's handle takes
-    /// it, as the chain does), and the link is written once more so the other copy agrees (`Ok` if that passes).
-    /// Not there, or unreadable: `c` stays out, one lost cluster. Nothing is ever freed here: a cluster the chain
-    /// may name is never given back (module doc, "a write that fails after landing").
-    fn link_taken(&mut self, d: &mut impl DiskWrite, last: u32, c: u32) -> Result<(), (Error, bool)> {
-        let Err(e) = self.set_entries(d, &[(last, c)]) else { return Ok(()) };
-        match self.entry(d, last) {
-            Ok(next) if next == c => self.set_entries(d, &[(last, c)]).map_err(|_| (e, true)),
-            _ => Err((e, false)),
-        }
     }
 
     /// Writes `buf` (whole sectors) to `h`'s sectors from `sector` on, taking clusters as needed; one disk write
@@ -690,7 +675,7 @@ impl Fat {
         }
         self.fill_cluster(d, c, &s)?;
         self.set_entries(d, &[(c, EOC)])?; // then the link, in its own write (as `take`)
-        self.link_taken(d, last, c).map_err(|(e, _)| e)?; // linked or not, `c` is the chain's or lost: never freed
+        self.set_entries(d, &[(last, c)])?;
         self.fsinfo_update(d, 1, c + 1, None)?;
         Ok(self.lba(c))
     }
@@ -1704,6 +1689,52 @@ pub(crate) mod tests {
         }
     }
 
+    /// A disk whose `.2`th write into the first FAT (sectors `.1`, counted down) lands and is answered as failed.
+    pub struct BusyFat(pub Ram, pub core::ops::Range<u32>, pub u32);
+
+    impl Disk for BusyFat {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for BusyFat {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            self.0.write(lba, buf)?;
+            if !self.1.contains(&lba) {
+                return Ok(());
+            }
+            self.2 = self.2.wrapping_sub(1);
+            if self.2 == 0 { Err(Error::Io) } else { Ok(()) }
+        }
+    }
+
+    /// The link of a file's new cluster lands in the first FAT and is answered `Busy` (the review of 38fb5f3,
+    /// finding 3), the recorder's way: the handle kept, the next checkpoint writes the piece again, then its size.
+    /// The handle does not take the cluster; the next grow takes another and its link overwrites the failed one in
+    /// both copies: the chain correct, the file whole, the FATs equal (fsck), exactly one cluster lost.
+    #[test]
+    fn a_link_that_lands_but_fails_loses_one_cluster_and_the_copies_agree() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.ensure_dir(&mut d, fat.root(), "Rustfw", T).unwrap();
+        let mut h = fat.create(&mut d, dir, "261102090000.fit", T).unwrap();
+        let spc = fat.spc as usize;
+        let data: Vec<u8> = (0..3 * spc * SECTOR).map(|i| (i * 11 + i / 509) as u8).collect();
+        fat.write_sectors(&mut d, &mut h, 0, &data[..spc * SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut h, (spc * SECTOR) as u32, T).unwrap();
+        let fat1 = fat.fat_start..fat.fat_start + fat.fat_size;
+        // the second piece takes a cluster: its end mark, then the link, the second write into the first FAT
+        let mut d = BusyFat(d, fat1, 2);
+        let piece = &data[spc * SECTOR..2 * spc * SECTOR];
+        assert_eq!(fat.write_sectors(&mut d, &mut h, spc as u32, piece), Err(Error::Io), "the link answered Busy");
+        assert_eq!(h.clusters, 1, "the handle did not take the cluster");
+        fat.write_sectors(&mut d, &mut h, spc as u32, &data[spc * SECTOR..]).unwrap(); // the next checkpoint
+        fat.set_size(&mut d, &mut h, data.len() as u32, T).unwrap();
+        assert_eq!(read_all(&mut fat, &mut d.0, "Rustfw/261102090000.fit"), data, "the file whole");
+        assert_eq!(fsck(&d.0.0), Ok(1), "the FATs equal, no cross-link, one cluster lost");
+    }
+
     /// A disk on which every FSInfo write (sector 1) fails, nothing landing.
     pub struct NoFsinfo(pub Ram);
 
@@ -1732,7 +1763,7 @@ pub(crate) mod tests {
 
     /// A write that lands but fails (module doc, "a write that fails after landing"), at every write of a folder's
     /// making, 20 files' entries (the folder's second cluster) and a file's growth over clusters, each call retried
-    /// as the recorder does (a piece, then its size; the retry from the entry, the failed call's handle dropped): the
+    /// as the recorder does (a piece, then its size; the handle kept whatever fails, recorder/mod.rs `checkpoint`): the
     /// file whole, no cross-link nor chain into a free cluster (fsck), at most one cluster lost, counted.
     #[test]
     fn a_write_that_lands_but_fails_loses_a_cluster_at_most() {
@@ -1761,9 +1792,10 @@ pub(crate) mod tests {
                 })
                 .unwrap();
             }
+            // the recorder's way: the handle kept whatever fails (recorder/mod.rs `checkpoint`)
+            let mut h = fat.locate(&mut d, dir, "000000000019.fit").unwrap();
             for (a, b) in [(0usize, 3usize), (3, 17), (17, 40)] {
                 retry(&mut d, &mut |d| {
-                    let mut h = fat.locate(d, dir, "000000000019.fit")?;
                     fat.write_sectors(d, &mut h, a as u32, &data[a * SECTOR..b * SECTOR])?;
                     fat.set_size(d, &mut h, (b * SECTOR) as u32, T)
                 })

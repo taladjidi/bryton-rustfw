@@ -62,8 +62,9 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 - **A write the card answers `Busy` after landing it (2026-11-02, fat/write.rs module doc):** the policy is "on a
   write that fails after landing, at worst a cluster is lost (fsck reports it), never freed while it may be named":
   no cluster is given back (an undo that itself lands and fails would leave a chain or handle naming a free
-  cluster: a cross-link, a lost ride); a link that landed in the first FAT is kept and written again for the other
-  copy. Seen in the simulator only: at most one cluster lost a failed write
+  cluster: a cross-link, a lost ride) nor taken back: a link that failed (landed or not) is not taken by the handle,
+  the next grow takes another cluster and its link overwrites the failed one in both copies. Seen in the simulator
+  only: at most one cluster lost a failed write
   (`a_write_that_lands_but_fails_loses_a_cluster_at_most`), 4 over a 75 s start with 1.2 s stalls; a computer's fsck
   reclaims them.
 - **First ride on a fresh card (2026-11-01, src/sim/budget_tests.rs):** the recorder creates its 20 folders and files on the first ride (setup 202 sectors, make_kept 154) and syncs the whole FAT three times (1.69 MB read, about 727 ms): the Start pass is 1051 to 1730 ms, the gate's one named exemption for it. On a card that already had a ride the Start pass is 53 to 97 ms, and the prepared-card rows (keys 108 to 136 ms, GNSS under 1.1 s) hold the general limits. Open owner decision: prepare the card's folders at boot or when idle, or buffer the first seconds in RAM (a branch's approach, not merged: the golden rule wants ride data on the eMMC as it goes).
