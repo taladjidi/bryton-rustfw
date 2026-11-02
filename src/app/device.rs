@@ -324,8 +324,13 @@ impl App {
             }
             (true, true) if self.light.ms >= every => {
                 let read = ambient::light_read(b);
-                self.sensor_ok(b, read.is_some());
-                if let Some(lux10) = read {
+                self.sensor_ok(b, !matches!(read, ambient::LightRead::Bus | ambient::LightRead::Lost));
+                if read == ambient::LightRead::Lost {
+                    self.light.measuring = false; // started again next pass
+                } else if read == ambient::LightRead::Wait {
+                    self.light.ms = every.saturating_sub(POLL_MS); // read again next pass
+                }
+                if let ambient::LightRead::Lux(lux10) = read {
                     self.light.auto_level = self.light.auto.update(lux10);
                     let dt = self.light.ms;
                     self.light.ms = 0;

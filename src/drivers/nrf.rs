@@ -70,6 +70,9 @@ pub struct Rx {
     kept_n: usize,
     /// The op of a call that timed out, whose answer may still come: the next call swallows one answer of that op.
     pub(crate) late: Option<u8>,
+    /// ANT queue overflows the SoftDevice reported (EVENT_QUE_OVERFLOW): ANT events lost between the chip and us.
+    /// Survives a reset (a count for `dev.py info`, next to the radio resets).
+    pub ant_lost: u16,
     /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
     /// PHONE menu shows it when the link could not be set up.
     pub failed: Option<(u8, u32)>,
@@ -113,6 +116,7 @@ impl Rx {
             head: 0,
             kept_n: 0,
             late: None,
+            ant_lost: 0,
             failed: None,
             heard: false,
             strikes: 0,
@@ -163,6 +167,9 @@ impl Rx {
         let p = self.buf.get(..self.last).unwrap_or(&[]);
         let id = event_id(p);
         let broadcast = ant_broadcast(p).is_some();
+        if ant_queue_overflow(p) {
+            self.ant_lost = self.ant_lost.saturating_add(1);
+        }
         if p.first() == Some(&ANT_EVT) {
             // only what the app acts on: a broadcast, a close, a failed or completed acknowledged message (the
             // rest, RX_FAIL and the like, would push a close or a disconnection out of a full ring)
@@ -721,6 +728,8 @@ impl SensorId {
 
 /// ANT event code: the channel is closed (after [`ant_close`], or a search that timed out).
 const EVENT_CHANNEL_CLOSED: u8 = 0x07;
+/// EVENT_QUE_OVERFLOW (S212 v4.0.2 docs, `ant_parameters.h`; the S332 headers are not public).
+const EVENT_QUE_OVERFLOW: u8 = 0x35;
 /// An acknowledged message was not acknowledged by the other end (ANT message 0x40 event code 6).
 const EVENT_TRANSFER_TX_FAILED: u8 = 0x06;
 /// An acknowledged message was acknowledged (event code 5; the same layout as code 6 here, inferred).
@@ -730,6 +739,21 @@ const EVENT_TRANSFER_TX_COMPLETED: u8 = 0x05;
 /// later ([`crate::SEARCH_REST_MS`]), so a sensor that is not sending (a strap not worn) does not keep the radio
 /// listening all the time. Stock uses 0xff (searching for ever).
 pub const SEARCH_TIMEOUT: u8 = 12;
+
+/// True if ANT event `p` is EVENT_QUE_OVERFLOW (0x35, Nordic `ant_parameters.h`): the SoftDevice's event queue was
+/// full and events were lost. The 44-byte layout (code at byte 42) is **inferred** from the other ANT events, not seen
+/// on the unit. Its length is `usNumberOfEvents` of the enable call (32, the floor).
+///
+/// ```
+/// let mut p = [0u8; 44];
+/// p[0] = 8;
+/// p[42] = 0x35;
+/// assert!(bryton_rustfw::nrf::ant_queue_overflow(&p));
+/// assert!(!bryton_rustfw::nrf::ant_queue_overflow(&p[..43]), "short");
+/// ```
+pub fn ant_queue_overflow(p: &[u8]) -> bool {
+    matches!(p, [ANT_EVT, .., EVENT_QUE_OVERFLOW, _] if p.len() == 44)
+}
 
 /// The channel of ANT event `p` if it reports a channel closed.
 ///
@@ -796,7 +820,8 @@ pub fn ant_start(
     private: Option<[u8; 8]>,
     nets: &[u8],
 ) -> Result<bool, Error> {
-    // enable: 15 channels, 0 encrypted, event queue 32, then stock's buffer pointer and size (sent as stock sends
+    // enable: 15 channels, 0 encrypted, event queue 32 (usNumberOfEvents = 0x20, the floor: Nordic's
+    // MIN_ANT_EVENT_QUEUE_SIZE; overflow is reported as event 0x35, counted in `Rx::ant_lost`), then stock's buffer pointer and size (sent as stock sends
     // them; the chip allocates its own, inferred)
     call(b, rx, &[ANT_CMD, 0xfa, 1, 0x0f, 0, 0x20, 0, 0x7c, 0x16, 0x06, 0x24, 0xfc, 0x05], &mut [])?;
     fn set_key(
@@ -1129,6 +1154,19 @@ mod tests {
             rx_byte(&mut rx, b);
         }
         assert_eq!(rx.late, None, "swallowed in the drain, so the next answer of that op is the real one");
+    }
+
+    #[test]
+    fn a_queue_overflow_event_is_counted_and_not_kept() {
+        let mut rx = Rx::new();
+        let mut lost = [0u8; 44];
+        (lost[0], lost[42]) = (ANT_EVT, EVENT_QUE_OVERFLOW);
+        keep(&mut rx, &lost);
+        keep(&mut rx, &lost);
+        assert_eq!(rx.ant_lost, 2);
+        assert_eq!(rx.pop(&mut [0; KEPT]), None);
+        rx.reset();
+        assert_eq!(rx.ant_lost, 2, "a reset keeps the count");
     }
 
     #[test]

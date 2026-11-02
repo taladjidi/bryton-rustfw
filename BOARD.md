@@ -245,8 +245,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   writes the same word over and over. Checked in Renode against the simulator, and **seen on the panel** (2026-10-23).
 - **SPI1's clock** (main.rs `spi_init`): kernel clock pll1_q_ck (RCC_D2CCIP1R SPI123SEL 0), 100 MHz (section 1;
   PLL1 always runs, and its Q output feeds the SDMMC too, so nothing is switched on for it), MBR /2: **50 MHz**. The
-  ST7789V's serial write cycle is 16 ns at least (tSCYCW: 62.5 MHz; ST7789V datasheet, serial interface
-  characteristics); SPI1's master clock goes to 80 MHz (DS12930 table 119). It was 8 MHz (HSI / 8), then 16 (HSI / 4,
+  ST7789VW's serial write cycle is 16 ns at least (tSCYCW: 62.5 MHz; ST7789VW datasheet V1.0, serial interface
+  characteristics); the older ST7789V datasheet V1.3 says 66 ns (15 MHz), so 50 MHz is inside the VW figure only, and
+  the unit's controller is then the newer die (it works at 50 MHz; which die is not known); SPI1's master clock goes to 80 MHz (DS12930 table 119). It was 8 MHz (HSI / 8), then 16 (HSI / 4,
   2026-10-25). Without POWER_STEPS bit 3, or if PLL1's Q output is off (RCC_PLLCFGR DIVQ1EN), HSI / 8 as before.
 - **Pixel runs by DMA** (hw.rs `PanelDma`, main.rs `lcd_ram`): DMA1 stream 0, DMAMUX1 channel 0 on request 38
   (spi1_tx_dma; RM0399 DMAMUX1 table, stm32h7xx_hal_dma.h `DMA_REQUEST_SPI1_TX`), memory to peripheral, 32-bit both

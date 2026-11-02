@@ -18,6 +18,10 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **`ant events lost` in `dev.py info`** (2026-11-02, EVENT_QUE_OVERFLOW 0x35): that the real SoftDevice sends it, in a
+  44-byte ANT event with the code at byte 42 (the layout is inferred from the other events), and that the count stays
+  0 in a ride with the owner's sensors.
+
 - **A stall over MAX_CATCH_UP (10 s) loses the seconds beyond it from the ride record** (older behaviour, found
   2026-11-02): the ride's seconds come from the RTC through `catch_up_seconds`, at most `MAX_CATCH_UP` a pass. The
   checkpoint cadence is on the recorded seconds too (recorder `CHECKPOINT_S`), not on the app clock.
@@ -52,6 +56,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   sourced from Linux's mmc.h; the stall's length and period, and whether the unit's card raises URGENT_BKOPS
   (EXCEPTION_EVENT, R1 bit 6) at all, are *inferred*. To see on the unit, with the write bench above: the longest
   CMD13 busy over a few thousand sector writes, and R1 bit 6 in `tools/dev.py emmc`'s status.
+  Datasheet check (2026-11-02): Linux allows a write 10 s of busy (`MMC_BLK_TIMEOUT_MS`), the driver 1 s
+  (`emmc::TRIES`; SK hynix lists 1 s for a power-on GC, 600 ms for an erase); a card may abort a write on a
+  voltage drop and set ERROR + CC_ERROR only in the first CMD13 after the busy (inferred: the vendor sheet is not public). The model has
+  both (`Cost::stall_ms`, `EmmcCard::prog_error`); the driver is unchanged, an ignored test shows its 1 s today.
+  Other open facts from the same check: the cache (EXT_CSD [33], on in iNAND would lose acknowledged writes in a
+  power cut) and CMD6 busy (GENERIC_CMD6_TIME [248]) are not read from the unit yet.
 - **A power cut with the backup domain lost, then the boot (2026-11-02, app/riding.rs `left_by_a_power_loss`):** a
   boot with none of this firmware's backup registers set reads the ride's record once (read only) and resumes a ride
   left open as the marker's path does (a card that does not answer then: the resume pending, stock's settings

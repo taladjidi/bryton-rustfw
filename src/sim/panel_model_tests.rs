@@ -12,23 +12,65 @@ fn powered() -> Sim {
 
 #[test]
 #[should_panic(expected = "settle time")]
-fn a_command_50_ms_after_swreset_fails() {
+fn a_command_3_ms_after_swreset_fails() {
+    let mut s = powered();
+    s.panel_cmd(panel::SWRESET, &[]);
+    s.delay_ms(3);
+    s.panel_cmd(0x13, &[]);
+}
+
+#[test]
+fn a_command_5_ms_after_swreset_passes_but_slpout_waits_120() {
+    let mut s = powered();
+    s.panel_cmd(panel::SWRESET, &[]);
+    s.delay_ms(5);
+    s.panel_cmd(0x13, &[]);
+    s.delay_ms(115);
+    s.panel_cmd(panel::SLPOUT, &[]);
+}
+
+#[test]
+#[should_panic(expected = "after SWRESET")]
+fn slpout_50_ms_after_swreset_fails() {
     let mut s = powered();
     s.panel_cmd(panel::SWRESET, &[]);
     s.delay_ms(50);
-    s.panel_cmd(0x13, &[]);
+    s.panel_cmd(panel::SLPOUT, &[]);
 }
 
 #[test]
-fn a_command_120_ms_after_swreset_passes() {
+#[should_panic(expected = "after SLPOUT")]
+fn swreset_inside_the_sleep_out_sequence_fails() {
     let mut s = powered();
+    s.panel_cmd(panel::SLPOUT, &[]);
+    s.delay_ms(10);
     s.panel_cmd(panel::SWRESET, &[]);
-    s.delay_ms(120);
-    s.panel_cmd(0x13, &[]);
 }
 
 #[test]
-#[should_panic(expected = "sleep switch")]
+fn slpout_right_after_slpin_is_allowed_and_ramctrl_defaults_to_the_mcu_interface() {
+    let mut s = powered();
+    s.panel_cmd(panel::SLPOUT, &[]);
+    s.delay_ms(120);
+    s.panel_cmd(panel::SLPIN, &[]);
+    s.delay_ms(5);
+    s.panel_cmd(panel::SLPOUT, &[]);
+    assert_eq!(s.ramctrl, [0x00, 0xf0]);
+}
+
+#[test]
+#[should_panic(expected = "RGB interface")]
+fn ramctrl_rm_bit_sends_ram_writes_to_the_rgb_port() {
+    let mut s = powered();
+    s.panel_cmd(panel::COLMOD, &[0x05]);
+    s.panel_cmd(panel::RAMCTRL, &[0x10, 0xf0]);
+    s.panel_cmd(panel::CASET, &[0, 0, 0, 0]);
+    s.panel_cmd(panel::RASET, &[0, 0, 0, 0]);
+    s.panel_ram_write(1, &mut || 0);
+}
+
+#[test]
+#[should_panic(expected = "after SLPOUT")]
 fn sleep_in_within_120_ms_of_sleep_out_fails() {
     let mut s = powered();
     s.panel_cmd(panel::SLPOUT, &[]);
