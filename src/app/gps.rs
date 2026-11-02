@@ -26,6 +26,12 @@ pub const GNSS_IDLE_MS: u32 = 10 * 60_000;
 /// A fix older than this is dropped (the receiver stopped answering).
 pub const PVT_STALE_MS: u32 = 3000;
 
+/// A receiver silent this long (or a multiple of it) is sent its configuration again, ms.
+const GNSS_NUDGE_MS: u32 = 10_000;
+
+/// A receiver silent this long (or a multiple of it) in a ride has its supply cycled, ms.
+const GNSS_CYCLE_MS: u32 = 60_000;
+
 /// What goes to the receiver in a pass: the bytes (padded with 0xff) and how many 32-byte transfers hold them.
 pub(crate) type Msg = ([u8; mga::WIRE], usize);
 
@@ -72,7 +78,8 @@ impl App {
             b.gnss_power(true);
         }
         self.gps.ms = self.gps.ms.saturating_add(self.real_ms);
-        self.gps.pvt_ms = self.gps.pvt_ms.saturating_add(self.dt_ms);
+        let silent_was = self.gps.pvt_ms;
+        self.gps.pvt_ms = silent_was.saturating_add(self.dt_ms);
         let mut send = if self.gps.ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
         self.gps.wait = self.gps.wait.saturating_sub(self.dt_ms);
         if send.is_some() || self.gps.wait == 0 {
@@ -80,6 +87,17 @@ impl App {
         }
         if self.gps.pvt_ms > PVT_STALE_MS && self.gps.pvt.take().is_some() {
             self.adapt(None); // silent: continuous tracking, if AUTO had chosen cyclic
+            // a frame to the receiver restarts a stream it stopped (a stall unread; inferred, see the model's G2b); the
+            // silence counts from here, so a long stall is not a minute of silence at once
+            (self.gps.reconfig, self.gps.pvt_ms) = (true, PVT_STALE_MS + 1);
+        } else if self.gps.pvt_ms / GNSS_NUDGE_MS != silent_was / GNSS_NUDGE_MS {
+            self.gps.reconfig = true;
+        }
+        if self.gps.pvt_ms / GNSS_CYCLE_MS != silent_was / GNSS_CYCLE_MS && self.ride.state() != ride::State::Idle {
+            // silent for a minute in a ride, whatever was sent: its supply is cycled and it starts over as at boot
+            b.gnss_power(false);
+            (self.gps.ms, self.gps.sent, self.gps.retried, self.gps.pvt_ms) = (0, 0, false, 0);
+            (self.gps.pvt, self.gps.parser) = (None, gnss::Parser::new());
         }
         self.strip.gps = self.gps.bars();
         // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing

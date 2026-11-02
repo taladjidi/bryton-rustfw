@@ -164,7 +164,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 |---|---|---|
 | PA0 | power button, standby wake-up WKUP1 (rising); must be a GPIO input | 9 |
 | PA1 | key 0x01 back / power, active low (also low while the power button is pressed) | 5 |
-| PA2 | output, high (seen on the unit 2026-11-02, untouched here); purpose unknown. Stock sets it high at board init (with the battery ADC's set-up) and low only when it boots into USB mass storage; never at switch-off or in its stop mode. A candidate rail enable (not the radio's as far as stock shows): not driven here | 11 |
+| PA2 | output, high (seen on the unit 2026-11-02, untouched here); purpose unknown. Stock sets it high at board init (with the battery ADC's set-up) and low only when it boots into USB mass storage; never at switch-off or in its stop mode. A candidate rail enable (not the radio's as far as stock shows): not driven here. Driven low on 2026-11-02: the USB dev link dropped after a few seconds, nothing else seen (inferred: the USB HS PHY's ULPI enable or supply); standby current still owed | 11 |
 | PA3 PA5 | USB ULPI D0, CK (AF10) | 7 |
 | PA6 | Nordic chip reset, low = reset | 11 |
 | PA7 | USB ULPI PHY enable / reset, high = running (inferred) | 7 |

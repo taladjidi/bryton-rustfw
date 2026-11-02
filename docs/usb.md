@@ -106,6 +106,11 @@ What the unit saw at a drop, the suspend watch, and the causes ruled out are dat
 - The old record in register 0 read 0xd1280200 at every drop (READ(10), phase error, no reset logged): the drive's
   log missed the resets the snapshot shows.
 
+**2026-11-02, a long stall with the cable in** (`dev.py stall`, owner present): a `bench stall` of 30 s or more drops
+the link on the computer's side (the stream stops answering while the loop sleeps); once it did not come back although
+the unit showed green. Seen, not explained; short stalls (4 s, 6 s) did not drop it. Inferred: the host gives up on a
+device that does not answer its polls for that long; the unit's side was not captured.
+
 ## Next tries, cheapest first
 
 1. **Read what the drive saw last.** A drop now stores the last command, its status and the resets in backup register

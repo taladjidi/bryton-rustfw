@@ -365,3 +365,33 @@ fn an_idle_minute_is_read_at_least_every_800_ms() {
     assert!(sim.gnss.violations.is_empty(), "{:?}", sim.gnss.violations);
     sim.gnss.assert_reads(880, 0);
 }
+
+/// Seen on the unit 2026-11-02: a 60 s `bench stall` in a ride, then the GPS label gone for about 2 minutes. A stall of
+/// 60 s and of 600 s, mid-ride, searching and with a fix: PVTs flow again within a few seconds and the strip is never
+/// silent for long after it.
+#[test]
+fn a_long_stall_in_a_ride_leaves_the_receiver_read_again_within_seconds() {
+    for (secs, fix) in [(60, None), (60, Some(7000)), (600, None), (600, Some(7000))] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.classic_pages();
+        sim.gnss.fix = fix;
+        sim.gnss.expect = Some("stream time-out");
+        sim.gnss.wedge_after_timeout = true; // the worst the unit's 2 minutes allow
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 5000);
+        app.press(&mut sim, crate::Press::Short(crate::Key::Start));
+        run(&mut sim, &mut app, 20_000);
+        assert!(app.strip.gps.is_some(), "{secs} s {fix:?}: a PVT before");
+        sim.delay_ms(secs * 1000);
+        let mut silent_ms = 0;
+        for _ in 0..(60_000 / 50) {
+            app.step(&mut sim);
+            sim.sleep_ms(50);
+            if app.strip.gps.is_none() {
+                silent_ms += 50;
+            }
+        }
+        assert!(silent_ms <= 4000, "{secs} s {fix:?}: the strip was silent {silent_ms} ms after the stall");
+        assert!(app.strip.gps.is_some() && app.gps.pvt_ms < 2000, "{secs} s {fix:?}: pvt_ms {}", app.gps.pvt_ms);
+    }
+}
