@@ -316,3 +316,13 @@ within an hour resumed it (an older one was saved as it was); without Start the 
 unit could switch off as idle, and the drive was not lent writable. Fix (app/riding.rs `step_recorder`, `step_full`):
 a pass that was waiting keeps the resume pending; only a try that finds no ride clears it. Test:
 `the_card_answers_late_at_boot_without_start` (the card back after 2 s, 5 s and 60 s, a further reset, the save).
+
+## 2026-11-02: a long stall on the unit, and what it showed (main)
+
+With the owner present, `dev.py stall` (`bench stall S`) made the loop sleep S seconds during a ride. Seen: 60 s gave a
+jump of 56 s in the records then 5 ticked, 6 s a jump of 2 s, 4 s none, and the session's elapsed and timer totals were
+exact; the GNSS receiver answered again at once after 15 s and 60 s stalls (a first look that suggested a 2 min silence was
+not reproduced, so the safety net written for it was removed). Stalls of 30 s or more with the cable in drop the USB dev
+link on the computer's side (docs/usb.md). Also seen: the radio chip's RTS released in System OFF within 3 ms
+(`dev.py nrfoff`), the power button wake with the radio back, the AUTO OFF banner and its beeps, and an app clock drift of
+0.003 % over 20 min without the cable (0.033 % with it). PA2 driven low dropped the USB link: left alone.
