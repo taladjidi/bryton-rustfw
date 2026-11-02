@@ -110,6 +110,9 @@ impl Nordic {
             && let Some(f) = self.resp.pop_front()
         {
             self.resp_ahead.pop_front();
+            if self.slow_ms > 0 {
+                self.tx_at = self.tx_at.max(self.t + u64::from(self.slow_ms) * 1000);
+            }
             f
         } else if (self.frame.len() < 2 || ahead.is_some())
             && let Some(f) = self.events.pop_front()

@@ -734,7 +734,12 @@ impl App {
         let radio_ms = pass_ms.saturating_sub(ahead);
         self.watch_radio(b, radio_ms, own_ms.saturating_sub(ahead));
         t = self.timed(b, Sec::Radio, t);
+        // a radio time-out held the pass: the receiver is read now, not when its wait ends (app/gps.rs)
+        if self.rx.stalled {
+            self.gps.wait = 0;
+        }
         self.poll_gnss(b);
+        self.rx.span_end(); // one time-out between two receiver reads (nrf::Rx::stalled)
         t = self.timed(b, Sec::Gnss, t);
         // the app's own run time, not the receiver's (switched off on an indoor ride, its clock starts again)
         if up_before < FAULT_CLEAR_MS && self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {

@@ -275,6 +275,8 @@ pub struct Nordic {
     off_pending: bool,
     /// Never goes off (a chip that ignores `sd_power_system_off`); survives resets.
     pub stays_on: bool,
+    /// A slow but alive chip: each response comes this many ms after its command (the wait is real time).
+    pub slow_ms: u32,
     /// Hangs at this ANT command (1 is the first) after each reset, 0 never (survives resets).
     pub die_at_ant: u8,
     ant_cmds: u8,
