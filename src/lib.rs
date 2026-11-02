@@ -599,8 +599,15 @@ impl App {
         let marker = b.backup_read(RIDE_BKP) == RIDE_OPEN;
         let probe = if self.card_writable && !marker { self.left_by_a_power_loss(b) } else { Some(false) };
         self.rec.resume_if(self.card_writable && (marker || probe != Some(false)));
-        // a ride known open (the marker, or its record read so): stock's settings are not imported over its own
-        let ride_open = self.card_writable && (marker || probe == Some(true));
+        // for stock's import: a ride known open (the marker, or its record read so), none, or unknown (the record
+        // not read: the import waits, `first_import`)
+        let ride = if !self.card_writable {
+            Some(false)
+        } else if marker {
+            Some(true)
+        } else {
+            probe
+        };
         let _ = b.waited_us(); // the start-up's waits (panel init, touch, Nordic boot) are not the first pass's
         self.trash_check = self.card_writable;
         if self.chips.baro {
@@ -633,7 +640,7 @@ impl App {
         if old {
             self.save_page_registers(b);
         }
-        self.first_start(b, ride_open); // before the first page is drawn: stock's pages on it
+        self.first_start(b, ride); // before the first page is drawn: stock's pages on it
         if self.ble.is_some() {
             self.phone_setup(b);
         }

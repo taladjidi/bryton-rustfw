@@ -733,7 +733,8 @@ impl Fat {
         s[32..64].copy_from_slice(&dotdot[1]);
         self.fill_cluster(d, c, &s)?;
         self.set_entries(d, &[(c, EOC)])?;
-        self.fsinfo_update(d, 1, c + 1, None)?;
+        // FSInfo is a hint (a failed write leaves its count high, module doc): not a reason to leave `c` unnamed
+        let _ = self.fsinfo_update(d, 1, c + 1, None);
         self.add_named(d, dir, name, DIR, (c, 0), time)?;
         Ok(File { cluster: c, size: 0, dir: true })
     }
@@ -1701,6 +1702,32 @@ pub(crate) mod tests {
             self.1 = self.1.wrapping_sub(1);
             if self.1 == u32::MAX { Err(Error::Io) } else { Ok(()) }
         }
+    }
+
+    /// A disk on which every FSInfo write (sector 1) fails, nothing landing.
+    pub struct NoFsinfo(pub Ram);
+
+    impl Disk for NoFsinfo {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for NoFsinfo {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            if lba == 1 { Err(Error::Io) } else { self.0.write(lba, buf) }
+        }
+    }
+
+    /// FSInfo is a hint (module doc): a card failing its writes still gets the folder made, its cluster named, no
+    /// cluster lost (the third review of 38fb5f3, finding 4).
+    #[test]
+    fn a_failing_fsinfo_write_does_not_stop_a_folder() {
+        let mut d = NoFsinfo(Ram(image(), 0));
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.mkdir(&mut d, fat.root(), "Rustfw", T).expect("the folder made");
+        assert_eq!(fat.open(&mut d, "Rustfw").map(|f| f.cluster), Ok(dir.cluster));
+        assert_eq!(fsck(&d.0.0), Ok(0));
     }
 
     /// A write that lands but fails (module doc, "a write that fails after landing"), at every write of a folder's

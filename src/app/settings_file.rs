@@ -397,6 +397,8 @@ pub(crate) struct SettingsStore {
     /// The first start's import of stock's settings waits: the card did not answer then ([`App::first_start`]).
     /// The file is not read before it (the file wins over it).
     pub(crate) import_pending: bool,
+    /// Its tries that the card did not answer ([`IMPORT_TRIES`]).
+    pub(crate) import_tries: u8,
 }
 
 impl SettingsStore {

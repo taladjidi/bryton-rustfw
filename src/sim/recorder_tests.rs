@@ -1430,3 +1430,40 @@ fn a_power_loss_ride_keeps_the_unit_on() {
     run(&mut sim, &mut app, 400_000);
     assert!(sim.standby, "no ride: AUTO OFF as usual");
 }
+
+/// The third review of 38fb5f3, finding 2: after a power loss that reset the backup domain with a ride open, the
+/// boot cannot read the ride's records (the card failing there for 3 s): what they say is unknown, so stock's
+/// settings are not imported then (they would replace the ride's own); the resume then takes the ride back, and
+/// nothing of stock's is imported over it.
+#[test]
+fn an_unread_record_after_a_power_loss_holds_stocks_import() {
+    let (mut sim, _) = power_lost_ride(false);
+    sim.emmc.unreadable = ["Rustfw/ride.rec", "Rustfw/full.rec"].iter().map(|p| file_lbas(&sim, p).0).collect();
+    let mut app = App::start(&mut sim, None);
+    assert!(app.rec.resume_pending, "unknown: pending");
+    let at_boot: Vec<_> = app.notes.list.iter().map(|n| n.as_str()).collect();
+    assert!(at_boot.iter().all(|n| !n.contains("IMPORTED")), "imported at the boot: {at_boot:?}");
+    run(&mut sim, &mut app, 3000);
+    sim.emmc.unreadable.clear();
+    run(&mut sim, &mut app, 30_000);
+    let notes: Vec<_> = app.notes.list.iter().map(|n| n.as_str()).collect();
+    assert!(notes.iter().any(|n| n.ends_with("RIDE RESUMED")), "{notes:?}");
+    assert!(notes.iter().all(|n| !n.contains("IMPORTED")), "stock's settings over the ride's: {notes:?}");
+    assert!(!app.settings_store.import_pending, "settled");
+}
+
+/// The third review of 38fb5f3, finding 1: the first start's import left pending behind a resume that never
+/// settles (both ride records unreadable for good after a power loss) is given up within its bound: the settings
+/// file is then read, and saves work again.
+#[test]
+fn a_pending_import_gives_way_to_the_settings_file() {
+    let (mut sim, _) = power_lost_ride(false);
+    sim.emmc.unreadable = ["Rustfw/ride.rec", "Rustfw/full.rec"].iter().map(|p| file_lbas(&sim, p).0).collect();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 5000);
+    assert!(app.settings_store.import_pending && !app.settings_store.file.loaded, "the file waits for the import");
+    run(&mut sim, &mut app, u64::from(crate::app::IMPORT_WAIT_MS) + 10_000);
+    assert!(app.rec.resume_pending, "the records still unread");
+    assert!(!app.settings_store.import_pending, "given up");
+    assert!(app.settings_store.file.loaded, "the settings file read");
+}

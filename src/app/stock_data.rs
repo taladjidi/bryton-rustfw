@@ -6,6 +6,13 @@ use crate::*;
 /// Stock's rides are read by themselves this long after start-up (for the totals), unless a ride runs.
 pub const STOCK_SCAN_MS: u32 = 30_000;
 
+/// The first start's import of stock's settings, left pending by a card that did not answer, is given up this long
+/// after the start (or after [`IMPORT_TRIES`] failed tries): the settings file is read then, and saves work again;
+/// the next start, still a first start, tries the import again.
+pub const IMPORT_WAIT_MS: u32 = 60_000;
+/// See [`IMPORT_WAIT_MS`].
+pub const IMPORT_TRIES: u8 = 3;
+
 /// Whether a backup register holds anything of this firmware's (settings, a paired sensor, a page): none at its first
 /// start on a unit, and after a battery run flat, which resets the backup domain. [`WHEEL_BKP`] alone is not enough:
 /// it is written only when a setting is changed, and a unit can have its sensors paired and pages set without that
@@ -275,20 +282,20 @@ impl App {
     /// At the first start (no backup register holds anything of this firmware's: settings, a paired sensor, a
     /// page), stock's settings are taken as [`App::import_stock`] does from the menu, so the unit starts as stock had
     /// it; the settings are then saved, so this happens once, even when the card has no stock data. Said only when
-    /// something was taken. Never with a ride to resume (`ride_open`: the marker said so, or its record was read
-    /// open: its sensors and zones stay). A flat backup battery loses this firmware's settings, so the next start is
-    /// a first start again: stock's are better than the defaults then. A card that does not answer leaves the
-    /// import pending ([`App::first_import`]), not done.
+    /// something was taken. Never with a ride to resume (`ride`: `Some(true)`, the marker said so or its record was
+    /// read open: its sensors and zones stay). A flat backup battery loses this firmware's settings, so the next
+    /// start is a first start again: stock's are better than the defaults then. A ride record not read (`None`), or a
+    /// card that does not answer the import, leaves the import pending ([`App::first_import`]), not done.
     #[inline(never)] // its card reading in its own frame, not begin's
-    pub(crate) fn first_start(&mut self, b: &mut impl Board, ride_open: bool) {
+    pub(crate) fn first_start(&mut self, b: &mut impl Board, ride: Option<bool>) {
         let own = own_registers(b);
         // the registers written below are not the rider's change: settings.bin, if there, still wins over them
         let lost = self.settings_store.lost;
-        if own || ride_open {
+        if own || ride == Some(true) {
             if !own {
                 self.save_misc(b); // the ride's settings kept as they are: no import at the next start either
             }
-        } else if self.import_stock(b, true) {
+        } else if ride.is_some() && self.import_stock(b, true) {
             self.save_misc(b);
         } else {
             self.settings_store.import_pending = true;
@@ -297,10 +304,16 @@ impl App {
     }
 
     /// The first start's import left pending ([`App::first_start`]): tried once no resume is pending; dropped if a
-    /// ride came back (its settings stay) or the rider changed a setting meanwhile (the registers his). Whether the
-    /// settings file may be read (not before the import: the file wins over it).
+    /// ride came back (its settings stay) or the rider changed a setting meanwhile (the registers his), and given up
+    /// past [`IMPORT_WAIT_MS`] or [`IMPORT_TRIES`] (a resume that never settles, a card that never answers). Whether
+    /// the settings file may be read (not before the import: the file wins over it).
     pub(crate) fn first_import(&mut self, b: &mut impl Board) -> bool {
-        if !self.settings_store.import_pending {
+        let st = &mut self.settings_store;
+        if !st.import_pending {
+            return true;
+        }
+        if self.gps.ms >= IMPORT_WAIT_MS || st.import_tries >= IMPORT_TRIES {
+            st.import_pending = false; // the registers left as they are: the next start tries again
             return true;
         }
         if self.rec.resume_pending || self.rec.full_pending {
@@ -315,6 +328,8 @@ impl App {
         } else if self.import_stock(b, true) {
             self.settings_store.import_pending = false;
             self.save_misc(b);
+        } else {
+            self.settings_store.import_tries += 1;
         }
         self.settings_store.lost = lost;
         !self.settings_store.import_pending
