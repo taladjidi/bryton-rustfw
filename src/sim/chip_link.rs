@@ -10,10 +10,14 @@
 //! it waits on our RTS; no new event frame starts between a command's header and its response. The events come from the
 //! SoftDevice in passes (all pending BLE, then all pending ANT) into 96 slots; a pass bringing more events than free
 //! slots hangs the app; after a put leaves 0 free it stops pulling until more than 48 are free. The SoftDevice's ANT queue
-//! holds 32 (inferred: the newest is lost when it is full; the S332 text was not found). 8 security contexts.
+//! holds `usNumberOfEvents` events (the enable call's field, floor 32 = `MIN_ANT_EVENT_QUEUE_SIZE`; ours passes 32; Nordic S212 v4.0.2
+//! docs, group ant_parameters; the S332 headers are not public) and reports a full queue with event 0x35
+//! (EVENT_QUE_OVERFLOW): here the newest is lost (**inferred**: nothing states which) and 0x35 follows once there is room. 8 security contexts.
 //! A payload of length 0 is fatal (nordic-app.md): inferred from the reversal, not reproduced by the emulator (which
 //! does not model a MAXCNT of 0); chip_table_tests.rs asserts it.
 //! A hung chip never sends again, takes 2 to 6 more bytes (4 here) and holds CTS.
+//! `sd_power_system_off` (nRF5 SDK 14 `ser_conn_command_process`: every command waits for the TX buffer first) takes
+//! effect once the frame in flight is out; then the chip sends nothing, takes nothing and lets go of its RTS.
 //!
 //! Time: the chip's clock `t` (us) follows the simulated ms and runs ahead of it while the host reads or writes bytes
 //! (wire time); a receive that finds nothing within the board's wait ends its burst.
@@ -64,6 +68,9 @@ impl Nordic {
     /// The chip holds our CTS: it has read a command's header while the previous response still waits for the TX
     /// buffer (an event frame in flight), or it is hung and has taken what it takes.
     pub(super) fn blocked(&self) -> bool {
+        if self.off {
+            return true; // its RTS pin let go: our pull-up reads "hold"
+        }
         if self.hung {
             return self.hung_rx >= HUNG_TAKES;
         }
@@ -77,7 +84,7 @@ impl Nordic {
             self.suspended = false;
         }
         let n = self.sd_ble.len() + self.sd_ant.len();
-        if self.suspended || n == 0 || self.hung {
+        if self.suspended || n == 0 || self.hung || self.off_pending || self.off {
             return;
         }
         let free = slots.saturating_sub(self.events.len());
@@ -88,6 +95,9 @@ impl Nordic {
         self.touch();
         self.events.extend(self.sd_ble.drain(..));
         self.events.extend(self.sd_ant.drain(..));
+        if std::mem::take(&mut self.ant_overflow) {
+            self.ant_event(&[], 0x35, 0); // EVENT_QUE_OVERFLOW, in the room the pull just made (the event is not stated to be sent in place)
+        }
         self.high_water = self.high_water.max(self.events.len());
         self.suspended = self.events.len() >= slots;
     }
@@ -97,11 +107,17 @@ impl Nordic {
     /// after it waits until the response is out, and none starts between a command's header and its response. Chaos
     /// damages it here.
     fn start_frame(&mut self) -> bool {
+        if self.off_pending {
+            return false; // its main loop waits for the TX buffer, then powers off: nothing new starts
+        }
         let ahead = self.resp_ahead.front().copied();
         let frame = if ahead == Some(0)
             && let Some(f) = self.resp.pop_front()
         {
             self.resp_ahead.pop_front();
+            if self.slow_ms > 0 {
+                self.tx_at = self.tx_at.max(self.t + u64::from(self.slow_ms) * 1000);
+            }
             f
         } else if (self.frame.len() < 2 || ahead.is_some())
             && let Some(f) = self.events.pop_front()
@@ -121,6 +137,9 @@ impl Nordic {
     pub(super) fn run(&mut self) {
         loop {
             let mut moved = false;
+            if self.off_pending && self.out.is_empty() {
+                self.power_off();
+            }
             self.pull();
             if self.resp.is_empty() || self.out.is_empty() {
                 self.stall = None;
@@ -167,7 +186,7 @@ impl Nordic {
 
     /// When the chip's next byte reaches our FIFO, if it has one to send.
     fn next_arrival(&self) -> Option<u64> {
-        if self.hung || self.fifo.len() >= FIFO {
+        if self.hung || self.off || self.fifo.len() >= FIFO {
             return None;
         }
         let start = if !self.out.is_empty() {
@@ -222,6 +241,31 @@ impl Nordic {
             self.run();
         }
         data.len()
+    }
+
+    /// `sd_power_system_off` has the TX buffer: the transport closed, the chip in System OFF (what it had queued is gone).
+    fn power_off(&mut self) {
+        (self.off, self.off_pending, self.stall) = (true, false, None);
+        self.events.clear();
+        self.resp.clear();
+        self.resp_ahead.clear();
+        self.sd_ble.clear();
+        self.sd_ant.clear();
+        self.frame.clear();
+    }
+
+    /// `nrf_sent`: our TX FIFO is empty, every byte on the wire.
+    pub(super) fn sent(&mut self, ms: u64) -> bool {
+        self.sync(ms);
+        self.run();
+        self.txq.is_empty()
+    }
+
+    /// `nrf_cts`: the chip takes bytes (its RTS low).
+    pub(super) fn cts(&mut self, ms: u64) -> bool {
+        self.sync(ms);
+        self.run();
+        !self.blocked()
     }
 
     /// The chip is back (a reset in the field): nothing of the hung state, and the bytes held in our TX FIFO are gone.

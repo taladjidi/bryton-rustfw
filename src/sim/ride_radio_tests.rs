@@ -181,7 +181,7 @@ fn search_timeouts(sim: &mut Sim) {
 
 /// The iPhone's ANCS / AMS traffic for 12 notifications at once: per notification the attribute fetch's four GATTC
 /// notifications (title, message, app id, date; sizes of the phone model, ble_sim.rs) in one pass, 48 events.
-fn phone_burst(sim: &mut Sim) {
+pub(super) fn phone_burst(sim: &mut Sim) {
     for _ in 0..12 {
         for n in [5u16, 11, 20, 15] {
             let mut p = std::vec![2, 0x39, 0, 0, 0, 0, 0, 0, 0, 0x25, 0, 1];
@@ -193,7 +193,7 @@ fn phone_burst(sim: &mut Sim) {
 }
 
 /// The SoftDevice's ANT queue (32) held while the chip was suspended, then pulled in one pass: 32 broadcasts.
-fn ant_resume(sim: &mut Sim) {
+pub(super) fn ant_resume(sim: &mut Sim) {
     for i in 0..32u8 {
         sim.nordic.ant_event(&[&[9, 0x4e, i % 3][..], &[i; 8]].concat(), 0x80, i % 3);
     }

@@ -27,6 +27,10 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   the RTC. Seen in the simulator (`a_stall_of_10_min_is_all_on_the_timer`, the budget row "catch-up of a 10 min
   stall"); not yet on the unit.
 
+- **`ant events lost` in `dev.py info`** (2026-11-02, EVENT_QUE_OVERFLOW 0x35): that the real SoftDevice sends it, in a
+  44-byte ANT event with the code at byte 42 (the layout is inferred from the other events), and that the count stays
+  0 in a ride with the owner's sensors.
+
 - **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel
   DMA, `delay_ms`) now count in `up_ms` and the uptime (time-outs, cadences counted in ms). Silent check: read
   `tools/dev.py info` (uptime) and the RTC time, wait 10 min on a screen that redraws (the main page), read both
@@ -57,6 +61,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   sourced from Linux's mmc.h; the stall's length and period, and whether the unit's card raises URGENT_BKOPS
   (EXCEPTION_EVENT, R1 bit 6) at all, are *inferred*. To see on the unit, with the write bench above: the longest
   CMD13 busy over a few thousand sector writes, and R1 bit 6 in `tools/dev.py emmc`'s status.
+  Datasheet check (2026-11-02): Linux allows a write 10 s of busy (`MMC_BLK_TIMEOUT_MS`), the driver 1 s
+  (`emmc::TRIES`; SK hynix lists 1 s for a power-on GC, 600 ms for an erase); a card may abort a write on a
+  voltage drop and set ERROR + CC_ERROR only in the first CMD13 after the busy (inferred: the vendor sheet is not public). The model has
+  both (`Cost::stall_ms`, `EmmcCard::prog_error`); the driver is unchanged, an ignored test shows its 1 s today.
+  Other open facts from the same check: the cache (EXT_CSD [33], on in iNAND would lose acknowledged writes in a
+  power cut) and CMD6 busy (GENERIC_CMD6_TIME [248]) are not read from the unit yet.
 - **A power cut with the backup domain lost, then the boot (2026-11-02, app/riding.rs `left_by_a_power_loss`):** a
   boot with none of this firmware's backup registers set reads the ride's record once (read only) and resumes a ride
   left open as the marker's path does (a card that does not answer then: the resume pending, stock's settings
@@ -77,7 +87,7 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 - **Review 3 of the chip's reset (2026-11-01):** nothing is sent while PA6 is low or the chip boots (the TX FIFO is flushed
   at the hold: USART_RQR TXFRQ, main.rs `nrf_hold`; to see: no `resyncs` after forcing a reset mid-command), the rider's
   sensor choice and the PAIR window during a reset are applied after it, the switch-off during a reset ends with the chip
-  in system off (current in standby, as after a normal switch-off), a put is bounded to 1 s whatever the chip floods.
+  in system off (current in standby, as after a normal switch-off; checks below, "switch-off made certain"), a put is bounded to 1 s whatever the chip floods.
 
 - **The receiver's answers and its SPI limits (2026-11-01, BOARD.md 13 "The receiver's rules"):** with `tools/gnss.py`, read
   back (VALGET) the four CFG-SIGNAL keys after the start-up and CFG-SPI-MAXFF / CFG-SPI-EXTENDEDTIMEOUT; MON-COMMS
@@ -644,6 +654,17 @@ A feature not listed here was seen on the unit.
   waypoint off a lap course bounded to 8 chunks).
 - **The I-cache from a cold boot** (seen from RAM).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
+- **The radio chip's switch-off made certain (2026-11-02, BOARD.md 11 "Power off", drivers/nrf.rs `system_off`):** the
+  command is read through (the chip's frame in flight drained), the chip *seen off* (USART2 TC set, CTS released for
+  3 ms, then PD3 following a 1 ms pull-down: released, not driven by a hung chip), else reset and asked again, else held
+  in reset (lines left as they were); seen off, PD3..PD6 analog, no pull. The beep and the screen go off first. To see with the owner (the wake
+  needs a hand on the button): (1) the standby current from the battery with a meter, after a switch-off with sensors
+  and the phone connected, against stock's (System OFF is 0.3 uA; a chip left running is 0.3 mA and more); (2) the
+  unit starts again with the power button and the radio comes back (sensors, phone); (3) the time from the 3 s press
+  to the screen going off is unchanged (under 100 ms more; about 1 s more when the chip was in a reset). The chip's RTS
+  releasing in System OFF is seen (2026-11-02, `tools/dev.py nrfoff`, BOARD.md 11). Not checkable here: whether
+  PA2 (output high, purpose unknown, BOARD.md 4) gates a rail: measure the standby current with PA2 left as it is
+  before anyone tries it low.
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
 - **The USB drive (mass storage, msc.rs): to do, high speed.** The drops, what was seen and what to try are in

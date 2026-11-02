@@ -139,7 +139,7 @@ impl App {
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
-        self.watch_radio(b, dt);
+        self.watch_radio(b, dt, dt);
         self.radio.tick(dt);
     }
 

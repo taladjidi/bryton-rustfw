@@ -64,13 +64,14 @@ impl App {
         if self.gnss_switch(b) {
             // off: the start's clock still runs (the files read a few seconds after the start wait on it); the
             // receiver's sequence starts over from 0 when it is switched on
-            self.gps.ms = self.gps.ms.saturating_add(self.dt_ms);
+            self.gps.ms = self.gps.ms.saturating_add(self.real_ms);
             return;
         }
-        if self.gps.ms < GNSS_ON_MS && self.gps.ms.saturating_add(self.dt_ms) >= GNSS_ON_MS {
+        // real time: the receiver's power-up is not hurried by a repaid debt (lib.rs `real_ms`)
+        if self.gps.ms < GNSS_ON_MS && self.gps.ms.saturating_add(self.real_ms) >= GNSS_ON_MS {
             b.gnss_power(true);
         }
-        self.gps.ms = self.gps.ms.saturating_add(self.dt_ms);
+        self.gps.ms = self.gps.ms.saturating_add(self.real_ms);
         self.gps.pvt_ms = self.gps.pvt_ms.saturating_add(self.dt_ms);
         let mut send = if self.gps.ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
         self.gps.wait = self.gps.wait.saturating_sub(self.dt_ms);
@@ -83,6 +84,14 @@ impl App {
         self.strip.gps = self.gps.bars();
         // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
         self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
+    }
+
+    /// A read now, whatever the wait: before a radio command that is known to be coming and may meet a silent chip
+    /// (the probe), so the receiver is not left unread for the wait and the time-out together.
+    pub(crate) fn read_gnss_now(&mut self, b: &mut impl Board) {
+        if !self.gps.off && self.gps.ms >= GNSS_ON_MS {
+            self.read_gnss(b, None);
+        }
     }
 
     /// One read of the receiver: up to [`GNSS_READ`] bytes (`send` goes out with the first 32), the fixes in them

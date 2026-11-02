@@ -93,7 +93,7 @@ fn every_command_rustfw_builds_decodes_on_the_chip() {
     }
     let _ = ble::descriptor_add(b, rx, 2, 0x2908, &[0, 1], ble::ENCRYPTED);
     let _ = ble::value_set(b, rx, 3, &[7; 100]);
-    nrf::system_off(b, &mut nrf::Rx::new());
+    nrf::system_off(b, &mut nrf::Rx::new(), true);
     // every modelled row was exercised
     let sent: Vec<(u8, u8)> = b.nordic.got.iter().map(|p| (p[0], p[1])).collect();
     let missing: Vec<&str> = CMDS.iter().filter(|c| !sent.contains(&(c.kind, c.op))).map(|c| c.name).collect();

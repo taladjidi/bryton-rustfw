@@ -4,28 +4,41 @@
 //! same as [`crate::periph::panel_fill_us`]); window bounds (CASET / RASET end below start, outside the panel) are
 //! checked by `span` in `mod.rs`.
 //!
-//! Sources: ST7789V datasheet (Sitronix, V1.4), command descriptions, from memory and **not re-read online** (no
-//! network tool was used in this run; to be settled by reading them):
-//! - P1 SWRESET: "wait 5 msec before sending new command"; "if Software Reset is applied during Sleep Out mode, it
-//!   will be necessary to wait 120 msec before sending Sleep Out" (SWRESET, 0x01). Here the whole 120 ms, as stock
-//!   waits (panel.rs INIT): stricter than the 5 ms, so a 50 ms gap fails (**inferred** as a rule for this firmware).
-//! - P2 SLPOUT: "wait 5 msec before sending any new command", "wait 120 msec after Sleep Out before Sleep In can be
-//!   sent" (SLPOUT, 0x11). SLPIN: 5 ms before a new command, 120 ms before Sleep Out (SLPIN, 0x10).
-//! - P3 RAM writes while asleep or with the display off are accepted (the RAM is kept); counted
-//!   ([`PanelRules::dark_writes`]) because `panel::init` relies on it (it clears before DISPON).
+//! Sources: Sitronix ST7789V datasheet V1.3 (2014/03; https://newhavendisplay.com/content/datasheets/ST7789V.pdf) and
+//! ST7789VW V1.0 (2017/09; https://www.waveshare.com/w/upload/a/ae/ST7789_Datasheet.pdf), checked 2026-11-02; the
+//! command texts are identical in both (the repo's old "V1.4" is neither). Sections of V1.3:
+//! - P1 SWRESET (9.1.2): "wait 5 msec before sending new command"; sent in Sleep In, "wait 120 msec before sending
+//!   sleep out command"; it "cannot be sent during sleep out sequence" (the 120 ms after SLPOUT). Modelled as that:
+//!   5 ms before any command, 120 ms before SLPOUT (every reset leaves Sleep In), none inside the sleep-out window.
+//!   The firmware is stricter on purpose (panel.rs INIT waits 120 ms after SWRESET, as stock does).
+//! - P2 SLPOUT / SLPIN (9.1.11, 9.1.12): "wait 5 msec before sending any new command"; "wait 120 msec after sending
+//!   sleep out command before sending a sleep in command". The doc has no 120 ms rule for SLPIN then SLPOUT (searched,
+//!   not found), so none is modelled.
+//! - P3 (9.1.20 to 9.1.22, register availability) RAMWR / CASET / RASET work in Sleep In and the RAM keeps its
+//!   contents, so writes while asleep or with the display off are accepted; counted ([`PanelRules::dark_writes`])
+//!   because `panel::init` relies on it (it clears before DISPON). DISPON states no wait (9.1.19).
+//! - RAMCTRL (9.2.1): default 00h/F0h after power-on and any reset; DM[1:0] 00 is the MCU interface, RM (bit 4) 1 sends
+//!   RAM access to the RGB port, so RAMWR over SPI would not land (`mod.rs` fails it).
+//! - Serial write cycle (TSCYCW): V1.3 (ST7789V) 66 ns min (15 MHz), VW V1.0 16 ns min (62.5 MHz). The unit runs
+//!   SPI1 at 50 MHz (20 ns, BOARD.md 6): within the VW figure, outside the V one, so the controller on the unit must
+//!   be the newer die (it works). Not modelled as a check.
+//! - Not checked: HW reset pulse >= 10 us and 5 ms (120 ms if it hit Sleep Out) after RESX; CS-high width 40 ns.
 
-/// Settle times, ms. 120 for SWRESET is the firmware's rule (see P1); the others are the datasheet's.
-const AFTER_SWRESET_MS: u64 = 120;
+/// Settle times, ms (datasheet values).
+const AFTER_SWRESET_MS: u64 = 5;
 const AFTER_SLEEP_CMD_MS: u64 = 5;
-const SLEEP_SWITCH_MS: u64 = 120;
+/// SLPOUT to SLPIN or SWRESET, and SWRESET to SLPOUT.
+const SLEEP_OUT_MS: u64 = 120;
 
 /// The clock side of the panel: when it accepts the next command, and the sleep switches' ages.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PanelRules {
     /// No command before this time (ms).
     ready_ms: u64,
-    /// When SLPOUT / SLPIN last came: the next sleep switch waits 120 ms after it.
-    slept_ms: Option<u64>,
+    /// When SLPOUT came (None after SLPIN or a reset): SLPIN and SWRESET wait 120 ms after it.
+    out_ms: Option<u64>,
+    /// No SLPOUT before this time (ms): 120 ms after a SWRESET.
+    out_ok_ms: u64,
     /// RAM writes made while asleep or with the display off.
     pub dark_writes: u32,
 }
@@ -34,16 +47,24 @@ impl PanelRules {
     /// A command at `now` ms (the cost of its own bytes already paid).
     pub fn command(&mut self, cmd: u8, now: u64) {
         assert!(now >= self.ready_ms, "command 0x{cmd:02x} {} ms inside the panel's settle time", self.ready_ms - now);
-        if matches!(cmd, 0x10 | 0x11) {
-            if let Some(t) = self.slept_ms {
-                assert!(now >= t + SLEEP_SWITCH_MS, "sleep switch 0x{cmd:02x} {} ms after the last", now - t);
+        if matches!(cmd, 0x01 | 0x10) {
+            if let Some(t) = self.out_ms {
+                assert!(now >= t + SLEEP_OUT_MS, "sleep switch 0x{cmd:02x} {} ms after SLPOUT", now - t);
             }
-            self.slept_ms = Some(now);
-            self.ready_ms = now + AFTER_SLEEP_CMD_MS;
+            self.out_ms = None;
         }
-        if cmd == 0x01 {
-            self.slept_ms = None;
-            self.ready_ms = now + AFTER_SWRESET_MS;
+        match cmd {
+            0x10 => self.ready_ms = now + AFTER_SLEEP_CMD_MS,
+            0x11 => {
+                assert!(now >= self.out_ok_ms, "SLPOUT {} ms after SWRESET", self.out_ok_ms - now);
+                self.out_ms = Some(now);
+                self.ready_ms = now + AFTER_SLEEP_CMD_MS;
+            }
+            0x01 => {
+                self.ready_ms = now + AFTER_SWRESET_MS;
+                self.out_ok_ms = now + SLEEP_OUT_MS;
+            }
+            _ => {}
         }
     }
 

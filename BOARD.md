@@ -164,6 +164,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 |---|---|---|
 | PA0 | power button, standby wake-up WKUP1 (rising); must be a GPIO input | 9 |
 | PA1 | key 0x01 back / power, active low (also low while the power button is pressed) | 5 |
+| PA2 | output, high (seen on the unit 2026-11-02, untouched here); purpose unknown. Stock sets it high at board init (with the battery ADC's set-up) and low only when it boots into USB mass storage; never at switch-off or in its stop mode. A candidate rail enable (not the radio's as far as stock shows): not driven here | 11 |
 | PA3 PA5 | USB ULPI D0, CK (AF10) | 7 |
 | PA6 | Nordic chip reset, low = reset | 11 |
 | PA7 | USB ULPI PHY enable / reset, high = running (inferred) | 7 |
@@ -172,6 +173,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PB2 | key 0x02 lap, active low | 5 |
 | PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
 | PB6 PB7 | I2C1 SCL, SDA: the touch controller (AF4, open drain, no pull) | 17 |
+| PB15 | output, high (seen on the unit 2026-11-02): SDRAM power enable (inferred: the bootloader sets it before the FMC init); untouched | 3 |
 | PC0 | USB ULPI STP (AF10) | 7 |
 | PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
 | PC8..PC11 | eMMC D0..D3, SDMMC1 (AF12) | 15 |
@@ -243,8 +245,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   writes the same word over and over. Checked in Renode against the simulator, and **seen on the panel** (2026-10-23).
 - **SPI1's clock** (main.rs `spi_init`): kernel clock pll1_q_ck (RCC_D2CCIP1R SPI123SEL 0), 100 MHz (section 1;
   PLL1 always runs, and its Q output feeds the SDMMC too, so nothing is switched on for it), MBR /2: **50 MHz**. The
-  ST7789V's serial write cycle is 16 ns at least (tSCYCW: 62.5 MHz; ST7789V datasheet, serial interface
-  characteristics); SPI1's master clock goes to 80 MHz (DS12930 table 119). It was 8 MHz (HSI / 8), then 16 (HSI / 4,
+  ST7789VW's serial write cycle is 16 ns at least (tSCYCW: 62.5 MHz; ST7789VW datasheet V1.0, serial interface
+  characteristics); the older ST7789V datasheet V1.3 says 66 ns (15 MHz), so 50 MHz is inside the VW figure only, and
+  the unit's controller is then the newer die (it works at 50 MHz; which die is not known); SPI1's master clock goes to 80 MHz (DS12930 table 119). It was 8 MHz (HSI / 8), then 16 (HSI / 4,
   2026-10-25). Without POWER_STEPS bit 3, or if PLL1's Q output is off (RCC_PLLCFGR DIVQ1EN), HSI / 8 as before.
 - **Pixel runs by DMA** (hw.rs `PanelDma`, main.rs `lcd_ram`): DMA1 stream 0, DMAMUX1 channel 0 on request 38
   (spi1_tx_dma; RM0399 DMAMUX1 table, stm32h7xx_hal_dma.h `DMA_REQUEST_SPI1_TX`), memory to peripheral, 32-bit both
@@ -382,7 +385,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 - Entry as stock: PWR_CPUCR PDDS_D1 and PDDS_D2 set, SLEEPDEEP, WFI. Waking resets the unit.
 - PDDS_D3 stays 0 (stock too): D1 and D2 power down, D3 only stops, so the system is in Stop, not Standby (the
   HAL's HAL_PWREx_EnterSTANDBYMode doc; Standby needs D1, D2 and D3 all in DStandby), and the GPIOs keep their
-  levels (Nordic PI4 / PA6, GNSS power). In Stop the WKUP pin reaches the core only through EXTI line 55
+  levels (Nordic PI4 / PA6 high, its UART lines parked analog: section 11 "Power off"; GNSS power). In Stop the WKUP pin reaches the core only through EXTI line 55
   (EXTI_CPUIMR2 bit 23, reset value 0 in ST's SVD, but read 0xfff5ffff on the unit while running: already unmasked
   there): stock unmasks it and enables IRQ 149 (WAKEUP_PIN) before standby. Enabling IRQ 149 in the NVIC (our standby
   had cleared every enable) made the power button start the unit (2026-10-25, rustfw ea359a0, seen on the unit).
@@ -478,10 +481,63 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   the end of the boot, so `call` / `send` return at once; the rider's sensor choices and the PAIR window are kept and
   applied when it is over. The simulator is strict about it: a byte sent in the window, or left in the FIFO at the
   release, panics the test unless it sets `expect_reset_bytes`. The switch-off during a reset resets the chip once
-  more through the broken-link path (about 1 s), then powers it down: whether the unit cuts the chip's power in standby
-  is not known (stock leaves PA6 as it is), so it is switched off by its own command.
-- **Power off:** `sd_power_system_off` (`00 32`), no response; stock sends nothing else first and leaves PA6 /
-  PI4 as they are. The next start's reset pulse wakes the chip (nRF52 pin reset; inferred, to see on the unit).
+  more (about 1 s), then powers it down ("Power off" below).
+- **Power off (this firmware, 2026-11-02; drivers/nrf.rs `system_off`, main.rs `nrf_park`):**
+  - *The part:* an nRF52832 (inferred: the image runs S332 v5, which supports the nRF52832 and nRF52840, and its stack
+    tops below 0x20010000, the 64 KB of the nRF52832 QFAA; bryton-S510-mods ghidra/nordic-app.md).
+  - *No supply switch is known.* Stock's switch-off sends `sd_power_system_off` (`00 32`, no response) and nothing
+    else to the chip: no pin is driven for it, PA6 and PI4 stay high, and its standby keeps USART2's pins as they are
+    (it parks RTS high only in its own stop mode, BOARD.md 9). Of the output pins on the unit, only PA2 and PB15 are
+    not explained by section 4 (`tools/dev.py peek` of every port, 2026-11-02); stock never drives either at the switch-off.
+  - *What the chip draws* (nRF52832 Product Specification v1.4,
+    https://infocenter.nordicsemi.com/pdf/nRF52832_PS_v1.4.pdf, and its POWER chapter,
+    https://docs.nordicsemi.com/bundle/ps_nrf52832/page/power.html): System OFF 0.3 uA (no RAM kept), woken by a pin
+    reset among others; held in reset, about 0.2 mA through the reset pin's 13 kOhm pull-up plus the regulators,
+    which stay on (Nordic's answer on DevZone,
+    https://devzone.nordicsemi.com/f/nordic-q-a/47176/power-consumption-in-reset-state-for-a-solar-powered-device:
+    reset is not a low-power state); running, its idle
+    with the HF clock on and any radio activity, 0.3 mA to several mA (docs/power.md). So System OFF with PA6
+    released, never PA6 held.
+  - *Lines:* an I/O pin's absolute maximum is VDD + 0.3 V (the PS's absolute maximum ratings): a line driven high
+    into an *unpowered* chip would feed it through its ESD diodes. Here the chip stays powered, so nothing can
+    back-power it. Before System OFF the app closes its transport, which puts its four UART pins back to their
+    reset state (nRF5 SDK 14 `nrf_drv_uart_uninit`, `pins_to_default`: input, buffer disconnected, no pull): its RTS
+    (our CTS, PD3) lets go and our pull-up reads "hold". PI4 high meets the DFU pin's pull-up (inferred from Nordic's
+    bootloader, which configures its button pin with a pull-up) and PA6 high the reset pull-up: no current either way.
+  - *The sequence:* a chip not known to take commands (not started, in a reset, broken or silent) is reset first;
+    the command is put, then the chip's bytes are read (and dropped) so the frame it has in flight ends, since every
+    command waits for its single TX buffer before it runs (SDK `ser_conn_command_process`); it is *seen off* when
+    our TX is out (USART_ISR TC, RM0399) and PD3 reads high (GPIOD_IDR) for three checks 1 ms apart, within 50 ms,
+    and then still follows our pull when it is switched to pull-down for 1 ms (RM0399 GPIO PUPDR 10): a released line
+    reads low, one a hung chip drives high does not (a hung chip takes a few bytes and holds its RTS high, which on the
+    pull-up alone looks like off). Not seen off: reset and asked once more; still not: PA6 held low and the lines left
+    as `nrf_hold` set them (AF7, pull-ups). That trade is deliberate: in reset the chip draws about 0.2 mA through its
+    reset pull-up with its regulators on, a hung chip whose SoftDevice still runs draws its idle and maybe its radio,
+    0.3 mA to several mA (docs/power.md); it costs two resets (about 2.1 s) only for a chip that fails both asks, never
+    for a healthy one (3 ms) nor for one that was not started but answers (one reset first, about 1 s). Seen off, and
+    only then, USART2 is disabled and PD3..PD6 set analog with no pull (RM0399 GPIO: nothing driven, no pull-up), PA6
+    and PI4 left high; the standby keeps them (section 9). The beep, the backlight and the panel go off before all
+    this (app/device.rs `power_off`), so the rider's answer never waits for a reset. The next boot's
+    `nrf_hold` brings the lines back to AF7 before the reset pulse, which wakes the chip (pin reset; inferred, to see
+    on the unit).
+  - *Expected, then seen:* an nRF52's pins latch as they are when it enters System OFF ("direction and level depends
+    on whatever might be controlling the pins at the time", Nordic on DevZone,
+    https://devzone.nordicsemi.com/f/nordic-q-a/82312/keep-gpio-state-during-system-off), and the app has put its RTS
+    back to a disconnected input just before (SDK `pins_to_default`), so the line floats and our pull-up holds PD3
+    high. **Seen on the unit 2026-11-02** (`tools/dev.py nrfoff`, RAM run, 5 runs 4 s apart): PD3 low while the chip
+    runs (GPIOD_IDR 0x3564), the chip seen off at the first ask in 3.0 ms each time (the 3 checks: released within
+    the first millisecond), PD3 released at 10 ms, 100 ms and 1 s after, low again once the radio restarted; no
+    watchdog reset, no resync, no fault. Asked while a restart was still under way it was reset first (953 ms), and
+    then seen off too. With the pull-down check (same day, 5 runs): PD3 followed the pull-down each time (seen off at
+    the first ask, 3.2 to 4.0 ms), and was low again after the restart (GPIOD_IDR 0x35f4).
+
+     PA6 reset   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  stays high (released)
+     PD5 TX      ~~~~~\_/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~  `02 00 00 32`, then analog
+     PD6 RX      ~~~~~~~~~~~\_/\_/~~~~~~~~~~~~~~~~~~~~~~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~  its frame in flight read out
+     PD3 CTS     ___________________/~~~~~~~~~~~~~~~~~~~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~  its RTS let go: our pull-up
+     chip        running             | System OFF (0.3 uA) ......................... until the next reset pulse
+                      |<- <= 4 ms ->|<- 3 ms ->| park |<-- wait for the key --> standby
+                        frame out      seen off
 - **Scanning (API v5 layout, seen on the unit 2026-10-23):** `sd_ble_gap_scan_start` `00 8a 01 [flags]
   [interval u16] [window u16] [timeout u16]`, flags bit 0 = active, times in 0.625 ms units, timeout in s (0 =
   until `sd_ble_gap_scan_stop`, `00 8b`). Stock: active, interval 0x60, window 0x60 (or 0x30 to save power), no
@@ -603,7 +659,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     up after 10 ms on one byte and returned **mid-frame**: the chip then got a frame shorter than its header said and
     hung for ever. `nrf::send` now puts the header and the payload as one frame, keeps reading the chip's bytes into
     `Rx` while CTS is held (which lets the chip finish its event frame, queue the response and release CTS), sleeps 1 ms
-    when nothing moved, and fails with `Timeout` after 500 ms without a byte either way (a hung chip). A frame that went
+    when nothing moved, and fails with `Timeout` after 500 ms without a byte either way (a hung chip; then every other command is refused at once until the next receiver read, `Rx::stalled`). A frame that went
     out partly marks the link broken: no frame is sent before the watchdog resets the chip through PA6, on its next pass.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

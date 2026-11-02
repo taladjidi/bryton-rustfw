@@ -400,6 +400,34 @@ fn every_r1_error_bit_fails_the_write() {
     assert_eq!(card.write(&mut sim, 8, &[1; 2 * SECTOR]), Ok(()), "URGENT_BKOPS raised: a status, not an error");
 }
 
+/// What the driver does today with the busy a Linux host would still wait for (10 s, `MMC_BLK_TIMEOUT_MS`): at 3 s it
+/// gives up with `Busy` after its 1 s ([`crate::emmc::TRIES`]). Documented, not endorsed: another review decides
+/// whether the limit grows. Ignored because it asserts the behaviour that decision may change.
+#[test]
+#[ignore = "documents today's 1 s write-busy limit against Linux's 10 s"]
+fn a_stall_longer_than_the_drivers_second_is_a_busy_error_today() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = vec![0; 64 * SECTOR];
+    let mut emmc = Emmc::new();
+    (sim.cost.stall_every, sim.cost.stall_ms) = (1, 3000);
+    assert_eq!(emmc.write(&mut sim, 3, &[2; SECTOR]), Err(Error::Busy));
+}
+
+/// A voltage drop (inferred for this card, see emmc_model.rs) aborts the write and sets ERROR + CC_ERROR, in the first CMD13
+/// after the busy, not in CMD12's answer. The driver must fail the write (the host retries), not take it as done.
+#[test]
+fn a_voltage_drop_abort_in_the_first_cmd13_fails_the_write() {
+    const ERROR: u32 = 1 << 19;
+    const CC_ERROR: u32 = 1 << 20;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = vec![0; 64 * SECTOR];
+    let card = Card::init(&mut sim).unwrap();
+    sim.emmc.prog_polls = 3;
+    sim.emmc.prog_error = ERROR | CC_ERROR;
+    let got = card.write(&mut sim, 8, &[1; 4 * SECTOR]);
+    assert!(matches!(got, Err(Error::Status(_, s)) if s & (ERROR | CC_ERROR) == ERROR | CC_ERROR), "{got:?}");
+}
+
 /// A protected sector: the write lands nothing and the driver says so, a single sector or four, on a plain card
 /// (where the violation comes in CMD12's answer) or a reliable one.
 #[test]
