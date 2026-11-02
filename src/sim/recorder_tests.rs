@@ -1560,6 +1560,105 @@ fn a_stall_while_auto_paused_adds_nothing() {
     ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 0, None);
     assert_eq!(app.ride.timer_s(), t);
     assert_eq!(app.ride.avg_power(), Some(200));
+    // moving again, then saved: the file's timer stopped over the stop and the stall, as the screen's
+    ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 300, Some(200));
+    let timer = app.ride.timer_s();
+    assert!(timer.abs_diff(t + 10) <= 1, "timer {timer}");
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
+    assert_eq!(timer_events(&file), [(0, None), (4, Some(1)), (0, Some(1)), (4, None)], "a stop over the stall");
+}
+
+/// The ride's timer events (event timer): (event_type, timer_trigger: None without the data field, the Start
+/// key's), after checking they alternate start, stop.
+fn timer_events(file: &[u8]) -> Vec<(u64, Option<u64>)> {
+    use crate::fit::tests::field;
+    let m = crate::fit::tests::decode(file).unwrap();
+    let ev: Vec<_> =
+        m.iter().filter(|x| x.0 == 21 && field(x, 0) == Some(0)).map(|x| (field(x, 1).unwrap(), field(x, 3))).collect();
+    assert!(ev.iter().enumerate().all(|(k, e)| e.0 == if k % 2 == 0 { 0 } else { 4 }), "start, stop, ...: {ev:?}");
+    ev
+}
+
+/// Pauses the ride (Start), saves it, and returns its clean copy and its session's timer (s), after checking the
+/// laps' timers add up to it and both copies' match.
+fn saved_timer(sim: &mut Sim, app: &mut App) -> (Vec<u8>, u64) {
+    use crate::fit::tests::field;
+    let name = app.rec.clean.name();
+    app.press(sim, Press::Short(Key::Start));
+    save_ride(sim, app);
+    run(sim, app, 2000);
+    assert_eq!(app.ride.state(), ride::State::Idle, "saved");
+    let timers = |dir| {
+        let m = crate::fit::tests::decode(&ride_file(sim, dir, name).unwrap()).unwrap();
+        let laps: u64 = m.iter().filter(|x| x.0 == 19).map(|l| field(l, 8).unwrap()).sum();
+        let session = field(m.iter().find(|x| x.0 == 18).unwrap(), 8).unwrap();
+        assert_eq!(laps, session, "{dir}: the laps add up to the session");
+        session / 1000
+    };
+    let timer = timers("Activities");
+    assert_eq!(timers("Rustfw/Activities"), timer, "the full copy");
+    (ride_file(sim, "Activities", name).unwrap(), timer)
+}
+
+/// Auto-pauses as Garmin's (owner, 2026-11-02; on the unit a 4.5 min ride at 0 km/h showed TIMER 0:00 and saved
+/// 241 s): stopped from the start, stops, a lap (Lap key) during a stop: each stop a timer stop_all event (trigger
+/// auto) and a start when moving again; each lap's and the session's total_timer_time the screen's. The file goes to
+/// `target/fit/autopause.fit` for tools/fit_check.py (`--timer`).
+#[test]
+fn auto_pauses_stop_the_files_timer() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 0, None);
+    assert_eq!(app.ride.timer_s(), 0, "stopped from the start: TIMER 0:00");
+    ride_passes(&mut sim, &mut app, 40_000, POLL_MS, 300, Some(200));
+    ride_passes(&mut sim, &mut app, 15_000, POLL_MS, 0, None);
+    app.lap();
+    let lap1 = app.ride.last_lap_s();
+    ride_passes(&mut sim, &mut app, 15_000, POLL_MS, 0, None);
+    ride_passes(&mut sim, &mut app, 70_000, POLL_MS, 300, Some(200));
+    ride_passes(&mut sim, &mut app, 30_000, POLL_MS, 0, None);
+    let timer = app.ride.timer_s();
+    assert!((105..=115).contains(&timer), "timer {timer}");
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
+    let m = crate::fit::tests::decode(&file).unwrap();
+    let lap = m.iter().find(|x| x.0 == 19).unwrap();
+    assert_eq!(crate::fit::tests::field(lap, 8), lap1.map(|s| u64::from(s) * 1000), "the first lap: its banner's");
+    let auto = |k| (k, Some(1));
+    // the last stop then Start and the end: no more events (the timer stopped already)
+    assert_eq!(timer_events(&file), [(0, None), auto(4), auto(0), auto(4), auto(0), auto(4)]);
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/fit");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("autopause.fit"), &file).unwrap();
+}
+
+/// A reset during an auto-pause (a checkpoint taken in the stop): the ride comes back paused with the timer of its
+/// checkpoint, the stop a pause; Start goes on and the saved file's timer is the screen's, its events paired.
+#[test]
+fn a_reset_during_an_auto_pause_keeps_the_timer() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 40_000, POLL_MS, 300, Some(200));
+    ride_passes(&mut sim, &mut app, 90_000, POLL_MS, 0, None); // a checkpoint at 60 s and 120 s, stopped
+    let timer = app.ride.timer_s();
+    let (mut sim, mut app) = reboot(&mut sim, 3);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    assert_eq!((app.ride.state(), app.ride.timer_s()), (ride::State::Paused, timer), "the stop's timer");
+    app.press(&mut sim, Press::Short(Key::Start)); // resume
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 300, Some(200));
+    let timer = app.ride.timer_s();
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
+    // the stop ended by the resume (the Start key's start), no stop event at the reset
+    assert_eq!(timer_events(&file), [(0, None), (4, Some(1)), (0, None), (4, None)]);
 }
 
 /// A card that fails during a 10 min stall and for 5 s after it: the stall's seconds go on the timer, the few

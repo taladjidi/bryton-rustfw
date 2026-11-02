@@ -175,7 +175,8 @@ lane_H() {  # the host
         step "fit_check" sh -e -c '
             "$0" tools/fit_check.py target/fit/sample.fit target/fit/cut.fit target/fit/sample_full.fit
             "$0" tools/fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
-            "$0" tools/fit_check.py --profile target/fit/indoor.fit target/fit/older.fit target/fit/mtb.fit' "$PY"
+            "$0" tools/fit_check.py --profile target/fit/indoor.fit target/fit/older.fit target/fit/mtb.fit
+            "$0" tools/fit_check.py --timer target/fit/autopause.fit' "$PY"
     elif [ $strict = 1 ]; then
         echo "fit_check: fitdecode / garmin-fit-sdk are not installed: on main (or --full) the independent FIT readers are required"
         return 1

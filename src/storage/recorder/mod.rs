@@ -33,7 +33,7 @@
 //! file and checks both), the FIT writer's state ([`fit::RECORD_LEN`] bytes, its own CRC) and the app's ride totals
 //! (`ride::Ride::to_words`, their count checked), the current lap's sums ([`fit::Writer::lap_words`]), the totals a
 //! resume goes on from beyond them (`ride::Ride::more_words`: uphill, downhill, max altitude, the power's NP, work,
-//! max and W' balance); the sector's CRC last.
+//! max and W' balance), the FIT timer's word ([`fit::Writer::timer_word`]); the sector's CRC last.
 //!
 //! **The save** (End), each step done again after a reset by [`Recorder::recover`] from the phase in the record:
 //! 1. the end messages and a checkpoint whose record says "saving";
@@ -333,8 +333,9 @@ pub const LOW: usize = 512;
 pub const RETRY: u32 = 100;
 /// Bytes a record message takes at most, with a new definition (and its developer fields) and the trailer after it:
 /// the definition's header 6, its 10 fields 3 each, its 3 developer fields and their count 10; the record's header 1,
-/// its fields 25 (fit.rs `RECORD`: 4 + 4 + 4 + 2 + 2 + 4 + 1 + 1 + 2 + 1), Alpha1, RMSSD and ArtPct 7; the CRC 2.
-const RECORD_MAX: usize = 6 + 3 * 10 + 10 + 1 + 25 + 7 + 2;
+/// its fields 25 (fit.rs `RECORD`: 4 + 4 + 4 + 2 + 2 + 4 + 1 + 1 + 2 + 1), Alpha1, RMSSD and ArtPct 7; the CRC 2;
+/// and an auto-pause's timer event before it (fit.rs, "The timer"), with its definition: 6 + 3 * 4, then 1 + 10.
+const RECORD_MAX: usize = 6 + 3 * 10 + 10 + 1 + 25 + 7 + 2 + 18 + 11;
 /// RR intervals waiting for an `hrv` message ([`Recorder::beat`]): 16 s at 150 bpm, while the buffer has no room.
 pub const BEATS_QUEUED: usize = 40;
 /// Record tag and layout version: change it with any change of [`Rec`]'s layout or of `ride::Ride::to_words`
@@ -1490,8 +1491,8 @@ impl Recorder {
         let mut rec = self.rec.ok_or(Error::NotFound)?;
         let seq = self.seq.wrapping_add(1);
         let (name, fit, ride, discard) = (self.name, self.writer.to_record(), self.ride, self.discard);
-        let (lap, more) = (self.writer.lap_words(), self.more);
-        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap, more };
+        let (lap, more, timer) = (self.writer.lap_words(), self.more, self.writer.timer_word());
+        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap, more, timer };
         let slot = 3 * (seq % 2);
         match copies {
             Some((first, last)) => {
@@ -1794,7 +1795,7 @@ impl Recorder {
         }
         let Some(r) = best.filter(|r| r.phase != Phase::Done) else { return Ok(Outcome::Nothing) };
         // the FATs were synced by the caller: the cut may have been between the two, or torn one
-        let writer = Writer::from_record(&r.fit).map(|w| w.with_lap_words(&r.lap));
+        let writer = Writer::from_record(&r.fit).map(|w| w.with_lap_words(&r.lap).with_timer_word(r.timer));
         (self.name, self.ride, self.more, self.discard) = (r.name, r.ride, r.more, r.discard);
         let size = writer.map_or(0, |w| 16 + w.data_len());
         match (r.phase, writer) {

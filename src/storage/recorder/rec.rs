@@ -10,9 +10,10 @@ use crate::ride::{MORE_WORDS, RIDE_WORDS};
 const LAP_AT: usize = 192;
 /// Where [`Rec::more`] starts: after the lap sums, in bytes every build before left zero.
 const MORE_AT: usize = 228;
-const _: () = assert!(
-    128 + 4 * RIDE_WORDS <= LAP_AT && LAP_AT + 4 * LAP_WORDS <= MORE_AT && MORE_AT + 4 * MORE_WORDS <= SECTOR - 2
-);
+/// Where [`Rec::timer`] is: after the ride's other totals, in bytes every build before left zero.
+const TIMER_AT: usize = MORE_AT + 4 * MORE_WORDS;
+const _: () =
+    assert!(128 + 4 * RIDE_WORDS <= LAP_AT && LAP_AT + 4 * LAP_WORDS <= MORE_AT && TIMER_AT + 4 <= SECTOR - 2);
 
 /// One recovery record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +39,9 @@ pub(crate) struct Rec {
     /// power's NP, work, max and W' balance), bytes 228..280: zeros in the records of the builds before them, which
     /// ignore these bytes (the totals then count from the resume).
     pub(crate) more: [u32; MORE_WORDS],
+    /// The FIT timer's state ([`crate::fit::Writer::timer_word`]), bytes 280..284: 0 in the records of the builds
+    /// before it, which ignore these bytes.
+    pub(crate) timer: u32,
 }
 
 impl Rec {
@@ -62,6 +66,7 @@ impl Rec {
         for (c, w) in s[MORE_AT..MORE_AT + 4 * MORE_WORDS].chunks_exact_mut(4).zip(self.more) {
             c.copy_from_slice(&w.to_le_bytes());
         }
+        s[TIMER_AT..TIMER_AT + 4].copy_from_slice(&self.timer.to_le_bytes());
         crate::storage::seal16(&mut s);
         s
     }
@@ -89,6 +94,7 @@ impl Rec {
             checked: (s[23] == 1).then(|| u16::from_le_bytes([s[28], s[29]])),
             lap: core::array::from_fn(|k| word(LAP_AT + 4 * k)),
             more: core::array::from_fn(|k| word(MORE_AT + 4 * k)),
+            timer: word(TIMER_AT),
         };
         r.name.copy_from_slice(&s[9..21]);
         r.fit.copy_from_slice(&s[32..32 + RECORD_LEN]);

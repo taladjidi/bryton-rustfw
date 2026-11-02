@@ -29,6 +29,13 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
     three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not
     reproduced.
 
+- **The ride file's timer stops at an auto-pause (2026-11-02, as Garmin's):** timer stop_all and start events with
+  timer_trigger auto at each stop and when moving again; each lap's and the session's total_timer_time leave the stops
+  out, so they are the screen's timer (the unit had saved 241 s for a 4.5 min ride at 0 km/h showing TIMER 0:00); a reset
+  during a stop comes back paused with the stop's timer. Seen in the simulator and read by fitdecode and Garmin's SDK
+  (`auto_pauses_stop_the_files_timer`, `a_reset_during_an_auto_pause_keeps_the_timer`, `fit_check.py --timer`); owed on
+  the unit: a ride with stops, its saved timer against the screen's, and Intervals.icu's / Strava's moving time.
+
 - **Every second of a stall is on the timer (2026-11-02, no cap; 10 s before):** the ride's seconds are counted from
   the RTC (`catch_up_seconds`); the last `REPEAT_S` (5) of a stall are ticked with the pass's readings, as before,
   the older ones go on the timer at once (as the ride was moving or auto-paused before it) with no records, the file's

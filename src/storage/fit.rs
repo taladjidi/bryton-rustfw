@@ -2,7 +2,8 @@
 //! power cut never loses more than the data since the last checkpoint (AGENTS.md, "never lose a ride").
 //!
 //! Layout: a 14-byte header (data size, its own CRC), then definition and data messages (little-endian), then the
-//! file CRC. Messages: file_id, event (timer start, stop at a pause, start at a resume), one record a second (only
+//! file CRC. Messages: file_id, event (timer start, stop at a pause or an auto-pause, start at a resume or when
+//! moving again: "The timer"), one record a second (only
 //! the fields that are present: a new record definition goes out when that set changes), a lap at each Lap key,
 //! a gear change event at each shift of an electronic groupset ([`Writer::gear`]), and at the end the last lap,
 //! session and activity. Laps and session carry sport cycling (2) and sub_sport indoor_cycling (6) for an indoor
@@ -27,7 +28,7 @@
 //! rpm) and power (19 / 20, uint16, W) over the records written since the last lap (FIT profile 21.218 `lap`,
 //! garmin_fit_sdk/profile.py; invalid 0xff / 0xffff, never 0, when no record had the value). The lap definition
 //! always had these fields (written invalid before), so no new definition: every file of every build stays as it
-//! was. Records are written every running second, auto-paused ones included, never while paused by hand; a lap's
+//! was. Records are written every running second, auto-paused ones included ("The timer"), never while paused by hand; a lap's
 //! averages leave out the auto-paused ones too ([`Sample::auto_paused`]), so they are the lap banner's numbers
 //! (`ride::Ride`'s lap power and heart rate, over the moving seconds; until a reset: the banner then starts again
 //! from the resume), while the session's cover every record. The lap's sums survive a reset beside the recovery
@@ -46,6 +47,24 @@
 //! 0..9 (`& 0x3ff`), so the ones before MTB ignore bit 11. Either way a build before MTB resumes an MTB ride as a
 //! road ride: its lap and session say road, nothing is lost. A build before total_ascent reads neither layout bit
 //! and is not covered (as before).
+//!
+//! **The timer** (owner, 2026-11-02: as Garmin's units). The Start key stops it (event timer (0), stop_all (4)) and
+//! starts it (start (0)); an auto-pause too ([`Sample::auto_paused`], the app's `Ride::moving` false): stop_all at the
+//! start of the first auto-paused second, start at the start of the first moving one, both with the event's data field
+//! 3 = timer_trigger auto (1) (garmin_fit_sdk/profile.py 21.218: `event` field 3 `data`, its subfield `timer_trigger`
+//! when event is timer; `timer_trigger` manual 0, auto 1, fitness_equipment 2; `event_type` start 0, stop_all 4),
+//! written on the gear events' local type, which has that field (no new definition: every build's resume reads it).
+//! Each lap's and the session's total_timer_time is its time less the seconds the timer was stopped in it, so it is
+//! the screen's timer (the lap's, the ride's), Connect IQ's `timerTime` against its `elapsedTime` (which includes
+//! auto-pauses: developer.garmin.com/connect-iq/api-docs/Toybox/Activity/Info.html); total_elapsed_time is unchanged
+//! (every second from the start, pauses in). A stall while auto-paused (app/pass.rs) is inside the stop: the file's
+//! timer leaves it out as the screen's does. Records go on while auto-paused (one a second, as before): our choice,
+//! nothing of a stop lost; whether Garmin's units write them then is not checked (inferred: some do not), and the
+//! readers take records while the timer is stopped. The Start key during an auto-pause writes no second stop (the
+//! timer is stopped): the stop becomes the pause, and the resume's start ends it. A recovery record taken during an
+//! auto-pause comes back paused, as after a Start pause (the recorder's resume writes no stop then); the seconds the
+//! timer was stopped when the current lap began go beside it ([`Writer::timer_word`]; a record of a build before has
+//! 0 there, and the stops before the lap are then taken as the ride's at the checkpoint).
 //!
 //! The profile ([`Sample::profile`], [`Sample::by_hand`]) is the last second's, or the one given since by
 //! [`Writer::set_profile`] (a change while paused): what the end and the record carry.
@@ -250,6 +269,8 @@ const INDOOR: u32 = 1 << 15;
 /// Bit 11: an MTB ride (sub_sport mountain); never with [`INDOOR`]. Records before it: 0, a road ride. Older builds
 /// ignore it or take it as part of the mask (module doc).
 const MTB: u32 = 1 << 11;
+/// Bit 31 of [`Writer::timer_word`]: the word is there (a record of a build before it has 0).
+const TIMER_WORD: u32 = 1 << 31;
 /// Bit 13: the profile was set by hand. Records before it: 0, automatic. Older builds: as bit 14 (module doc).
 const BY_HAND: u32 = 1 << 13;
 
@@ -520,9 +541,14 @@ pub struct Writer {
     lap_start: u32,
     lap_dist: u32,
     laps: u32,
-    /// Seconds paused (Start key) so far; when the current pause began (0: not paused).
+    /// Seconds the timer was stopped (the Start key, an auto-pause) so far; when the current stop began (0: running).
     paused_s: u32,
     paused_at: u32,
+    /// The current stop is an auto-pause's (module doc, "The timer"): a moving second starts the timer again. Not in
+    /// the recovery record: a ride resumed after a reset is paused, its stop the Start key's from then on.
+    auto: bool,
+    /// Seconds stopped ([`Writer::paused_total`]) when the current lap began ([`Writer::timer_word`]).
+    lap_paused: u32,
     /// The full copy: protocol 2.0, developer fields in the records (module doc).
     dev: bool,
     /// Its file describes `ArtPct` (a full copy begun by a build before it does not: module doc).
@@ -562,6 +588,8 @@ impl Writer {
             laps: 0,
             paused_s: 0,
             paused_at: 0,
+            auto: false,
+            lap_paused: 0,
             dev: false,
             art: false,
             ascent_m: 0,
@@ -603,9 +631,13 @@ impl Writer {
         Ok(w)
     }
 
-    /// The Start key paused the ride at FIT time `time`: timer stop.
+    /// The Start key paused the ride at FIT time `time`: timer stop (none during an auto-pause: the timer is
+    /// stopped already, the stop becomes the pause).
     pub fn pause(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
         self.last = self.last.max(time);
+        if core::mem::take(&mut self.auto) {
+            return Ok(());
+        }
         self.event(sink, self.last, 4)?;
         self.paused_at = self.last;
         Ok(())
@@ -619,7 +651,28 @@ impl Writer {
             self.paused_s = self.paused_s.saturating_add(self.last.saturating_sub(self.paused_at));
             self.paused_at = 0;
         }
+        self.auto = false;
         Ok(())
+    }
+
+    /// Seconds the timer was stopped up to the latest message, the current stop included.
+    fn paused_total(&self) -> u32 {
+        let now = if self.paused_at != 0 { self.last.saturating_sub(self.paused_at) } else { 0 };
+        self.paused_s.saturating_add(now)
+    }
+
+    /// The timer's state beside the recovery record (the recorder stores it after the ride's totals; a record of a
+    /// build before has 0 there): the seconds stopped when the current lap began, bit 31 set.
+    pub fn timer_word(&self) -> u32 {
+        self.lap_paused & !TIMER_WORD | TIMER_WORD
+    }
+
+    /// This writer with the state [`Writer::timer_word`] gave (0, a build before it: [`Writer::from_record`]'s guess).
+    pub fn with_timer_word(self, w: u32) -> Writer {
+        if w & TIMER_WORD == 0 {
+            return self;
+        }
+        Writer { lap_paused: w & !TIMER_WORD, ..self }
     }
 
     /// A lap ended at `time` (the Lap key): a lap message from the last one, with the lap's own heart rate, cadence
@@ -629,6 +682,7 @@ impl Writer {
         let v = self.this_lap();
         self.message(sink, L_LAP, 19, &LAP, &v)?;
         (self.lap_start, self.lap_dist, self.laps) = (self.last, self.dist_mm, self.laps + 1);
+        self.lap_paused = self.paused_total();
         self.lap_stats = [Stat::default(); 3];
         Ok(())
     }
@@ -675,13 +729,8 @@ impl Writer {
     /// [`LAP`]'s values for the lap from `lap_start` to `last`: elapsed and timer time and distance, with the
     /// ride's averages and maxima (the lap's when it is the only one).
     fn lap_values(&self) -> [u32; 18] {
-        let pausing =
-            if self.paused_at != 0 { self.last.saturating_sub(self.paused_at.max(self.lap_start)) } else { 0 };
         let elapsed = self.last.saturating_sub(self.lap_start);
-        // ponytail: pauses are counted for the ride, not per lap: a lap after the first leaves out only the pause
-        // in progress
-        let paused = if self.lap_start == self.start { self.paused_s + pausing } else { pausing };
-        let timer = elapsed.saturating_sub(paused);
+        let timer = elapsed.saturating_sub(self.paused_total().saturating_sub(self.lap_paused));
         let dist = self.dist_mm.saturating_sub(self.lap_dist);
         let avg_speed = if timer == 0 { 0 } else { dist / timer };
         let [(ah, mh), (ac, mc), (ap, mp)] = self.stats.map(|s| s.avg_max());
@@ -718,7 +767,18 @@ impl Writer {
 
     /// Appends one record. The totals count it even if the write fails.
     pub fn record(&mut self, sink: &mut impl Sink, s: &Sample) -> Result<(), Error> {
-        // ponytail: dt capped at 5 s, so a gap (a reset, a lost fix) adds no distance; no auto-pause yet
+        // the timer stops at the start of the first auto-paused second and starts at the start of the first moving
+        // one (module doc, "The timer"); a failed event is written at the next record instead
+        let at = s.time.saturating_sub(1).max(self.last);
+        let timer = match (s.auto_paused, self.paused_at, self.auto) {
+            (true, 0, _) => self.auto_event(sink, at, 4).map(|()| (self.paused_at, self.auto) = (at, true)),
+            (false, p, true) => self.auto_event(sink, at, 0).map(|()| {
+                self.paused_s = self.paused_s.saturating_add(at.saturating_sub(p));
+                (self.paused_at, self.auto) = (0, false);
+            }),
+            _ => Ok(()),
+        };
+        // ponytail: dt capped at 5 s, so a gap (a reset, a lost fix) adds no distance
         let dt = s.time.saturating_sub(self.last).min(5);
         self.last = self.last.max(s.time);
         if let Some(v) = s.speed_mm_s {
@@ -805,7 +865,7 @@ impl Writer {
         }
         self.mask = mask;
         self.trn = trn.is_some();
-        Ok(())
+        timer
     }
 
     /// Bytes [`Writer::record`] writes for `s`'s trainer beyond a record without one, at most: its fields, and the
@@ -893,7 +953,7 @@ impl Writer {
         let lap = if self.laps > 0 { self.this_lap() } else { self.lap_values() };
         self.message(sink, L_LAP, 19, &LAP, &lap)?;
         // the ride as one lap: the session's values
-        let whole = Writer { lap_start: self.start, lap_dist: 0, ..*self }.lap_values();
+        let whole = Writer { lap_start: self.start, lap_dist: 0, lap_paused: 0, ..*self }.lap_values();
         // session: event session (8), stop (1), the lap's sport and sub_sport, first lap 0, the laps
         let mut v = [0u32; 20];
         v[..18].copy_from_slice(&whole);
@@ -944,9 +1004,9 @@ impl Writer {
         self.last
     }
 
-    /// Paused (a timer stop with no start after it).
+    /// Paused by the Start key (a timer stop with no start after it; an auto-pause's is not).
     pub fn paused(&self) -> bool {
-        self.paused_at != 0
+        self.paused_at != 0 && !self.auto
     }
 
     /// The ride's profile (the last sample's [`Sample::profile`]; a record from before it: a road ride).
@@ -1010,6 +1070,11 @@ impl Writer {
             laps: w[18],
             paused_s: w[19],
             paused_at: w[20],
+            // a stop at the checkpoint, the Start key's or an auto-pause's, is a pause now (module doc, "The timer")
+            auto: false,
+            // a record without [`Writer::timer_word`]: the stops before the lap were the ride's before it (the
+            // builds before counted only the Start key's)
+            lap_paused: if w[16] == w[3] { 0 } else { w[19] },
         })
     }
 
@@ -1067,6 +1132,12 @@ impl Writer {
     /// An event message: timer (0), `kind` start (0) or stop all (4).
     fn event(&mut self, sink: &mut impl Sink, time: u32, kind: u32) -> Result<(), Error> {
         self.message(sink, L_EVENT, 21, &EVENT, &[time, 0, kind])
+    }
+
+    /// [`Writer::event`] for an auto-pause: with its data field, timer_trigger auto (1), on the gear events' local
+    /// type, which has that field (module doc, "The timer").
+    fn auto_event(&mut self, sink: &mut impl Sink, time: u32, kind: u32) -> Result<(), Error> {
+        self.message(sink, L_GEAR, 21, &GEAR_EVENT, &[time, 0, kind, 1])
     }
 
     /// Data message `local` (global number `global`), its definition first if the file does not have it yet.
@@ -1676,6 +1747,114 @@ pub(crate) mod tests {
         assert_eq!(field(lap, 15), ride.last_lap_hr().map(u64::from), "the banner's lap heart rate");
         let session = m.iter().find(|x| x.0 == 18).unwrap();
         assert!(field(session, 20) < field(lap, 19), "the session's average has the stop's zeros");
+    }
+
+    /// Auto-pauses as Garmin's (owner, 2026-11-02): each stop a timer stop_all event, trigger auto, and the next
+    /// moving second a timer start, trigger auto; the laps' and the session's total_timer_time are the screen's
+    /// (`Ride`'s) timer, the elapsed time unchanged. With a recovery record taken mid auto-pause (its lap's paused
+    /// seconds beside it), the Start key pressed during a stop (the stop becomes the pause: no second stop event),
+    /// a stall during a stop (no records for 100 s), and a lap during a stop.
+    #[test]
+    fn auto_pauses_stop_the_timer() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        let mut ride = ride::Ride::new();
+        ride.start_pause();
+        let stop = |t: u32| (1..=10).contains(&t) || (60..120).contains(&t) || (200..330).contains(&t) || t >= 395;
+        let mut lap_s = Vec::new();
+        for t in 1..=400u32 {
+            if (250..350).contains(&t) {
+                continue; // a stall of 100 s while stopped: no records (app/pass.rs `gap_seconds`)
+            }
+            if t == 350 {
+                ride.gap_seconds(100);
+            }
+            let i = ride::Input { speed_x10: Some(if stop(t) { 0 } else { 250 }), ..ride::Input::default() };
+            if ride.second(&i).is_some() {
+                let s =
+                    Sample { time: T0 + t, speed_mm_s: Some(7000), auto_paused: !ride.moving(), ..Sample::default() };
+                w.record(&mut f, &s).unwrap();
+            }
+            match t {
+                100 => {
+                    let rec = w.checkpoint(&mut f).unwrap();
+                    let back = Writer::from_record(&rec).unwrap().with_lap_words(&w.lap_words());
+                    assert!(back.paused(), "a resume mid auto-pause: the stop is a pause");
+                    w = back.with_timer_word(w.timer_word());
+                    // what the recorder's resume does: the ride paused, Start goes on (the next second moving)
+                    ride.start_pause();
+                    ride.start_pause();
+                    w.resume(&mut f, T0 + t).unwrap();
+                }
+                150 | 205 => {
+                    lap_s.push(ride.lap_s());
+                    ride.lap();
+                    w.lap(&mut f, T0 + t).unwrap();
+                }
+                210 | 360 | 398 => {
+                    ride.start_pause();
+                    w.pause(&mut f, T0 + t).unwrap();
+                }
+                230 | 365 => {
+                    ride.start_pause();
+                    w.resume(&mut f, T0 + t).unwrap();
+                }
+                _ => {}
+            }
+        }
+        lap_s.push(ride.lap_s());
+        w.finish(&mut f, T0 + 400).unwrap();
+        let m = decode(&f).unwrap();
+        // (event_type, timer_trigger): None for the Start key's (no data field)
+        let events: Vec<(u64, Option<u64>)> = m
+            .iter()
+            .filter(|x| x.0 == 21 && field(x, 0) == Some(0))
+            .map(|x| (field(x, 1).unwrap(), field(x, 3)))
+            .collect();
+        let (start, stop_all, auto) = ((0, None), (4, None), |k| (k, Some(1)));
+        assert_eq!(
+            events,
+            [
+                start,   // the ride
+                auto(4), // stopped from the first second
+                auto(0),
+                auto(4),
+                start,   // the resume after the reset (the stop a pause)
+                auto(4), // still stopped
+                auto(0),
+                auto(4),
+                start,   // Start pressed during the stop (no event there), then again
+                auto(4), // still stopped, then the stall
+                auto(0),
+                stop_all, // Start
+                start,
+                auto(4), // stopped, then Start (no event) and the end (none: stopped already)
+            ],
+            "the timer's starts and stops alternate"
+        );
+        let laps: Vec<&Msg> = m.iter().filter(|x| x.0 == 19).collect();
+        let timer: Vec<u64> = laps.iter().map(|l| field(l, 8).unwrap()).collect();
+        assert_eq!(timer, lap_s.iter().map(|&s| u64::from(s) * 1000).collect::<Vec<_>>(), "each lap: the screen's");
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert_eq!(field(session, 8), Some(u64::from(ride.timer_s()) * 1000), "the session: the screen's timer");
+        assert_eq!(field(session, 7), Some(400_000), "elapsed: every second");
+    }
+
+    /// A recovery record of a build before the timer word (0 beside it): the stops before the current lap are taken
+    /// as the ride's at the checkpoint (none in the first lap); the word, when there, is taken as is.
+    #[test]
+    fn a_record_without_the_timer_word() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        let rec = w.checkpoint(&mut f).unwrap();
+        assert_eq!(Writer::from_record(&rec).unwrap().with_timer_word(0).timer_word(), TIMER_WORD, "first lap");
+        w.pause(&mut f, T0 + 10).unwrap();
+        w.resume(&mut f, T0 + 25).unwrap();
+        w.lap(&mut f, T0 + 30).unwrap();
+        let rec = w.checkpoint(&mut f).unwrap();
+        assert_eq!(w.timer_word(), TIMER_WORD | 15);
+        assert_eq!(Writer::from_record(&rec).unwrap().with_timer_word(0).timer_word(), TIMER_WORD | 15, "guessed");
+        assert_eq!(Writer::from_record(&rec).unwrap().with_timer_word(TIMER_WORD | 7).timer_word(), TIMER_WORD | 7);
     }
 
     /// A pause (timer stop and start events, left out of the timer time), a lap, temperatures below zero; and the

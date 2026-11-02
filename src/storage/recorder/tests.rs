@@ -298,7 +298,29 @@ fn laps_match_records(img: &[u8], name: &str, what: &str) -> usize {
         }
         from = to;
     }
+    timer_follows_events(&m, what);
     laps.len()
+}
+
+/// The file's timer events (event timer) alternate start, stop (an auto-pause's or the Start key's), and each lap's
+/// and the session's total_timer_time is its time less the stops in it (fit.rs, "The timer"): after any cut and
+/// resume too.
+pub(crate) fn timer_follows_events(m: &[crate::fit::tests::Msg], what: &str) {
+    use crate::fit::tests::field;
+    let ev: Vec<(u64, u64)> = m
+        .iter()
+        .filter(|x| x.0 == 21 && field(x, 0) == Some(0))
+        .map(|x| (field(x, 253).unwrap(), field(x, 1).unwrap()))
+        .collect();
+    assert!(ev.iter().enumerate().all(|(k, e)| e.1 == if k % 2 == 0 { 0 } else { 4 }), "{what}: {ev:?}");
+    // the stops: from each stop to the start after it (or on)
+    let stops: Vec<(u64, u64)> =
+        (1..ev.len()).step_by(2).map(|k| (ev[k].0, ev.get(k + 1).map_or(u64::MAX, |e| e.0))).collect();
+    for x in m.iter().filter(|x| x.0 == 19 || x.0 == 18) {
+        let (from, to) = (field(x, 2).unwrap(), field(x, 253).unwrap());
+        let stopped: u64 = stops.iter().map(|&(a, b)| b.min(to).saturating_sub(a.max(from))).sum();
+        assert_eq!(field(x, 8), Some((to - from - stopped) * 1000), "{what}: message {} to {to}: {ev:?}", x.0);
+    }
 }
 
 const SAVED: &str = "Activities/261023100000.fit";
@@ -1480,7 +1502,7 @@ cut_part!(a_discard_cut_at_every_sector_part_6, a_discard_cut(6));
 cut_part!(a_discard_cut_at_every_sector_part_7, a_discard_cut(7));
 
 /// The cuts of the discard's ride at which the next start finds it already discarded (both torn modes).
-const AT_BOOT_CUTS: [u64; 3] = [872, 873, 874];
+const AT_BOOT_CUTS: [u64; 3] = [945, 946, 947];
 
 fn a_discard_cut(part: u64) {
     for torn in [false, true] {
@@ -1861,6 +1883,7 @@ fn a_damaged_record_is_refused() {
             checked: None,
             lap: [seq; crate::fit::LAP_WORDS],
             more: [seq + 1; crate::ride::MORE_WORDS],
+            timer: seq | 1 << 31,
         }
     };
     let s = r(5, Phase::Recording).to_sector();
@@ -1882,7 +1905,10 @@ fn a_damaged_record_is_refused() {
     // the totals beyond the ride words, bytes 228..280 and the ride's word 15 (188..192): zero in the records of the
     // builds before them, read as none (no new tag); nothing after them
     assert_eq!(s[228..280], [6u8, 0, 0, 0].repeat(13)[..]);
-    assert!(s[280..SECTOR - 2].iter().all(|&b| b == 0));
+    // the FIT timer's word, bytes 280..284 (zero in the records of the builds before it: `Writer::with_timer_word`
+    // then keeps its guess); nothing after it
+    assert_eq!(s[280..284], (5u32 | 1 << 31).to_le_bytes());
+    assert!(s[284..SECTOR - 2].iter().all(|&b| b == 0));
     let mut old = s;
     old[188..192].fill(0);
     old[228..280].fill(0);
@@ -3899,6 +3925,7 @@ fn restarted(r: &crate::ride::Ride, p: &crate::power::Power) -> (crate::ride::Ri
         checked: None,
         lap: [0; crate::fit::LAP_WORDS],
         more: r.more_words(p),
+        timer: 0,
     };
     let back = Rec::from_sector(&rec.to_sector()).unwrap();
     let mut r = crate::ride::Ride::resumed(&back.ride, &back.more);
