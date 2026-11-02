@@ -16,8 +16,7 @@
 //! Recovery: drain the stream and start reading at a frame boundary, ask again; failing that reset the chip, start
 //! ANT again (keys, channels), reopen every channel that was open, and set the phone link up again (a bonded
 //! phone reconnects by itself). Attempts back off (15 s, doubling to 5 min) and the backoff relaxes after 10 quiet
-//! minutes. The recorder never waits on any of it beyond the commands' own time-outs (500 ms each, at most
-//! about 3 s for a whole restart with a dead chip): it records from the app's own state, and a pass that took
+//! minutes. The recorder never waits on any of it beyond the commands' own time-outs (500 ms of radio time in all per span between two GNSS reads: `Rx::paused_ms`): it records from the app's own state, and a pass that took
 //! longer loses no ride time (`App::step` counts the seconds gone).
 
 use crate::*;
@@ -117,16 +116,21 @@ impl Watch {
     }
 }
 
-/// Reads and drops what the chip sends until the link has been idle for 20 ms (bounded: at most 200 reads).
+/// Reads and drops what the chip sends until the link has been idle for 20 ms (bounded: at most 200 reads, and 60 ms of
+/// sleeping: a chip that keeps talking must not hold the pass, and with it the GNSS reads).
 fn drain(b: &mut impl Board) {
-    let (mut buf, mut idle) = ([0; 64], 0);
+    let (mut buf, mut idle, mut slept) = ([0; 64], 0, 0);
     for _ in 0..200 {
+        if slept >= 60 {
+            break;
+        }
         if b.nrf_recv(&mut buf) > 0 {
             idle = 0;
         } else if idle >= 20 {
             break;
         } else {
             idle += 1;
+            slept += 1;
             b.delay_ms(1);
         }
     }
@@ -185,11 +189,17 @@ impl App {
             || self.watch.owed.iter().any(|&s| s != Sensor::Off);
         let broken = self.ble.is_none() || ant_down || self.rx.broken || self.rx.strikes >= 2 || self.rx.timeouts >= 2;
         if !broken {
-            if self.watch.quiet_ms >= PROBE_MS {
+            if self.watch.quiet_ms >= PROBE_MS && !self.rx.stalled {
+                self.read_gnss_now(b);
                 // a probe that gets no answer is asked again in a second (one time-out may be a busy chip); two
                 // in a row (`timeouts`) are a broken link
                 self.watch.quiet_ms = if self.probe(b) { 0 } else { PROBE_MS - 1000 };
             }
+            return;
+        }
+        // a command timed out in this span: the probe would be refused unasked, and two real time-outs already make the
+        // link broken. Not asked: try again next pass, never a reset of a chip nobody probed
+        if self.rx.stalled && self.rx.timeouts < 2 && !self.rx.broken {
             return;
         }
         // 1. start reading at a frame boundary and ask again
@@ -281,12 +291,17 @@ impl App {
     pub(crate) fn restart_step(&mut self, b: &mut impl Board, dt: u32) {
         let w = &mut self.watch;
         w.reset_ms = w.reset_ms.saturating_add(dt);
+        // a time-out in this span refuses every command: a stage that sends would lose its configuration, so it waits
+        if self.rx.stalled && w.reset != Reset::Held {
+            return;
+        }
         match w.reset {
             Reset::Held if w.reset_ms >= nrf::RESET_HOLD_MS => {
                 b.nrf_hold(false);
                 (w.reset, w.reset_ms) = (Reset::Boot, 0);
             }
             Reset::Boot if w.reset_ms >= nrf::BOOT_MS => {
+                self.read_gnss_now(b); // the stages that send may meet a silent chip: the receiver first
                 nrf::flush(b); // a glitch byte at the release (seen on the unit)
                 self.rx.reset();
                 let level = self.watch.level;
@@ -304,10 +319,12 @@ impl App {
                 }
             }
             Reset::Configure => {
+                self.read_gnss_now(b);
                 self.restart_channels(b);
                 self.watch.reset = Reset::Channels;
             }
             Reset::Channels => {
+                self.read_gnss_now(b);
                 self.watch.reset = Reset::None; // the phone setup is the restart's own: not deferred
                 self.restart_phone(b);
                 self.apply_later(b);
