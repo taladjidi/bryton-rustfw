@@ -70,6 +70,38 @@ fn s3_new_data_bit_clears_on_the_data_read_and_s4_early_read_is_refused() {
     assert_eq!(read(&mut sim, crate::ambient::LIGHT_ADDR, 0x07, 1)[0] & 8, 8, "the next conversion");
 }
 
+/// S4 with the datasheet's timing: a conversion that takes 120 ms (+20 %) is never taken for a fresh one.
+#[test]
+fn a_late_conversion_gives_no_reading_instead_of_an_old_one() {
+    let mut sim = Sim::new(9, 0, 0);
+    crate::ambient::init(&mut sim);
+    sim.bus.light_late_ms = 20;
+    assert!(crate::ambient::light_start(&mut sim));
+    sim.delay_ms(100);
+    assert_eq!(crate::ambient::light_read(&mut sim), None, "100 ms on: not done yet");
+    sim.delay_ms(21);
+    assert_eq!(crate::ambient::light_read(&mut sim), Some(3000));
+    assert!(sim.bus.violations.is_empty());
+}
+
+/// S7: a supply glitch put the sensor back to standby, gain 3, MEAS_RATE default, MAIN_STATUS bit 5 set. The
+/// firmware sees it, writes the set-up again and starts the sensor; the next reading has the right scale.
+#[test]
+fn a_supply_glitch_on_the_light_sensor_is_seen_and_the_setup_written_again() {
+    let mut sim = Sim::new(9, 0, 0);
+    crate::ambient::init(&mut sim);
+    assert!(crate::ambient::light_start(&mut sim));
+    sim.delay_ms(500);
+    assert_eq!(crate::ambient::light_read(&mut sim), Some(3000));
+    let now = sim.ms;
+    sim.bus.light_glitch(now);
+    sim.delay_ms(500);
+    assert_eq!(crate::ambient::light_read(&mut sim), None, "the glitch is seen, no reading taken at gain 3");
+    sim.delay_ms(100);
+    assert_eq!(crate::ambient::light_read(&mut sim), Some(3000), "set up again: gain 6, measuring");
+    assert!(sim.bus.violations.is_empty());
+}
+
 /// S5, at boot: a reset in the middle of a read left a slave holding SDA. Before the bus clear, the chips were
 /// never found and the light sensor and barometer stayed dead until a power cycle.
 #[test]

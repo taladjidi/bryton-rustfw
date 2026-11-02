@@ -7,11 +7,23 @@
 //! clear by read), which match the SD Physical Layer Simplified Specification's card status table; what a host
 //! must check, as drivers/mmc/core/block.c (fetched 2026-11-02: `mmc_blk_busy_cb` "Accumulate response error bits"
 //! over the CMD13 polls, `mmc_blk_status_error` checks the command's, the stop's (CMD12) and the polls' status).
+//! - Vendor and Linux figures (checked 2026-11-02; JESD84-B51 is login-walled and was not opened): SanDisk iNAND 7232
+//!   e.MMC 5.1 data sheet DOC-06397 Rev 1.13 (a sibling part, mirrored at cdn.hackaday.io/files/1893878102733408/), 7.x
+//!   "Unstable Power-Supply indications": on a flash voltage drop the card aborts the host's write and sets ERROR (bit
+//!   19) and CC_ERROR (bit 20), "seen only if CMD13 was issued, or in the next command response", and in open mode
+//!   (CMD25 + CMD12 + CMD13) CMD12's answer lacks them and only the first CMD13 after the busy shows them: that is
+//!   [`EmmcCard::prog_error`]; the host "shall retry". Linux's busy wait for a write is `MMC_BLK_TIMEOUT_MS` = 10 000
+//!   ms (drivers/mmc/core/block.c) against this driver's 1 s ([`crate::emmc::TRIES`]); SK hynix eMMC5.1 Rev 1.5
+//!   Table 22 (test pattern only): sliding window 256 ms, long power-on GC 1000 ms, erase 600 ms. The driver is not
+//!   changed here (another review decides); `a_stall_longer_than_the_drivers_second_is_a_busy_error_today` shows
+//!   what it does.
 //! - E1 a write takes time ([`super::Cost`]: per command and per sector, **inferred** until benched on the unit), and
 //!   every [`super::Cost::stall_every`] sectors the card stays busy [`super::Cost::stall_ms`] after the write
-//!   (garbage collection, **inferred** 300 ms): CMD13 answers PRG (state 7), not READY_FOR_DATA, until it ends, so
+//!   (garbage collection; the 300 ms is **inferred**: searched the iNAND and hynix documents, which give
+//!   only test-pattern ceilings, and Linux's 10 s): CMD13 answers PRG (state 7), not READY_FOR_DATA, until it ends, so
 //!   the driver's own 1 ms polls wait it out, and give up (`Busy`) past [`crate::emmc::TRIES`]. A CMD0 does not end
-//!   it: CMD1 answers busy until the programming is over (**inferred**). `prog_polls` is the count-based variant.
+//!   it: CMD1 answers busy until the programming is over (**inferred**: hynix only says
+//!   initialisation completes within 1 s of the first CMD1, nothing on CMD0 during programming). `prog_polls` is the count-based variant.
 //! - E2 R1 error bits: ILLEGAL_COMMAND (a command not legal in the state: no answer, the bit in the next answer,
 //!   type "er, b"), WP_VIOLATION (a write touching [`EmmcCard::wp`]: nothing lands, the bit in the next answer, CMD12's
 //!   for an open-ended CMD25, else the first CMD13; "erx, c"), and the bits a test injects: in the next answer
@@ -21,11 +33,13 @@
 //!   (clear by read). Which bits a host checks where: [`DATA_ERRORS`], [`COMMAND_ERRORS`].
 //! - E3 the CRC status token of a written block: [`EmmcCard::bad`] answers a CRC error (`BusError::Crc`).
 //! - E4 an URGENT_BKOPS-style stall ([`EmmcCard::bkops`]): busy as E1 for N ms, and R1's EXCEPTION_EVENT (bit 6,
-//!   "sr, a": a status, not an error) in every answer meanwhile (EXT_CSD EXCEPTION_EVENTS_STATUS URGENT_BKOPS; that
-//!   the unit's card raises it, and for how long, is **inferred**).
+//!   "sr, a": a status, not an error) in every answer meanwhile (EXT_CSD EXCEPTION_EVENTS_STATUS URGENT_BKOPS; the
+//!   mechanism is Linux's `R1_EXCEPTION_EVENT`; that the unit's card raises it, and for how long, is **inferred**).
 //! - E5 a power cut mid-write ([`EmmcCard::cut_after`], `tear`, `tear_prefix`): a plain write may leave the sector
-//!   being written garbage, a reliable write keeps it old or new.
-//! - E6 identification at 400 kHz only, no HS_TIMING switch (asserts).
+//!   being written garbage (JEDEC text, not read: inferred), a reliable write keeps it old or new (iNAND 7232 2.11:
+//!   "old data ... must remain unchanged until the new data ... has been successfully programmed").
+//! - E6 identification at 400 kHz only, no HS_TIMING switch (asserts): hynix fOD 0 to 400 kHz, then 0 to 26 MHz by default
+//!   (iNAND p.5).
 //!
 //! Not modelled: erase and discard, the cache (CACHE_CTRL), BKOPS started by the host, a stall between the blocks of
 //! one multi-block write (the controller's data time-out on the unit).

@@ -26,7 +26,11 @@ const MAIN_CTRL: u8 = 0x00;
 const MEAS_RATE: u8 = 0x04;
 const GAIN: u8 = 0x05;
 const PART_ID: u8 = 0x06;
-const ALS_DATA: u8 = 0x0d;
+/// MAIN_STATUS: bit 3 new data, bit 5 power-on (a supply glitch put every register back to its default; reads 1 at
+/// power-up too, cleared by reading it). Lite-On DS86-2016-0027 Rev C p.13.
+const MAIN_STATUS: u8 = 0x07;
+const ALS_NEW: u8 = 0x08;
+const POWER_ON: u8 = 0x20;
 /// MAIN_CTRL: ALS_EN. 0 is standby.
 const ALS_EN: u8 = 0x02;
 /// PART_ID as the light sensor answers it (stock checks it).
@@ -72,10 +76,15 @@ fn probe(b: &mut impl Board) -> Chips {
     let _ = b.i2c_write(ACCEL_ADDR, 0x20, &[0x07]);
     let light = reg(b, LIGHT_ADDR, PART_ID) == Some(LIGHT_ID)
         && b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[0])
-        && b.i2c_write(LIGHT_ADDR, MEAS_RATE, &[0x22]) // 18 bits / 100 ms, every 100 ms while enabled
-        && b.i2c_write(LIGHT_ADDR, GAIN, &[0x02]); // gain 6
+        && light_config(b)
+        && reg(b, LIGHT_ADDR, MAIN_STATUS).is_some(); // clears the power-on bit: a later one means a glitch
     let baro = reg(b, BARO_ADDR, WHO_AM_I) == Some(BARO_ID) && b.i2c_write(BARO_ADDR, CTRL_REG1, &[0x02]); // ODR 0, BDU
     Chips { light, baro }
+}
+
+/// 18 bits / 100 ms, every 100 ms while enabled, gain 6.
+fn light_config(b: &mut impl Board) -> bool {
+    b.i2c_write(LIGHT_ADDR, MEAS_RATE, &[0x22]) && b.i2c_write(LIGHT_ADDR, GAIN, &[0x02])
 }
 
 /// Starts measuring (the sensor leaves standby): a new reading every 100 ms, the first 100 ms on ([`light_read`]).
@@ -83,13 +92,23 @@ pub fn light_start(b: &mut impl Board) -> bool {
     b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[ALS_EN])
 }
 
-/// The ambient light in tenths of a lux (None: no answer): the last conversion. Called at least 100 ms after
-/// [`light_start`] and every [`crate::LIGHT_MS`] after, so there always is a new one: MAIN_STATUS (ALS_NEW) is not
-/// read first, which halves the bus time (two transactions of about 200 us each, the CPU polling I2C4: 2026-10-26).
-/// Does not stop the sensor: [`light_stop`] does.
+/// The ambient light in tenths of a lux (None: no answer, no new conversion yet, or the sensor had lost its set-up):
+/// called at least 500 ms after [`light_start`] and every [`crate::LIGHT_MS`] after. MAIN_STATUS and the data are one
+/// block read (the datasheet reads them as a group; one transaction, about 100 us more than the data alone), so a
+/// conversion that runs late (timing is +-20 %, and wake-up takes up to 10 ms) is never taken for a fresh one, and a
+/// supply glitch (power-on bit: gain back to 3, standby) is seen: the set-up is written again and the sensor started,
+/// the reading comes 100 ms on. (If those writes fail the glitch is not seen again: the next read has gain 3, 2x off;
+/// the bus failure it comes with goes through `sensor_ok`.) Does not stop the sensor: [`light_stop`] does.
 pub fn light_read(b: &mut impl Board) -> Option<u32> {
-    let mut d = [0; 3];
-    b.i2c_read(LIGHT_ADDR, ALS_DATA, &mut d).then(|| lux10(u32::from_le_bytes([d[0], d[1], d[2], 0])))
+    let mut d = [0; 9]; // MAIN_STATUS 0x07 to ALS_DATA 0x0d..0x0f
+    if !b.i2c_read(LIGHT_ADDR, MAIN_STATUS, &mut d) {
+        return None;
+    }
+    if d[0] & POWER_ON != 0 {
+        let _ = light_config(b) && light_start(b);
+        return None;
+    }
+    (d[0] & ALS_NEW != 0).then(|| lux10(u32::from_le_bytes([d[6], d[7], d[8], 0])))
 }
 
 /// Back to standby.

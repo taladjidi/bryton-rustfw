@@ -10,7 +10,9 @@
 //! it waits on our RTS; no new event frame starts between a command's header and its response. The events come from the
 //! SoftDevice in passes (all pending BLE, then all pending ANT) into 96 slots; a pass bringing more events than free
 //! slots hangs the app; after a put leaves 0 free it stops pulling until more than 48 are free. The SoftDevice's ANT queue
-//! holds 32 (inferred: the newest is lost when it is full; the S332 text was not found). 8 security contexts.
+//! holds `usNumberOfEvents` events (the enable call's field, floor 32 = `MIN_ANT_EVENT_QUEUE_SIZE`; ours passes 32; Nordic S212 v4.0.2
+//! docs, group ant_parameters; the S332 headers are not public) and reports a full queue with event 0x35
+//! (EVENT_QUE_OVERFLOW): here the newest is lost (**inferred**: nothing states which) and 0x35 follows once there is room. 8 security contexts.
 //! A payload of length 0 is fatal (nordic-app.md): inferred from the reversal, not reproduced by the emulator (which
 //! does not model a MAXCNT of 0); chip_table_tests.rs asserts it.
 //! A hung chip never sends again, takes 2 to 6 more bytes (4 here) and holds CTS.
@@ -88,6 +90,9 @@ impl Nordic {
         self.touch();
         self.events.extend(self.sd_ble.drain(..));
         self.events.extend(self.sd_ant.drain(..));
+        if std::mem::take(&mut self.ant_overflow) {
+            self.ant_event(&[], 0x35, 0); // EVENT_QUE_OVERFLOW, in the room the pull just made (the event is not stated to be sent in place)
+        }
         self.high_water = self.high_water.max(self.events.len());
         self.suspended = self.events.len() >= slots;
     }

@@ -144,6 +144,11 @@ impl App {
         self.watch.resets
     }
 
+    /// ANT events the SoftDevice reported lost (its queue of 32 overflowed), since the start.
+    pub fn ant_events_lost(&self) -> u16 {
+        self.rx.ant_lost
+    }
+
     /// Asks the chip its version: whether the link answers (an error code is an answer).
     pub(crate) fn probe(&mut self, b: &mut impl Board) -> bool {
         let failed = self.rx.failed; // a silence is not a failure of the phone's setup (PHONE menu): keep the last

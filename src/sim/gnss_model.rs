@@ -6,18 +6,22 @@
 //! Sources, by rule (the interface description is UBX-21035062 R02, u-blox M10 SPG 5.10; "verified" = read in its
 //! text, "inferred" = a guess marked as such; BOARD.md 13 lists them with the unit checks that would settle them):
 //! - G1 output buffer 4 kB, then new messages are dropped: MAX-M10S integration manual UBX-20053088 R01, 2.2.2.2
-//!   (I2C text; the SPI figure is **inferred**).
+//!   ("buffer can store up to 4 kB") and 2.2.1 (new messages dropped once it is exceeded); for SPI, NEO-M9N integration
+//!   manual UBX-19014286 R10, 3.8.5.1 (4 kB of undelivered bytes per port). Checked 2026-11-02.
 //! - G2 about 1.5 s without a read stops the stream, which restarts at the next access: interface description 4.9.22
-//!   CFG-SPI-EXTENDEDTIMEOUT "disable timeouting the interface after 1.5s" (the key and the 1.5 s are verified; the
-//!   behaviour, stream stops, is from the integration manual's I2C text, **inferred** for SPI), so the time-out is a
-//!   parameter ([`Gnss::timeout_ms`]).
+//!   CFG-SPI-EXTENDEDTIMEOUT "disable timeouting the interface after 1.5s", and NEO-M9N manual 3.8.5.1 (SPI and I2C):
+//!   "approximately 2 seconds" without host traffic and no more packets are scheduled; MAX-M10S 2.2.2.2 says 1.5 s and
+//!   2.2.3.6.1 about 2 s. The model keeps 1.5 s, the safe side of both, as a parameter ([`Gnss::timeout_ms`]).
 //! - G3 CFG-SPI-MAXFF (default 50, 0: off): "bytes containing 0xFF to receive before switching off reception", 4.9.22
-//!   (verified); that they are consecutive and counted from the chip select is **inferred**: here per transfer.
-//! - G4 a frame with a bad checksum or an absurd length is dropped without an answer (**inferred**; 3.4 to 3.5).
+//!   (verified; range 0 to 63); consecutive: NEO-M9N manual 3.7.3.1 "50 subsequent bytes containing 0xFF", reception
+//!   re-enabled by the first other byte. That they are counted from the chip select is **inferred** (searched: no
+//!   text on CS): here per transfer.
+//! - G4 a frame with a bad checksum or an absurd length is dropped without an answer (**inferred**; searched 3.4 to 3.5: the checksum is defined, the reaction to a bad one is not).
 //! - G5 every CFG message gets ACK or NAK; CFG-VALSET is refused for an unknown key, no layer, an invalid
 //!   configuration (checked for the RAM layer), more than 64 pairs: 3.9.1, 3.9.2, 3.10.5.1 (verified).
 //! - G6 at most three concurrent constellations: integration manual 1 and CFG-SIGNAL, 3.10.x "simultaneous"
-//!   (the rule's exact form is **inferred**).
+//!   (MAX-M10S manual 1.1: concurrent reception "limited to three"; UBX-MON-GNSS `simultaneous`; whether VALSET NAKs a
+//!   fourth is **inferred**: not stated).
 //! - G7 UBX-MGA-ACK with CFG-NAVSPG-ACKAIDING on, its types and info codes: 3.13.1 (verified); ANO is 76 bytes
 //!   (3.13.2, verified); that ANO needs the time first is the info code 1 text.
 //! - G8 time aiding off by more than its stated accuracy degrades the receiver: 3.13 INI-TIME_UTC text (verified);
