@@ -165,6 +165,37 @@ fn pairs_reads_and_waits_to_be_taken_over() {
     assert_eq!(live(&app, Metric::Speed), Some(272), "the trainer's speed, no speed sensor");
 }
 
+/// A stall in ERG: the seconds it put on the timer carry one old reading each, and held conditions count real
+/// seconds only (seen on the unit 2026-11-02: CADENCE LOW right after a 6 s and a 4 s stall, 5 repeats of one reading
+/// being 5 s of "slow"). 2 s under 50 rpm, then a 4 s stall: not 5 s of it.
+#[test]
+fn a_stall_does_not_count_as_held_seconds_for_the_cadence_alert() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start)); // SHORT INTERVALS
+    app.press(&mut sim, Press::Short(Key::Start)); // START
+    assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 8000);
+    // the control: 40 rpm held 6 s in ERG with no stall says it
+    sim.nordic.trainer.rpm = 40;
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(app.notes.text.as_str(), "CADENCE LOW", "held without a stall: said");
+    // the rider recovers, the banner goes, then 2 s slow again
+    sim.nordic.trainer.rpm = 90;
+    run(&mut sim, &mut app, 65_000); // the alert is said once a CADENCE_EVERY_S at most
+    app.notes.ms = None;
+    app.notes.text.clear();
+    sim.nordic.trainer.rpm = 40;
+    run(&mut sim, &mut app, 2000);
+    sim.delay_ms(4000);
+    app.step(&mut sim);
+    run(&mut sim, &mut app, 300);
+    assert_ne!(app.notes.text.as_str(), "CADENCE LOW", "2 s slow and a 4 s stall are not 5 s slow");
+}
+
 /// A workout in ERG: each step's power target (the midpoint of its range) is sent as page 49 when the step starts
 /// and again later; the trainer holds it; the ride records the trainer's power, and its speed gives the distance
 /// (no GPS).

@@ -25,6 +25,7 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     ./dev.py nrfoff               # the radio chip's switch-off on a running unit (BOARD.md 11 "Power off"): path, time,
                                   # its RTS 10 ms / 100 ms / 1 s after; the radio then restarts (resets +1)
     ./dev.py where                # the screen and the cursor row's label (read-only)
+    ./dev.py stall S              # the loop sleeps S s (1..600) in one go, a ride may be open: the timer must take the gap
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
                                   # reset / load / find / bench / sector / poke answer `err ride open` while a ride or its save is
                                   # open; a wedged recorder needs the four-button restart (Engineer Mode gesture, AGENTS.md)

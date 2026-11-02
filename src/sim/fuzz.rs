@@ -516,7 +516,7 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 16] = [
+    let words: [&[u8]; 17] = [
         b"peek ",
         b"poke ",
         b"load ",
@@ -530,6 +530,7 @@ fn dev_link_input() {
         b"emmc\n",
         b"bench map ",
         b"bench step ",
+        b"bench stall ",
         b"bench nrfoff\n",
         b"prof ",
         b" -",
@@ -617,7 +618,7 @@ fn dev_link_ride_open() {
     assert_eq!(app.ride.state(), crate::ride::State::Running);
     let addrs = ["0x40000000", "0x5ffffffc", "0x40013014", "0x20000000", "0xfffffffc"];
     let (mut session, mut pc) = (Session::new(), super::Pc::default());
-    let (mut refused, mut other, mut nrfoff) = (0, 0, 0);
+    let (mut refused, mut other, mut nrfoff, mut stalls) = (0, 0, 0, 0);
     for c in bytes(78, 6 << 10).collect::<std::vec::Vec<_>>().chunks_exact(6) {
         let a = addrs[usize::from(c[1]) % addrs.len()];
         let line = match c[0] % 10 {
@@ -632,9 +633,13 @@ fn dev_link_ride_open() {
             6 => std::format!("sector {}\n", c[2]),
             7 => std::format!("poke {a} {}\n", c[3]),
             8 => std::format!("peek {a}\n"),
+            9 if c[1] % 3 == 0 => std::format!("bench stall {}\n", c[2] % 130),
+            9 if c[1] % 3 == 1 => std::format!("bench stallx {}\n", c[2] % 130),
             _ => std::format!("{}\n", "x".repeat(usize::from(c[4]))),
         };
         let e = session.feed(line.as_bytes(), &app, Stats::default(), &mut pc);
+        stalls += usize::from(matches!(e, Effect::BenchStall(1..=120)));
+        assert!(!line.starts_with("bench stallx") || e == Effect::None, "{line:?}");
         assert!(
             !matches!(
                 e,
@@ -659,6 +664,7 @@ fn dev_link_ride_open() {
     assert!(pc.regs.is_empty(), "a poke reached the board with a ride open");
     assert!(refused > 100 && other > 500, "refusals reached: {refused} of {other}");
     assert!(nrfoff > 20, "`bench nrfoff` refused {nrfoff} times");
+    assert!(stalls > 20, "`bench stall` reached {stalls} times");
 }
 
 /// The dev link by structure: addresses at and around the range edges, counts at the bounds, long lines, uploads at

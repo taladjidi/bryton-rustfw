@@ -700,10 +700,14 @@ impl App {
                 kcal: self.power.kcal(),
                 kj: self.power.kj(),
             };
-            self.alerts.limits(&r, &self.settings.limits, &mut self.alert);
-            // ERG: the trainer holds the watts, the resistance climbs as the rider slows
-            let slow = self.alerts.cadence(input.cadence, self.erg_on());
-            self.alert.push(slow);
+            // held conditions count real seconds: the repeats of a stall (`lag_s` > 0) carry one old reading each, so a
+            // stall counts only its last tick toward a hold (a deliberate cost: a hold can be a few seconds late)
+            if self.rec.lag_s == 0 {
+                self.alerts.limits(&r, &self.settings.limits, &mut self.alert);
+                // ERG: the trainer holds the watts, the resistance climbs as the rider slows
+                let slow = self.alerts.cadence(input.cadence, self.erg_on());
+                self.alert.push(slow);
+            }
             // the sunset alert: the minutes left to today's sunset by the clock the status bar shows (no fix, no times)
             let now = u32::from(self.strip.time.0) * 60 + u32::from(self.strip.time.1);
             let left = super::fields::minutes_to_sunset(now, self.sun_times());
