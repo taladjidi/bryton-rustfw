@@ -130,7 +130,9 @@ sheets, at their test conditions), none was measured on the unit.
   from this side without the Nordic image's source.
 - **Switched off:** System OFF, 0.3 uA (nRF52832 PS v1.4); held in reset it would draw about 0.2 mA and more, so the
   switch-off makes sure of System OFF and leaves PA6 released (BOARD.md 11 "Power off"). No pin is known to cut the
-  chip's supply.
+  chip's supply. A chip that will not go off after a reset and a second ask is held in reset: about 0.2 mA for as long
+  as the unit is off (a month: about 150 mAh), against 0.3 mA to several mA for a hung chip left running. Only a failing
+  chip costs this; seen on the unit, a healthy one goes off at the first ask.
 
 ### Backlight and panel
 

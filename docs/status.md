@@ -641,7 +641,8 @@ A feature not listed here was seen on the unit.
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **The radio chip's switch-off made certain (2026-11-02, BOARD.md 11 "Power off", drivers/nrf.rs `system_off`):** the
   command is read through (the chip's frame in flight drained), the chip *seen off* (USART2 TC set, CTS released for
-  3 ms), else reset and asked again, else held in reset; then PD3..PD6 analog, no pull. To see with the owner (the wake
+  3 ms, then PD3 following a 1 ms pull-down: released, not driven by a hung chip), else reset and asked again, else held
+  in reset (lines left as they were); seen off, PD3..PD6 analog, no pull. The beep and the screen go off first. To see with the owner (the wake
   needs a hand on the button): (1) the standby current from the battery with a meter, after a switch-off with sensors
   and the phone connected, against stock's (System OFF is 0.3 uA; a chip left running is 0.3 mA and more); (2) the
   unit starts again with the power button and the radio comes back (sensors, phone); (3) the time from the 3 s press

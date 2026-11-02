@@ -506,10 +506,17 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   - *The sequence:* a chip not known to take commands (not started, in a reset, broken or silent) is reset first;
     the command is put, then the chip's bytes are read (and dropped) so the frame it has in flight ends, since every
     command waits for its single TX buffer before it runs (SDK `ser_conn_command_process`); it is *seen off* when
-    our TX is out (USART_ISR TC, RM0399) and its RTS stays released (USART_ISR CTS = 0) for three checks 1 ms apart,
-    within 50 ms. Not seen off: reset and asked once more; still not: PA6 held low (the radio is off for certain,
-    about 0.2 to 0.4 mA, inferred). Then USART2 is disabled and PD3..PD6 set analog with no pull (RM0399 GPIO:
-    nothing driven, no pull-up), PA6 and PI4 left high; the standby keeps them (section 9). The next boot's
+    our TX is out (USART_ISR TC, RM0399) and PD3 reads high (GPIOD_IDR) for three checks 1 ms apart, within 50 ms,
+    and then still follows our pull when it is switched to pull-down for 1 ms (RM0399 GPIO PUPDR 10): a released line
+    reads low, one a hung chip drives high does not (a hung chip takes a few bytes and holds its RTS high, which on the
+    pull-up alone looks like off). Not seen off: reset and asked once more; still not: PA6 held low and the lines left
+    as `nrf_hold` set them (AF7, pull-ups). That trade is deliberate: in reset the chip draws about 0.2 mA through its
+    reset pull-up with its regulators on, a hung chip whose SoftDevice still runs draws its idle and maybe its radio,
+    0.3 mA to several mA (docs/power.md); it costs two resets (about 2.1 s) only for a chip that fails both asks, never
+    for a healthy one (3 ms) nor for one that was not started but answers (one reset first, about 1 s). Seen off, and
+    only then, USART2 is disabled and PD3..PD6 set analog with no pull (RM0399 GPIO: nothing driven, no pull-up), PA6
+    and PI4 left high; the standby keeps them (section 9). The beep, the backlight and the panel go off before all
+    this (app/device.rs `power_off`), so the rider's answer never waits for a reset. The next boot's
     `nrf_hold` brings the lines back to AF7 before the reset pulse, which wakes the chip (pin reset; inferred, to see
     on the unit).
   - *Expected, then seen:* an nRF52's pins latch as they are when it enters System OFF ("direction and level depends
@@ -520,8 +527,8 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     runs (GPIOD_IDR 0x3564), the chip seen off at the first ask in 3.0 ms each time (the 3 checks: released within
     the first millisecond), PD3 released at 10 ms, 100 ms and 1 s after, low again once the radio restarted; no
     watchdog reset, no resync, no fault. Asked while a restart was still under way it was reset first (953 ms), and
-    then seen off too. A hung chip that took the 4 bytes also holds CTS, which looks like off: the link watchdog's
-    `broken` / `timeouts` decide the reset first, so only a hang since the last command would go unseen.
+    then seen off too. With the pull-down check (same day, 5 runs): PD3 followed the pull-down each time (seen off at
+    the first ask, 3.2 to 4.0 ms), and was low again after the restart (GPIOD_IDR 0x35f4).
 
      PA6 reset   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  stays high (released)
      PD5 TX      ~~~~~\_/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~  `02 00 00 32`, then analog

@@ -118,8 +118,12 @@ pub trait Board {
     /// The chip's RTS (our CTS, PD3) is low: it takes bytes. A chip in System OFF has let go of the line: the pull-up
     /// reads "hold" (BOARD.md 11). The pin's level, read with USART2 on or off (not once parked: analog reads low).
     fn nrf_cts(&mut self) -> bool;
-    /// The four USART2 lines to the chip parked for the switch-off (analog, no pull: nothing driven into the chip's
-    /// disconnected pins), the USART off. PA6 and PI4 are left as they are. [`Board::nrf_hold`] brings them back.
+    /// Our pull on PD3 (the chip's RTS): `true` up (as `nrf_hold` sets it), `false` down. A released line follows it, a
+    /// driven one does not ([`nrf::system_off`]'s check of a hung chip).
+    fn nrf_cts_pull(&mut self, up: bool);
+    /// The four USART2 lines to the chip parked for the switch-off of a chip seen off (analog, no pull: nothing driven
+    /// into its disconnected pins), the USART off. PA6 and PI4 are left as they are. [`Board::nrf_hold`] brings them
+    /// back.
     fn nrf_park(&mut self);
     /// One 16-bit reading of ADC3 channel `channel` (BOARD.md 12; 1: the battery, 19: VREFINT); None if the ADC did
     /// not come up. Takes about a quarter of a millisecond.
@@ -381,6 +385,9 @@ pub struct App {
     /// [`MAX_PASS_MS`]); every timer counts it, never a fixed [`POLL_MS`], so a long pass (a slow card) or a
     /// shorter or longer sleep (stop mode) keeps them right.
     dt_ms: u32,
+    /// The same pass as it really was, ms: not capped, no debt repaid. What a chip's power-up or reset waits on (the
+    /// radio's 150 / 800 ms, the receiver's `GNSS_ON_MS` / `GNSS_CONFIG_MS`, app/gps.rs) counts this: never early.
+    real_ms: u32,
     /// The card of the past ride shown ([`Screen::Past`]): 11 KB in its own cell (main.rs `make_past`), as `stock`.
     past: &'static mut history::Past,
     /// The card's survey for STORAGE (app/survey.rs).
@@ -564,6 +571,7 @@ impl App {
             stock,
             awake_at: 0,
             dt_ms: POLL_MS,
+            real_ms: POLL_MS,
             past,
             survey: volume::Survey::new(),
             trash_check: false,
@@ -689,6 +697,7 @@ impl App {
         };
         self.prof.clock.owed_us = work_us % 1000;
         self.dt_ms = pass_ms;
+        self.real_ms = own_ms;
         self.emmc.advance(pass_ms);
         self.emmc.urgent(!self.ride_settled());
         let up_before = self.up_ms;
@@ -721,8 +730,9 @@ impl App {
             self.poll_nrf(b);
         }
         // what the radio passes in this pass's sleep did not count yet (main_loop.rs)
-        let radio_ms = pass_ms.saturating_sub(core::mem::take(&mut self.watch.ahead_ms));
-        self.watch_radio(b, radio_ms);
+        let ahead = core::mem::take(&mut self.watch.ahead_ms);
+        let radio_ms = pass_ms.saturating_sub(ahead);
+        self.watch_radio(b, radio_ms, own_ms.saturating_sub(ahead));
         t = self.timed(b, Sec::Radio, t);
         self.poll_gnss(b);
         t = self.timed(b, Sec::Gnss, t);

@@ -373,14 +373,7 @@ impl App {
         self.rec.full.checkpoint_now();
         self.step_recorder(b);
         self.hold_pages(b); // pages changed and not in the file yet: the registers keep them (app/editor.rs)
-        let fresh = self.nrf_fresh();
-        if self.ble.is_some() {
-            self.release_trainer(b); // not left at the last target until its own time-out
-        }
-        // always: a chip that never started may still run (and drain the battery); one in a reset, not started or
-        // broken is reset once more first (`system_off`)
-        nrf::system_off(b, &mut self.rx, fresh);
-        b.gnss_power(false);
+        // the rider's answer at once: the radio's part below can take a second (a chip to reset first)
         play(b, &BEEP_OFF);
         if self.light.measuring {
             ambient::light_stop(b);
@@ -389,6 +382,14 @@ impl App {
         b.backlight(0);
         panel::off(b);
         b.touch_reset(false); // the touch chip held in reset: no INT to keep the core out of standby
+        let fresh = self.nrf_fresh();
+        if self.ble.is_some() {
+            self.release_trainer(b); // not left at the last target until its own time-out
+        }
+        // always: a chip that never started may still run (and drain the battery); one in a reset, not started or
+        // broken is reset once more first (`system_off`)
+        nrf::system_off(b, &mut self.rx, fresh);
+        b.gnss_power(false);
         // at most 10 s: a key stuck down must not keep the unit (and the battery) on
         for _ in 0..10_000 / POLL_MS {
             if b.keys_down() & Key::Back as u8 == 0 {

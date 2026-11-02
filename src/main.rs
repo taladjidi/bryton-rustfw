@@ -1623,6 +1623,10 @@ impl Board for S510 {
     fn nrf_cts(&mut self) -> bool {
         pin_low(Port::D, 3) // the pin itself (GPIOD_IDR, RM0399 GPIO: read in AF mode too), whether USART2 runs or not
     }
+    fn nrf_cts_pull(&mut self, up: bool) {
+        // PUPDR 01 pull-up, 10 pull-down (RM0399 GPIO); applies in AF mode too
+        modify(gpio_base(Port::D) + 0x0c, 3 << (2 * 3), if up { 1 } else { 2 } << (2 * 3));
+    }
     fn nrf_park(&mut self) {
         nrf_park();
     }

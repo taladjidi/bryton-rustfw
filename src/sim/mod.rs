@@ -144,8 +144,9 @@ pub struct Sim {
     /// sends before that, or left in its TX FIFO at the release, is lost on the hardware, so it fails the test.
     chip_held: bool,
     chip_boot_until: u64,
-    /// The USART2 lines parked ([`Board::nrf_park`]) since the last hold.
+    /// The USART2 lines parked ([`Board::nrf_park`]) since the last hold, and our pull on PD3 (the chip's RTS).
     nrf_parked: bool,
+    cts_pull_up: bool,
     /// A test that provokes the violation sets this: the bytes are counted in `reset_bytes` and dropped instead.
     pub expect_reset_bytes: bool,
     pub reset_bytes: u32,
@@ -1025,6 +1026,7 @@ impl Sim {
             nrf_ext: None,
             chip_held: false,
             nrf_parked: false,
+            cts_pull_up: true,
             chip_boot_until: 0,
             expect_reset_bytes: false,
             reset_bytes: 0,
@@ -1297,14 +1299,19 @@ impl Board for Sim {
         self.sleep_ms(ms);
     }
 
-    /// Strict about the radio chip (BOARD.md 11 "Power off"): once it has run, it must be in System OFF (or, when it
-    /// would not go, held in reset), and the UART lines parked, never left driven into it.
+    /// Strict about the radio chip (BOARD.md 11 "Power off"): once it has run, it must be in System OFF with the UART
+    /// lines parked, or (when it would not go) held in reset with them left as they were; never running.
     fn standby(&mut self) {
         self.standby = true;
         if self.nrf_ext.is_none() && self.nordic.reset {
             let n = &self.nordic;
             assert!(n.off || self.chip_held || n.dead, "the Nordic chip is left powered and running at the switch-off");
-            assert!(self.nrf_parked, "the USART2 lines are left driven into the Nordic chip at the switch-off");
+            assert!(
+                self.nrf_parked || !n.off,
+                "the USART2 lines are left driven into the Nordic chip at the switch-off"
+            );
+            assert!(!self.nrf_parked || n.off, "the USART2 lines parked although the chip was not seen off");
+            assert!(self.cts_pull_up, "PD3 left pulled down");
         }
     }
 
@@ -1312,6 +1319,7 @@ impl Board for Sim {
     fn nrf_hold(&mut self, held: bool) {
         self.chip_held = held;
         self.nrf_parked = false;
+        self.cts_pull_up = true;
         if held {
             self.nordic.txq.clear(); // TXFRQ, as main.rs
             return;
@@ -1490,12 +1498,23 @@ impl Board for Sim {
         self.nordic.recv(buf, self.ms)
     }
 
+    /// The bridge ([`Sim::nrf_ext`]) has no line state: its TX reads sent and its RTS released (floating), so the
+    /// switch-off's checks read "off" there and are not exercised (they are on the model).
     fn nrf_sent(&mut self) -> bool {
         self.nrf_ext.is_some() || self.nordic.sent(self.ms)
     }
 
+    /// PD3 low. The chip drives its RTS while it runs, hung included (held high); in System OFF it lets go and the line
+    /// follows our pull.
     fn nrf_cts(&mut self) -> bool {
-        self.nrf_ext.is_none() && self.nordic.cts(self.ms)
+        if self.nrf_ext.is_some() || self.nordic.off {
+            return !self.cts_pull_up;
+        }
+        self.nordic.cts(self.ms)
+    }
+
+    fn nrf_cts_pull(&mut self, up: bool) {
+        self.cts_pull_up = up;
     }
 
     fn nrf_park(&mut self) {

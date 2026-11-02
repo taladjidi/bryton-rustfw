@@ -589,7 +589,7 @@ fn a_chip_that_stays_on_is_held_in_reset() {
     app.power_off(&mut s);
     assert!(s.ms - t0 < 3000, "bounded: {} ms", s.ms - t0);
     assert_eq!(s.nordic.resets.len(), resets + 1, "asked twice, a reset between");
-    assert!(!s.nordic.off && s.chip_held && s.nrf_parked);
+    assert!(!s.nordic.off && s.chip_held && !s.nrf_parked, "held, the lines left as they were (not parked)");
 }
 
 /// The model is strict: a chip left running at the standby, or lines left driven into it, fail the test.
@@ -678,4 +678,34 @@ fn the_nrfoff_bench_switches_the_chip_off_and_the_radio_comes_back() {
     run(&mut s, &mut app, 3000);
     assert_eq!(s.nordic.resets.len(), resets + 1);
     assert!(app.radio_up() && !s.nordic.off);
+}
+
+/// Review of the switch-off (2): a chip hung since its last command takes our 4 bytes and drives its RTS high, which
+/// reads like a released line on the pull-up; the pull-down tells them apart, so it is reset and asked again, never
+/// taken for off while it runs.
+#[test]
+fn a_hung_chip_at_the_switch_off_is_reset_not_taken_for_off() {
+    let (mut s, mut app) = riding_app(&[]);
+    s.nordic.hung = true; // silently: the link has not noticed (`rx.broken` false)
+    assert!(!app.rx.broken && app.rx.timeouts == 0);
+    let resets = s.nordic.resets.len();
+    app.power_off(&mut s);
+    assert_eq!(s.nordic.resets.len(), resets + 1, "reset, then asked again");
+    assert!(s.nordic.off && s.nrf_parked && s.standby);
+}
+
+/// Review of the switch-off (1): a pass over MAX_PASS_MS leaves a debt the clock repays at up to twice real speed; the
+/// radio's restart counts real time, so the strict chip sees no command before its 800 ms boot are really over.
+#[test]
+fn a_restart_after_a_long_pass_waits_the_real_boot_time() {
+    let (mut s, mut app) = riding_app(&[]);
+    s.gnss.expect = Some("stream time-out"); // the 5 s pass leaves the receiver unread: not this test's concern
+    s.awake_ns += 5_000_000_000; // one pass of 5 s of work: 4 s of debt
+    s.ms += 5000;
+    app.step(&mut s);
+    let resets = s.nordic.resets.len();
+    app.restart_begin(&mut s);
+    run(&mut s, &mut app, 4000); // the strict sim panics on a byte in the hold or the boot
+    assert_eq!((s.nordic.resets.len(), s.reset_bytes), (resets + 1, 0));
+    assert!(app.radio_up());
 }
