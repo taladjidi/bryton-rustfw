@@ -55,7 +55,9 @@
 //! when event is timer; `timer_trigger` manual 0, auto 1, fitness_equipment 2; `event_type` start 0, stop_all 4),
 //! written on the gear events' local type, which has that field (no new definition: every build's resume reads it).
 //! Each lap's and the session's total_timer_time is its time less the seconds the timer was stopped in it, so it is
-//! the screen's timer (the lap's, the ride's), Connect IQ's `timerTime` against its `elapsedTime` (which includes
+//! the screen's timer (the lap's, the ride's) while no second is dropped: a second the recorder refuses for lack of
+//! room (storage/recorder/mod.rs `second`, a card falling behind) moves an auto stop or start to the next second
+//! recorded, so the file's timer can differ from the screen's by those seconds (the events still pair). Connect IQ's `timerTime` against its `elapsedTime` (which includes
 //! auto-pauses: developer.garmin.com/connect-iq/api-docs/Toybox/Activity/Info.html); total_elapsed_time is unchanged
 //! (every second from the start, pauses in). A stall while auto-paused (app/pass.rs) is inside the stop: the file's
 //! timer leaves it out as the screen's does. Records go on while auto-paused (one a second, as before): our choice,
@@ -1855,6 +1857,44 @@ pub(crate) mod tests {
         assert_eq!(w.timer_word(), TIMER_WORD | 15);
         assert_eq!(Writer::from_record(&rec).unwrap().with_timer_word(0).timer_word(), TIMER_WORD | 15, "guessed");
         assert_eq!(Writer::from_record(&rec).unwrap().with_timer_word(TIMER_WORD | 7).timer_word(), TIMER_WORD | 7);
+    }
+
+    /// The build before (main before a01cda9), resuming this build's ride from a record taken mid auto-pause: its
+    /// record has no timer word (its `to_sector` zeroes the bytes) and its `paused()` is `paused_at != 0`, as this
+    /// build's [`Writer::from_record`] gives back. Start, a minute moving, the end: the timer events still alternate,
+    /// and the session's timer is its elapsed time less the stops between them.
+    #[test]
+    fn the_build_before_resumes_a_ride_mid_auto_pause() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        let rec = |t: u32, auto_paused| Sample { time: T0 + t, auto_paused, ..Sample::default() };
+        for t in 1..=90 {
+            w.record(&mut f, &rec(t, (30..60).contains(&t) || t > 80)).unwrap();
+        }
+        let r = w.checkpoint(&mut f).unwrap();
+        let mut w = Writer::from_record(&r).unwrap();
+        assert!(w.paused(), "paused, as the build before reads it");
+        w.resume(&mut f, T0 + 100).unwrap();
+        for t in 101..=160 {
+            w.record(&mut f, &rec(t, false)).unwrap();
+        }
+        w.pause(&mut f, T0 + 160).unwrap();
+        w.finish(&mut f, T0 + 170).unwrap();
+        let m = decode(&f).unwrap();
+        let ev: Vec<(u64, u64)> = m
+            .iter()
+            .filter(|x| x.0 == 21 && field(x, 0) == Some(0))
+            .map(|x| (field(x, 253).unwrap(), field(x, 1).unwrap()))
+            .collect();
+        let kinds: Vec<u64> = ev.iter().map(|e| e.1).collect();
+        assert_eq!(kinds, [0, 4, 0, 4, 0, 4], "start, stop, ...: {ev:?}");
+        // each stop to the start after it, the last one to the end
+        let end = u64::from(T0 + 170);
+        let stopped: u64 = (1..ev.len()).step_by(2).map(|k| ev.get(k + 1).map_or(end, |e| e.0) - ev[k].0).sum();
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert_eq!(field(session, 7), Some(170_000), "elapsed");
+        assert_eq!(field(session, 8), Some((170 - stopped) * 1000), "timer: elapsed less the stops {ev:?}");
+        assert_eq!(field(session, 8), Some(110_000), "29 + 21 moving before the cut, 60 after");
     }
 
     /// A pause (timer stop and start events, left out of the timer time), a lap, temperatures below zero; and the
