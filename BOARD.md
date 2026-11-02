@@ -511,7 +511,16 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     about 0.2 to 0.4 mA, inferred). Then USART2 is disabled and PD3..PD6 set analog with no pull (RM0399 GPIO:
     nothing driven, no pull-up), PA6 and PI4 left high; the standby keeps them (section 9). The next boot's
     `nrf_hold` brings the lines back to AF7 before the reset pulse, which wakes the chip (pin reset; inferred, to see
-    on the unit). A hung chip that took the 4 bytes also holds CTS, which looks like off: the link watchdog's
+    on the unit).
+  - *Expected, then seen:* an nRF52's pins latch as they are when it enters System OFF ("direction and level depends
+    on whatever might be controlling the pins at the time", Nordic on DevZone,
+    https://devzone.nordicsemi.com/f/nordic-q-a/82312/keep-gpio-state-during-system-off), and the app has put its RTS
+    back to a disconnected input just before (SDK `pins_to_default`), so the line floats and our pull-up holds PD3
+    high. **Seen on the unit 2026-11-02** (`tools/dev.py nrfoff`, RAM run, 5 runs 4 s apart): PD3 low while the chip
+    runs (GPIOD_IDR 0x3564), the chip seen off at the first ask in 3.0 ms each time (the 3 checks: released within
+    the first millisecond), PD3 released at 10 ms, 100 ms and 1 s after, low again once the radio restarted; no
+    watchdog reset, no resync, no fault. Asked while a restart was still under way it was reset first (953 ms), and
+    then seen off too. A hung chip that took the 4 bytes also holds CTS, which looks like off: the link watchdog's
     `broken` / `timeouts` decide the reset first, so only a hang since the last command would go unseen.
 
      PA6 reset   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  stays high (released)

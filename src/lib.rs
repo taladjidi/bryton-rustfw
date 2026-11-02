@@ -115,8 +115,8 @@ pub trait Board {
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
     /// Every byte given to [`Board::nrf_send`] has left the wire (USART2 TC, BOARD.md 11).
     fn nrf_sent(&mut self) -> bool;
-    /// The chip's RTS (our CTS) says it takes bytes. A chip in System OFF has let go of the line: the pull-up reads
-    /// "hold" (BOARD.md 11).
+    /// The chip's RTS (our CTS, PD3) is low: it takes bytes. A chip in System OFF has let go of the line: the pull-up
+    /// reads "hold" (BOARD.md 11). The pin's level, read with USART2 on or off (not once parked: analog reads low).
     fn nrf_cts(&mut self) -> bool;
     /// The four USART2 lines to the chip parked for the switch-off (analog, no pull: nothing driven into the chip's
     /// disconnected pins), the USART off. PA6 and PI4 are left as they are. [`Board::nrf_hold`] brings them back.

@@ -529,9 +529,17 @@ const OFF_SEEN: u32 = 3;
 /// sure of it (BOARD.md 11 "Power off"): the command is on the wire, then the chip is seen to let go of its RTS (our
 /// CTS) with nothing more to send. A chip not known to take commands (`fresh` false: never started, in a reset, broken
 /// or silent) is reset first; one that is not seen off is reset and asked once more; failing that it is held in reset
-/// (radio off for certain) rather than left running. Returns whether it was seen off. Bounded: about 2.2 s at worst,
-/// the unit is going off.
-pub fn system_off(b: &mut impl Board, rx: &mut Rx, fresh: bool) -> bool {
+/// (radio off for certain) rather than left running. Then the lines are parked. Returns the attempt that saw it off (0
+/// the first, 1 after the extra reset), None when it was held. Bounded: about 2.2 s at worst, the unit is going off.
+pub fn system_off(b: &mut impl Board, rx: &mut Rx, fresh: bool) -> Option<u8> {
+    let r = system_off_unparked(b, rx, fresh);
+    b.nrf_park();
+    r
+}
+
+/// [`system_off`] without the parking: the lines stay as the USART has them (the dev link's `bench nrfoff` reads the
+/// chip's RTS after it).
+pub fn system_off_unparked(b: &mut impl Board, rx: &mut Rx, fresh: bool) -> Option<u8> {
     for attempt in 0..2 {
         if attempt > 0 || !fresh || rx.broken || rx.timeouts > 0 {
             // a mis-framed or silent chip would read the command as the rest of a frame
@@ -543,13 +551,11 @@ pub fn system_off(b: &mut impl Board, rx: &mut Rx, fresh: bool) -> bool {
             rx.reset();
         }
         if put(b, None, &[2, 0, CMD, SD_POWER_SYSTEM_OFF], 20).is_ok() && seen_off(b) {
-            b.nrf_park();
-            return true;
+            return Some(attempt);
         }
     }
     b.nrf_hold(true);
-    b.nrf_park();
-    false
+    None
 }
 
 /// Reads (and drops) what the chip still sends, so that its frame in flight ends and the command gets its TX buffer,

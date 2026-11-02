@@ -661,3 +661,21 @@ fn a_broken_link_is_not_a_trainer_refusal() {
     }
     assert!(app.notes.list.iter().all(|n| !n.as_str().contains("TRAINER CONTROL FAILED")));
 }
+
+/// `dev.py nrfoff`: the switch-off on a running unit, then the radio comes back through the watchdog's reset; the
+/// chip's RTS reads released after it.
+#[test]
+fn the_nrfoff_bench_switches_the_chip_off_and_the_radio_comes_back() {
+    let (mut s, mut app) = riding_app(&[]);
+    let (session, mut pc) = (crate::dev::Session::new(), super::Pc::default());
+    let resets = s.nordic.resets.len();
+    app.serve(&mut s, &mut pc, &session, crate::dev::Effect::BenchNrfOff);
+    let line = std::string::String::from_utf8_lossy(&pc.got).into_owned();
+    let w: std::vec::Vec<&str> = line.split_whitespace().collect();
+    assert_eq!((w[0], w[1], &w[3..]), ("nrfoff", "seen0", &["fresh", "0", "0", "0"][..]), "{line}");
+    assert!(w[2].parse::<u32>().is_ok_and(|us| us < 10_000), "{line}");
+    assert!(s.nordic.off || s.chip_held, "off, then held for the restart");
+    run(&mut s, &mut app, 3000);
+    assert_eq!(s.nordic.resets.len(), resets + 1);
+    assert!(app.radio_up() && !s.nordic.off);
+}

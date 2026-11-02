@@ -871,10 +871,8 @@ const U_RDR: u32 = USART2 + 0x24;
 const U_TDR: u32 = USART2 + 0x28;
 const ISR_RXFNE: u32 = 1 << 5;
 const ISR_TXFNF: u32 = 1 << 7;
-/// RM0399 USART_ISR: TC (bit 6) the last byte has left the shift register, the TX FIFO empty; CTS (bit 10) the inverse of
-/// the nCTS pin, 1 = the chip takes bytes.
+/// RM0399 USART_ISR TC (bit 6): the last byte has left the shift register, the TX FIFO empty.
 const U_ISR_TC: u32 = 1 << 6;
-const U_ISR_CTS: u32 = 1 << 10;
 const RCC_D2CCIP2R: u32 = RCC + 0x054;
 const RCC_APB1LENR: u32 = RCC + 0x0e8;
 const NRF_RESET: (Port, u32) = (Port::A, 6);
@@ -1623,7 +1621,7 @@ impl Board for S510 {
         rd(U_ISR) & U_ISR_TC != 0
     }
     fn nrf_cts(&mut self) -> bool {
-        rd(U_ISR) & U_ISR_CTS != 0
+        pin_low(Port::D, 3) // the pin itself (GPIOD_IDR, RM0399 GPIO: read in AF mode too), whether USART2 runs or not
     }
     fn nrf_park(&mut self) {
         nrf_park();

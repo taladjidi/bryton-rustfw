@@ -645,8 +645,8 @@ A feature not listed here was seen on the unit.
   needs a hand on the button): (1) the standby current from the battery with a meter, after a switch-off with sensors
   and the phone connected, against stock's (System OFF is 0.3 uA; a chip left running is 0.3 mA and more); (2) the
   unit starts again with the power button and the radio comes back (sensors, phone); (3) the time from the 3 s press
-  to the screen going off is unchanged (under 100 ms more; about 1 s more when the chip was in a reset). Not checkable
-  here: that the chip's RTS really floats high in System OFF (inferred from the SDK's `pins_to_default`), and whether
+  to the screen going off is unchanged (under 100 ms more; about 1 s more when the chip was in a reset). The chip's RTS
+  releasing in System OFF is seen (2026-11-02, `tools/dev.py nrfoff`, BOARD.md 11). Not checkable here: whether
   PA2 (output high, purpose unknown, BOARD.md 4) gates a rail: measure the standby current with PA2 left as it is
   before anyone tries it low.
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature

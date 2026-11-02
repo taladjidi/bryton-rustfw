@@ -516,7 +516,7 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 15] = [
+    let words: [&[u8]; 16] = [
         b"peek ",
         b"poke ",
         b"load ",
@@ -530,6 +530,7 @@ fn dev_link_input() {
         b"emmc\n",
         b"bench map ",
         b"bench step ",
+        b"bench nrfoff\n",
         b"prof ",
         b" -",
     ];
@@ -644,6 +645,7 @@ fn dev_link_ride_open() {
                     | Effect::BenchScan(_)
                     | Effect::BenchMap(..)
                     | Effect::BenchStep(_)
+                    | Effect::BenchNrfOff
             ),
             "{line:?} got out with a ride open"
         );

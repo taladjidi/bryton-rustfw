@@ -454,6 +454,8 @@ def main():
     p = sub.add_parser('stepbench', help='run App::step N times back to back (2..16, default 8) and print each in us and the '
                        'first-to-rest ratio: a ratio well over 1 means the pass is code fetch')
     p.add_argument('n', nargs='?', type=int, default=8)
+    sub.add_parser('nrfoff', help='switch the radio chip off as the switch-off does, unit kept up: the path taken (seen0 / '
+                   'seen1 / held), the time, the chip\'s RTS (our CTS, PD3) 10 ms, 100 ms, 1 s after; then the radio restarts')
     p = sub.add_parser('mapbench', help='time the basemap of the full-page map at the unit\'s position: mapbench LEVEL '
                        '[STEPS]: STEPS views, each moved a screen east (cold re-centres)')
     p.add_argument('level', type=int)
@@ -551,6 +553,13 @@ def main():
                 print(f'{len(data)} bytes -> {a.o}')
             elif a.cmd == 'stepbench':
                 print(command(s, f'bench step {a.n}'))
+            elif a.cmd == 'nrfoff':
+                r = command(s, 'bench nrfoff').split()
+                if r[0] != 'nrfoff':
+                    sys.exit(' '.join(r))
+                rts = ['low (takes bytes)' if c == '1' else 'released' for c in r[4:7]]
+                print(f'{r[1]} in {int(r[2]) / 1000:.1f} ms (chip {r[3]}); RTS at 10 ms {rts[0]}, 100 ms {rts[1]}, '
+                      f'1 s {rts[2]}')
             elif a.cmd == 'mapbench':
                 # a screen east each time (240 px at the level's metres a pixel): a view never drawn before
                 mpp = [1, 1.5][a.level % 2] * 2 ** (a.level // 2)  # map.rs mpp16(level) / 16

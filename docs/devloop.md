@@ -22,6 +22,8 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     ./dev.py prof [--reset] [--watch 5]   # the profiler: per section of the pass, calls/s, mean / max us, % of wall time
     ./dev.py stepbench [N]        # App::step N times back to back (2..16): per-step us and the first / rest ratio; run it
                                   # on a quiet unit with nothing dirty
+    ./dev.py nrfoff               # the radio chip's switch-off on a running unit (BOARD.md 11 "Power off"): path, time,
+                                  # its RTS 10 ms / 100 ms / 1 s after; the radio then restarts (resets +1)
     ./dev.py where                # the screen and the cursor row's label (read-only)
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
                                   # reset / load / find / bench / sector / poke answer `err ride open` while a ride or its save is
