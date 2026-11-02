@@ -555,6 +555,62 @@ fn power_off_during_a_reset_ends_in_system_off() {
     }
 }
 
+/// The switch-off with events on the way, our FIFO full: the chip needs its TX buffer for `sd_power_system_off`, so the
+/// frame in flight must be read out, or the chip stays on through the standby (the strict standby panics).
+#[test]
+fn power_off_with_an_event_frame_stalled_ends_in_system_off() {
+    let (mut s, mut app) = riding_app(&[]);
+    ant(&mut s, 4);
+    app.power_off(&mut s);
+    assert!(s.standby && s.nordic.off, "System OFF");
+    assert!(!s.chip_held && s.nrf_parked, "PA6 released (held, its pull-up draws), the UART lines parked");
+}
+
+/// A chip that never started (no answer at boot) may still run: it is reset and powered down too.
+#[test]
+fn power_off_without_a_started_radio_still_powers_the_chip_down() {
+    let mut s = Sim::new(9, 0, 0);
+    s.nordic.dead = true;
+    let mut app = App::start(&mut s, None);
+    s.nordic.dead = false; // it came to life after the start gave up
+    assert!(app.ble.is_none());
+    let resets = s.nordic.resets.len();
+    app.power_off(&mut s);
+    assert_eq!(s.nordic.resets.len(), resets + 1, "reset, then asked");
+    assert!(s.nordic.off && s.nrf_parked);
+}
+
+/// A chip that will not go off, even after a reset: held in reset (radio off for certain, about 0.4 mA), in bounded time.
+#[test]
+fn a_chip_that_stays_on_is_held_in_reset() {
+    let (mut s, mut app) = riding_app(&[]);
+    s.nordic.stays_on = true;
+    let (t0, resets) = (s.ms, s.nordic.resets.len());
+    app.power_off(&mut s);
+    assert!(s.ms - t0 < 3000, "bounded: {} ms", s.ms - t0);
+    assert_eq!(s.nordic.resets.len(), resets + 1, "asked twice, a reset between");
+    assert!(!s.nordic.off && s.chip_held && s.nrf_parked);
+}
+
+/// The model is strict: a chip left running at the standby, or lines left driven into it, fail the test.
+#[test]
+#[should_panic(expected = "left powered and running")]
+fn the_standby_with_the_chip_running_panics() {
+    let (mut s, _app) = riding_app(&[]);
+    s.standby();
+}
+
+#[test]
+#[should_panic(expected = "lines are left driven")]
+fn the_standby_with_the_lines_driven_panics() {
+    let (mut s, _app) = riding_app(&[]);
+    assert!(nrf::send(&mut s, &mut nrf::Rx::new(), &[nrf::CMD, nrf::SD_POWER_SYSTEM_OFF]).is_ok());
+    let mut buf = [0; 16];
+    s.nrf_recv(&mut buf);
+    assert!(s.nordic.off && !s.nrf_cts(), "off: its RTS let go");
+    s.standby();
+}
+
 /// The level-0 fallback (the chip refuses the two-link configuration): a second hold and boot, still no byte early.
 #[test]
 fn the_fallback_to_the_defaults_keeps_the_boot_time() {

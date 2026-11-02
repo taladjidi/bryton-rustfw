@@ -871,6 +871,10 @@ const U_RDR: u32 = USART2 + 0x24;
 const U_TDR: u32 = USART2 + 0x28;
 const ISR_RXFNE: u32 = 1 << 5;
 const ISR_TXFNF: u32 = 1 << 7;
+/// RM0399 USART_ISR: TC (bit 6) the last byte has left the shift register, the TX FIFO empty; CTS (bit 10) the inverse of
+/// the nCTS pin, 1 = the chip takes bytes.
+const U_ISR_TC: u32 = 1 << 6;
+const U_ISR_CTS: u32 = 1 << 10;
 const RCC_D2CCIP2R: u32 = RCC + 0x054;
 const RCC_APB1LENR: u32 = RCC + 0x0e8;
 const NRF_RESET: (Port, u32) = (Port::A, 6);
@@ -908,6 +912,17 @@ fn nrf_hold() {
 /// error flags.)
 fn nrf_release() {
     pin_set(NRF_RESET.0, NRF_RESET.1, true);
+}
+
+/// The switch-off (BOARD.md 11 "Power off"): USART2 off (CR1 UE clear, RM0399 USART) and PD3..PD6 analog with no pull
+/// (RM0399 GPIO: MODER 3, the input buffer off, PUPDR 0), so neither side drives or pulls the lines while the chip
+/// sleeps; D2, USART2's domain, is then powered down by the standby (BOARD.md 9). PA6 and PI4 keep their levels.
+fn nrf_park() {
+    wr(U_CR1, 0);
+    for pin in 3..=6 {
+        modify(gpio_base(Port::D) + 0x0c, 3 << (2 * pin), 0); // PUPDR: none
+        modify(gpio_base(Port::D), 3 << (2 * pin), 3 << (2 * pin)); // MODER: analog
+    }
 }
 
 /// Puts bytes in the TX FIFO as far as it has room, and returns how many, at once: when the chip holds CTS the FIFO
@@ -1603,6 +1618,15 @@ impl Board for S510 {
     }
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         nrf_recv(buf)
+    }
+    fn nrf_sent(&mut self) -> bool {
+        rd(U_ISR) & U_ISR_TC != 0
+    }
+    fn nrf_cts(&mut self) -> bool {
+        rd(U_ISR) & U_ISR_CTS != 0
+    }
+    fn nrf_park(&mut self) {
+        nrf_park();
     }
     fn adc_read(&mut self, channel: u8) -> Option<u16> {
         adc_read(u32::from(channel))
