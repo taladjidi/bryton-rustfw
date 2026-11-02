@@ -109,6 +109,9 @@ pub struct Stats {
     /// Share of the last second the CPU ran at all, per mille: the app's work and everything inside the sleep loop
     /// (USB polls, and anything that keeps WFI from sleeping: a stuck interrupt kept it near 820, 2026-10-27).
     pub cpu_permille: u32,
+    /// Since boot, to tell where a clock drift comes from: slices ended early, their summed us, slices that ran out,
+    /// slices a USB command took over, radio passes.
+    pub slices: [u32; 5],
 }
 
 /// Configured, but no start of frame for this long (and no suspend seen): the computer dropped the device.
@@ -407,7 +410,14 @@ impl Session {
                 h.send(decimal(u64::from(stats.awake_permille), &mut [0; 20]));
                 h.send(b" permille, cpu ");
                 h.send(decimal(u64::from(stats.cpu_permille), &mut [0; 20]));
-                h.send(b" permille, radio resets ");
+                h.send(b" permille, loop early ");
+                for (i, n) in stats.slices.iter().enumerate() {
+                    h.send(if i == 0 { b"" } else { b" " });
+                    h.send(decimal(u64::from(*n), &mut [0; 20]));
+                }
+                h.send(b" appup ");
+                h.send(decimal(u64::from(app.up_ms), &mut [0; 20]));
+                h.send(b", radio resets ");
                 h.send(decimal(u64::from(app.radio_resets()), &mut [0; 20]));
                 let (resyncs, broadcasts) = app.radio_counts();
                 h.send(b" resyncs ");

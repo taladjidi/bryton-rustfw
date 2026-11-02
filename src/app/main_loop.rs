@@ -227,6 +227,9 @@ impl<L: UsbLink> MainLoop<L> {
             // an early end counts SysTick's us, the sub-ms rest carried (floored to whole ms each, ~0.5 ms was lost per
             // radio wake: the app clock ran 0.35 % slow, 2026-11-02). A chip sending faster than a byte a ms would keep
             // every slice near 0: the rests add up, and MAX_RADIO_PASSES bounds the pass all the same
+            if took_over {
+                self.policy.count(true);
+            }
             if w.timer && !took_over {
                 self.policy.slept(slice);
             } else {
@@ -259,6 +262,7 @@ impl<L: UsbLink> MainLoop<L> {
                 let now = b.cycles();
                 app.prof().span(Sec::Radio, t, now);
                 radio_passes += 1;
+                self.policy.count(false);
                 if !app.radio_up() {
                     break; // the chip went down in it (a failed restart): nothing reads its bytes, as before
                 }

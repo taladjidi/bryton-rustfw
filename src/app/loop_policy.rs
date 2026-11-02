@@ -114,7 +114,7 @@ impl LoopPolicy {
             awake: 0,
             ran: 0,
             window_ms: 0,
-            stats: Stats { uptime_ms: 0, awake_permille: 0, cpu_permille: 0 },
+            stats: Stats { uptime_ms: 0, awake_permille: 0, cpu_permille: 0, slices: [0; 5] },
         }
     }
 
@@ -160,15 +160,28 @@ impl LoopPolicy {
 
     /// A slice slept `ms` (the whole slice when its timer ran out, else what SysTick counted).
     pub fn slept(&mut self, ms: u32) {
+        self.stats.slices[2] = self.stats.slices[2].wrapping_add(1);
         self.slept += ms;
         self.since_touch = self.since_touch.saturating_add(ms);
     }
 
     /// A slice ended early after `us` of SysTick: whole ms are slept, the rest waits for the next slice.
     pub fn slept_us(&mut self, us: u32) {
+        self.stats.slices[0] = self.stats.slices[0].wrapping_add(1);
+        self.stats.slices[1] = self.stats.slices[1].wrapping_add(us);
         let total = us.saturating_add(self.slept_rest_us);
         self.slept_rest_us = total % 1000;
-        self.slept(total / 1000);
+        let ms = total / 1000;
+        self.slept += ms;
+        self.since_touch = self.since_touch.saturating_add(ms);
+    }
+
+    /// Counts a slice a USB command took over (`1`) or a radio pass (`2`) in the `info` figures.
+    pub fn count(&mut self, took_over: bool) {
+        let i = if took_over { 3 } else { 4 };
+        if let Some(n) = self.stats.slices.get_mut(i) {
+            *n = n.wrapping_add(1);
+        }
     }
 
     /// Slept since the panel was last read, ms: it is read now.
@@ -344,12 +357,18 @@ mod tests {
                 assert_eq!(p.stats().awake_permille, 0); // not a second yet
             }
         }
-        assert_eq!(p.stats(), Stats { uptime_ms: 1000, awake_permille: 20, cpu_permille: 30 });
+        assert_eq!(
+            p.stats(),
+            Stats { uptime_ms: 1000, awake_permille: 20, cpu_permille: 30, slices: p.stats().slices }
+        );
         // the window starts again: a long pass (an eMMC scan, 1.2 s awake) is a window by itself
         p.begin_sleep(POLL_MS, false);
         let pass = p.account(1200 * ms, 0, 0);
         assert_eq!(pass, 1200);
-        assert_eq!(p.stats(), Stats { uptime_ms: 2200, awake_permille: 1000, cpu_permille: 1000 });
+        assert_eq!(
+            p.stats(),
+            Stats { uptime_ms: 2200, awake_permille: 1000, cpu_permille: 1000, slices: p.stats().slices }
+        );
     }
 
     #[test]

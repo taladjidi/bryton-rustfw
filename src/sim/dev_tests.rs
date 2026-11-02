@@ -62,12 +62,12 @@ fn peek_and_poke_registers_only() {
 fn info_answers() {
     let (_, app) = app_at(1, 2, 3);
     let mut pc = Pc::default();
-    Session::new().feed(b"info\n", &app, Stats { uptime_ms: 1234, awake_permille: 0, cpu_permille: 0 }, &mut pc);
+    Session::new().feed(b"info\n", &app, Stats { uptime_ms: 1234, ..Stats::default() }, &mut pc);
     // held 65: the keys at the start (bit 0) and, a first start, the settings' file to write (bit 6)
     assert_eq!(
         pc.got,
         format!(
-            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, radio resets 0 resyncs 0, ant events lost 0, ant HR 0 SPEED 0 CAD 0 SPD+CAD 0 POWER 0 SHIFT 0 DI2 0 TRAIN 0, climb tile us last 0 max 0 slice max 0, auto off held 65, ride idle, card writes yes\n",
+            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, loop early 0 0 0 0 0 appup 86, radio resets 0 resyncs 0, ant events lost 0, ant HR 0 SPEED 0 CAD 0 SPD+CAD 0 POWER 0 SHIFT 0 DI2 0 TRAIN 0, climb tile us last 0 max 0 slice max 0, auto off held 65, ride idle, card writes yes\n",
             env!("CARGO_PKG_VERSION"),
             env!("GIT_DESCRIBE")
         )
