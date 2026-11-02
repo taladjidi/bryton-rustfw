@@ -464,13 +464,9 @@ pub(crate) struct Recording {
     /// A ride of its own to look for on the card once the clean one's is found.
     pub(crate) full_pending: bool,
     /// While seconds are caught up after a long pass: how many seconds ago the one being ticked was (its time).
-    pub(crate) lag_s: u32,
+    pub(crate) lag_s: u8,
     /// The RTC's second (since 1970) the ride's seconds are counted up to; a clock set moves it ([`App::phone_time`]).
     pub(crate) counted_s: i64,
-    /// Seconds gone and not yet ticked ([`App::catch_up_seconds`]).
-    pub(crate) owed_s: u32,
-    /// The second being ticked is a gap: caught up after a stall, without readings ([`App::catch_up_seconds`]).
-    pub(crate) gap: bool,
     /// The CP (W) and W' (J) the ride in progress took at its start, and whether from the fit (app/fitness.rs): kept
     /// for the whole ride.
     pub(crate) model: Option<(u16, u16, bool)>,
@@ -488,8 +484,6 @@ impl Recording {
             full_pending: false,
             lag_s: 0,
             counted_s: rtc_s,
-            owed_s: 0,
-            gap: false,
             model: None,
             errors_seen: 0,
         }

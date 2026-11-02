@@ -1215,7 +1215,7 @@ fn off_during_a_ride_asks_twice() {
 }
 
 /// A pass that takes longer than a second (an eMMC or radio wait) loses no ride time: the ride counts every
-/// second gone, however many (the owner, 2026-11-02: a clock set is followed where it is made, app/pass.rs).
+/// second gone, however many (the owner, 2026-11-02: no cap; a clock set is followed where it is made).
 #[test]
 fn long_pass_loses_no_ride_time() {
     let mut sim = Sim::new(9, 0, 0);

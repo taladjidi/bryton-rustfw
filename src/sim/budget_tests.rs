@@ -33,8 +33,7 @@ const QUEUE_MAX: usize = 48;
 const GNSS_GAP_MAX: u64 = 1200;
 /// The key latency limit, ms.
 const KEY_GAP_MAX: u64 = 250;
-/// The length of the 3 h ride filler's passes, ms (the recorder catches up the seconds between: every other record
-/// a gap, app/pass.rs, written with the record definition in use: no bigger a file).
+/// The length of the 3 h ride filler's passes, ms (the recorder catches up the seconds between).
 const FILL_STRIDE: u32 = 2000;
 
 /// A setting of the card's write time.
@@ -452,22 +451,16 @@ fn the_operations(s: Setting) -> Vec<Row1> {
     assert!(r.sim.paid_ns[5] - r.paid0[5] >= r.sim.cost.stall_ms * 1_000_000, "the stall fired inside a checkpoint");
     rows.push(r.done("checkpoint, card stall"));
 
-    // the catch-up of a 10 min stall: the ride's seconds ticked CATCH_UP_PER_PASS a pass, with a checkpoint each minute
-    // of them. Only the RTC moves on (the stall's own gaps are the rows above's): the cost of the catch-up alone
+    // the pass after a 10 min stall: its last 5 s ticked, the rest on the timer at once, a checkpoint asked for. Only
+    // the RTC moves on (the stall's own gaps are other rows'): the cost of the catch-up alone
     let mut r = Rig::new(card(), s);
     r.start_ride("first ride on a fresh card");
     r.run(70_000);
     r.reset();
+    let elapsed = r.app.ride.elapsed_s();
     r.sim.start_s += 600;
     r.pass();
-    assert!(r.app.rec.owed_s > 500, "the stall owed");
-    for _ in 0..100 {
-        if r.app.rec.owed_s == 0 {
-            break;
-        }
-        r.pass();
-    }
-    assert_eq!((r.app.rec.owed_s, r.app.rec.clean.dropped), (0, 0), "caught up, every record kept");
+    assert!(r.app.ride.elapsed_s() >= elapsed + 600, "the stall counted");
     rows.push(r.done("catch-up of a 10 min stall"));
 
     rows.extend(three_hours(s));

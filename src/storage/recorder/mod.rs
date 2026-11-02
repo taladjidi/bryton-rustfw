@@ -113,8 +113,8 @@
 //!
 //! That sync reads both FATs whole in one call (about 1.5 to 3 s on the unit's 15 MB, estimated: the perf review of
 //! 2026-10-25), and it stays in one call on purpose. It runs only at the first ride on a card and after a cut, the
-//! ride's seconds missed meanwhile are caught up (every one, over passes: [`crate::CATCH_UP_PER_PASS`]), and it must
-//! come before any chain is read or written. Spread over passes (`Fat::sync_fats_from`, as the scan's cache does) it would hold the first
+//! ride's seconds missed meanwhile all go on the timer (app/pass.rs, the last [`crate::REPEAT_S`] recorded), and it
+//! must come before any chain is read or written. Spread over passes (`Fat::sync_fats_from`, as the scan's cache does) it would hold the first
 //! checkpoint back by seconds and put a resumable cursor, and a state per sync position for the power-cut tests to
 //! cover, into the one path that must never lose a ride: a pause the rider sees twice per card is the smaller cost.
 //!
@@ -1025,13 +1025,10 @@ impl Recorder {
         self.discard
     }
 
-    /// The buffer has room for more than the newest seconds (above [`LOW`]), or nothing is recorded: a stall's backlog
-    /// may go in (app/pass.rs). False only while a ride records and a card that cannot be written leaves the buffer
-    /// full: the backlog then waits, the newest seconds use the reserve.
-    pub fn takes_backlog(&self) -> bool {
-        !matches!(self.phase, Phase::Starting | Phase::Recording)
-            || self.ended
-            || self.room() >= LOW + Writer::END_BYTES
+    /// A checkpoint at the next card work, whatever the seconds recorded since the last: the app's totals changed
+    /// without records (a stall's seconds on the timer, app/pass.rs), and a cut must not lose them.
+    pub fn checkpoint_soon(&mut self) {
+        self.want = true;
     }
 
     /// The card has work to do ([`Recorder::io`]).

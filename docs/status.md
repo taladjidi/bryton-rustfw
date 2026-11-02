@@ -18,18 +18,14 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
-- **Every second of a stall is recorded (2026-11-02, no cap):** the ride's seconds are counted from the RTC
-  (`catch_up_seconds`), every one gone however long the stall (up to `CLOCK_STEP_S`, an hour: a step forward longer
-  than that, or any step back, is a clock step and counts one), `CATCH_UP_PER_PASS` (30) a pass and none past a
-  checkpoint due, so a long catch-up runs over passes with a checkpoint each minute of records (recorder
-  `CHECKPOINT_S`); while a failing card leaves the buffer at its reserve the backlog waits (the newest second still
-  ticks: distance, auto-pause, laps), and a pause or an end credits it to the timer at once. A clock
-  set moves the count's reference where it is made (the phone's, the only RTC setter, refused during a ride); the GPS
-  never sets the RTC (it learns the offset from UTC). The last `REPEAT_S` (5) seconds of a stall repeat the pass's readings
-  (as before); older ones are gaps: no readings, a record of FIT invalid values with the definition in use, the timer
-  going on as the ride was (moving or auto-paused), no distance on screen or in the file. Seen in the simulator (`a_stall_of_10_min_records_every_second`, the budget row
-  "catch-up of a 10 min stall"); on the unit, the CPU time of 30 seconds ticked in one pass is not measured yet
-  (`tools/dev.py prof`, section Second, after a stall).
+- **Every second of a stall is on the timer (2026-11-02, no cap; 10 s before):** the ride's seconds are counted from
+  the RTC (`catch_up_seconds`); the last `REPEAT_S` (5) of a stall are ticked with the pass's readings, as before,
+  the older ones go on the timer at once (as the ride was moving or auto-paused before it) with no records, the file's
+  times jumping over them (Garmin's SDK and fitdecode read it; the session's elapsed and timer times include the
+  stall), and a checkpoint follows at once. A step of the RTC forward by over an hour (`CLOCK_STEP_S`) or back counts
+  one second; the phone's set (the only RTC setter, refused during a ride) moves the count with it; the GPS never sets
+  the RTC. Seen in the simulator (`a_stall_of_10_min_is_all_on_the_timer`, the budget row "catch-up of a 10 min
+  stall"); not yet on the unit.
 
 - **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel
   DMA, `delay_ms`) now count in `up_ms` and the uptime (time-outs, cadences counted in ms). Silent check: read

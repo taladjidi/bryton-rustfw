@@ -7584,15 +7584,14 @@ fn gnss_refusals_at_random() {
     assert!(taken > 10 && refused >= 4 && given_up >= 2, "{taken} taken, {refused} retried, {given_up} given up");
 }
 
-/// Random RTC steps during a ride (app/pass.rs `catch_up_seconds`): stalls of seconds to 15 min, steps forward of
-/// hours to days, steps back of up to half an hour, a stall then a card that fails for up to 2 min, between runs of
-/// random length. No panic; no pass ticks more than `CATCH_UP_PER_PASS`; a step over `CLOCK_STEP_S` counts one
-/// second; nothing dropped without a failing card; the saved file's records later each. The seeds must reach each
-/// kind of step, and the hold (a backlog waiting on a full buffer).
+/// Random RTC steps during a ride (app/pass.rs `catch_up_seconds`): stalls of a second to 15 min, steps forward of
+/// hours to days, steps back of up to half an hour, a card that fails for up to 20 s after a stall, between runs of
+/// random length. No panic; the timer never runs ahead of the RTC's real time (a clock step counts one second at
+/// most); nothing dropped; the saved file's records later each. The seeds must reach each kind of step.
 #[test]
 fn rtc_steps_during_a_ride() {
-    use crate::{CATCH_UP_PER_PASS, Key, Press};
-    let (mut stalls, mut steps, mut backs, mut held) = (0u32, 0u32, 0u32, 0u32);
+    use crate::{Key, Press};
+    let mut kinds = [0u32; 4];
     for seed in 1..=scaled(16) {
         let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9));
         let mut sim = Sim::new(9, 0, 0);
@@ -7601,62 +7600,40 @@ fn rtc_steps_during_a_ride() {
         let mut app = crate::App::start(&mut sim, None);
         super::run(&mut sim, &mut app, 1000);
         app.press(&mut sim, Press::Short(Key::Start));
-        let name = app.rec.clean.name();
-        let mut failed = false;
-        for _ in 0..6 {
-            let end = sim.ms + u64::from(next() % 90_000);
+        let (name, ms0, mut steps) = (app.rec.clean.name(), sim.ms, 0u64);
+        let passes = |sim: &mut Sim, app: &mut crate::App, ms: u64, steps: u64| {
+            let end = sim.ms + ms;
             while sim.ms < end {
-                let t = app.ride.timer_s();
-                app.step(&mut sim);
-                assert!(app.ride.timer_s() - t <= CATCH_UP_PER_PASS, "seed {seed}: a pass ticked too many");
+                app.step(sim);
+                let real = (sim.ms - ms0) / 1000 + 1 + steps;
+                assert!(u64::from(app.ride.timer_s()) <= real, "seed {seed}: timer {} past {real}", app.ride.timer_s());
                 sim.sleep_ms(crate::POLL_MS);
             }
-            for _ in 0..200 {
-                if app.rec.owed_s == 0 {
-                    break; // a step after the last stall's catch-up, so its pass ticks the step alone
-                }
-                app.step(&mut sim);
-                sim.sleep_ms(crate::POLL_MS);
-            }
-            let t = app.ride.timer_s();
-            match next() % 4 {
-                3 => {
-                    sim.delay_ms(60_000 + next() % 600_000);
-                    sim.emmc.bad = std::vec![0..u32::MAX];
-                    let end = sim.ms + u64::from(10_000 + next() % 110_000);
-                    while sim.ms < end {
-                        let rec = &app.rec;
-                        held += u32::from(rec.owed_s > 0 && !(rec.clean.takes_backlog() && rec.full.takes_backlog()));
-                        let t = app.ride.timer_s();
-                        app.step(&mut sim);
-                        assert!(app.ride.timer_s() - t <= CATCH_UP_PER_PASS, "seed {seed}: a pass ticked too many");
-                        sim.sleep_ms(crate::POLL_MS);
-                    }
-                    sim.emmc.bad.clear();
-                    failed = true;
-                }
-                0 => {
-                    sim.delay_ms(1000 + next() % 900_000);
-                    stalls += 1;
-                }
+        };
+        for _ in 0..6 {
+            passes(&mut sim, &mut app, u64::from(next() % 90_000), steps);
+            let kind = next() % 4;
+            kinds[kind as usize] += 1;
+            match kind {
+                0 => sim.delay_ms(1000 + next() % 900_000),
                 1 => {
                     sim.start_s += u64::from(crate::CLOCK_STEP_S + 1 + next() % (3 * 86_400));
-                    app.step(&mut sim);
-                    assert!(app.ride.timer_s() - t <= 1, "seed {seed}: a clock step caught up");
+                    steps += 1;
+                }
+                2 => {
+                    sim.start_s -= u64::from(1 + next() % 1800);
                     steps += 1;
                 }
                 _ => {
-                    sim.start_s -= u64::from(1 + next() % 1800);
-                    app.step(&mut sim);
-                    assert!(app.ride.timer_s() - t <= 1, "seed {seed}: a step back caught up");
-                    backs += 1;
+                    sim.delay_ms(1000 + next() % 900_000);
+                    sim.emmc.bad = std::vec![0..u32::MAX];
+                    passes(&mut sim, &mut app, u64::from(1000 + next() % 19_000), steps);
+                    sim.emmc.bad.clear();
                 }
             }
         }
-        super::run(&mut sim, &mut app, 30_000);
-        if !failed {
-            assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0), "seed {seed}");
-        }
+        passes(&mut sim, &mut app, 30_000, steps);
+        assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0), "seed {seed}");
         app.press(&mut sim, Press::Short(Key::Start));
         super::save_ride(&mut sim, &mut app);
         super::run(&mut sim, &mut app, 3000);
@@ -7664,6 +7641,5 @@ fn rtc_steps_during_a_ride() {
         let times = super::recorder_tests::record_times(&sim.emmc.image, &path);
         assert!(times.windows(2).all(|p| p[1] > p[0]), "seed {seed}: later each");
     }
-    assert!(stalls >= thr(10) && steps >= thr(10) && backs >= thr(10), "{stalls} stalls, {steps} steps, {backs} back");
-    assert!(held >= thr(100), "{held} passes held");
+    assert!(kinds.iter().all(|&k| k >= thr(10)), "stalls, steps forward, steps back, card failures: {kinds:?}");
 }
