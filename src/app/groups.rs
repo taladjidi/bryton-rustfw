@@ -464,7 +464,11 @@ pub(crate) struct Recording {
     /// A ride of its own to look for on the card once the clean one's is found.
     pub(crate) full_pending: bool,
     /// While seconds are caught up after a long pass: how many seconds ago the one being ticked was (its time).
-    pub(crate) lag_s: u8,
+    pub(crate) lag_s: u32,
+    /// The RTC's second (since 1970) the ride's seconds are counted up to; a clock set moves it ([`App::phone_time`]).
+    pub(crate) counted_s: i64,
+    /// Seconds gone and not yet ticked ([`App::catch_up_seconds`]).
+    pub(crate) owed_s: u32,
     /// The CP (W) and W' (J) the ride in progress took at its start, and whether from the fit (app/fitness.rs): kept
     /// for the whole ride.
     pub(crate) model: Option<(u16, u16, bool)>,
@@ -473,14 +477,16 @@ pub(crate) struct Recording {
 }
 
 impl Recording {
-    /// Nothing recorded, nothing to resume.
-    pub(crate) fn new() -> Self {
+    /// Nothing recorded, nothing to resume; the seconds counted from the RTC's `rtc_s`.
+    pub(crate) fn new(rtc_s: i64) -> Self {
         Recording {
             clean: recorder::Recorder::new(),
             resume_pending: false,
             full: recorder::Recorder::of(recorder::Kind::Full),
             full_pending: false,
             lag_s: 0,
+            counted_s: rtc_s,
+            owed_s: 0,
             model: None,
             errors_seen: 0,
         }
@@ -664,7 +670,7 @@ mod tests {
         r.heard_ms[0] = 10;
         r.tick(5);
         assert_eq!((r.heard_ms[0], r.heard_ms[1]), (15, u32::MAX), "saturating");
-        let mut rec = Recording::new();
+        let mut rec = Recording::new(0);
         rec.resume_if(true);
         assert!(rec.resume_pending && rec.full_pending);
     }

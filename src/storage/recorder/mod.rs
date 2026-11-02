@@ -113,8 +113,8 @@
 //!
 //! That sync reads both FATs whole in one call (about 1.5 to 3 s on the unit's 15 MB, estimated: the perf review of
 //! 2026-10-25), and it stays in one call on purpose. It runs only at the first ride on a card and after a cut, the
-//! ride's seconds missed meanwhile are caught up ([`crate::MAX_CATCH_UP`]: 10 s), and it must come before any chain is
-//! read or written. Spread over passes (`Fat::sync_fats_from`, as the scan's cache does) it would hold the first
+//! ride's seconds missed meanwhile are caught up (every one, over passes: [`crate::CATCH_UP_PER_PASS`]), and it must
+//! come before any chain is read or written. Spread over passes (`Fat::sync_fats_from`, as the scan's cache does) it would hold the first
 //! checkpoint back by seconds and put a resumable cursor, and a state per sync position for the power-cut tests to
 //! cover, into the one path that must never lose a ride: a pause the rider sees twice per card is the smaller cost.
 //!

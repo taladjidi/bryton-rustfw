@@ -1117,6 +1117,7 @@ impl App {
         if let Some(t) = set {
             self.show_clock(t); // with the offset just learnt (a TIME ZONE needs it)
             self.seconds = t.5;
+            self.rec.counted_s = self.rtc_s; // a set, not seconds gone: none caught up, none lost
         }
     }
 

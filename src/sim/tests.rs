@@ -1215,7 +1215,7 @@ fn off_during_a_ride_asks_twice() {
 }
 
 /// A pass that takes longer than a second (an eMMC or radio wait) loses no ride time: the ride counts every
-/// second gone, up to MAX_CATCH_UP (more is the clock being set).
+/// second gone, however many (the owner, 2026-11-02: a clock set is followed where it is made, app/pass.rs).
 #[test]
 fn long_pass_loses_no_ride_time() {
     let mut sim = Sim::new(9, 0, 0);
@@ -1231,9 +1231,9 @@ fn long_pass_loses_no_ride_time() {
     run(&mut sim, &mut app, 1000);
     assert_eq!(app.ride.timer_s(), t + 4, "the 3 s of the long pass and the next second");
     sim.gnss.assert_reads(4180, 3);
-    sim.delay_ms(30_000); // the clock jumps (set from the GPS): counted up to MAX_CATCH_UP only
+    sim.delay_ms(30_000); // a 30 s stall: every second of it too
     run(&mut sim, &mut app, 100);
-    assert!(app.ride.timer_s() <= t + 4 + u32::from(MAX_CATCH_UP) + 1);
+    assert_eq!(app.ride.timer_s(), t + 4 + 30);
     // the 30 s jump is a gap of its own: forget it, the next 100 ms read the receiver again within the bound
     sim.gnss.longest_gap_ms = 0;
     sim.gnss.lost_epochs = 0;

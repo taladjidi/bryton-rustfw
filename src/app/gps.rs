@@ -353,9 +353,7 @@ impl App {
     pub(crate) fn learn_aid(&mut self, b: &mut impl Board, pvt: gnss::Pvt) {
         let mut aid = self.gps.aid;
         if pvt.time_ok {
-            let (tr, dr) = b.rtc();
-            let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
-            let diff = epoch_s((y, mo, d, h, m, s)) - epoch_s(pvt.utc);
+            let diff = rtc_epoch_s(b) - epoch_s(pvt.utc);
             let steps = (diff + diff.signum() * 450) / 900; // nearest 15 minutes
             if steps.abs() <= 14 * 4 {
                 aid.offset_15min = Some(steps as i8);

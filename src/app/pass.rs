@@ -4,22 +4,29 @@
 use crate::*;
 
 impl App {
-    /// The RTC's seconds went on to `sec`: every second gone, not one a pass, so a pass that took longer (an eMMC or
-    /// radio wait) loses no ride time.
+    /// The RTC went on (to `sec` in its minute, [`App::rtc_s`] in all): every second gone is ticked, however long
+    /// the pass (an eMMC or radio wait, a stall), so no ride time is lost. A clock set is no second gone: its setter
+    /// moves `counted_s` with it ([`App::phone_time`], the only one), and a step back of any other cause counts one.
+    /// Bounded: [`CATCH_UP_PER_PASS`] a pass, and none after one that leaves a checkpoint due (its records written by
+    /// this pass's [`App::step_recorder`] before more go into the buffer), so a long catch-up runs over passes.
     pub(crate) fn catch_up_seconds(&mut self, sec: u8) {
-        if sec != self.seconds {
-            // more than MAX_CATCH_UP is the clock set, not riding
-            let gone = (sec + 60 - self.seconds) % 60;
+        if self.rtc_s != self.rec.counted_s {
+            let gone = self.rtc_s.saturating_sub(self.rec.counted_s).max(1);
+            self.rec.owed_s = self.rec.owed_s.saturating_add(u32::try_from(gone).unwrap_or(u32::MAX));
+            self.rec.counted_s = self.rtc_s;
             self.value_due = true; // the pages show this second's readings
             self.seconds = sec; // the time the recorder reads goes with the minute already read
-            // each with its own time for the recorder: the first was `n - 1` seconds ago (the second review, R5)
-            let n = gone.clamp(1, MAX_CATCH_UP);
-            for k in 0..n {
-                self.rec.lag_s = n - 1 - k;
-                self.second();
-            }
-            self.rec.lag_s = 0;
         }
+        for _ in 0..self.rec.owed_s.min(CATCH_UP_PER_PASS) {
+            // each with its own time for the recorder: the ones still owed after it (the second review, R5)
+            self.rec.owed_s = self.rec.owed_s.saturating_sub(1);
+            self.rec.lag_s = self.rec.owed_s;
+            self.second();
+            if self.rec.clean.due() || self.rec.full.due() {
+                break;
+            }
+        }
+        self.rec.lag_s = 0;
     }
 
     /// The next alert due is said and beeped, unless the banner up is another alert's.

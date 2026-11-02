@@ -18,9 +18,14 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
-- **A stall over MAX_CATCH_UP (10 s) loses the seconds beyond it from the ride record** (older behaviour, found
-  2026-11-02): the ride's seconds come from the RTC through `catch_up_seconds`, at most `MAX_CATCH_UP` a pass. The
-  checkpoint cadence is on the recorded seconds too (recorder `CHECKPOINT_S`), not on the app clock.
+- **Every second of a stall is recorded (2026-11-02, no cap):** the ride's seconds are counted from the RTC
+  (`catch_up_seconds`), every one gone however long the stall, `CATCH_UP_PER_PASS` (30) a pass and none past a
+  checkpoint due, so a long catch-up runs over passes with a checkpoint each minute of records (recorder
+  `CHECKPOINT_S`). A clock set moves the count's reference where it is made (the phone's, the only RTC setter, refused
+  during a ride); the GPS never sets the RTC (it learns the offset from UTC). The caught-up seconds repeat the readings
+  of the pass that ticks them. Seen in the simulator (`a_stall_of_10_min_records_every_second`, the budget row
+  "catch-up of a 10 min stall"); on the unit, the CPU time of 30 seconds ticked in one pass is not measured yet
+  (`tools/dev.py prof`, section Second, after a stall).
 
 - **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel
   DMA, `delay_ms`) now count in `up_ms` and the uptime (time-outs, cadences counted in ms). Silent check: read

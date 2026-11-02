@@ -73,7 +73,10 @@ impl Walk {
         // saturating: a walk past 12.5 h of simulated time would leave the clock moving, not panic (it lasts minutes).
         // The strip clock's own formatting (midnight, date change, 12/24 h) is covered by `ticks_through_midnight`
         // (sim/tests.rs) and the strip's tests, since the walk shows one fixed time now.
-        sim.start_s = SHOT_CLOCK_S.saturating_sub((sim.ms + SHOT_SETTLE_MS) / 1000);
+        let start_s = SHOT_CLOCK_S.saturating_sub((sim.ms + SHOT_SETTLE_MS) / 1000);
+        // a clock set, as the app's own setter makes one (phone_time): the seconds it skips are not counted
+        app.rec.counted_s += start_s as i64 - sim.start_s as i64;
+        sim.start_s = start_s;
         run(sim, app, SHOT_SETTLE_MS);
         self.shot(sim);
     }

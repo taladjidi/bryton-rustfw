@@ -1467,3 +1467,142 @@ fn a_pending_import_gives_way_to_the_settings_file() {
     assert!(!app.settings_store.import_pending, "given up");
     assert!(app.settings_store.file.loaded, "the settings file read");
 }
+
+/// A ride of 70 s on the simulated card, then `stall_s` without a pass (a loop held by a card or a radio that does not
+/// answer): the sim, the app, the timer before the stall and the ride's name.
+fn ride_then_stall(stall_s: u32) -> (Sim, App, u32, [u8; 12]) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the test holds the loop on purpose: the receiver's stream stops
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    let (t, name) = (app.ride.timer_s(), app.rec.clean.name());
+    sim.delay_ms(stall_s * 1000);
+    (sim, app, t, name)
+}
+
+/// The ride after the stall caught up, paused and saved: every second of it is in the file, one record a second up
+/// to the clock's time, none dropped; the full copy the same.
+fn every_second_of_a_stall_is_recorded(stall_s: u32) {
+    let (mut sim, mut app, t, name) = ride_then_stall(stall_s);
+    run(&mut sim, &mut app, 20_000);
+    let timer = app.ride.timer_s();
+    assert!(timer.abs_diff(t + stall_s + 20) <= 1, "timer {timer}: {t} before, {stall_s} s of stall, 20 s after");
+    assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0), "a checkpoint at least every minute of records");
+    let (_, now) = app.rec_time();
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    let times = record_times(&sim.emmc.image, &path);
+    assert!(times.windows(2).all(|p| p[1] == p[0] + 1), "one record a second");
+    assert_eq!(times.last().copied(), Some(now), "the last record at the clock's time");
+    assert!(times.len().abs_diff(timer as usize) <= 1, "{} records, {timer} s on the timer", times.len());
+    assert_eq!(record_times(&sim.emmc.image, &std::format!("Rustfw/{path}")), times, "the full copy");
+}
+
+/// The owner, 2026-11-02: no cap on the catch-up. A 30 s stall used to keep only 10 s of it.
+#[test]
+fn a_stall_of_30_s_records_every_second() {
+    every_second_of_a_stall_is_recorded(30);
+}
+
+/// A 10 min stall, caught up over passes (`CATCH_UP_PER_PASS` a pass, a checkpoint as each minute of records is due).
+#[test]
+fn a_stall_of_10_min_records_every_second() {
+    every_second_of_a_stall_is_recorded(600);
+}
+
+/// A power cut at every sector the catch-up of a 10 min stall writes (torn sectors): the ride resumes at its last
+/// checkpoint, at most the last minute of the seconds recorded before the cut lost, the volume clean.
+#[test]
+fn a_cut_during_the_catch_up_resumes_at_the_last_checkpoint() {
+    let setup = || {
+        let (mut sim, app, _, _) = ride_then_stall(600);
+        sim.emmc.tear = true;
+        let base = sim.emmc.sectors_written;
+        (sim, app, base)
+    };
+    let (mut sim, mut app, base) = setup();
+    run(&mut sim, &mut app, 3000);
+    let total = sim.emmc.sectors_written - base;
+    assert!(app.ride.timer_s() > 600, "caught up within 3 s");
+    assert!(total > 0);
+    for cut in 0..total {
+        let (mut sim, mut app, base) = setup();
+        sim.emmc.cut_after = Some(base + cut);
+        let mut timer = app.ride.timer_s();
+        while !sim.emmc.dead {
+            app.step(&mut sim);
+            sim.sleep_ms(POLL_MS);
+            timer = app.ride.timer_s();
+        }
+        let (mut sim, mut app) = reboot(&mut sim, 20);
+        run(&mut sim, &mut app, 1000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "cut {cut}: {}", app.notes.list[0].as_str());
+        let back = app.ride.timer_s();
+        assert!(back <= timer && back + 60 >= timer, "cut {cut}: timer {back} of {timer}");
+        crate::fat::write::tests::fsck_torn(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+    }
+    std::println!("catch-up of 10 min: {total} sectors in 3 s");
+}
+
+/// The GPS moves the FIT clock (the learnt offset from UTC), by hours forward and by a quarter hour back, mid-ride:
+/// it never sets the RTC, which counts the ride's seconds, so no second is added or lost.
+#[test]
+fn a_gps_time_set_mid_ride_adds_and_loses_no_second() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let name = app.rec.clean.name();
+    run(&mut sim, &mut app, 30_000);
+    let fix = |sim: &mut Sim, shift_s: i64| {
+        let (tr, dr) = sim.rtc();
+        let ((h, m, s), (y, mo, d)) = (crate::rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
+        let utc = crate::from_epoch_s(crate::epoch_s((y, mo, d, h, m, s)) + shift_s);
+        crate::gnss::Pvt { utc, time_ok: true, ..Default::default() }
+    };
+    let p = fix(&mut sim, 3 * 3600); // UTC 3 h ahead of the RTC: the FIT clock forward by 3 h
+    app.learn_aid(&mut sim, p);
+    assert_eq!(app.gps.aid.offset_15min, Some(-12));
+    run(&mut sim, &mut app, 30_000);
+    let p = fix(&mut sim, 3 * 3600 - 15 * 60); // then back by 15 min
+    app.learn_aid(&mut sim, p);
+    assert_eq!(app.gps.aid.offset_15min, Some(-11));
+    run(&mut sim, &mut app, 30_000);
+    let timer = app.ride.timer_s();
+    assert!(timer.abs_diff(90) <= 1, "timer {timer} after 90 s");
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    let times = record_times(&sim.emmc.image, &path);
+    assert!(times.windows(2).all(|p| p[1] > p[0]), "later each");
+    assert!(times.len().abs_diff(timer as usize) <= 1, "{} records, {timer} s on the timer", times.len());
+}
+
+/// The phone sets the RTC (the only setter: refused during a ride) 3 h forward, then 5 min back: the seconds the jump
+/// skips or repeats are not the ride's, so a ride started right after counts only its own.
+#[test]
+fn a_phone_time_set_is_not_caught_up() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    for (h, m) in [(12, 0), (11, 55)] {
+        let time = [0xea, 0x07, 10, 23, h, m, 0, 5, 0, 1]; // Current Time: 2026-10-23 h:m:00
+        app.phone_time(&mut sim, Some(&time), None);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 10_000);
+        let timer = app.ride.timer_s();
+        assert!(timer.abs_diff(10) <= 1, "{h}:{m}: timer {timer} after 10 s");
+        app.press(&mut sim, Press::Short(Key::Start));
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 3000);
+    }
+    assert_eq!(sim.rtc_sets, 2);
+}

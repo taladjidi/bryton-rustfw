@@ -4,8 +4,9 @@
 
 use crate::*;
 
-/// The ride catches up at most this many seconds after a long pass ([`App::step`]).
-pub const MAX_CATCH_UP: u8 = 10;
+/// The seconds a pass ticks at most after a long one (app/pass.rs `catch_up_seconds`): the rest wait for the next pass. At
+/// a pass every 50 ms (250 ms idle) a catch-up runs 600 (120) times faster than the clock.
+pub const CATCH_UP_PER_PASS: u32 = 30;
 
 impl App {
     /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.
