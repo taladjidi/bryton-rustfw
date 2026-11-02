@@ -32,6 +32,9 @@
 //!   <cts10> <cts100> <cts1000>`: path `seen0` (off at the first ask), `seen1` (after a reset), `held` (PA6 held), `us`
 //!   the time `system_off` took, `fresh` when the chip was up and asked at once (`reset`: reset first, it was not), each
 //!   cts `1` when the chip's RTS was low (it takes bytes), `0` released (BOARD.md 11 "Power off").
+//! - `bench stall <seconds>` (1 to 600): sleeps that long in one go, WFI, with nothing else run ([`Effect::BenchStall`],
+//!   `bench_stall`), and answers `stall <ms>` (the sleep as the board timed it). Allowed while a ride is open: the
+//!   recorder must take the gap on its RTC seconds (the stall path of `catch_up_seconds`, docs/status.md).
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
@@ -276,6 +279,8 @@ pub enum Effect {
     BenchMap(u32, i32, i32),
     /// The radio chip's switch-off on a running unit, then its restart (`bench nrfoff` in the module doc).
     BenchNrfOff,
+    /// Sleep this many seconds in one go with nothing else run (`bench_stall`); answer `stall <ms>`.
+    BenchStall(u32),
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
     Drive,
     /// Start a new profiler window ([`crate::prof::Prof::reset`]).
@@ -398,6 +403,11 @@ impl Session {
             None => {}
             // a RAM run mid-ride loses up to 60 s of it; the card commands stall the loop (and the recorder) for
             // seconds; a poke can hit the card's controller: all wait for a settled ride, as wtest does
+            // the one bench a ride allows: the stall is the test of the recorder's gap, and it writes nothing
+            Some(b"bench") if line.starts_with(b"bench stall") => match words.nth(1).and_then(parse) {
+                Some(secs @ 1..=600) => return Effect::BenchStall(secs),
+                _ => h.send(b"err usage: bench stall <1..600>\n"),
+            },
             Some(b"load" | b"reset" | b"find" | b"bench" | b"sector" | b"poke") if !app.ride_settled() => {
                 h.send(b"err ride open\n");
             }
@@ -697,6 +707,19 @@ fn bench_nrf_off(app: &mut App, b: &mut impl crate::Board, h: &mut impl Host) {
     h.send(b"\n");
 }
 
+/// `bench stall <s>`: one WFI sleep of `s` seconds, nothing else run, so the ride's timer sees a gap in RTC seconds
+/// ([`Effect::BenchStall`]). The sleep is not the app's time (the cycle counter stops in WFI): as in `bench nrfoff`,
+/// the pass's owed time is paid first and the sleep's own is taken out after.
+fn bench_stall(app: &mut App, b: &mut impl crate::Board, h: &mut impl Host, secs: u32) {
+    app.prof.clock.owed_us = app.prof.clock.owed_us.saturating_add(b.waited_us());
+    b.delay_ms(secs.saturating_mul(1000));
+    let slept_ms = b.waited_us() / 1000;
+    app.awake_at = app.prof.clock.us(b);
+    h.send(b"stall ");
+    h.send(decimal(u64::from(slept_ms), &mut [0; 20]));
+    h.send(b"\n");
+}
+
 impl App {
     /// Answers the effect `session` asked for that needs the app and the board (the eMMC, the FAT reader, the
     /// benchmarks, the drive, the profiler), then flushes `h`. True when board work may have slept, which takes over
@@ -730,6 +753,7 @@ impl App {
                 send_bench_step(h, us.get(..n as usize).unwrap_or_default());
             }
             Effect::BenchNrfOff => bench_nrf_off(self, b, h),
+            Effect::BenchStall(secs) => bench_stall(self, b, h, secs),
             Effect::BenchMap(level, dx, dy) => {
                 let t = self.prof.clock.us(b);
                 let got = self.bench_map(b, level, dx, dy);

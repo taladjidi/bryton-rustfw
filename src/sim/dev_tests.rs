@@ -355,3 +355,25 @@ fn a_long_line_is_refused() {
     s.feed(b"where\n", &app, Stats::default(), &mut pc);
     assert!(pc.got.starts_with(b"where "), "{:?}", pc.got);
 }
+
+/// `bench stall <s>` runs during a ride: the sleep is one gap, the ride's timer takes it on the next pass, and the
+/// session answers `stall <ms>`. `bench step` is still refused in the ride.
+#[test]
+fn bench_stall_runs_during_a_ride() {
+    let (mut sim, mut app) = app_at(9, 0, 0);
+    app.press(&mut sim, crate::Press::Short(crate::Key::Start));
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    let t = app.ride.timer_s();
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    let e = s.feed(b"bench stall 30\n", &app, Stats::default(), &mut pc);
+    assert_eq!(e, Effect::BenchStall(30));
+    assert!(app.serve(&mut sim, &mut pc, &s, e));
+    let answer = std::str::from_utf8(&pc.got).unwrap_or("");
+    let ms: u32 = answer.trim().strip_prefix("stall ").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    assert!((29_000..=31_000).contains(&ms), "{answer:?}");
+    app.step(&mut sim);
+    assert!(app.ride.timer_s().abs_diff(t + 30) <= 1, "timer {} after {t}", app.ride.timer_s());
+    pc.got.clear();
+    assert_eq!(s.feed(b"bench step 2\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert_eq!(pc.got, b"err ride open\n");
+}

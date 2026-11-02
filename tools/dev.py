@@ -25,6 +25,8 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py stackfault               run the stack past its canary on purpose (no ride open): the unit must reset
                                   with the fault marker (peek 0x580040c4 reads 0xfa0000nn within a minute)
+  dev.py stall S                  sleep the loop S seconds (1..600) in one go, a ride may be open: the recorder sees a gap
+                                  in RTC seconds (src/link/dev.rs `bench stall`)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
 import argparse, os, re, struct, sys, time, zlib
@@ -454,6 +456,9 @@ def main():
     p = sub.add_parser('stepbench', help='run App::step N times back to back (2..16, default 8) and print each in us and the '
                        'first-to-rest ratio: a ratio well over 1 means the pass is code fetch')
     p.add_argument('n', nargs='?', type=int, default=8)
+    p = sub.add_parser('stall', help='sleep the unit\'s main loop S seconds (1..600) in one go, a ride may be open: '
+                       'the recorder must take the gap on its RTC seconds')
+    p.add_argument('seconds', type=int)
     sub.add_parser('nrfoff', help='switch the radio chip off as the switch-off does, unit kept up: the path taken (seen0 / '
                    'seen1 / held), the time, the chip\'s RTS (our CTS, PD3) 10 ms, 100 ms, 1 s after; then the radio restarts')
     p = sub.add_parser('mapbench', help='time the basemap of the full-page map at the unit\'s position: mapbench LEVEL '
@@ -553,6 +558,14 @@ def main():
                 print(f'{len(data)} bytes -> {a.o}')
             elif a.cmd == 'stepbench':
                 print(command(s, f'bench step {a.n}'))
+            elif a.cmd == 'stall':
+                if not 1 <= a.seconds <= 600:
+                    sys.exit('dev.py: stall S: S is 1..600')
+                s.timeout = a.seconds + 10  # the answer comes after the sleep
+                r = command(s, f'bench stall {a.seconds}')
+                if not r.startswith('stall '):
+                    sys.exit(r)
+                print(f'stalled {int(r.split()[1]) / 1000:.2f} s (asked {a.seconds} s)')
             elif a.cmd == 'nrfoff':
                 r = command(s, 'bench nrfoff').split()
                 if r[0] != 'nrfoff':
