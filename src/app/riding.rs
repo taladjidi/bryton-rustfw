@@ -4,8 +4,15 @@
 
 use crate::*;
 
-/// The ride catches up at most this many seconds after a long pass ([`App::step`]).
-pub const MAX_CATCH_UP: u8 = 10;
+/// The seconds before a pass, up to this many, that a long pass (a stall) ticks one by one with the pass's readings
+/// (app/pass.rs); the older ones of a longer stall go on the timer at once, without records. 5: the FIT writer's
+/// distance takes at most 5 s between two records (fit.rs `record`).
+pub const REPEAT_S: u8 = 5;
+
+/// A step of the RTC forward by more than this is a clock step, not a stall: one second counted, as for a step back.
+/// No stall of a running unit lasts an hour (the review of 2026-11-02), and a ride left stopped longer is not
+/// resumed either (`recorder::RESUME_S`, the same hour).
+pub const CLOCK_STEP_S: u32 = 3600;
 
 impl App {
     /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.

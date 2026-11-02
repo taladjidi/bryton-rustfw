@@ -1107,6 +1107,7 @@ impl App {
         if let Some(t) = set {
             let (tr, dr) = rtc_words(t);
             b.rtc_set(tr, dr);
+            self.rec.counted_s = rtc_epoch_s(b); // a set, not seconds gone (app/pass.rs)
         }
         if let Some(offset) = local.and_then(ph::local_offset)
             && self.gps.aid.offset_15min != Some(offset)

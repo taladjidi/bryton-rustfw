@@ -4,16 +4,33 @@
 use crate::*;
 
 impl App {
-    /// The RTC's seconds went on to `sec`: every second gone, not one a pass, so a pass that took longer (an eMMC or
-    /// radio wait) loses no ride time.
+    /// The RTC went on (to `sec` in its minute, [`App::rtc_s`] in all): every second gone counts, however long the
+    /// pass (an eMMC or radio wait, a stall), so no ride time is lost (the owner, 2026-11-02: no cap). The last
+    /// [`REPEAT_S`] are ticked one by one with the pass's readings, as before; the older ones of a longer stall go on
+    /// the timer at once ([`ride::Ride::gap_seconds`], as the ride was moving or not before the stall), with no
+    /// records: the file's times jump over them (a reader takes records at any interval). A clock set is no second
+    /// gone: its setter moves `counted_s` with it ([`App::phone_time`], the only one); a step back, or forward by
+    /// more than [`CLOCK_STEP_S`], counts one.
+    ///
+    /// What follows from the seconds put on the timer at once: the eat and drink reminders crossed are said
+    /// (`alerts::Alerts::second`); a workout's step clock and the ramp test follow ridden seconds only, so a stall does
+    /// not move them on; a stall longer than a time auto-lap makes one long lap; the FIT file holds up to 4 s x the
+    /// speed more distance than the screen for each stall over [`REPEAT_S`] (the writer's 5 s cap on the time between
+    /// two records, against the 5 s ticked), accepted.
     pub(crate) fn catch_up_seconds(&mut self, sec: u8) {
-        if sec != self.seconds {
-            // more than MAX_CATCH_UP is the clock set, not riding
-            let gone = (sec + 60 - self.seconds) % 60;
+        if self.rtc_s != self.rec.counted_s {
+            let gone = self.rtc_s.saturating_sub(self.rec.counted_s);
+            let gone = if (1..=i64::from(CLOCK_STEP_S)).contains(&gone) { gone as u32 } else { 1 };
+            self.rec.counted_s = self.rtc_s;
             self.value_due = true; // the pages show this second's readings
             self.seconds = sec; // the time the recorder reads goes with the minute already read
+            let n = u8::try_from(gone).unwrap_or(REPEAT_S).min(REPEAT_S);
+            if gone > u32::from(n) {
+                self.ride.gap_seconds(gone - u32::from(n));
+                self.rec.clean.checkpoint_soon(); // the timer's new seconds on the card now, not a minute of records on
+                self.rec.full.checkpoint_soon();
+            }
             // each with its own time for the recorder: the first was `n - 1` seconds ago (the second review, R5)
-            let n = gone.clamp(1, MAX_CATCH_UP);
             for k in 0..n {
                 self.rec.lag_s = n - 1 - k;
                 self.second();

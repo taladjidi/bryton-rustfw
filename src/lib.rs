@@ -320,6 +320,8 @@ pub struct App {
     hint_shown: bool,
     /// Today as shown (the RTC, moved by TIME ZONE: app/clock.rs [`App::show_clock`]), for the overview.
     date: (u16, u8, u8),
+    /// The RTC as last read, seconds since 1970 ([`App::show_clock`]): what the ride's seconds are counted from.
+    rtc_s: i64,
     /// The shown clock minus the RTC, seconds (0 under TIME ZONE CLOCK or before an offset from UTC is learnt).
     clock_delta_s: i32,
     /// What the shown clock was last worked out from (RTC words, zone, summer-time rule, learnt offset): `read_clock`.
@@ -542,6 +544,7 @@ impl App {
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
             clock_key: None,
+            rtc_s: rtc_epoch_s(b),
             clock_delta_s: 0, // the registers hold no TIME ZONE: CLOCK until the settings file is read
             sun: None,
             heading: None,
@@ -578,7 +581,7 @@ impl App {
             trash_tried: false,
             plan: Plan::new(),
             ramp: RampState::default(),
-            rec: Recording::new(),
+            rec: Recording::new(rtc_epoch_s(b)),
             card_writable: false,
             courses: None,
             pois: None,
@@ -683,8 +686,8 @@ impl App {
         // a pass longer than MAX_PASS_MS (a save, a fresh card's start, a card stall) counts MAX_PASS_MS: one huge dt
         // would fire every timer at once. The excess is a debt (capped at a minute), repaid at most the pass's own
         // length per pass, so the clock runs at most twice real speed after a stall and time-outs (a banner) do not
-        // vanish. The ride's seconds come from the RTC (`catch_up_seconds`: a stall over MAX_CATCH_UP loses the
-        // seconds beyond it); this clock drives the time-outs and the cadences counted in ms.
+        // vanish. The ride's seconds come from the RTC (`catch_up_seconds`: every second of a stall, over passes); this
+        // clock drives the time-outs and the cadences counted in ms.
         let own_ms = sleep_ms.saturating_add(work_us / 1000);
         let debt_ms = self.debt_ms;
         let pass_ms = if own_ms > MAX_PASS_MS {

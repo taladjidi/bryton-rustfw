@@ -451,6 +451,18 @@ fn the_operations(s: Setting) -> Vec<Row1> {
     assert!(r.sim.paid_ns[5] - r.paid0[5] >= r.sim.cost.stall_ms * 1_000_000, "the stall fired inside a checkpoint");
     rows.push(r.done("checkpoint, card stall"));
 
+    // the pass after a 10 min stall: its last 5 s ticked, the rest on the timer at once, a checkpoint asked for. Only
+    // the RTC moves on (the stall's own gaps are other rows'): the cost of the catch-up alone
+    let mut r = Rig::new(card(), s);
+    r.start_ride("first ride on a fresh card");
+    r.run(70_000);
+    r.reset();
+    let elapsed = r.app.ride.elapsed_s();
+    r.sim.start_s += 600;
+    r.pass();
+    assert!(r.app.ride.elapsed_s() >= elapsed + 600, "the stall counted");
+    rows.push(r.done("catch-up of a 10 min stall"));
+
     rows.extend(three_hours(s));
     rows
 }

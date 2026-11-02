@@ -18,13 +18,18 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **Every second of a stall is on the timer (2026-11-02, no cap; 10 s before):** the ride's seconds are counted from
+  the RTC (`catch_up_seconds`); the last `REPEAT_S` (5) of a stall are ticked with the pass's readings, as before,
+  the older ones go on the timer at once (as the ride was moving or auto-paused before it) with no records, the file's
+  times jumping over them (Garmin's SDK and fitdecode read it; the session's elapsed and timer times include the
+  stall), and a checkpoint follows at once. A step of the RTC forward by over an hour (`CLOCK_STEP_S`) or back counts
+  one second; the phone's set (the only RTC setter, refused during a ride) moves the count with it; the GPS never sets
+  the RTC. Seen in the simulator (`a_stall_of_10_min_is_all_on_the_timer`, the budget row "catch-up of a 10 min
+  stall"); not yet on the unit.
+
 - **`ant events lost` in `dev.py info`** (2026-11-02, EVENT_QUE_OVERFLOW 0x35): that the real SoftDevice sends it, in a
   44-byte ANT event with the code at byte 42 (the layout is inferred from the other events), and that the count stays
   0 in a ride with the owner's sensors.
-
-- **A stall over MAX_CATCH_UP (10 s) loses the seconds beyond it from the ride record** (older behaviour, found
-  2026-11-02): the ride's seconds come from the RTC through `catch_up_seconds`, at most `MAX_CATCH_UP` a pass. The
-  checkpoint cadence is on the recorded seconds too (recorder `CHECKPOINT_S`), not on the app clock.
 
 - **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel
   DMA, `delay_ms`) now count in `up_ms` and the uptime (time-outs, cadences counted in ms). Silent check: read

@@ -256,6 +256,15 @@ impl Ride {
         })
     }
 
+    /// `n` seconds of a stall at once, without readings (app/pass.rs): the elapsed time, and the timer if the ride was
+    /// moving before it (auto-paused: not). The totals and averages stay as they were. Running only.
+    pub fn gap_seconds(&mut self, n: u32) {
+        if self.state == State::Running {
+            self.elapsed_s = self.elapsed_s.saturating_add(n);
+            self.timer_s = self.timer_s.saturating_add(if self.moving { n } else { 0 });
+        }
+    }
+
     /// One second: the timer and the totals move if the ride runs and is moving. [`Event::Second`] while running.
     pub fn second(&mut self, i: &Input) -> Option<Event> {
         if self.state != State::Idle && i.alt_corr_mm != 0 {

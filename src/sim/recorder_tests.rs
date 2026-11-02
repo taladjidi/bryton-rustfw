@@ -1467,3 +1467,236 @@ fn a_pending_import_gives_way_to_the_settings_file() {
     assert!(!app.settings_store.import_pending, "given up");
     assert!(app.settings_store.file.loaded, "the settings file read");
 }
+
+/// Passes of `stride` ms for `ms`, the sensors reading `speed_x10` and `power` (None: the meter silent) before each.
+fn ride_passes(sim: &mut Sim, app: &mut App, ms: u64, stride: u32, speed_x10: u16, power: Option<u16>) {
+    let end = sim.ms + ms;
+    while sim.ms < end {
+        app.live.set(Metric::Speed, speed_x10);
+        match power {
+            Some(p) => app.live.set(Metric::Power, p),
+            None => app.live.clear(Metric::Power),
+        }
+        app.step(sim);
+        sim.sleep_ms(stride);
+    }
+}
+
+/// A ride of 70 s at 30 km/h and 200 W (its last 5 s at `speed_x10`; 0: stopped, the meter silent), then `stall_s`
+/// without a pass (a loop held by a card or a radio that does not answer): the sim, the app, the timer before the
+/// stall and the ride's name.
+fn ride_then_stall(stall_s: u32, speed_x10: u16) -> (Sim, App, u32, [u8; 12]) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out"); // the test holds the loop on purpose: the receiver's stream stops
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 65_000, POLL_MS, 300, Some(200));
+    ride_passes(&mut sim, &mut app, 5000, POLL_MS, speed_x10, (speed_x10 > 0).then_some(200));
+    let (t, name) = (app.ride.timer_s(), app.rec.clean.name());
+    sim.delay_ms(stall_s * 1000);
+    (sim, app, t, name)
+}
+
+/// The saved file's records' times (the full copy's the same), its session's total elapsed and timer times (s) and
+/// average power.
+fn saved_ride(sim: &Sim, name: [u8; 12]) -> (Vec<u32>, u64, u64, Option<u64>) {
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    let times = record_times(&sim.emmc.image, &path);
+    assert_eq!(record_times(&sim.emmc.image, &std::format!("Rustfw/{path}")), times, "the full copy");
+    let m = crate::fit::tests::decode(&ride_file(sim, "Activities", name).unwrap()).unwrap();
+    let session = m.iter().find(|x| x.0 == 18).unwrap();
+    let f = |n| crate::fit::tests::field(session, n);
+    (times, f(7).unwrap() / 1000, f(8).unwrap() / 1000, f(20))
+}
+
+/// The owner, 2026-11-02: no cap on a stall's seconds (10 s before). Riding, a stall of `stall_s`: every second of it
+/// on the timer; records for the seconds read (the last 5 of the stall repeat the pass's readings, as before), the
+/// times jumping over the rest; the session's timer is the screen's, the average power unchanged; nothing dropped.
+fn every_second_of_a_stall_is_on_the_timer(stall_s: u32) {
+    let (mut sim, mut app, t, name) = ride_then_stall(stall_s, 300);
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 300, Some(200));
+    let timer = app.ride.timer_s();
+    assert!(timer.abs_diff(t + stall_s + 20) <= 1, "timer {timer}: {t} before, {stall_s} s of stall, 20 s after");
+    assert_eq!(app.ride.avg_power(), Some(200));
+    let (_, now) = app.rec_time();
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0));
+    let (times, elapsed, timer_s, power) = saved_ride(&sim, name);
+    assert!(times.windows(2).all(|p| p[1] > p[0]), "later each");
+    assert_eq!(times.last().copied(), Some(now), "the last record at the clock's time");
+    let jumps: Vec<u32> = times.windows(2).map(|p| p[1] - p[0]).filter(|&d| d > 1).collect();
+    let skipped = stall_s.saturating_sub(5);
+    assert_eq!(jumps, if skipped > 0 { std::vec![skipped + 1] } else { std::vec![] }, "one jump over the stall");
+    assert!(times.len().abs_diff((timer - skipped) as usize) <= 1, "{} records, timer {timer}", times.len());
+    assert!(timer_s.abs_diff(u64::from(timer)) <= 1 && elapsed == timer_s, "session {elapsed} / {timer_s} s, {timer}");
+    assert_eq!(power, Some(200));
+}
+
+#[test]
+fn a_stall_of_30_s_is_all_on_the_timer() {
+    every_second_of_a_stall_is_on_the_timer(30);
+}
+
+#[test]
+fn a_stall_of_10_min_is_all_on_the_timer() {
+    every_second_of_a_stall_is_on_the_timer(600);
+}
+
+/// A stall of 3 s (under 5): every second repeated as before, no jump in the record times.
+#[test]
+fn a_stall_of_3_s_repeats_the_readings() {
+    every_second_of_a_stall_is_on_the_timer(3);
+}
+
+/// Auto-paused (stopped) when the loop stalls: the stall adds nothing to the timer, as a stop does not.
+#[test]
+fn a_stall_while_auto_paused_adds_nothing() {
+    let (mut sim, mut app, t, _) = ride_then_stall(600, 0);
+    assert!(!app.ride.moving());
+    ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 0, None);
+    assert_eq!(app.ride.timer_s(), t);
+    assert_eq!(app.ride.avg_power(), Some(200));
+}
+
+/// A card that fails during a 10 min stall and for 5 s after it: the stall's seconds go on the timer, the few
+/// records read wait in the buffer, none is dropped, and they are on the card once it answers.
+#[test]
+fn a_card_failing_during_and_after_a_stall_drops_nothing() {
+    let (mut sim, mut app, t, name) = ride_then_stall(0, 300);
+    sim.emmc.bad = std::vec![0..u32::MAX];
+    sim.delay_ms(600_000);
+    ride_passes(&mut sim, &mut app, 5000, POLL_MS, 300, Some(200));
+    sim.emmc.bad.clear();
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 300, Some(200));
+    assert!(app.ride.timer_s().abs_diff(t + 625) <= 1, "timer {}", app.ride.timer_s());
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0));
+    let (times, ..) = saved_ride(&sim, name);
+    assert!(times.windows(2).all(|p| p[1] > p[0]));
+}
+
+/// A ride ended right after a 10 min stall, by Start then the end screen (keys) or by END RIDE (the ride menu):
+/// the saved session's timer has the stall.
+#[test]
+fn a_ride_ended_after_a_stall_keeps_it() {
+    for menu in [false, true] {
+        let (mut sim, mut app, t, name) = ride_then_stall(600, 300);
+        app.step(&mut sim);
+        let timer = app.ride.timer_s();
+        assert!(timer >= t + 600, "{menu}: timer {timer}");
+        if menu {
+            app.press(&mut sim, Press::Long(Key::Page));
+            super::menu_tests::to_row(&mut sim, &mut app, crate::menu::Row::Ride(crate::menu::RideRow::End));
+            app.press(&mut sim, Press::Short(Key::Start));
+            app.press(&mut sim, Press::Short(Key::Start)); // SAVE, selected
+        } else {
+            app.press(&mut sim, Press::Short(Key::Start));
+            save_ride(&mut sim, &mut app);
+        }
+        run(&mut sim, &mut app, 3000);
+        assert_eq!(app.ride.state(), ride::State::Idle, "{menu}: saved");
+        let (_, _, timer_s, _) = saved_ride(&sim, name);
+        assert!(timer_s.abs_diff(u64::from(timer)) <= 1, "{menu}: session {timer_s} s, timer {timer}");
+    }
+}
+
+/// The RTC stepping forward by more than an hour mid-ride (no setter of this firmware does it, the dev link's poke
+/// could) is a clock step, not a stall: one second counted, as for a step back.
+#[test]
+fn a_clock_step_counts_one_second() {
+    for step in [2 * 3600i64, -600] {
+        let (mut sim, mut app, t, _) = ride_then_stall(0, 300);
+        sim.start_s = (sim.start_s as i64 + step) as u64;
+        ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 300, Some(200));
+        assert!(app.ride.timer_s().abs_diff(t + 10) <= 1, "{step}: timer {} from {t}", app.ride.timer_s());
+    }
+}
+
+/// A reset with the RTC days ahead (a clock set while the unit was off): the ride resumes at its last checkpoint, and
+/// the jump adds nothing to it while it stays paused.
+#[test]
+fn a_clock_step_across_a_reboot_resumes_at_the_checkpoint() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 150_000);
+    let timer = app.ride.timer_s();
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.start_s += 3 * 86400;
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    let back = app.ride.timer_s();
+    assert!(back <= timer && back + 60 >= timer, "timer {back} of {timer}");
+    run(&mut sim2, &mut app, 30_000);
+    assert_eq!(app.ride.timer_s(), back, "paused: the jump is not ridden");
+}
+
+/// The phone sets the RTC (the only setter: refused during a ride) 3 h forward, then 5 min back: the seconds the jump
+/// skips or repeats are not the ride's, so a ride started right after counts only its own.
+#[test]
+fn a_phone_time_set_is_not_caught_up() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    for (h, m) in [(12, 0), (11, 55)] {
+        let time = [0xea, 0x07, 10, 23, h, m, 0, 5, 0, 1]; // Current Time: 2026-10-23 h:m:00
+        app.phone_time(&mut sim, Some(&time), None);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 10_000);
+        let timer = app.ride.timer_s();
+        assert!(timer.abs_diff(10) <= 1, "{h}:{m}: timer {timer} after 10 s");
+        app.press(&mut sim, Press::Short(Key::Start));
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 3000);
+    }
+    assert_eq!(sim.rtc_sets, 2);
+}
+
+/// A power cut during the passes after a 10 min stall (at every sector they write, torn): the stall's seconds are on
+/// the card from the checkpoint its first pass asks for (`checkpoint_soon`); a cut in that one loses the stall and
+/// what came before it since the last checkpoint (the chunk the stall was), a later one at most the last minute; the
+/// ride resumes, the volume clean.
+#[test]
+fn a_cut_after_a_stall_resumes_at_the_last_checkpoint() {
+    let setup = || {
+        let (mut sim, app, t, _) = ride_then_stall(600, 300);
+        sim.emmc.tear = true;
+        let base = sim.emmc.sectors_written;
+        (sim, app, base, t)
+    };
+    let (mut sim, mut app, base, _) = setup();
+    app.step(&mut sim);
+    let first = sim.emmc.sectors_written - base;
+    assert!(first > 0, "the stall's checkpoint in its first pass");
+    run(&mut sim, &mut app, 65_000); // and the next one
+    let total = sim.emmc.sectors_written - base;
+    for cut in 0..total {
+        let (mut sim, mut app, base, t) = setup();
+        sim.emmc.cut_after = Some(base + cut);
+        let mut timer = app.ride.timer_s();
+        while !sim.emmc.dead {
+            app.step(&mut sim);
+            sim.sleep_ms(POLL_MS);
+            timer = app.ride.timer_s();
+        }
+        let (mut sim, mut app) = reboot(&mut sim, 20);
+        run(&mut sim, &mut app, 1000);
+        assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "cut {cut}: {}", app.notes.list[0].as_str());
+        let back = app.ride.timer_s();
+        let lost_from = if cut < first { t } else { timer };
+        assert!(back <= timer && back + 60 >= lost_from, "cut {cut}: timer {back} of {timer} ({t} before the stall)");
+        crate::fat::write::tests::fsck_torn(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+    }
+}

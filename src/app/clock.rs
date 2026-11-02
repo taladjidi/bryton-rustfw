@@ -118,6 +118,13 @@ pub fn rtc_words((y, mo, d, h, mi, s): (u16, u8, u8, u8, u8, u8)) -> (u32, u32) 
     (tr, bcd((y % 100) as u8) << 16 | weekday << 13 | bcd(mo) << 8 | bcd(d))
 }
 
+/// The RTC's date and time now, as seconds since 1970.
+pub(crate) fn rtc_epoch_s(b: &mut impl Board) -> i64 {
+    let (tr, dr) = b.rtc();
+    let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
+    epoch_s((y, mo, d, h, m, s))
+}
+
 /// The time of day, hours and minutes.
 pub(crate) fn rtc_hm(b: &mut impl Board) -> (u8, u8) {
     let (h, m, _) = rtc_time_from_tr(b.rtc().0);
@@ -228,6 +235,7 @@ impl App {
     pub(crate) fn show_clock(&mut self, rtc: recorder::Local) {
         self.clock_key = None;
         let rtc_s = epoch_s(rtc);
+        self.rtc_s = rtc_s;
         let delta = match (self.settings.zone_min(), self.gps.aid.offset_15min) {
             (Some(zone), Some(o)) => local_time(rtc_s - i64::from(o) * 900, zone, self.settings.dst) - rtc_s,
             _ => 0,
