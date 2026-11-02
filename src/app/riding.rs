@@ -13,15 +13,21 @@ pub const CATCH_UP_PER_PASS: u32 = 30;
 /// left stopped longer is not resumed either (`recorder::RESUME_S`, the same hour).
 pub const CLOCK_STEP_S: u32 = 3600;
 
+/// The seconds of a stall up to this many before the pass repeat its readings, as all did before 2026-11-02; older
+/// ones are gaps without readings. The FIT writer's distance takes at most 5 s between two records (fit.rs `record`).
+pub const REPEAT_S: u32 = 5;
+
 impl App {
     /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.
     pub(crate) fn start_pause(&mut self) {
         if self.emmc.lent() {
             return self.say("USB DRIVE ON"); // no ride while the computer has the card (drive_on refuses the reverse)
         }
+        // seconds still owed (app/pass.rs): before a start or a resume, not the ride's; before a pause or an end, its
+        // gaps, credited at once (no records: a hole in the file, as their gap records would hold nothing)
+        self.ride.gap_seconds(core::mem::take(&mut self.rec.owed_s));
         let ev = self.ride.start_pause();
         if ev == ride::Event::Start {
-            self.rec.owed_s = 0; // seconds still being caught up were before the ride (app/pass.rs)
             // the ride's own track and graphs, from here (the last position kept, so the map is not empty)
             self.ride_started = RideStart::new(self.date, self.strip.time);
             self.history = ride::History::default();
@@ -406,7 +412,7 @@ impl App {
     /// This second's record: the fix, the sensors, the barometer's temperature. A second caught up after a stall
     /// (`lag_s`, app/pass.rs) has none of them: nothing was read then, so its record is a gap, not the last values.
     pub(crate) fn sample(&self, time: u32) -> fit::Sample {
-        let read = self.rec.lag_s == 0;
+        let read = !self.rec.gap;
         let fix = self.gps.pvt.filter(|p| read && p.good());
         let live = |m| self.live.get(m).filter(|_| read);
         let byte = |m| live(m).map(|v| v.min(254) as u8);
@@ -648,16 +654,13 @@ impl App {
         }
     }
 
-    /// A second caught up after a stall (app/pass.rs): no reading was taken then, so only the ride's timer goes on
-    /// (AUTO PAUSE cannot judge a second without speed) and the recorder gets a record without readings; the power
-    /// metrics and curve, the alerts, the workout, the laps, the history and the course are not fed made-up values.
+    /// A second caught up after a stall (app/pass.rs): no reading was taken then, so the ride's timer goes on as it
+    /// was (moving or auto-paused: [`ride::Input::gap`]) and the recorder gets a record without readings; the
+    /// distance, the power metrics and curve, the alerts, the workout, the laps, the history and the course are not
+    /// fed made-up values. The FIT writer adds no distance for it either (no speed), so the screen and the file agree.
     fn gap_second(&mut self) {
-        let input = ride::Input {
-            alt_ref: self.alt_now().1,
-            profile: self.ride_profile(),
-            pause_kmh: 255,
-            ..Default::default()
-        };
+        let input =
+            ride::Input { alt_ref: self.alt_now().1, profile: self.ride_profile(), gap: true, ..Default::default() };
         if let Some(ev) = self.ride.second(&input) {
             self.recorder(ev);
         }
@@ -665,7 +668,7 @@ impl App {
 
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
-        if self.rec.lag_s > 0 {
+        if self.rec.gap {
             return self.gap_second();
         }
         self.alt_second();
@@ -693,6 +696,7 @@ impl App {
                 0 => self.ride_profile().pause_kmh(),
                 k => k,
             },
+            gap: false,
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {

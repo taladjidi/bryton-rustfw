@@ -67,6 +67,9 @@ pub struct Input {
     /// AUTO PAUSE: 0 the profile's own rule, 255 never paused, else the km/h under which the ride is paused
     /// (`settings::AUTO_PAUSE_KMH`).
     pub pause_kmh: u8,
+    /// A second without readings, caught up after a stall (app/pass.rs): the timer goes on if the ride was moving,
+    /// the moving state, the totals and the averages stay as they were.
+    pub gap: bool,
 }
 
 /// Words of [`Ride::to_words`].
@@ -256,6 +259,15 @@ impl Ride {
         })
     }
 
+    /// `n` seconds without readings at once, as [`Input::gap`] ones (the backlog of a stall when the ride pauses or
+    /// ends: app/riding.rs `start_pause`): the elapsed time, and the timer if the ride was moving. Running only.
+    pub fn gap_seconds(&mut self, n: u32) {
+        if self.state == State::Running {
+            self.elapsed_s = self.elapsed_s.saturating_add(n);
+            self.timer_s = self.timer_s.saturating_add(if self.moving { n } else { 0 });
+        }
+    }
+
     /// One second: the timer and the totals move if the ride runs and is moving. [`Event::Second`] while running.
     pub fn second(&mut self, i: &Input) -> Option<Event> {
         if self.state != State::Idle && i.alt_corr_mm != 0 {
@@ -270,6 +282,10 @@ impl Ride {
             return None;
         }
         self.elapsed_s = self.elapsed_s.saturating_add(1);
+        if i.gap {
+            self.timer_s = self.timer_s.saturating_add(u32::from(self.moving));
+            return Some(Event::Second);
+        }
         // ponytail: no speed at all (no sensor, no fix) keeps the timer running; a trainer with power only works
         let under = match i.pause_kmh {
             0 => AUTO_PAUSE_X10,
@@ -1415,6 +1431,7 @@ mod tests {
             alt_corr_mm: 0,
             profile: Profile::Road,
             pause_kmh: 0,
+            gap: false,
         }
     }
 

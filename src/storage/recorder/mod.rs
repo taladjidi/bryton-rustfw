@@ -1025,6 +1025,15 @@ impl Recorder {
         self.discard
     }
 
+    /// The buffer has room for more than the newest seconds (above [`LOW`]), or nothing is recorded: a stall's backlog
+    /// may go in (app/pass.rs). False only while a ride records and a card that cannot be written leaves the buffer
+    /// full: the backlog then waits, the newest seconds use the reserve.
+    pub fn takes_backlog(&self) -> bool {
+        !matches!(self.phase, Phase::Starting | Phase::Recording)
+            || self.ended
+            || self.room() >= LOW + Writer::END_BYTES
+    }
+
     /// The card has work to do ([`Recorder::io`]).
     pub fn due(&self) -> bool {
         (self.want && self.phase != Phase::Done)

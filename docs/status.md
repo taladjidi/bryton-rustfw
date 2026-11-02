@@ -22,10 +22,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   (`catch_up_seconds`), every one gone however long the stall (up to `CLOCK_STEP_S`, an hour: a step forward longer
   than that, or any step back, is a clock step and counts one), `CATCH_UP_PER_PASS` (30) a pass and none past a
   checkpoint due, so a long catch-up runs over passes with a checkpoint each minute of records (recorder
-  `CHECKPOINT_S`); while a checkpoint is due (a failing card) the backlog waits instead of filling the buffer. A clock
+  `CHECKPOINT_S`); while a failing card leaves the buffer at its reserve the backlog waits (the newest second still
+  ticks: distance, auto-pause, laps), and a pause or an end credits it to the timer at once. A clock
   set moves the count's reference where it is made (the phone's, the only RTC setter, refused during a ride); the GPS
-  never sets the RTC (it learns the offset from UTC). The caught-up seconds carry no readings (a gap in the records:
-  the timer runs, nothing else is fed). Seen in the simulator (`a_stall_of_10_min_records_every_second`, the budget row
+  never sets the RTC (it learns the offset from UTC). The last `REPEAT_S` (5) seconds of a stall repeat the pass's readings
+  (as before); older ones are gaps: no readings, a record of FIT invalid values with the definition in use, the timer
+  going on as the ride was (moving or auto-paused), no distance on screen or in the file. Seen in the simulator (`a_stall_of_10_min_records_every_second`, the budget row
   "catch-up of a 10 min stall"); on the unit, the CPU time of 30 seconds ticked in one pass is not measured yet
   (`tools/dev.py prof`, section Second, after a stall).
 

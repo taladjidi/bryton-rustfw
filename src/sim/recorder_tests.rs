@@ -1700,3 +1700,92 @@ fn a_clock_step_across_a_reboot_resumes_at_the_checkpoint() {
     run(&mut sim2, &mut app, 30_000);
     assert_eq!(app.ride.timer_s(), back, "paused: the jump is not ridden");
 }
+
+/// Passes of `stride` ms for `ms`, the sensors reading `speed_x10` and `power` (None: the meter silent) before each.
+fn ride_passes(sim: &mut Sim, app: &mut App, ms: u64, stride: u32, speed_x10: u16, power: Option<u16>) {
+    let end = sim.ms + ms;
+    while sim.ms < end {
+        app.live.set(Metric::Speed, speed_x10);
+        match power {
+            Some(p) => app.live.set(Metric::Power, p),
+            None => app.live.clear(Metric::Power),
+        }
+        app.step(sim);
+        sim.sleep_ms(stride);
+    }
+}
+
+/// An auto-paused stop on a power ride (0 km/h, the meter silent) with 2 s passes (a second repeated each, as
+/// before) and a 10 min stall (gap seconds) in it: the timer, the moving state and the average power stay as they
+/// were, and the average power on the screen is the saved session's.
+#[test]
+fn a_stop_with_long_passes_and_a_stall_keeps_the_timer_and_averages() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out");
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let name = app.rec.clean.name();
+    ride_passes(&mut sim, &mut app, 60_000, POLL_MS, 300, Some(200));
+    ride_passes(&mut sim, &mut app, 2000, POLL_MS, 0, None);
+    let (timer, avg) = (app.ride.timer_s(), app.ride.avg_power());
+    assert!(!app.ride.moving() && avg == Some(200), "auto-paused");
+    ride_passes(&mut sim, &mut app, 30_000, 2000, 0, None);
+    sim.delay_ms(600_000);
+    ride_passes(&mut sim, &mut app, 5000, POLL_MS, 0, None);
+    ride_passes(&mut sim, &mut app, 30_000, 2000, 0, None);
+    assert!(app.rec.owed_s <= 1, "caught up (one may wait behind a checkpoint)");
+    assert!(!app.ride.moving());
+    assert_eq!((app.ride.timer_s(), app.ride.avg_power()), (timer, avg), "the stop adds nothing");
+    ride_passes(&mut sim, &mut app, 60_000, POLL_MS, 300, Some(250));
+    let avg = app.ride.avg_power().unwrap();
+    assert!(avg.abs_diff(225) <= 2, "{avg} W");
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    let f = ride_file(&sim, "Activities", name).unwrap_or_else(|| panic!("{path}"));
+    let m = crate::fit::tests::decode(&f).unwrap();
+    let session = m.iter().find(|x| x.0 == 18).unwrap();
+    assert_eq!(crate::fit::tests::field(session, 20), Some(u64::from(avg)), "the screen's average is the file's");
+}
+
+/// A card that fails for 2 min right after a 10 min stall, the ride going on: distance, auto-pause and laps go on
+/// with the newest seconds; the backlog waits while the buffer is down to its reserve and drains once the card is
+/// back; every second is on the timer.
+#[test]
+fn a_card_failing_for_two_minutes_after_a_stall() {
+    let (mut sim, mut app, t, _) = ride_then_stall(600);
+    sim.emmc.bad = std::vec![0..u32::MAX];
+    let (dist, laps) = (app.ride.dist_m(), app.ride.laps());
+    ride_passes(&mut sim, &mut app, 60_000, POLL_MS, 300, Some(200));
+    assert!(app.ride.dist_m() >= dist + 450, "distance grows: {} m", app.ride.dist_m() - dist);
+    app.lap();
+    assert_eq!(app.ride.laps(), laps + 1, "a lap");
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 0, None);
+    assert!(!app.ride.moving(), "auto-paused");
+    ride_passes(&mut sim, &mut app, 40_000, POLL_MS, 300, Some(200));
+    assert!(app.rec.owed_s > 100, "the backlog waits: {} owed", app.rec.owed_s);
+    sim.emmc.bad.clear();
+    ride_passes(&mut sim, &mut app, 30_000, POLL_MS, 300, Some(200));
+    assert_eq!(app.rec.owed_s, 0, "drained");
+    let timer = app.ride.timer_s();
+    assert!(timer.abs_diff(t + 600 + 130) <= 3, "timer {timer}: {t}, the stall, 130 s moving");
+}
+
+/// The same card never back: the pause credits the backlog to the timer at once, and the save keeps it.
+#[test]
+fn a_card_that_never_comes_back_after_a_stall_keeps_the_timer() {
+    let (mut sim, mut app, t, _) = ride_then_stall(600);
+    sim.emmc.bad = std::vec![0..u32::MAX];
+    ride_passes(&mut sim, &mut app, 60_000, POLL_MS, 300, Some(200));
+    assert!(app.rec.owed_s > 100, "the backlog waits: {} owed", app.rec.owed_s);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    assert_eq!(app.rec.owed_s, 0);
+    let timer = app.ride.timer_s();
+    assert!(timer.abs_diff(t + 660) <= 2, "timer {timer}");
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ride.timer_s(), timer);
+}

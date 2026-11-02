@@ -7,14 +7,20 @@ impl App {
     /// The RTC went on (to `sec` in its minute, [`App::rtc_s`] in all): every second gone is ticked, however long
     /// the pass (an eMMC or radio wait, a stall), so no ride time is lost. A clock set is no second gone: its setter
     /// moves `counted_s` with it ([`App::phone_time`], the only one); a step back, or forward by more than
-    /// [`CLOCK_STEP_S`], of any other cause counts one. The seconds before the last carry no readings (`second`).
+    /// [`CLOCK_STEP_S`], of any other cause counts one.
+    ///
+    /// Which second is what: the first ticked in a pass the RTC moved in, and any of the last [`REPEAT_S`], takes
+    /// the pass's readings (`second`, as before 2026-11-02); an older one of a long stall is a gap (`gap_second`:
+    /// no readings, the timer only, a record of invalid values).
+    ///
     /// Bounded: [`CATCH_UP_PER_PASS`] a pass, and none after one that leaves a checkpoint due (its records written by
     /// this pass's [`App::step_recorder`] before more go into the buffer), so a long catch-up runs over passes. While
-    /// a checkpoint is due at the start of the pass (the card failing, a save) only a new second is ticked: the
-    /// backlog waits in `owed_s`, not in the buffer, where it would be dropped. Seconds still owed at a save or a
-    /// switch-off (about the last second; a whole backlog only right after a long stall) are not drained: lost.
+    /// a recording copy's buffer is down to its reserve (a card that cannot be written: `takes_backlog`) only the
+    /// pass's new second is ticked; the backlog waits in `owed_s` rather than be dropped, and a pause or an end
+    /// credits it to the timer at once (`start_pause`). Seconds still owed at a switch-off (about the last second; a
+    /// backlog only right after a long stall or a long card failure) are not drained: lost.
     pub(crate) fn catch_up_seconds(&mut self, sec: u8) {
-        let mut fresh = 0;
+        let mut fresh = false;
         if self.rtc_s != self.rec.counted_s {
             let gone = self.rtc_s.saturating_sub(self.rec.counted_s);
             let gone = if (1..=i64::from(CLOCK_STEP_S)).contains(&gone) { gone } else { 1 };
@@ -22,19 +28,21 @@ impl App {
             self.rec.counted_s = self.rtc_s;
             self.value_due = true; // the pages show this second's readings
             self.seconds = sec; // the time the recorder reads goes with the minute already read
-            fresh = 1;
+            fresh = true;
         }
-        let held = self.rec.clean.due() || self.rec.full.due();
-        for _ in 0..self.rec.owed_s.min(if held { fresh } else { CATCH_UP_PER_PASS }) {
+        let held = !(self.rec.clean.takes_backlog() && self.rec.full.takes_backlog());
+        let n = if held { u32::from(fresh) } else { CATCH_UP_PER_PASS };
+        for k in 0..self.rec.owed_s.min(n) {
             // each with its own time for the recorder: the ones still owed after it (the second review, R5)
             self.rec.owed_s = self.rec.owed_s.saturating_sub(1);
             self.rec.lag_s = self.rec.owed_s;
+            self.rec.gap = !(fresh && k == 0) && self.rec.lag_s >= REPEAT_S;
             self.second();
             if self.rec.clean.due() || self.rec.full.due() {
                 break;
             }
         }
-        self.rec.lag_s = 0;
+        (self.rec.lag_s, self.rec.gap) = (0, false);
     }
 
     /// The next alert due is said and beeped, unless the banner up is another alert's.

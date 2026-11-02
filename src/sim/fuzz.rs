@@ -7585,13 +7585,14 @@ fn gnss_refusals_at_random() {
 }
 
 /// Random RTC steps during a ride (app/pass.rs `catch_up_seconds`): stalls of seconds to 15 min, steps forward of
-/// hours to days, steps back of up to half an hour, between runs of random length. No panic; no pass ticks more than
-/// `CATCH_UP_PER_PASS`; a step over `CLOCK_STEP_S` counts one second; nothing dropped; the saved file's records later
-/// each. The seeds must reach each kind of step.
+/// hours to days, steps back of up to half an hour, a stall then a card that fails for up to 2 min, between runs of
+/// random length. No panic; no pass ticks more than `CATCH_UP_PER_PASS`; a step over `CLOCK_STEP_S` counts one
+/// second; nothing dropped without a failing card; the saved file's records later each. The seeds must reach each
+/// kind of step, and the hold (a backlog waiting on a full buffer).
 #[test]
 fn rtc_steps_during_a_ride() {
     use crate::{CATCH_UP_PER_PASS, Key, Press};
-    let (mut stalls, mut steps, mut backs) = (0u32, 0u32, 0u32);
+    let (mut stalls, mut steps, mut backs, mut held) = (0u32, 0u32, 0u32, 0u32);
     for seed in 1..=scaled(16) {
         let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9));
         let mut sim = Sim::new(9, 0, 0);
@@ -7601,6 +7602,7 @@ fn rtc_steps_during_a_ride() {
         super::run(&mut sim, &mut app, 1000);
         app.press(&mut sim, Press::Short(Key::Start));
         let name = app.rec.clean.name();
+        let mut failed = false;
         for _ in 0..6 {
             let end = sim.ms + u64::from(next() % 90_000);
             while sim.ms < end {
@@ -7617,7 +7619,22 @@ fn rtc_steps_during_a_ride() {
                 sim.sleep_ms(crate::POLL_MS);
             }
             let t = app.ride.timer_s();
-            match next() % 3 {
+            match next() % 4 {
+                3 => {
+                    sim.delay_ms(60_000 + next() % 600_000);
+                    sim.emmc.bad = std::vec![0..u32::MAX];
+                    let end = sim.ms + u64::from(10_000 + next() % 110_000);
+                    while sim.ms < end {
+                        let rec = &app.rec;
+                        held += u32::from(rec.owed_s > 0 && !(rec.clean.takes_backlog() && rec.full.takes_backlog()));
+                        let t = app.ride.timer_s();
+                        app.step(&mut sim);
+                        assert!(app.ride.timer_s() - t <= CATCH_UP_PER_PASS, "seed {seed}: a pass ticked too many");
+                        sim.sleep_ms(crate::POLL_MS);
+                    }
+                    sim.emmc.bad.clear();
+                    failed = true;
+                }
                 0 => {
                     sim.delay_ms(1000 + next() % 900_000);
                     stalls += 1;
@@ -7637,7 +7654,9 @@ fn rtc_steps_during_a_ride() {
             }
         }
         super::run(&mut sim, &mut app, 30_000);
-        assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0), "seed {seed}");
+        if !failed {
+            assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0), "seed {seed}");
+        }
         app.press(&mut sim, Press::Short(Key::Start));
         super::save_ride(&mut sim, &mut app);
         super::run(&mut sim, &mut app, 3000);
@@ -7646,4 +7665,5 @@ fn rtc_steps_during_a_ride() {
         assert!(times.windows(2).all(|p| p[1] > p[0]), "seed {seed}: later each");
     }
     assert!(stalls >= thr(10) && steps >= thr(10) && backs >= thr(10), "{stalls} stalls, {steps} steps, {backs} back");
+    assert!(held >= thr(100), "{held} passes held");
 }
