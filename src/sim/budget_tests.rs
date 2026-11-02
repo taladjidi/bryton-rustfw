@@ -33,9 +33,9 @@ const QUEUE_MAX: usize = 48;
 const GNSS_GAP_MAX: u64 = 1200;
 /// The key latency limit, ms.
 const KEY_GAP_MAX: u64 = 250;
-/// The length of the 3 h ride filler's passes, ms: a second, as a ride's seconds come (2 s made every other record a gap
-/// without readings, app/pass.rs, each with its own definitions: a 428 KB file for 281 KB).
-const FILL_STRIDE: u32 = 1000;
+/// The length of the 3 h ride filler's passes, ms (the recorder catches up the seconds between: every other record
+/// a gap, app/pass.rs, written with the record definition in use: no bigger a file).
+const FILL_STRIDE: u32 = 2000;
 
 /// A setting of the card's write time.
 #[derive(Clone, Copy)]

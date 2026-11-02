@@ -135,6 +135,7 @@ fn sample(t: u32) -> Sample {
         profile: PROFILE.get().0,
         by_hand: PROFILE.get().1,
         auto_paused: auto_paused(t),
+        gap: false,
     }
 }
 

@@ -174,6 +174,28 @@ pub struct Sample {
     /// Auto-paused this second (the app's `Ride::moving` false): recorded, but left out of the lap's averages, as
     /// the lap banner leaves it out (module doc, "Laps"). False (the default): a moving second.
     pub auto_paused: bool,
+    /// A second caught up after a stall, with no readings (app/pass.rs): written with the record definition in use,
+    /// each reading field at its base type's invalid value ([`invalid`]), so a gap costs no definition and is the
+    /// size of any record; the distance stays the total so far.
+    pub gap: bool,
+}
+
+/// The invalid value of a FIT base type: what a reader takes as "no value" (FIT SDK profile, base types:
+/// github.com/garmin/fit-python-sdk garmin_fit_sdk/fit.py `BASE_TYPE_DEFINITIONS`, `invalid`: sint8 0x7F, uint8 and
+/// enum 0xFF, uint16 0xFFFF, sint32 0x7FFFFFFF, uint32 0xFFFFFFFF).
+///
+/// ```
+/// assert_eq!(bryton_rustfw::fit::invalid(0x85), 0x7fff_ffff); // sint32
+/// assert_eq!(bryton_rustfw::fit::invalid(0x02), 0xff); // uint8
+/// ```
+pub fn invalid(base: u8) -> u32 {
+    match base {
+        S8 => 0x7f,
+        ENUM | U8 => 0xff,
+        U16 => 0xffff,
+        S32 => 0x7fff_ffff,
+        _ => 0xffff_ffff,
+    }
 }
 
 /// One second of the trainer (module doc, "The trainer"): plain values the app took from the trainer's reading.
@@ -743,13 +765,20 @@ impl Writer {
         // altitude: (m + 500) x 5, rounded
         let alt = s.alt_mm.map(|mm| ((i64::from(mm) + 500_100) / 200).clamp(0, 0xfffe) as u32);
         let speed = s.speed_mm_s.map(|v| v.min(0xfffe));
-        let dist = s.speed_mm_s.map(|_| self.dist_mm / 10);
+        let dist = (s.speed_mm_s.is_some() || s.gap).then_some(self.dist_mm / 10);
         let (hr, cad, power) = (s.hr.map(u32::from), s.cadence.map(u32::from), s.power.map(u32::from));
         let temp = s.temp_c.map(|t| u32::from(t as u8));
         let all = [Some(s.time), lat, lon, alt, speed, dist, hr, cad, power, temp];
+        // a gap has the fields defined (the timestamp at least), no more, invalid where it has no value
+        let keep = self.mask | 1;
         let mut mask = 0u16;
         let (mut fields, mut values, mut n) = ([(0, 0, 0); 10], [0u32; 10], 0);
         for (i, (f, v)) in RECORD.iter().zip(all).enumerate() {
+            let v = match (s.gap, keep & 1 << i != 0) {
+                (true, true) => v.or(Some(invalid(f.2))),
+                (true, false) => None,
+                (false, _) => v,
+            };
             if let (Some(v), Some(fs), Some(vs)) = (v, fields.get_mut(n), values.get_mut(n)) {
                 (*fs, *vs) = (*f, v);
                 n += 1;
@@ -757,7 +786,12 @@ impl Writer {
             }
         }
         // the trainer's fields only in a full copy that describes `ArtPct` (they follow it)
-        let trn = s.trainer.filter(|_| self.dev && self.art);
+        // (a gap in a ride that has them keeps them, invalid: no definition for it)
+        let trn = if s.gap && self.trn && self.dev && self.art {
+            Some(TrainerSample::default())
+        } else {
+            s.trainer.filter(|_| self.dev && self.art)
+        };
         if mask != self.mask || trn.is_some() != self.trn {
             self.defined &= !(1 << L_RECORD);
         }
@@ -778,6 +812,7 @@ impl Writer {
             let alpha = s.alpha1_milli.map_or(u32::MAX, |a| (f32::from(a) / 1000.0).to_bits());
             let w = |v: Option<u16>| v.map_or(0xffff, |v| u32::from(v.min(0xfffe)));
             let t = trn.unwrap_or_default();
+            let b = |v: u32| if s.gap { 0xff } else { v };
             let dev = [
                 alpha,
                 s.rmssd_ms.map_or(0xffff, u32::from),
@@ -785,11 +820,11 @@ impl Writer {
                 w(t.target_w),
                 w(t.trainer_w),
                 w(t.meter_w),
-                u32::from(t.fe_state & 7),
-                u32::from(t.status & 0x73),
-                u32::from(t.ble),
-                u32::from(t.cmds & 0xf),
-                u32::from(t.ack_fails.min(0xfe)),
+                b(u32::from(t.fe_state & 7)),
+                b(u32::from(t.status & 0x73)),
+                b(u32::from(t.ble)),
+                b(u32::from(t.cmds & 0xf)),
+                b(u32::from(t.ack_fails.min(0xfe))),
             ];
             let n = if trn.is_some() {
                 DEV_RECORD.len()
@@ -812,6 +847,7 @@ impl Writer {
     /// first time their descriptions and the device (a buffered sink keeps this much more room).
     pub fn trainer_bytes(&self, s: &Sample) -> usize {
         match s.trainer {
+            None if s.gap && self.trn && self.dev && self.art => 3 * 8 + 11, // a gap keeps them (`record`)
             Some(t) if self.dev && self.art => {
                 3 * 8
                     + 11
@@ -1356,6 +1392,7 @@ pub(crate) mod tests {
                 profile: ride::Profile::Road,
                 by_hand: false,
                 auto_paused: false,
+                gap: false,
             })
             .collect()
     }
@@ -1397,6 +1434,57 @@ pub(crate) mod tests {
 
     /// Writes `samples` from `w`, each second's beats after its record (the full copy), a checkpoint every 60 s; the
     /// last record stored whole, None if the sink failed.
+    /// `samples` with the odd seconds of 70..90 and 121..140 (the trainer on) as gaps: seconds caught up after a
+    /// stall (app/pass.rs), no readings, as the app's `sample` makes them.
+    fn gapped(samples: &[Sample]) -> Vec<Sample> {
+        let gap = |t: u32| t % 2 == 1 && ((70..90).contains(&t) || (121..140).contains(&t));
+        let blank = |s: &Sample| Sample {
+            time: s.time,
+            temp_c: s.temp_c,
+            ascent_m: s.ascent_m,
+            gap: true,
+            ..Default::default()
+        };
+        samples.iter().map(|s| if gap(s.time - T0 - 1) { blank(s) } else { *s }).collect()
+    }
+
+    /// A gap costs no definition: the ride with gaps is the size of the ride without (every record the same size),
+    /// clean and full; its gap records read as no value but the distance so far; the session's averages are over the
+    /// other seconds, as for the same seconds missing their readings (which cost definitions).
+    #[test]
+    fn a_gap_is_a_record_of_invalid_values() {
+        let plain = ride(240);
+        let gaps = gapped(&plain);
+        let missing: Vec<Sample> = gaps.iter().map(|s| Sample { gap: false, ..*s }).collect();
+        let file = |samples: &[Sample], dev: bool| {
+            let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
+            let (mut w, _) = start(&mut f, dev).unwrap();
+            write(&mut f, &mut w, samples, &mut rec).unwrap();
+            f
+        };
+        for dev in [false, true] {
+            let (p, g, m) = (file(&plain, dev), file(&gaps, dev), file(&missing, dev));
+            assert_eq!(g.len(), p.len(), "dev {dev}: no definition for a gap");
+            assert!(m.len() > g.len(), "dev {dev}: missing readings cost definitions");
+            let session = |f: &[u8]| tests::decode(f).unwrap().into_iter().find(|x| x.0 == 18).unwrap();
+            for num in [16, 18, 20] {
+                assert_eq!(field(&session(&g), num), field(&session(&m), num), "dev {dev}: avg field {num}");
+            }
+            let mut rd = crate::fitread::Reader::new();
+            let mut seen = 0;
+            rd.push_slice(&g, |msg| {
+                if let crate::fitread::Msg::Record(r) = msg
+                    && gaps.iter().any(|s| s.gap && s.time == r.time)
+                {
+                    assert_eq!((r.hr, r.power, r.pos, r.alt_dm), (None, None, None, None), "{}", r.time);
+                    assert!(r.dist_cm.is_some());
+                    seen += 1;
+                }
+            });
+            assert_eq!(seen, 20, "dev {dev}");
+        }
+    }
+
     fn write(sink: &mut impl Sink, w: &mut Writer, samples: &[Sample], rec: &mut [u8; RECORD_LEN]) -> Option<()> {
         for s in samples {
             w.record(sink, s).ok()?;
@@ -1980,11 +2068,11 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
         let (mut w, _) = Writer::start(&mut f, T0).unwrap();
-        write(&mut f, &mut w, &ride(1200), &mut rec).unwrap();
+        write(&mut f, &mut w, &gapped(&ride(1200)), &mut rec).unwrap();
         std::fs::write(dir.join("sample.fit"), &f).unwrap();
         let mut full = Vec::new();
         let (mut w, _) = start(&mut full, true).unwrap();
-        write(&mut full, &mut w, &ride(1200), &mut rec).unwrap();
+        write(&mut full, &mut w, &gapped(&ride(1200)), &mut rec).unwrap();
         std::fs::write(dir.join("sample_full.fit"), &full).unwrap();
 
         let mut sink = Cut { disk: Vec::new(), budget: f.len() / 2 };
