@@ -394,6 +394,9 @@ pub(crate) struct SettingsStore {
     pub(crate) queued: Option<(u32, u32)>,
     /// Totals of saved rides not yet added to the trips: they wait for the file to be read ([`App::pay_trips`]).
     pub(crate) due: (u32, u32),
+    /// The first start's import of stock's settings waits: the card did not answer then ([`App::first_start`]).
+    /// The file is not read before it (the file wins over it).
+    pub(crate) import_pending: bool,
 }
 
 impl SettingsStore {
@@ -512,7 +515,7 @@ impl App {
     /// changed and no ride is open.
     #[inline(never)]
     pub(crate) fn step_settings(&mut self, b: &mut impl Board) {
-        if self.emmc.lent() {
+        if self.emmc.lent() || !self.first_import(b) {
             return;
         }
         // when pages.bin is read (the card not touched at boot), or at once for a change

@@ -275,32 +275,62 @@ impl App {
     /// At the first start (no backup register holds anything of this firmware's: settings, a paired sensor, a
     /// page), stock's settings are taken as [`App::import_stock`] does from the menu, so the unit starts as stock had
     /// it; the settings are then saved, so this happens once, even when the card has no stock data. Said only when
-    /// something was taken. Never with a ride to resume (its sensors and zones stay). A flat backup battery loses
-    /// this firmware's settings, so the next start is a first start again: stock's are better than the defaults then.
+    /// something was taken. Never with a ride to resume (`ride_open`: the marker said so, or its record was read
+    /// open: its sensors and zones stay). A flat backup battery loses this firmware's settings, so the next start is
+    /// a first start again: stock's are better than the defaults then. A card that does not answer leaves the
+    /// import pending ([`App::first_import`]), not done.
     #[inline(never)] // its card reading in its own frame, not begin's
-    pub(crate) fn first_start(&mut self, b: &mut impl Board) {
+    pub(crate) fn first_start(&mut self, b: &mut impl Board, ride_open: bool) {
         let own = own_registers(b);
         // the registers written below are not the rider's change: settings.bin, if there, still wins over them
         let lost = self.settings_store.lost;
-        if own || self.rec.resume_pending {
+        if own || ride_open {
             if !own {
                 self.save_misc(b); // the ride's settings kept as they are: no import at the next start either
             }
-        } else {
-            self.import_stock(b, true);
+        } else if self.import_stock(b, true) {
             self.save_misc(b);
+        } else {
+            self.settings_store.import_pending = true;
         }
         self.settings_store.lost = lost;
     }
 
-    /// Applies stock's settings ([`stock::Scan::import`]) where this firmware has them, and says how many (`quiet`:
-    /// nothing said when there was nothing).
-    pub(crate) fn import_stock(&mut self, b: &mut impl Board, quiet: bool) {
-        let Ok(i) = self.stock.import(&mut emmc::Volume(&mut self.emmc, b)) else {
-            if !quiet {
-                self.notice("NO STOCK DATA");
+    /// The first start's import left pending ([`App::first_start`]): tried once no resume is pending; dropped if a
+    /// ride came back (its settings stay) or the rider changed a setting meanwhile (the registers his). Whether the
+    /// settings file may be read (not before the import: the file wins over it).
+    pub(crate) fn first_import(&mut self, b: &mut impl Board) -> bool {
+        if !self.settings_store.import_pending {
+            return true;
+        }
+        if self.rec.resume_pending || self.rec.full_pending {
+            return false;
+        }
+        let lost = self.settings_store.lost;
+        if own_registers(b) || self.ride.state() != ride::State::Idle {
+            self.settings_store.import_pending = false;
+            if !own_registers(b) {
+                self.save_misc(b);
             }
-            return;
+        } else if self.import_stock(b, true) {
+            self.settings_store.import_pending = false;
+            self.save_misc(b);
+        }
+        self.settings_store.lost = lost;
+        !self.settings_store.import_pending
+    }
+
+    /// Applies stock's settings ([`stock::Scan::import`]) where this firmware has them, and says how many (`quiet`:
+    /// nothing said when there was nothing). False only when the card did not answer (nothing known of stock's).
+    pub(crate) fn import_stock(&mut self, b: &mut impl Board, quiet: bool) -> bool {
+        let i = match self.stock.import(&mut emmc::Volume(&mut self.emmc, b)) {
+            Ok(i) => i,
+            Err(e) => {
+                if !quiet {
+                    self.notice("NO STOCK DATA");
+                }
+                return e != fat::Error::Io;
+            }
         };
         let mut n = 0;
         let s = &mut self.settings;
@@ -374,11 +404,12 @@ impl App {
             }
         }
         if quiet && n == 0 {
-            return;
+            return true;
         }
         let mut l = Line::<20>::new();
         l.push_str("IMPORTED ");
         l.push_u32(n);
         self.notice(l.as_str());
+        true
     }
 }

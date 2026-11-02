@@ -388,6 +388,31 @@ fn first_start_imports_stock_settings() {
     assert_eq!(app.settings.ftp, crate::ride::FTP, "nothing imported");
 }
 
+/// The first start over stock's volume with a card that does not answer at the boot and does 3 s later: the boot's
+/// look for a ride left by a power loss cannot read the record (unknown: the resume pending, which holds the import,
+/// not "a ride is open"); once the card answers with no ride, stock's settings, sensors and pages are taken as at a
+/// first start with the card up (the review of 16af735, finding 2).
+#[test]
+fn first_start_imports_stock_settings_when_the_card_answers_late() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.dead = true;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 3000);
+    assert!(app.rec.resume_pending, "unknown: pending");
+    sim.emmc.dead = false;
+    run(&mut sim, &mut app, 30_000);
+    assert!(!app.rec.resume_pending && app.ride_settled(), "no ride: settled");
+    assert_eq!((app.settings.ftp, app.settings.max_hr), (265, 188));
+    use crate::ui::Field::*;
+    let p = app.pages();
+    assert_eq!((p[0].cells(), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
+    assert_eq!(sim.backup[Kind::Hr.backup()], crate::nrf::SensorId { device: 1234, trans: 0 }.to_word());
+    assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
+    let app = App::start(&mut sim, None);
+    assert_eq!(app.settings.ftp, 265, "not a first start again");
+}
+
 /// The ride history over the synthetic volume (tools/fat_image.py): HISTORY starts the scan of stock's rides and
 /// lists them newest first as they come; Select opens a ride's card (its track, profile and numbers, read from
 /// its file once), Back returns to the list. Prints what opening a card read.

@@ -1745,8 +1745,14 @@ impl Recorder {
     /// read only: one the boot did not take up (its marker lost alone), which the next Start does; also the boot's
     /// own look after a flat battery (`App::left_by_a_power_loss`). While so, the card is not lent writable: a
     /// computer could free or reuse the chain the record alone may name (the review of 2026-10-29, S3).
-    #[inline(never)]
     pub fn left_open(&mut self, d: &mut impl DiskWrite) -> bool {
+        self.record_open(d).unwrap_or(true) // a card error: what the record says is unknown
+    }
+
+    /// [`Recorder::left_open`] with the unknown said apart: `None` when the card did not answer (the record not
+    /// read), `Some(open)` when it was read or there is none.
+    #[inline(never)]
+    pub fn record_open(&mut self, d: &mut impl DiskWrite) -> Option<bool> {
         let read = |s: &mut Self, d: &mut _| -> Result<bool, Error> {
             let mut fat = Fat::mount(d)?;
             let dir = fat.open(d, DIR)?;
@@ -1754,12 +1760,11 @@ impl Recorder {
             Ok(s.read_records(&mut fat, d)?.is_some_and(|r| r.phase != Phase::Done))
         };
         match read(self, d) {
-            Ok(open) => open,
-            // a card error: what the record says is unknown
-            Err(Error::Io) => true,
+            Ok(open) => Some(open),
+            Err(Error::Io) => None,
             // never recorded here; or a damaged volume, which the recorder cannot use either: the drive lent
             // writable, for a computer to repair it
-            Err(_) => false,
+            Err(_) => Some(false),
         }
     }
 

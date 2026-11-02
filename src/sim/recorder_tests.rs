@@ -401,8 +401,9 @@ fn a_late_card_with_no_ride_settles() {
 /// one. So a cut tears nothing: at every sector of a ride's first 75 s, the reboot finds a clean volume and the
 /// ride at its last checkpoint (the root directory's sector included, which a plain write could lose). With the
 /// card's stalls (emmc_model.rs E1) too: none in these 75 s, 400 ms every 11 sectors (waited out), 1.2 s every 41
-/// (past the driver's bound: `Busy`, the write retried; not 37, which is a ride start's retry exactly: it failed at the
-/// same write every time and the start never got through, a resonance no real card keeps up).
+/// (past the driver's bound: `Busy`, the write retried; every 37: `a_ride_starts_through_stalls_every_37_sectors`). A
+/// write given up after landing may lose a cluster (fat/write.rs, "a write that fails after landing"): counted,
+/// printed, bounded; never a cross-link.
 #[test]
 fn every_write_is_reliable_when_the_card_offers_it() {
     let start = |cut: Option<u64>, (every, ms): (u64, u64)| {
@@ -425,9 +426,11 @@ fn every_write_is_reliable_when_the_card_offers_it() {
             assert!(k > 0 && cmds[k - 1].0 == 23 && cmds[k - 1].1 & 1 << 31 != 0, "CMD25 without a reliable CMD23");
         }
         assert_eq!(app.rec.clean.errors > 0, stall.1 > 1000, "{stall:?}: writes given up past the bound only");
-        // a write given up (`Busy`, its data landed) gives its cluster back or keeps it in the chain (fat/write.rs
-        // `take_free`, `link_taken`): 4 were lost with the 1.2 s stalls before (2026-11-02), none now
-        assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "{stall:?}: clusters leaked by the retries");
+        // clusters lost by the writes given up, never freed while named (no cross-link: fsck passes)
+        let leaked = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("{stall:?}: {e}"));
+        let given = app.rec.clean.errors + app.rec.full.errors; // the two copies' writes given up
+        std::println!("{stall:?}: {} writes given up, {leaked} clusters lost", given);
+        assert!(leaked <= given, "{stall:?}: {leaked} lost, more than one a write given up");
         let total = sim.emmc.sectors_written;
         let (mut resumed, mut first) = (0, None);
         for cut in 0..total {
@@ -445,11 +448,40 @@ fn every_write_is_reliable_when_the_card_offers_it() {
             }
             let lost =
                 crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("{stall:?} cut {cut}: {e}"));
-            assert!(lost <= 2, "{stall:?} cut {cut}: {lost} clusters lost");
+            assert!(lost <= 2 + leaked, "{stall:?} cut {cut}: {lost} clusters lost");
         }
         std::println!("{stall:?}: {total} cuts, {resumed} resumed from cut {first:?}");
         assert!(resumed > 0, "{stall:?}");
     }
+}
+
+/// The card stalls 1.2 s (past the driver's bound: `Busy`) every 37 sectors, a ride start's retry length once the
+/// failed write's cluster was given back (2026-11-02: the same write then failed at every retry and the start never
+/// got through). The retries move on (a cluster lost each, at worst: fat/write.rs), the ride starts, its checkpoints
+/// land and it is saved whole; fsck finds no cross-link.
+#[test]
+fn a_ride_starts_through_stalls_every_37_sectors() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.emmc.rel_param = crate::emmc::EN_REL_WR;
+    (sim.cost.stall_every, sim.cost.stall_ms) = (37, 1200);
+    sim.gnss.expect = Some("stream time-out"); // past the driver's bound the pass holds over 1.5 s
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let name = std::string::String::from(core::str::from_utf8(&app.rec.clean.name()).unwrap());
+    run(&mut sim, &mut app, 180_000);
+    assert!(app.rec.clean.phase() == recorder::Phase::Recording, "started: {:?}", app.rec.clean.phase());
+    let timer = app.ride.timer_s();
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    let times = record_times(&sim.emmc.image, &std::format!("Activities/{name}.fit"));
+    let dropped = app.rec.clean.dropped;
+    assert!(times.len() as u32 + dropped + 2 >= timer, "{} records, {dropped} dropped, of {timer} s", times.len());
+    let lost = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    std::println!("37: {} writes given up, {lost} clusters lost", app.rec.clean.errors);
 }
 
 /// A card without reliable write whose cut leaves the torn sector's first k bytes new and the rest old (the review

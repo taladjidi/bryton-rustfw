@@ -463,16 +463,26 @@ impl App {
 
     /// At a boot without the ride marker: whether the backup domain was reset (none of this firmware's registers
     /// set: a battery run flat clears them with the marker and the RTC, RM0399) and the card's record says a ride is
-    /// left unfinished (or cannot be read). The golden rule's resume on boot then takes the marker's path: the ride
-    /// reopened at the first step, AUTO OFF held meanwhile. One read of each record at such a boot (`left_open`, read
-    /// only), none at any other; before it a ride left this way waited for Start (2026-11-02).
+    /// left unfinished: `Some(true)`; `None` when the card did not answer (unknown: the resume stays pending, as the
+    /// marker's does on a failing card, but stock's settings are still imported once it answers with no ride). The
+    /// golden rule's resume on boot then takes the marker's path: the ride reopened at the first step, AUTO OFF held
+    /// meanwhile. One read of each record at such a boot (`record_open`, read only), none at any other; before it a
+    /// ride left this way waited for Start (2026-11-02).
     #[inline(never)] // its card reading in its own frame, not begin's
-    pub(crate) fn left_by_a_power_loss(&mut self, b: &mut impl Board) -> bool {
+    pub(crate) fn left_by_a_power_loss(&mut self, b: &mut impl Board) -> Option<bool> {
         if own_registers(b) {
-            return false;
+            return Some(false);
         }
-        self.rec.clean.left_open(&mut emmc::Volume(&mut self.emmc, b))
-            || self.rec.full.left_open(&mut emmc::Volume(&mut self.emmc, b))
+        let clean = self.rec.clean.record_open(&mut emmc::Volume(&mut self.emmc, b));
+        if clean == Some(true) {
+            return clean;
+        }
+        let full = self.rec.full.record_open(&mut emmc::Volume(&mut self.emmc, b));
+        match (clean, full) {
+            (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        }
     }
 
     /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the

@@ -959,7 +959,7 @@ impl App {
             }
             Some(Row::Stock(menu::StockRow::Import)) if !self.settings_ready(b) => {}
             Some(Row::Stock(menu::StockRow::Import)) if self.confirmed(menu, sel, "IMPORT SETTINGS") => {
-                self.import_stock(b, false)
+                let _ = self.import_stock(b, false);
             }
             Some(Row::Stock(menu::StockRow::Import)) => {}
             Some(Row::Stock(menu::StockRow::Curve)) => self.open_curve(),
