@@ -8,6 +8,11 @@ use crate::*;
 /// a pass every 50 ms (250 ms idle) a catch-up runs 600 (120) times faster than the clock.
 pub const CATCH_UP_PER_PASS: u32 = 30;
 
+/// A step of the RTC forward by more than this is a clock step, not a stall: one second counted, as for a step back.
+/// No stall of a running unit lasts an hour (the loop has no wait that long; the review of 2026-11-02), and a ride
+/// left stopped longer is not resumed either (`recorder::RESUME_S`, the same hour).
+pub const CLOCK_STEP_S: u32 = 3600;
+
 impl App {
     /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.
     pub(crate) fn start_pause(&mut self) {
@@ -16,6 +21,7 @@ impl App {
         }
         let ev = self.ride.start_pause();
         if ev == ride::Event::Start {
+            self.rec.owed_s = 0; // seconds still being caught up were before the ride (app/pass.rs)
             // the ride's own track and graphs, from here (the last position kept, so the map is not empty)
             self.ride_started = RideStart::new(self.date, self.strip.time);
             self.history = ride::History::default();
@@ -397,26 +403,29 @@ impl App {
         (y, mo, d, h, mi, self.seconds)
     }
 
-    /// This second's record: the fix, the sensors, the barometer's temperature.
+    /// This second's record: the fix, the sensors, the barometer's temperature. A second caught up after a stall
+    /// (`lag_s`, app/pass.rs) has none of them: nothing was read then, so its record is a gap, not the last values.
     pub(crate) fn sample(&self, time: u32) -> fit::Sample {
-        let fix = self.gps.pvt.filter(|p| p.good());
-        let byte = |m| self.live.get(m).map(|v| v.min(254) as u8);
-        let hr = self.live.get(Metric::Hr).is_some();
+        let read = self.rec.lag_s == 0;
+        let fix = self.gps.pvt.filter(|p| read && p.good());
+        let live = |m| self.live.get(m).filter(|_| read);
+        let byte = |m| live(m).map(|v| v.min(254) as u8);
+        let hr = live(Metric::Hr).is_some();
         fit::Sample {
             time,
             pos: fix.map(|p| (p.lat, p.lon)),
-            alt_mm: self.alt_now().0,
-            speed_mm_s: self.live.get(Metric::Speed).map(|v| u32::from(v) * 1000 / 36), // km/h x 10 to mm/s
+            alt_mm: self.alt_now().0.filter(|_| read),
+            speed_mm_s: live(Metric::Speed).map(|v| u32::from(v) * 1000 / 36), // km/h x 10 to mm/s
             hr: byte(Metric::Hr),
             cadence: byte(Metric::Cadence),
-            power: self.live.get(Metric::Power),
+            power: live(Metric::Power),
             temp_c: self.baro.map(|(_, c)| (c / 100).clamp(-100, 100) as i8),
             // the strap's beats: only while it is in (hrv.rs keeps its last values)
             alpha1_milli: self.hrv.alpha1().filter(|_| hr).map(|a| (a * 1000.0 + 0.5).clamp(0.0, 65_534.0) as u16),
             rmssd_ms: self.hrv.rmssd().filter(|_| hr),
             artifacts_pct: self.hrv.artifacts().filter(|_| hr),
             ascent_m: Some(self.ride.ascent_m()),
-            trainer: self.trainer_sample(),
+            trainer: self.trainer_sample().filter(|_| read),
             profile: self.ride_profile(),
             by_hand: self.profile_by_hand,
             auto_paused: !self.ride.moving(), // the lap's averages over the moving seconds, as its banner
@@ -638,8 +647,26 @@ impl App {
         }
     }
 
+    /// A second caught up after a stall (app/pass.rs): no reading was taken then, so only the ride's timer goes on
+    /// (AUTO PAUSE cannot judge a second without speed) and the recorder gets a record without readings; the power
+    /// metrics and curve, the alerts, the workout, the laps, the history and the course are not fed made-up values.
+    fn gap_second(&mut self) {
+        let input = ride::Input {
+            alt_ref: self.alt_now().1,
+            profile: self.ride_profile(),
+            pause_kmh: 255,
+            ..Default::default()
+        };
+        if let Some(ev) = self.ride.second(&input) {
+            self.recorder(ev);
+        }
+    }
+
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
+        if self.rec.lag_s > 0 {
+            return self.gap_second();
+        }
         self.alt_second();
         self.places_second();
         self.profile_second();

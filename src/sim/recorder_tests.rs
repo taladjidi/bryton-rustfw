@@ -1570,7 +1570,9 @@ fn a_gps_time_set_mid_ride_adds_and_loses_no_second() {
     app.learn_aid(&mut sim, p);
     assert_eq!(app.gps.aid.offset_15min, Some(-12));
     run(&mut sim, &mut app, 30_000);
-    let p = fix(&mut sim, 3 * 3600 - 15 * 60); // then back by 15 min
+    // then back by 15 min: the records' FIT times go back too, so the recorder gives them last + 1 (its clamp, older
+    // than this test: synthetic times) until the clock passes the last one again; still one record a second
+    let p = fix(&mut sim, 3 * 3600 - 15 * 60);
     app.learn_aid(&mut sim, p);
     assert_eq!(app.gps.aid.offset_15min, Some(-11));
     run(&mut sim, &mut app, 30_000);
@@ -1605,4 +1607,96 @@ fn a_phone_time_set_is_not_caught_up() {
         run(&mut sim, &mut app, 3000);
     }
     assert_eq!(sim.rtc_sets, 2);
+}
+
+/// A card that fails (every write an error) during the catch-up of a 10 min stall: the seconds still owed wait for it
+/// in `owed_s`, not in the buffer, so none is dropped; once it answers they are recorded, every one.
+#[test]
+fn a_card_failing_during_the_catch_up_drops_nothing() {
+    let (mut sim, mut app, t, name) = ride_then_stall(600);
+    run(&mut sim, &mut app, 100);
+    sim.emmc.bad = std::vec![0..u32::MAX];
+    run(&mut sim, &mut app, 5000);
+    assert!(app.rec.owed_s > 300, "the backlog waits while the card fails: {} owed", app.rec.owed_s);
+    sim.emmc.bad.clear();
+    run(&mut sim, &mut app, 20_000);
+    let timer = app.ride.timer_s();
+    assert!(timer.abs_diff(t + 600 + 25) <= 2, "timer {timer}");
+    assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0));
+    let (_, now) = app.rec_time();
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let times = record_times(&sim.emmc.image, &std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap()));
+    assert!(times.windows(2).all(|p| p[1] == p[0] + 1), "one record a second");
+    assert_eq!(times.last().copied(), Some(now));
+}
+
+/// The seconds of a stall carry no readings (none was taken then): a stall that ends on 800 W at 36 km/h adds no
+/// 5 or 8 min best to the power curve and no 10 min of distance at that speed; the timer counts them all.
+#[test]
+fn a_stall_records_no_readings() {
+    let (mut sim, mut app, t, _) = ride_then_stall(600);
+    app.set_ride_curve(std::boxed::Box::leak(std::boxed::Box::new(crate::power_curve::Rolling::new())));
+    let dist = app.ride.dist_m();
+    app.live.set(Metric::Power, 800);
+    app.live.set(Metric::Speed, 360);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(app.rec.owed_s, 0, "caught up");
+    assert!(app.ride.timer_s() >= t + 600, "the timer counts the stall");
+    let best = app.ride_curve.as_deref().unwrap().best;
+    assert_eq!((best[7], best[8]), (0, 0), "300 s and 480 s bests: {best:?}");
+    assert!(app.ride.dist_m() - dist < 100, "{} m", app.ride.dist_m() - dist);
+}
+
+/// The RTC stepping forward by more than [`crate::CLOCK_STEP_S`] mid-ride (no setter of this firmware does it, the
+/// dev link's poke could) is a clock step, not a stall: one second counted, as for a step back.
+#[test]
+fn a_clock_step_of_hours_counts_one_second() {
+    let (mut sim, mut app, _, _) = ride_then_stall(0);
+    let t = app.ride.timer_s();
+    sim.start_s += 2 * 3600;
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.ride.timer_s().abs_diff(t + 10) <= 1, "timer {} from {t}", app.ride.timer_s());
+}
+
+/// The seconds owed when a ride starts were before it: a 10 min idle stall, then Start at the first pass after it,
+/// counts only the ride's own seconds.
+#[test]
+fn a_ride_started_during_a_catch_up_counts_its_own_seconds() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.expect = Some("stream time-out");
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    sim.delay_ms(600_000);
+    app.step(&mut sim);
+    assert!(app.rec.owed_s > 500);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.ride.timer_s().abs_diff(10) <= 1, "timer {}", app.ride.timer_s());
+}
+
+/// A reset with the RTC days ahead (a clock set while the unit was off): the ride resumes at its last checkpoint, and
+/// the jump adds nothing to it while it stays paused.
+#[test]
+fn a_clock_step_across_a_reboot_resumes_at_the_checkpoint() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 150_000);
+    let timer = app.ride.timer_s();
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.start_s += 3 * 86400;
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    let back = app.ride.timer_s();
+    assert!(back <= timer && back + 60 >= timer, "timer {back} of {timer}");
+    run(&mut sim2, &mut app, 30_000);
+    assert_eq!(app.ride.timer_s(), back, "paused: the jump is not ridden");
 }

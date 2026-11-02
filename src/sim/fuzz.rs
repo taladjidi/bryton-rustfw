@@ -7583,3 +7583,67 @@ fn gnss_refusals_at_random() {
     }
     assert!(taken > 10 && refused >= 4 && given_up >= 2, "{taken} taken, {refused} retried, {given_up} given up");
 }
+
+/// Random RTC steps during a ride (app/pass.rs `catch_up_seconds`): stalls of seconds to 15 min, steps forward of
+/// hours to days, steps back of up to half an hour, between runs of random length. No panic; no pass ticks more than
+/// `CATCH_UP_PER_PASS`; a step over `CLOCK_STEP_S` counts one second; nothing dropped; the saved file's records later
+/// each. The seeds must reach each kind of step.
+#[test]
+fn rtc_steps_during_a_ride() {
+    use crate::{CATCH_UP_PER_PASS, Key, Press};
+    let (mut stalls, mut steps, mut backs) = (0u32, 0u32, 0u32);
+    for seed in 1..=scaled(16) {
+        let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9));
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.expect = Some("stream time-out"); // the stalls hold the loop on purpose
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = crate::App::start(&mut sim, None);
+        super::run(&mut sim, &mut app, 1000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let name = app.rec.clean.name();
+        for _ in 0..6 {
+            let end = sim.ms + u64::from(next() % 90_000);
+            while sim.ms < end {
+                let t = app.ride.timer_s();
+                app.step(&mut sim);
+                assert!(app.ride.timer_s() - t <= CATCH_UP_PER_PASS, "seed {seed}: a pass ticked too many");
+                sim.sleep_ms(crate::POLL_MS);
+            }
+            for _ in 0..200 {
+                if app.rec.owed_s == 0 {
+                    break; // a step after the last stall's catch-up, so its pass ticks the step alone
+                }
+                app.step(&mut sim);
+                sim.sleep_ms(crate::POLL_MS);
+            }
+            let t = app.ride.timer_s();
+            match next() % 3 {
+                0 => {
+                    sim.delay_ms(1000 + next() % 900_000);
+                    stalls += 1;
+                }
+                1 => {
+                    sim.start_s += u64::from(crate::CLOCK_STEP_S + 1 + next() % (3 * 86_400));
+                    app.step(&mut sim);
+                    assert!(app.ride.timer_s() - t <= 1, "seed {seed}: a clock step caught up");
+                    steps += 1;
+                }
+                _ => {
+                    sim.start_s -= u64::from(1 + next() % 1800);
+                    app.step(&mut sim);
+                    assert!(app.ride.timer_s() - t <= 1, "seed {seed}: a step back caught up");
+                    backs += 1;
+                }
+            }
+        }
+        super::run(&mut sim, &mut app, 30_000);
+        assert_eq!((app.rec.clean.dropped, app.rec.full.dropped), (0, 0), "seed {seed}");
+        app.press(&mut sim, Press::Short(Key::Start));
+        super::save_ride(&mut sim, &mut app);
+        super::run(&mut sim, &mut app, 3000);
+        let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+        let times = super::recorder_tests::record_times(&sim.emmc.image, &path);
+        assert!(times.windows(2).all(|p| p[1] > p[0]), "seed {seed}: later each");
+    }
+    assert!(stalls >= thr(10) && steps >= thr(10) && backs >= thr(10), "{stalls} stalls, {steps} steps, {backs} back");
+}
