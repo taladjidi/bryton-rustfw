@@ -88,8 +88,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
   the destination and the arrival time on a course, the unit's and each sensor's battery as fields~~ done, sim (features.md;
   the distance to the destination is the course's distance to go, not a new field);
 - ~~trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; sound on or off;
-  backlight always on (LIGHT OFF NEVER); the auto pause threshold~~ done, sim (features.md "Units, sound, trips"); still open: the
-  12 h time format (the strip's layout, for the owner); key click (the unit's keys have no beep to switch). Done since:
+  backlight always on (LIGHT OFF NEVER); the auto pause threshold~~ done, sim (features.md "Units, sound, trips"); still open: ~~the
+  12 h time format (the strip's layout, for the owner)~~ dropped, 24 h only (owner, 2026-11-02); key click (the unit's keys have no beep to switch). Done since:
   CLIMBS ALL or MEDIUM+ (score 16000, inferred scheme), CLIMB PAGE on or off, DATE FORMAT, ZONE and SUMMER TIME (EU, US;
   the RTC kept, the shown clock converted), sim (features.md "Climbs and dates");
 - ~~the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
@@ -120,7 +120,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: ~~completed climbs listed with their
   times~~ done, sim (features.md, ride menu CLIMBS DONE), ~~detection on or off per profile~~ done (CX and COMMUTE off), ~~descents~~ done, sim (features.md: STEEP DESCENT alert, DESCENT AHEAD field);
 - trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); ~~a virtual course as a workout from the workout list~~ done, sim (features.md, RIDE A COURSE);
-- the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md); a larger ATT MTU is open again (tried 2026-10-31, removed 2026-11-01: suspected of the radio chip's silences on the road ride);
+- the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md); ~~a larger ATT MTU~~ closed, not planned (owner, 2026-11-02: "let's not break something that works"; the MTU stays 23; the gain, fewer packets for long ANCS texts, is small against that risk; tried 2026-10-31, removed 2026-11-01, suspected of the radio chip's silences on the road ride);
 - ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); ~~a battery saver mode~~ done, sim (SYSTEM > BATT SAVER, features.md; per profile and the measured gain are open); ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
   computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); ~~altitude calibration at saved places; favourite places~~ done, sim (PLACES, `\Rustfw\places.bin`,
   features.md; not seen on the unit, status.md); a place named after the nearest named point, routing to a place.
@@ -130,7 +130,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
   e-bikes (ANT+ LEV, Shimano STEPS);
 - BLE sensors as a central: heart rate, speed and cadence, power (sonnet; the Nordic chip's central role);
 - the accelerometer (BOARD.md 16): motion start, then incident detection (critical for the driver);
-- power (phase 2, critical, the owner present): stop mode between seconds, USB high speed for the drive, the
+- power (phase 2, critical, the owner present): stop mode between seconds, ~~USB high speed for the drive~~ (dropped 2026-11-02, see section 2), the
   D-cache on for the SDRAM, the panel's partial and idle modes, charging only in a safe temperature range;
 - routing on the unit: to a pinned point, back to the start, rerouting, round trips (on stock's routing graph,
   which climbs ahead already reads);
@@ -162,12 +162,12 @@ with a fingerprint.
 
 ## 2. Power
 
-- **USB high speed** for the drive: drops during large copies (docs/usb.md); full speed works.
+- ~~**USB high speed** for the drive: drops during large copies (docs/usb.md); full speed works.~~ Dropped, not planned (owner, 2026-11-02): debugged before without a fix; full speed is the setting and stays.
 - **Stop mode** between seconds, woken by the RTC, the keys, the touch interrupt, the radio chip's UART and USB:
   the largest gain left. A core change: with the owner present. The plan and its wake sources: docs/power.md,
   "Stop mode: plan".
 - **Idle loop at 250 ms and AUTO OFF:** done 2026-10-28 (docs/power.md).
-- ~~**The radio chip off for certain at power-off** (System OFF seen, else reset, else held)~~ done 2026-11-02, RAM run (BOARD.md 11, `dev.py nrfoff`); the standby current is owed (status.md).
+- ~~**The radio chip off for certain at power-off** (System OFF seen, else reset, else held)~~ done 2026-11-02, RAM run (BOARD.md 11, `dev.py nrfoff`); the standby current: not planned (owner: needs the unit opened), System OFF confirmed by the chip's lines instead (BOARD.md 11).
 - ~~**The app clock keeps real time** (WFI waits, USB slices, in us)~~ done 2026-11-02: drift 0.003 % over 20 min without the cable, seen on the unit.
 - **SPI by DMA** for the panel: done (2026-10-27, seen from RAM, SPI1 at 50 MHz); the next drawing gain is the D-cache.
 - **D-cache on for the SDRAM** (write-through), after which `+strict-align` can go. Until then, data the firmware
@@ -333,7 +333,7 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
   - the clock and the time zone from the phone's Current Time Service.
   - Next: LE Secure Connections (pairing is legacy Just Works now), a whitelist of the bonded phone (its IRK is
     distributed but not kept). Done in the simulator (2026-10-31): the notification's app shown (ANCS Get App Attributes, cached). A larger ATT MTU (103) was tried and
-    removed on 2026-11-01, suspected of the radio chip's silences on that day's ride; retry only with a way to prove it safe.
+    removed on 2026-11-01, suspected of the radio chip's silences on that day's ride; closed, not planned (owner, 2026-11-02: "let's not break something that works"): the MTU stays 23.
 - With a companion app only: Android notifications and track info, find my phone, live tracking, automatic upload; a
   computer tool over USB can upload rides.
 - The phone app: section 9.
