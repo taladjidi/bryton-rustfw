@@ -109,6 +109,13 @@ impl UsbLink for SimLink {
 }
 
 impl Sim {
+    /// Wall time passes by `ns` (work or waiting).
+    fn advance_ns(&mut self, ns: u64) {
+        self.cost_rem += ns;
+        self.ms += self.cost_rem / 1_000_000;
+        self.cost_rem %= 1_000_000;
+    }
+
     /// The wall clock, ns: the whole ms and the sub-ms rest of the work's cost.
     fn wall_ns(&self) -> u64 {
         self.ms * 1_000_000 + self.cost_rem
@@ -161,9 +168,7 @@ impl LoopBoard for Sim {
     fn touch_edge(&mut self) -> bool {
         let ns = self.main.poll_work_ns;
         self.awake_ns += ns;
-        self.cost_rem += ns;
-        self.ms += self.cost_rem / 1_000_000;
-        self.cost_rem %= 1_000_000;
+        self.advance_ns(ns);
         let int = self.touch_int();
         let edge = int && !self.main.touch_was;
         self.main.touch_was = int;
@@ -181,7 +186,11 @@ impl LoopBoard for Sim {
         for (_, bytes) in self.main.later.extract_if(.., |(t, _)| *t <= now) {
             self.nordic.out.extend(bytes);
         }
-        self.main.bytes_always || self.nordic.has_bytes(now)
+        if self.main.bytes_always {
+            self.advance_ns(300_000); // a byte every 300 us: the time SysTick counts between wakes
+            return true;
+        }
+        self.nordic.has_bytes(now)
     }
     fn sleep(&mut self) {
         let mut step = 1_000_000;

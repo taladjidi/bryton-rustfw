@@ -109,7 +109,7 @@ pub struct Stats {
     /// Share of the last second the CPU ran at all, per mille: the app's work and everything inside the sleep loop
     /// (USB polls, and anything that keeps WFI from sleeping: a stuck interrupt kept it near 820, 2026-10-27).
     pub cpu_permille: u32,
-    /// Since boot, to tell where a clock drift comes from: slices ended early, their summed us, slices that ran out,
+    /// Since boot, to tell where a clock drift comes from: slices ended early, the ms they slept, slices that ran out,
     /// slices a USB command took over, radio passes.
     pub slices: [u32; 5],
 }

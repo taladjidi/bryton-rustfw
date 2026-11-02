@@ -226,7 +226,8 @@ impl<L: UsbLink> MainLoop<L> {
                 }
                 b.sleep();
             };
-            // an early end counts SysTick's us, the sub-ms rest carried (floored to whole ms each, ~0.5 ms was lost per
+            // SysTick keeps counting through WFI (ARMv7-M ARM B3.3), so its count is the wall time of the slice.
+            // An early end counts SysTick's us, the sub-ms rest carried (floored to whole ms each, ~0.5 ms was lost per
             // radio wake: the app clock ran 0.35 % slow, 2026-11-02). A chip sending faster than a byte a ms would keep
             // every slice near 0: the rests add up, and MAX_RADIO_PASSES bounds the pass all the same
             if took_over {

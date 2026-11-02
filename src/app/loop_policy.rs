@@ -168,10 +168,10 @@ impl LoopPolicy {
     /// A slice ended early after `us` of SysTick: whole ms are slept, the rest waits for the next slice.
     pub fn slept_us(&mut self, us: u32) {
         self.stats.slices[0] = self.stats.slices[0].wrapping_add(1);
-        self.stats.slices[1] = self.stats.slices[1].wrapping_add(us);
         let total = us.saturating_add(self.slept_rest_us);
         self.slept_rest_us = total % 1000;
         let ms = total / 1000;
+        self.stats.slices[1] = self.stats.slices[1].wrapping_add(ms); // in ms: us would wrap in 71 minutes
         self.slept += ms;
         self.since_touch = self.since_touch.saturating_add(ms);
     }

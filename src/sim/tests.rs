@@ -2045,11 +2045,10 @@ fn a_chip_that_never_stops_sending_cannot_hold_the_pass() {
     let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
     for _ in 0..3 {
         let up = app.up_ms;
-        // the model's WFI never runs (a byte waits before it): the clock does not move in the sleep
+        // the model's WFI never runs (a byte waits before it): each byte-ended slice counts its 300 us, the rest carried
         assert_eq!(main.pass(&mut app, &mut sim), crate::MAX_RADIO_PASSES);
         let slept = app.prof().clock.sleep.0;
-        assert!(slept <= IDLE_POLL_MS, "slept {slept} ms");
-        sim.awake_ns += 1_000_000; // the unit's SysTick moves between bytes: here 1 ms of work does
+        assert!((1..=IDLE_POLL_MS).contains(&slept), "slept {slept} ms"); // the carried rests add up to whole ms
         main.pass(&mut app, &mut sim);
         assert!(app.up_ms > up, "the next step ran");
     }
