@@ -241,6 +241,14 @@ settings) starts with BRIGHTNESS AUTO and OFF AFTER 30 S; saved settings, or sto
 AUTO OFF (SYSTEM > AUTO OFF: off, or after 5, 10, 30 or 60 min idle) switches the unit off with no ride, cable, drive
 or write waiting and no movement; details: docs/power.md.
 
+Switching off (hold Back 3 s, or AUTO OFF) puts the radio chip in its System OFF (0.3 uA) for certain: the beep and the
+screen go first, then the chip is seen off, else reset and asked again, else held in reset; the power button brings
+the radio back (BOARD.md 11, "Power off"; the standby current is not yet measured, status.md).
+
+A stall of the loop (a long write, a long USB job) does not lose ride time: the ride's seconds are counted from the clock,
+the last 5 seconds of a stall are recorded with the readings, the older ones go on the timer in one step, the file's times
+jump over them, and a checkpoint follows at once (docs/status.md, "Every second of a stall is on the timer").
+
 BATT SAVER (SYSTEM > BATT SAVER: OFF, ON or AUTO; settings file byte 172, one setting for all profiles): ON applies, on top of
 the other settings (it changes none of them, so OFF gives them back exactly), the GPS in cyclic tracking (GPS POWER SAVER's mode) while no ride is running (a running ride, and an MTB ride, keep the rider's GPS POWER: its distance
 comes from the GPS speed), the backlight capped at 30 % with a 10 s time-out at most (never off and 30 / 60 s become 10 s; a running ride keeps its

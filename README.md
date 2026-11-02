@@ -30,14 +30,14 @@ More screens, grouped by menu: [the gallery](docs/gallery.md).
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*
 
-**Status (2026-10-29):** runs on the unit (installed, and newer builds from RAM). An overview and ride pages in several
+**Status (2026-11-02):** runs on the unit (installed, and newer builds from RAM). An overview and ride pages in several
 layouts, a page editor, touch and keys, menus, ANT+ sensors, a power meter's calibration and a smart trainer (ERG, SIM,
 an FTP ramp test), derived power metrics (NP, TSS, W' balance...), heart rate variability (DFA a1, thresholds from
 recent rides) and the beats recorded raw, graphs, GPS with fast aided starts, a track map with a basemap (IGN Plan v2
 packs, else stock's cached tiles), the workouts stock's app synced, courses with climbs, a climb pacer and the climbs
 on the road ahead without a course, with a CLIMB page that opens at a climb's start, the phone as a Bluetooth accessory, a PIXEL or SMOOTH font, and a USB dev link. A settings file and colour themes (DARK, OUTDOOR, LIGHT, or a theme file) on the card, the trainer's ERG target corrected by the power meter (power match), and a profiler over the dev link. Auto power-off after 5 min idle, an MTB profile, and sync to Intervals.icu (docs/sync.md).
 Rides are saved to `\Activities` as stock does (seen on the unit), in two copies, and survive a reset or a power cut. Rides need an `EMMC_WRITE=1` build (docs/install.md).
-The newest features are seen in the simulator only so far (docs/status.md). It shares the storage with Bryton's firmware, so the two can be swapped.
+Since 2026-11-01 the radio, GNSS, touch, keys, panel and card each have a strict model in the simulator, and the radio chip's own app runs in an emulator (docs/devloop.md), so a link bug shows on the Mac first. The newest features are seen in the simulator only so far (docs/status.md). It shares the storage with Bryton's firmware, so the two can be swapped.
 
 ## Key figures
 

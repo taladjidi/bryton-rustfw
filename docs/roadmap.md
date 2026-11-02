@@ -167,6 +167,8 @@ with a fingerprint.
   the largest gain left. A core change: with the owner present. The plan and its wake sources: docs/power.md,
   "Stop mode: plan".
 - **Idle loop at 250 ms and AUTO OFF:** done 2026-10-28 (docs/power.md).
+- ~~**The radio chip off for certain at power-off** (System OFF seen, else reset, else held)~~ done 2026-11-02, RAM run (BOARD.md 11, `dev.py nrfoff`); the standby current is owed (status.md).
+- ~~**The app clock keeps real time** (WFI waits, USB slices, in us)~~ done 2026-11-02: drift 0.003 % over 20 min without the cable, seen on the unit.
 - **SPI by DMA** for the panel: done (2026-10-27, seen from RAM, SPI1 at 50 MHz); the next drawing gain is the D-cache.
 - **D-cache on for the SDRAM** (write-through), after which `+strict-align` can go. Until then, data the firmware
   scans (tiles, tracks, tables) is laid out word-aligned so it is read with 32-bit loads (`LDR`, `LDM`), never
@@ -198,6 +200,8 @@ The golden rule (AGENTS.md) depends on this whole phase.
    with DFA a1 (`Alpha1`) and RMSSD as developer fields for Intervals.icu (docs/sync.md, "Why two files").
    `tools/sync.py` uploads them from the computer and brings the planned workouts back. Next: a run against the
    real services; the phone app (section 9).
+   Done 2026-11-02: a stall of the loop of any length puts every second on the timer (no cap), seen on the unit
+   (`dev.py stall`, status.md); the card model's rules E1 to E6 and the FAT write's policy on a late `Busy`.
 4. ~~Settings file~~ done, see T0 at the top (`\Rustfw\settings.bin`, on the unit; features.md, Settings).
 5. USB mass storage: rides off and courses, workouts and maps on, with no phone app. The recorder and the FAT
    writer stop while the computer owns the volume.
@@ -308,6 +312,11 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
 
 ## 8. Radios and the phone
 
+- ~~**The radio test bench**~~ done 2026-11-01 to 11-02 (docs/devloop.md): the chip's command table, a strict Nordic model
+  (`chip_link.rs`), the chip's real app under Unicorn (`tools/nrf_emu.py`) and Renode (`renode/nrf_run.py`), a stock
+  allowlist, non-blocking chip reset, GNSS reads independent of the radio, ACK/NAK retry, and the time cost model with
+  its budget gate (`budget_tests.rs`). It proved the ride's hang can come from bursts on the old configuration; the
+  production one holds.
 - BLE sensors (heart rate, speed and cadence, power), then ANT+ radar (Varia) and lights.
 - **Shifting and hood buttons** (small, ANT only): Shimano Di2 is not ANT+ but a private ANT channel on its own
   network key (stock: channel 6, device type 1, period 8198, 2457 MHz; the key sits next to the ANT+ key in the stock
