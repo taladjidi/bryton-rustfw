@@ -110,11 +110,11 @@ fn timer_done() -> bool {
     rd(SYST_CSR) & (1 << 16) != 0
 }
 
-/// Milliseconds of a period of `ms` gone so far (SysTick keeps counting through WFI; the DWT cycle counter does not:
+/// Microseconds of a period of `ms` gone so far (SysTick keeps counting through WFI; the DWT cycle counter does not:
 /// the core clock stops in sleep, DBGMCU_CR being 0, seen on the unit 2026-10-23).
-fn timer_elapsed_ms(ms: u32) -> u32 {
+fn timer_elapsed_us(ms: u32) -> u32 {
     let total = ms.min(TIMER_MAX_MS) * (CPU_HZ / 1000);
-    total.saturating_sub(rd(SYST_CVR)) / (CPU_HZ / 1000)
+    total.saturating_sub(rd(SYST_CVR)) / (CPU_HZ / 1_000_000)
 }
 
 fn timer_stop() {
@@ -1746,8 +1746,8 @@ impl bryton_rustfw::LoopBoard for S510 {
     fn timer_done(&mut self) -> bool {
         timer_done()
     }
-    fn timer_elapsed_ms(&mut self, ms: u32) -> u32 {
-        timer_elapsed_ms(ms)
+    fn timer_elapsed_us(&mut self, ms: u32) -> u32 {
+        timer_elapsed_us(ms)
     }
     fn timer_stop(&mut self) {
         timer_stop();

@@ -30,6 +30,11 @@ pub struct LoopModel {
     pub ran: Option<u32>,
     /// The slice timer: started at, ms.
     timer: Option<(u64, u32)>,
+    /// WFI wakes at uneven sub-ms instants (a byte, a key arrive at any time), as on the unit; off: every WFI is 1 ms.
+    pub jitter: bool,
+    /// Each look at the touch line costs this much CPU work, ns (a USB poll's own cycles, which SysTick counts too).
+    pub poll_work_ns: u64,
+    lcg: u32,
     /// The touch INT and the keys at the last look (their edges latch in between, as the EXTI flags do).
     touch_was: bool,
     keys_was: u8,
@@ -103,6 +108,20 @@ impl UsbLink for SimLink {
     }
 }
 
+impl Sim {
+    /// Wall time passes by `ns` (work or waiting).
+    fn advance_ns(&mut self, ns: u64) {
+        self.cost_rem += ns;
+        self.ms += self.cost_rem / 1_000_000;
+        self.cost_rem %= 1_000_000;
+    }
+
+    /// The wall clock, ns: the whole ms and the sub-ms rest of the work's cost.
+    fn wall_ns(&self) -> u64 {
+        self.ms * 1_000_000 + self.cost_rem
+    }
+}
+
 impl LoopBoard for Sim {
     type Link = SimLink;
     fn canary(&mut self) -> u32 {
@@ -134,18 +153,22 @@ impl LoopBoard for Sim {
     }
     fn wake_on_io(&mut self, _: bool, _: bool) {}
     fn timer_start(&mut self, ms: u32) {
-        self.main.timer = Some((self.ms, ms));
+        self.main.timer = Some((self.wall_ns(), ms));
     }
     fn timer_done(&mut self) -> bool {
-        self.main.timer.is_some_and(|(t, n)| self.ms >= t + u64::from(n))
+        self.main.timer.is_some_and(|(t, n)| self.wall_ns() >= t + u64::from(n) * 1_000_000)
     }
-    fn timer_elapsed_ms(&mut self, ms: u32) -> u32 {
-        self.main.timer.map_or(0, |(t, _)| (self.ms - t).min(u64::from(ms)) as u32)
+    fn timer_elapsed_us(&mut self, ms: u32) -> u32 {
+        let wall = self.wall_ns();
+        self.main.timer.map_or(0, |(t, _)| ((wall - t) / 1000).min(u64::from(ms) * 1000) as u32)
     }
     fn timer_stop(&mut self) {
         self.main.timer = None;
     }
     fn touch_edge(&mut self) -> bool {
+        let ns = self.main.poll_work_ns;
+        self.awake_ns += ns;
+        self.advance_ns(ns);
         let int = self.touch_int();
         let edge = int && !self.main.touch_was;
         self.main.touch_was = int;
@@ -163,10 +186,25 @@ impl LoopBoard for Sim {
         for (_, bytes) in self.main.later.extract_if(.., |(t, _)| *t <= now) {
             self.nordic.out.extend(bytes);
         }
-        self.main.bytes_always || self.nordic.has_bytes(now)
+        if self.main.bytes_always {
+            self.advance_ns(300_000); // a byte every 300 us: the time SysTick counts between wakes
+            return true;
+        }
+        self.nordic.has_bytes(now)
     }
     fn sleep(&mut self) {
-        self.sleep_ms(1);
+        let mut step = 1_000_000;
+        if self.main.jitter {
+            self.main.lcg = self.main.lcg.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            step = 150_000 + u64::from(self.main.lcg >> 8) % 850_000;
+        }
+        let wall = self.wall_ns();
+        if let Some((t, n)) = self.main.timer {
+            step = step.min((t + u64::from(n) * 1_000_000).saturating_sub(wall).max(1)); // SysTick ends the WFI on time
+        }
+        let total = self.cost_rem + step;
+        self.cost_rem = total % 1_000_000;
+        self.sleep_ms((total / 1_000_000) as u32);
     }
     fn take_io(&mut self) -> (u32, u32, u32) {
         (0, 0, 0)

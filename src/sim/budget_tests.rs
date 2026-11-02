@@ -712,6 +712,28 @@ fn a_busy_usb_drive_is_not_counted_twice() {
     assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
 }
 
+/// The same with each poll costing CPU cycles (the unit's USB poll: 0.046 % slow, 1200 taken-over slices in 600 s):
+/// a taken-over slice's cycles after its measured length are work, not sleep.
+#[test]
+fn a_busy_usb_drive_polls_cost_cycles_the_clock_counts() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let link = SimLink::default();
+    link.0.borrow_mut().busy_ms = 3;
+    (sim.main.link, sim.main.vbus, sim.main.poll_work_ns) = (Some(link), true, 200_000);
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..50 {
+        main.pass(&mut app, &mut sim);
+    }
+    let now = |app: &App| u64::from(app.up_ms) + u64::from(app.prof.clock.sleep.0);
+    let (up0, real0) = (now(&app), sim.ms);
+    while sim.ms < real0 + 600_000 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (now(&app) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 5000 <= real, "app clock {up} ms against real {real} ms"); // 0.02 %
+}
+
 /// After a 60 s stall the clock catches up at twice real speed at most: a banner (4 s) does not vanish at once.
 #[test]
 fn a_stall_is_repaid_at_most_at_twice_real_speed() {
@@ -733,4 +755,39 @@ fn a_stall_is_repaid_at_most_at_twice_real_speed() {
         real >= u64::from(BANNER_MS - MAX_PASS_MS) / 2 - 100,
         "a {BANNER_MS} ms banner lasted {real} ms of real time"
     );
+}
+
+/// The unit's loop with WFI waking at uneven sub-ms instants (the radio's bytes, touches, keys): the app clock keeps real
+/// time (0.35 % slow on the unit, 2026-11-02: each early slice lost its sub-ms part, and the cycles outside the slices
+/// were counted as in them).
+fn loop_drift(ride: bool) {
+    let (mut sim, mut app) = radio_unit(40, board_wait_us(), crate::fat::tests::image(), true, |sim| {
+        sim.touch.set_finger(|ms| (ms % 9000 < 150).then_some((120, 5)));
+    });
+    sim.main.jitter = true;
+    if ride {
+        app.press(&mut sim, Press::Short(Key::Start));
+    }
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..100 {
+        main.pass(&mut app, &mut sim);
+    }
+    // the pass's sleep is in the clock's next step: counted here, or the lag of one pass shows
+    let now = |app: &App| u64::from(app.up_ms) + u64::from(app.prof.clock.sleep.0);
+    let (up0, real0) = (now(&app), sim.ms);
+    while sim.ms < real0 + 600_000 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (now(&app) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 5000 <= real, "app clock {up} ms against real {real} ms"); // 0.02 %
+}
+
+#[test]
+fn the_idle_loop_keeps_real_time_on_early_wakes() {
+    loop_drift(false);
+}
+
+#[test]
+fn the_ride_loop_keeps_real_time_on_early_wakes() {
+    loop_drift(true);
 }
