@@ -38,8 +38,11 @@ pub const EVT_HVX: u16 = 0x39;
 /// Largest payload kept; a longer one is read through and dropped.
 pub const MAX: usize = 256;
 
-/// How long a command may take before it is given up (stock waits 5 s; replies take a few ms).
-pub const TIMEOUT_MS: u32 = 500;
+/// How long a command may take before it is given up (stock waits 5 s; replies take a few ms). Short on purpose: the
+/// pass that meets a silent chip is blocked this long, and the GNSS read that comes after it (a PVT wait of 800 ms
+/// before, app/gps.rs) must still land inside the receiver's 1.5 s stream time-out, less 300 ms of margin (1.2 s,
+/// sim/budget_tests.rs).
+pub const TIMEOUT_MS: u32 = 250;
 
 /// A length header past this cannot be a frame (a BLE event is at most one ATT packet, about 250 bytes, and a
 /// header): it counts as garbage and is not read through, so a stray byte does not swallow up to 64 KB of real frames.
@@ -81,6 +84,10 @@ pub struct Rx {
     /// A frame went out partly (the chip held CTS for ever): the chip is mis-framed. No frame goes to it until it is
     /// reset ([`Rx::reset`]); the watchdog resets it at once (`app/nrf_watch.rs`).
     pub broken: bool,
+    /// A command timed out in this pass (500 ms of silence): every other command fails at once until [`Rx::reset`] or
+    /// the app clears it at the next pass, so a dead chip costs a pass one time-out, not one per command, and GNSS
+    /// reads (app/gps.rs) are never kept waiting for the radio more than that.
+    pub stalled: bool,
 }
 
 impl Default for Rx {
@@ -108,6 +115,7 @@ impl Rx {
             strikes: 0,
             timeouts: 0,
             broken: false,
+            stalled: false,
         }
     }
 
@@ -123,6 +131,7 @@ impl Rx {
     pub fn reset(&mut self) {
         self.resync();
         (self.kept_n, self.head, self.late, self.broken) = (0, 0, None, false);
+        self.stalled = false;
     }
 
     /// The last packet answered op `answer` (a response's op): true, and the swallow cleared, if that is the late
@@ -281,7 +290,7 @@ pub enum Error {
 /// wait: BLE and ANT events kept, an answer to a call that timed out swallowed (`rx.late`), the rest dropped.
 #[inline(never)] // its 386-byte frame in its own stack frame
 pub fn send(b: &mut impl Board, rx: &mut Rx, payload: &[u8]) -> Result<(), Error> {
-    if rx.broken {
+    if rx.broken || rx.stalled {
         return Err(Error::Timeout);
     }
     let mut frame = [0u8; 2 + MAX_CMD];
@@ -291,6 +300,7 @@ pub fn send(b: &mut impl Board, rx: &mut Rx, payload: &[u8]) -> Result<(), Error
     let all = frame.get(..2 + payload.len()).unwrap_or(&[]);
     put(b, Some(rx), all, TIMEOUT_MS).map_err(|taken| {
         rx.broken |= taken > 0;
+        rx.stalled = true;
         Error::Timeout
     })
 }
@@ -335,7 +345,7 @@ fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u
 /// How long a put has made no progress: time is counted in the 1 ms sleeps taken with nothing moving either way, and
 /// only a sent byte clears it (a flood of the chip's events, a scan's, read while CTS is held is not progress of
 /// ours). Two bounds that no sent byte resets: the bytes read since the last sent one ([`FLOOD_BYTES`]), and the
-/// whole put's time (sleeps and reads at 10 us a byte), twice the idle limit.
+/// whole put's time (sleeps and reads at 10 us a byte), the idle limit.
 #[derive(Default)]
 struct Stall {
     idle_ms: u32,
@@ -356,7 +366,7 @@ impl Stall {
         }
         let us = if idle { 1000 } else { 10 * (took + n) as u32 };
         self.total_us = self.total_us.saturating_add(us);
-        if self.idle_ms >= limit_ms || self.flood >= FLOOD_BYTES || self.total_us >= limit_ms.saturating_mul(2000) {
+        if self.idle_ms >= limit_ms || self.flood >= FLOOD_BYTES || self.total_us >= limit_ms.saturating_mul(1000) {
             Err(())
         } else {
             Ok(idle)
@@ -364,15 +374,15 @@ impl Stall {
     }
 }
 
-/// Bytes read with nothing sent before a put gives up: 64 KB (0.65 s of the chip talking at 1 Mbaud).
-const FLOOD_BYTES: u32 = 0x1_0000;
+/// Bytes read with nothing sent before a put gives up: 16 KB (0.16 s of the chip talking at 1 Mbaud).
+const FLOOD_BYTES: u32 = 0x4000;
 
 /// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of silence, or
 /// 64 KB of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
 fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
     let mut buf = [0; 1];
     let (mut idle_ms, mut bytes) = (0, 0u32);
-    while idle_ms < TIMEOUT_MS && bytes < 0x1_0000 {
+    while idle_ms < TIMEOUT_MS && bytes < FLOOD_BYTES {
         let n = b.nrf_recv(&mut buf);
         bytes += n as u32;
         if n == 0 {
@@ -392,7 +402,7 @@ fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T
 /// and returns their length. Packets that arrive meanwhile are dropped, BLE events but advertising reports kept
 /// ([`Rx::pop`]).
 pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
-    if rx.broken {
+    if rx.broken || rx.stalled {
         return Err(Error::Timeout); // no frame goes to a mis-framed chip; the watchdog resets it (not a time-out)
     }
     // a failed send leaves `rx.late` as the drain left it (an answer swallowed there stays swallowed)
@@ -425,6 +435,7 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
         Err(e) => Err(e), // the chip took no whole command: nothing to wait for
     };
     if r == Err(Error::Timeout) {
+        rx.stalled = true;
         rx.timeouts = rx.timeouts.saturating_add(1);
         if sent.is_ok() {
             rx.late = op.filter(|_| armed.is_none() || late.is_some()); // not after a swallow
@@ -1015,7 +1026,11 @@ mod tests {
         sim.nordic.hung = true;
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "A: silent");
         sim.nordic.unhang();
+        assert!(rx.stalled, "the time-out stalls the rest of the pass");
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: refused at once");
+        rx.stalled = false; // the next pass
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: its answer swallowed");
+        rx.stalled = false;
         assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "C: clean");
     }
 

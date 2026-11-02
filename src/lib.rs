@@ -709,6 +709,7 @@ impl App {
         }
         t = self.timed(b, Sec::Battery, t);
         self.poll_light(b); // timed with the battery: one Light section a pass, the backlight's at the end
+        self.rx.stalled = false; // a time-out costs the pass that met it, no more (nrf::Rx::stalled)
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
@@ -716,6 +717,10 @@ impl App {
         let radio_ms = pass_ms.saturating_sub(core::mem::take(&mut self.watch.ahead_ms));
         self.watch_radio(b, radio_ms);
         t = self.timed(b, Sec::Radio, t);
+        // a radio time-out held the pass: the receiver is read now, not when its wait ends (app/gps.rs)
+        if self.rx.stalled {
+            self.gps.wait = 0;
+        }
         self.poll_gnss(b);
         t = self.timed(b, Sec::Gnss, t);
         // the app's own run time, not the receiver's (switched off on an indoor ride, its clock starts again)

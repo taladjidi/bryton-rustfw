@@ -569,14 +569,13 @@ fn the_fallback_to_the_defaults_keeps_the_boot_time() {
 }
 
 /// Finding 4: a chip that dies after BLE is enabled, at any ANT command of the restart: no pass of the restart goes
-/// past one command time-out (500 ms) by much.
+/// past one command time-out (250 ms) by much.
 #[test]
 fn a_chip_dying_mid_restart_costs_one_time_out_a_pass() {
     use crate::sensors::Kind;
     let mut longest = 0;
     for at in 1..=8 {
         let (mut s, mut app) = riding_app(&[Kind::Hr, Kind::Power, Kind::Cadence]);
-        s.gnss.expect = Some("stream time-out"); // the dead chip's time-outs: 500 ms a command
         s.nordic.die_at_ant = at;
         s.nordic.hung = true;
         for _ in 0..(120_000 / POLL_MS) {
