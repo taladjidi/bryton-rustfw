@@ -88,6 +88,9 @@ pub struct Rx {
     /// a dead chip costs one time-out between two GNSS reads, not one per command. Callers that must not lose
     /// work to a refusal (the restart's stages, the probe) check it first and try again the next pass.
     pub stalled: bool,
+    /// ms slept in puts and waits, always: a command's send and its wait share one [`TIMEOUT_MS`] (`call` reads the
+    /// difference), so a slow send then a silent wait cannot cost twice a time-out between two receiver reads.
+    paused_ms: u32,
 }
 
 impl Default for Rx {
@@ -116,6 +119,7 @@ impl Rx {
             timeouts: 0,
             broken: false,
             stalled: false,
+            paused_ms: 0,
         }
     }
 
@@ -127,11 +131,16 @@ impl Rx {
         (self.strikes, self.timeouts) = (0, 0);
     }
 
+    /// A receiver read was made: the radio budget starts again.
+    pub fn span_end(&mut self) {
+        self.stalled = false;
+    }
+
     /// [`Rx::resync`] after a chip reset: the events kept belong to a link that is gone, too.
     pub fn reset(&mut self) {
         self.resync();
         (self.kept_n, self.head, self.late, self.broken) = (0, 0, None, false);
-        self.stalled = false;
+        self.span_end();
     }
 
     /// The last packet answered op `answer` (a response's op): true, and the swallow cleared, if that is the late
@@ -335,7 +344,12 @@ fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u
             buf.get(..n).unwrap_or(&[]).iter().for_each(|&x| rx_byte(rx, x));
         }
         match stall.note(took, n, limit_ms) {
-            Ok(true) => b.delay_ms(1), // sleep, not spin: the chip needs the host's reads, not its time
+            Ok(true) => {
+                b.delay_ms(1); // sleep, not spin: the chip needs the host's reads, not its time
+                if let Some(rx) = rx.as_deref_mut() {
+                    rx.paused_ms = rx.paused_ms.saturating_add(1);
+                }
+            }
             Ok(false) => {}
             Err(()) => return Err(total - data.len()),
         }
@@ -386,15 +400,16 @@ const FLOOD_BYTES: u32 = 0x8000;
 
 /// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of waiting (the 1 ms pauses summed: a chip that chatters but never answers still times out), or
 /// 64 KB of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
-fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
+fn wait<T>(b: &mut impl Board, rx: &mut Rx, limit_ms: u32, mut f: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
     let mut buf = [0; 1];
     let (mut idle_ms, mut bytes) = (0, 0u32);
-    while idle_ms < TIMEOUT_MS && bytes < FLOOD_BYTES {
+    while idle_ms < limit_ms && bytes < FLOOD_BYTES {
         let n = b.nrf_recv(&mut buf);
         bytes += n as u32;
         if n == 0 {
             b.delay_ms(1);
             idle_ms += 1;
+            rx.paused_ms = rx.paused_ms.saturating_add(1);
         } else if let Some(p) = rx.push(buf[0]) {
             if let Some(t) = f(p) {
                 return Some(t);
@@ -413,6 +428,7 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
         return Err(Error::Timeout); // no frame goes to a mis-framed chip; the watchdog resets it (not a time-out)
     }
     // a failed send leaves `rx.late` as the drain left it (an answer swallowed there stays swallowed)
+    let paused = rx.paused_ms;
     let sent = send(b, rx, payload);
     let op = payload.get(1).copied();
     // a call that timed out may still be answered: that late answer is not this call's (the next channel's open has
@@ -438,7 +454,9 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
         _ => None,
     };
     let r = match sent {
-        Ok(()) => wait(b, rx, response).unwrap_or(Err(Error::Timeout)),
+        Ok(()) => {
+            wait(b, rx, TIMEOUT_MS.saturating_sub(rx.paused_ms - paused), response).unwrap_or(Err(Error::Timeout))
+        }
         Err(e) => Err(e), // the chip took no whole command: nothing to wait for
     };
     if r == Err(Error::Timeout) {
@@ -792,7 +810,7 @@ pub fn ant_ack(b: &mut impl Board, rx: &mut Rx, ch: u8, data: [u8; 8]) -> Result
 pub fn ant_close(b: &mut impl Board, rx: &mut Rx, ch: u8) -> Result<(), Error> {
     call(b, rx, &[ANT_CMD, 0xc5, ch], &mut [])?;
     let closed = |p: &[u8]| (ant_closed(p) == Some(ch)).then_some(());
-    wait(b, rx, closed).ok_or(Error::Timeout)
+    wait(b, rx, TIMEOUT_MS, closed).ok_or(Error::Timeout)
 }
 
 /// The sensor channel `ch` locked onto (`sd_ant_channel_id_get`, op 0xd4, seen on the unit): the reply's outputs
@@ -1035,9 +1053,9 @@ mod tests {
         sim.nordic.unhang();
         assert!(rx.stalled, "the time-out stalls the rest of the pass");
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: refused at once");
-        rx.stalled = false; // the next pass
+        rx.span_end(); // the next span
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: its answer swallowed");
-        rx.stalled = false;
+        rx.span_end();
         assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "C: clean");
     }
 

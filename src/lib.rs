@@ -721,7 +721,7 @@ impl App {
             self.gps.wait = 0;
         }
         self.poll_gnss(b);
-        self.rx.stalled = false; // one time-out between two receiver reads (nrf::Rx::stalled)
+        self.rx.span_end(); // one time-out between two receiver reads (nrf::Rx::stalled)
         t = self.timed(b, Sec::Gnss, t);
         // the app's own run time, not the receiver's (switched off on an indoor ride, its clock starts again)
         if up_before < FAULT_CLEAR_MS && self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {

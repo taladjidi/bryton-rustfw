@@ -16,7 +16,7 @@
 //! Recovery: drain the stream and start reading at a frame boundary, ask again; failing that reset the chip, start
 //! ANT again (keys, channels), reopen every channel that was open, and set the phone link up again (a bonded
 //! phone reconnects by itself). Attempts back off (15 s, doubling to 5 min) and the backoff relaxes after 10 quiet
-//! minutes. The recorder never waits on any of it beyond the commands' own time-outs (500 ms each, one per span between two GNSS reads: `Rx::stalled`): it records from the app's own state, and a pass that took
+//! minutes. The recorder never waits on any of it beyond the commands' own time-outs (500 ms of radio time in all per span between two GNSS reads: `Rx::paused_ms`): it records from the app's own state, and a pass that took
 //! longer loses no ride time (`App::step` counts the seconds gone).
 
 use crate::*;
@@ -116,16 +116,21 @@ impl Watch {
     }
 }
 
-/// Reads and drops what the chip sends until the link has been idle for 20 ms (bounded: at most 200 reads).
+/// Reads and drops what the chip sends until the link has been idle for 20 ms (bounded: at most 200 reads, and 60 ms of
+/// sleeping: a chip that keeps talking must not hold the pass, and with it the GNSS reads).
 fn drain(b: &mut impl Board) {
-    let (mut buf, mut idle) = ([0; 64], 0);
+    let (mut buf, mut idle, mut slept) = ([0; 64], 0, 0);
     for _ in 0..200 {
+        if slept >= 60 {
+            break;
+        }
         if b.nrf_recv(&mut buf) > 0 {
             idle = 0;
         } else if idle >= 20 {
             break;
         } else {
             idle += 1;
+            slept += 1;
             b.delay_ms(1);
         }
     }

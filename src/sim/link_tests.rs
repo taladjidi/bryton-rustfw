@@ -168,8 +168,8 @@ fn a_damaged_stream_is_recovered_from() {
         );
         super::budget_tests::print_gap_breakdown(&sim, "damaged stream");
         // measured 2026-11-02 after the radio time-out went to 250 ms, once a pass (Rx::stalled): longest gap 1462 ms
-        // over the 5 seeds (1751 before), no epoch lost; a call that sends slowly on a damaged link and then times out
-        // costs both, and the receiver's own time-out is 1.5 s: the bound is measured + 10 %
+        // over the 5 seeds (1751 before), no epoch lost; a frame the chip takes slowly on a damaged link (a put may run 2x its
+        // bound to finish a started frame, review of a719c1c), and the receiver's own time-out is 1.5 s: the bound is measured + 10 %
         sim.gnss.assert_reads(1610, 0);
         ride_ok(&app, t0, &sim);
     }
