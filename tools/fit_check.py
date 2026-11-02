@@ -12,7 +12,11 @@ same records in both, developer fields and beats only in the full one, every bea
 `cargo test-host fit_sample`):
     fit_check.py --profile target/fit/indoor.fit target/fit/older.fit target/fit/mtb.fit
 an indoor ride cut and resumed (sport cycling, sub_sport indoor_cycling in every lap and the session), and a ride
-resumed from a record of the build before sub_sport (road), and an MTB ride cut and resumed (mountain).
+resumed from a record of the build before sub_sport (road), and an MTB ride cut and resumed (mountain). The timer
+(fit.rs, "The timer"; from `cargo test-host auto_pauses_stop_the_files_timer`):
+    fit_check.py --timer target/fit/autopause.fit
+a ride with auto-pauses: its timer events alternate start and stop_all, the auto-pauses' with timer_trigger auto, and
+each lap's and the session's total_timer_time is its time less the stops in it, read by both decoders.
 """
 import sys
 import warnings
@@ -197,9 +201,43 @@ def check_profile(path, sub):
     print(f"{path}: {len(laps)} laps and the session: cycling, {sub} (fitdecode, garmin-fit-sdk)")
 
 
+def check_timer(path):
+    """The timer events and the laps' and session's total_timer_time (module doc), with both decoders."""
+    msgs = read(path)
+    ev = [values(m) for m in msgs if m.name == "event" and values(m).get("event") == "timer"]
+    kinds = [e["event_type"] for e in ev]
+    assert kinds == ["start", "stop_all"] * (len(kinds) // 2), kinds
+    autos = [e.get("timer_trigger") for e in ev]
+    assert autos.count("auto") >= 2 and autos[0] is None, autos
+    times = [e["timestamp"].timestamp() for e in ev]
+    stops = [(times[k], times[k + 1] if k + 1 < len(times) else float("inf")) for k in range(1, len(times), 2)]
+    rows = [values(m) for m in msgs if m.name in ("lap", "session")]
+    for r in rows:
+        a, b = r["start_time"].timestamp(), r["timestamp"].timestamp()
+        stopped = sum(max(0, min(e, b) - max(s, a)) for s, e in stops)
+        assert r["total_timer_time"] == b - a - stopped, (r["total_timer_time"], b - a, stopped)
+    s = rows[-1]
+    assert s["total_elapsed_time"] > s["total_timer_time"], s
+    try:
+        from garmin_fit_sdk import Decoder, Stream
+    except ImportError:
+        print("  garmin-fit-sdk: not installed, skipped")
+    else:
+        g, errors = Decoder(Stream.from_file(path)).read()
+        assert errors == [], errors
+        ge = [e for e in g["event_mesgs"] if e["event"] == "timer"]
+        assert [e["event_type"] for e in ge] == kinds, ge
+        assert [e.get("timer_trigger") for e in ge] == autos, ge
+        assert g["session_mesgs"][0]["total_timer_time"] == s["total_timer_time"]
+    print(f"{path}: {len(kinds)} timer events ({autos.count('auto')} auto), timer {s['total_timer_time']} s of "
+          f"{s['total_elapsed_time']} s (fitdecode, garmin-fit-sdk)")
+
+
 args = sys.argv[1:]
 if args[:1] == ["--pair"]:
     check_pair(args[1], args[2])
+elif args[:1] == ["--timer"]:
+    check_timer(args[1])
 elif args[:1] == ["--profile"]:
     check_profile(args[1], "indoor_cycling")
     check_profile(args[2], "road")
