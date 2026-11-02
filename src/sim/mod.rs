@@ -144,6 +144,9 @@ pub struct Sim {
     /// sends before that, or left in its TX FIFO at the release, is lost on the hardware, so it fails the test.
     chip_held: bool,
     chip_boot_until: u64,
+    /// The USART2 lines parked ([`Board::nrf_park`]) since the last hold, and our pull on PD3 (the chip's RTS).
+    nrf_parked: bool,
+    cts_pull_up: bool,
     /// A test that provokes the violation sets this: the bytes are counted in `reset_bytes` and dropped instead.
     pub expect_reset_bytes: bool,
     pub reset_bytes: u32,
@@ -265,6 +268,13 @@ pub struct Nordic {
     pub reset: bool,
     /// Hung: no answer, no event, until the next reset (unlike `dead`, which a reset does not cure).
     pub hung: bool,
+    /// In System OFF (BOARD.md 11 "Power off"): `sd_power_system_off` taken and its TX buffer got (the frame in flight
+    /// out first), then the transport closed: nothing sent, our bytes not taken, its RTS let go (our CTS reads "hold").
+    /// Until the next reset.
+    pub off: bool,
+    off_pending: bool,
+    /// Never goes off (a chip that ignores `sd_power_system_off`); survives resets.
+    pub stays_on: bool,
     /// A slow but alive chip: each response comes this many ms after its command (the wait is real time).
     pub slow_ms: u32,
     /// Hangs at this ANT command (1 is the first) after each reset, 0 never (survives resets).
@@ -683,7 +693,7 @@ impl Nordic {
     }
 
     fn queue(&mut self, payload: &[u8]) {
-        if self.dead || self.hung {
+        if self.dead || self.hung || self.off {
             return;
         }
         if let Some(kind) = self.cur.filter(|_| payload.first() == Some(&1)) {
@@ -767,6 +777,7 @@ impl Nordic {
         match verdict {
             Ok(c) if self.table_only => {
                 self.got.push(p.clone());
+                self.off_pending |= p == [0, 0x32];
                 if c.out != chip_table::Out::None {
                     let mut r = vec![1, c.op, 0, 0, 0, 0];
                     if let chip_table::Out::Fixed(n) = c.out {
@@ -815,7 +826,8 @@ impl Nordic {
             }
         }
         if p == [0, 0x32] {
-            return; // sd_power_system_off: no response
+            self.off_pending = !self.stays_on; // sd_power_system_off: no response; off once it has the TX buffer
+            return;
         }
         if let [0, 0x8a, 1, _, _, _, _, _, t0, t1] = *p {
             self.queue(&[1, 0x8a, 0, 0, 0, 0]);
@@ -1021,6 +1033,8 @@ impl Sim {
             nordic: Nordic::default(),
             nrf_ext: None,
             chip_held: false,
+            nrf_parked: false,
+            cts_pull_up: true,
             chip_boot_until: 0,
             expect_reset_bytes: false,
             reset_bytes: 0,
@@ -1170,7 +1184,7 @@ impl Sim {
         }
         let no_mem = self.nordic.no_mem;
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
-        let die_at_ant = self.nordic.die_at_ant;
+        let (die_at_ant, stays_on) = (self.nordic.die_at_ant, self.nordic.stays_on);
         let trainer = std::mem::take(&mut self.nordic.trainer);
         let meter = std::mem::take(&mut self.nordic.meter);
         let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
@@ -1180,6 +1194,7 @@ impl Sim {
         resets.push(self.ms);
         self.nordic = Nordic {
             die_at_ant,
+            stays_on,
             dead,
             refuse,
             ant_refuse,
@@ -1292,13 +1307,27 @@ impl Board for Sim {
         self.sleep_ms(ms);
     }
 
+    /// Strict about the radio chip (BOARD.md 11 "Power off"): once it has run, it must be in System OFF with the UART
+    /// lines parked, or (when it would not go) held in reset with them left as they were; never running.
     fn standby(&mut self) {
         self.standby = true;
+        if self.nrf_ext.is_none() && self.nordic.reset {
+            let n = &self.nordic;
+            assert!(n.off || self.chip_held || n.dead, "the Nordic chip is left powered and running at the switch-off");
+            assert!(
+                self.nrf_parked || !n.off,
+                "the USART2 lines are left driven into the Nordic chip at the switch-off"
+            );
+            assert!(!self.nrf_parked || n.off, "the USART2 lines parked although the chip was not seen off");
+            assert!(self.cts_pull_up, "PD3 left pulled down");
+        }
     }
 
     /// The chip resets as the line is released (the library holds it 150 ms and waits 800 ms of boot meanwhile).
     fn nrf_hold(&mut self, held: bool) {
         self.chip_held = held;
+        self.nrf_parked = false;
+        self.cts_pull_up = true;
         if held {
             self.nordic.txq.clear(); // TXFRQ, as main.rs
             return;
@@ -1475,6 +1504,29 @@ impl Board for Sim {
         }
         self.nordic_due();
         self.nordic.recv(buf, self.ms)
+    }
+
+    /// The bridge ([`Sim::nrf_ext`]) has no line state: its TX reads sent and its RTS released (floating), so the
+    /// switch-off's checks read "off" there and are not exercised (they are on the model).
+    fn nrf_sent(&mut self) -> bool {
+        self.nrf_ext.is_some() || self.nordic.sent(self.ms)
+    }
+
+    /// PD3 low. The chip drives its RTS while it runs, hung included (held high); in System OFF it lets go and the line
+    /// follows our pull.
+    fn nrf_cts(&mut self) -> bool {
+        if self.nrf_ext.is_some() || self.nordic.off {
+            return !self.cts_pull_up;
+        }
+        self.nordic.cts(self.ms)
+    }
+
+    fn nrf_cts_pull(&mut self, up: bool) {
+        self.cts_pull_up = up;
+    }
+
+    fn nrf_park(&mut self) {
+        self.nrf_parked = true;
     }
 }
 

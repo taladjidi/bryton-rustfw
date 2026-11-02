@@ -516,7 +516,7 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 15] = [
+    let words: [&[u8]; 16] = [
         b"peek ",
         b"poke ",
         b"load ",
@@ -530,6 +530,7 @@ fn dev_link_input() {
         b"emmc\n",
         b"bench map ",
         b"bench step ",
+        b"bench nrfoff\n",
         b"prof ",
         b" -",
     ];
@@ -616,7 +617,7 @@ fn dev_link_ride_open() {
     assert_eq!(app.ride.state(), crate::ride::State::Running);
     let addrs = ["0x40000000", "0x5ffffffc", "0x40013014", "0x20000000", "0xfffffffc"];
     let (mut session, mut pc) = (Session::new(), super::Pc::default());
-    let (mut refused, mut other) = (0, 0);
+    let (mut refused, mut other, mut nrfoff) = (0, 0, 0);
     for c in bytes(78, 6 << 10).collect::<std::vec::Vec<_>>().chunks_exact(6) {
         let a = addrs[usize::from(c[1]) % addrs.len()];
         let line = match c[0] % 10 {
@@ -624,7 +625,8 @@ fn dev_link_ride_open() {
             1 => "reset\n".into(),
             2 => std::format!("find {} {} {} {}\n", c[2], 1 + c[3], c[4], c[5]),
             3 => std::format!("bench {} {} {}\n", c[2], 1 + c[3] % 32, 1 + c[4]),
-            4 => std::format!("bench scan {}\n", 1 + c[4]),
+            4 if c[1] % 2 == 0 => std::format!("bench scan {}\n", 1 + c[4]),
+            4 => "bench nrfoff\n".into(),
             5 if c[1] % 2 == 0 => std::format!("bench step {}\n", c[2] % 20),
             5 => std::format!("bench map {} 0 0\n", c[2] % 61),
             6 => std::format!("sector {}\n", c[2]),
@@ -644,15 +646,19 @@ fn dev_link_ride_open() {
                     | Effect::BenchScan(_)
                     | Effect::BenchMap(..)
                     | Effect::BenchStep(_)
+                    | Effect::BenchNrfOff
             ),
             "{line:?} got out with a ride open"
         );
-        refused += pc.got.windows(14).filter(|w| *w == b"err ride open\n").count();
+        let no = pc.got.windows(14).filter(|w| *w == b"err ride open\n").count();
+        refused += no;
+        nrfoff += usize::from(line == "bench nrfoff\n" && no == 1);
         other += 1;
         pc.got.clear();
     }
     assert!(pc.regs.is_empty(), "a poke reached the board with a ride open");
     assert!(refused > 100 && other > 500, "refusals reached: {refused} of {other}");
+    assert!(nrfoff > 20, "`bench nrfoff` refused {nrfoff} times");
 }
 
 /// The dev link by structure: addresses at and around the range edges, counts at the bounds, long lines, uploads at

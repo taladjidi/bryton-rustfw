@@ -364,6 +364,11 @@ impl App {
         }
     }
 
+    /// The radio chip is known to take commands: started and not in a reset (`nrf::system_off`'s `fresh`).
+    pub(crate) fn nrf_fresh(&self) -> bool {
+        self.ble.is_some() && !matches!(self.watch.reset, Reset::Held | Reset::Boot)
+    }
+
     /// As stock: the radio chip off too (or it drains the battery), screen off, wait for the key to be released
     /// (or it would wake the unit at once), then standby.
     pub(crate) fn power_off(&mut self, b: &mut impl Board) {
@@ -373,15 +378,7 @@ impl App {
         self.rec.full.checkpoint_now();
         self.step_recorder(b);
         self.hold_pages(b); // pages changed and not in the file yet: the registers keep them (app/editor.rs)
-        let resetting = matches!(self.watch.reset, Reset::Held | Reset::Boot);
-        // a chip in reset or boot has `rx.broken` set: `system_off` resets it once more, waits its boot, then powers it down
-        if self.ble.is_some() {
-            self.release_trainer(b); // not left at the last target until its own time-out
-        }
-        if self.ble.is_some() || resetting {
-            nrf::system_off(b, &mut self.rx);
-        }
-        b.gnss_power(false);
+        // the rider's answer at once: the radio's part below can take a second (a chip to reset first)
         play(b, &BEEP_OFF);
         if self.light.measuring {
             ambient::light_stop(b);
@@ -390,6 +387,14 @@ impl App {
         b.backlight(0);
         panel::off(b);
         b.touch_reset(false); // the touch chip held in reset: no INT to keep the core out of standby
+        let fresh = self.nrf_fresh();
+        if self.ble.is_some() {
+            self.release_trainer(b); // not left at the last target until its own time-out
+        }
+        // always: a chip that never started may still run (and drain the battery); one in a reset, not started or
+        // broken is reset once more first (`system_off`)
+        nrf::system_off(b, &mut self.rx, fresh);
+        b.gnss_power(false);
         // at most 10 s: a key stuck down must not keep the unit (and the battery) on
         for _ in 0..10_000 / POLL_MS {
             if b.keys_down() & Key::Back as u8 == 0 {

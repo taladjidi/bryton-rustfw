@@ -163,9 +163,9 @@ impl App {
         r != Err(nrf::Error::Timeout)
     }
 
-    /// After the chip's events were read (a step, a radio pass), `dt` ms after the last time: counts the quiet, and
-    /// recovers when the link is out of step.
-    pub(crate) fn watch_radio(&mut self, b: &mut impl Board, dt: u32) {
+    /// After the chip's events were read (a step, a radio pass), `dt` ms after the last time (`real` ms really, no
+    /// repaid debt: lib.rs `real_ms`): counts the quiet, and recovers when the link is out of step.
+    pub(crate) fn watch_radio(&mut self, b: &mut impl Board, dt: u32, real: u32) {
         let heard = core::mem::take(&mut self.rx.heard);
         let w = &mut self.watch;
         w.quiet_ms = if heard { 0 } else { w.quiet_ms.saturating_add(dt) };
@@ -175,7 +175,7 @@ impl App {
             (w.delay_ms, w.told) = (0, false);
         }
         if w.reset != Reset::None {
-            self.restart_step(b, dt);
+            self.restart_step(b, real); // the chip's 150 / 800 ms are real time: never a byte to it early
             return;
         }
         // a frame that went out partly proves the chip mis-framed: the first such break of a calm period resets at

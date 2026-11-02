@@ -26,6 +26,12 @@
 //! - `bench step <n>` (2 to 16): runs [`App::step`] `n` times back to back, no sleep between ([`Effect::BenchStep`]),
 //!   and answers `step us <first> <next>... ratio <first / mean of the rest>` (decimal): is the pass's fixed cost
 //!   code fetch (a cold first step) or work (all alike).
+//! - `bench nrfoff`: switches the radio chip off as the switch-off does ([`Effect::BenchNrfOff`],
+//!   [`nrf::system_off_unparked`]) while the unit stays up, reads its RTS (our CTS, PD3) 10 ms, 100 ms and 1 s after, then
+//!   restarts it through the radio watchdog's reset (the main loop carries on); answers `nrfoff <path> <us> <fresh|reset>
+//!   <cts10> <cts100> <cts1000>`: path `seen0` (off at the first ask), `seen1` (after a reset), `held` (PA6 held), `us`
+//!   the time `system_off` took, `fresh` when the chip was up and asked at once (`reset`: reset first, it was not), each
+//!   cts `1` when the chip's RTS was low (it takes bytes), `0` released (BOARD.md 11 "Power off").
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
@@ -58,7 +64,7 @@
 //!   fault, which parks the CPU (four-button restart).
 
 use crate::ui::{H, W};
-use crate::{App, emmc};
+use crate::{App, emmc, nrf};
 
 /// The other end of the link, as the protocol needs it.
 pub trait Host {
@@ -265,6 +271,8 @@ pub enum Effect {
     BenchStep(u32),
     /// Time the basemap of the full-page map at zoom level, moved by (dx, dy) m ([`App::bench_map`]).
     BenchMap(u32, i32, i32),
+    /// The radio chip's switch-off on a running unit, then its restart (`bench nrfoff` in the module doc).
+    BenchNrfOff,
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
     Drive,
     /// Start a new profiler window ([`crate::prof::Prof::reset`]).
@@ -553,6 +561,7 @@ impl Session {
                     _ => h.send(b"err usage: bench map <level> <dx m> <dy m>\n"),
                 }
             }
+            Some(b"bench") if line == b"bench nrfoff" => return Effect::BenchNrfOff,
             Some(b"bench") if line.starts_with(b"bench step") => match words.nth(1).and_then(parse) {
                 Some(n @ 2..=16) => return Effect::BenchStep(n),
                 _ => h.send(b"err usage: bench step <2..16>\n"),
@@ -648,6 +657,36 @@ fn bench_steps(app: &mut App, b: &mut impl crate::Board, n: usize) -> [u32; 16] 
     us
 }
 
+/// `bench nrfoff`: what the switch-off does to the radio chip, on a unit that stays up. Answers as the module doc says.
+fn bench_nrf_off(app: &mut App, b: &mut impl crate::Board, h: &mut impl Host) {
+    let fresh = app.nrf_fresh();
+    // the waits sleep in WFI, where the cycle counter stops: they come from `waited_us` (the pass's own given back)
+    app.prof.clock.owed_us = app.prof.clock.owed_us.saturating_add(b.waited_us());
+    let t = app.prof.clock.us(b);
+    let path = nrf::system_off_unparked(b, &mut app.rx, fresh);
+    let us = app.prof.clock.us(b).wrapping_sub(t).saturating_add(b.waited_us());
+    let mut cts = [false; 3];
+    for (slot, wait) in cts.iter_mut().zip([10, 90, 900]) {
+        b.delay_ms(wait);
+        *slot = b.nrf_cts();
+    }
+    // the bench's second is not the app's: counted, the clock's debt would run the restart's 800 ms boot early
+    let _ = b.waited_us();
+    app.awake_at = app.prof.clock.us(b);
+    app.restart_begin(b); // PA6 low now, released and configured over the next passes
+    h.send(match path {
+        Some(0) => b"nrfoff seen0 ",
+        Some(_) => b"nrfoff seen1 ",
+        None => b"nrfoff held ",
+    });
+    h.send(decimal(u64::from(us), &mut [0; 20]));
+    h.send(if fresh { b" fresh" } else { b" reset" });
+    for c in cts {
+        h.send(if c { b" 1" } else { b" 0" });
+    }
+    h.send(b"\n");
+}
+
 impl App {
     /// Answers the effect `session` asked for that needs the app and the board (the eMMC, the FAT reader, the
     /// benchmarks, the drive, the profiler), then flushes `h`. True when board work may have slept, which takes over
@@ -680,6 +719,7 @@ impl App {
                 let us = bench_steps(self, b, n as usize);
                 send_bench_step(h, us.get(..n as usize).unwrap_or_default());
             }
+            Effect::BenchNrfOff => bench_nrf_off(self, b, h),
             Effect::BenchMap(level, dx, dy) => {
                 let t = self.prof.clock.us(b);
                 let got = self.bench_map(b, level, dx, dy);

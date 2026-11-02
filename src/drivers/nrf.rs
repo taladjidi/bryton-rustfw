@@ -562,20 +562,78 @@ pub fn configure(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     }
 }
 
-/// Powers the chip down until its next reset (stock's power-off; the next start's reset pulse wakes it).
-pub fn system_off(b: &mut impl Board, rx: &mut Rx) {
-    if rx.broken || rx.timeouts > 0 {
-        // a mis-framed or silent chip would read the command as the rest of a frame: reset it first (bounded: the
-        // two waits, 1 s; the unit is going off)
-        b.nrf_hold(true);
-        b.delay_ms(RESET_HOLD_MS);
-        b.nrf_hold(false);
-        b.delay_ms(BOOT_MS);
-        flush(b);
-        rx.reset();
+/// After the power-off command, how long the chip has to be seen off, ms: it sends the frame it has in flight first
+/// (at most 386 bytes, 4 ms), since the command needs its single TX buffer (BOARD.md 11 "Power off").
+const OFF_WAIT_MS: u32 = 50;
+/// Checks in a row, 1 ms apart, that must see it off: the line let go for good, not between two of its frames; then
+/// [`floating`] tells a released line from one a hung chip drives high.
+const OFF_SEEN: u32 = 3;
+
+/// Powers the chip down until its next reset (`sd_power_system_off`; the next start's reset pulse wakes it), and makes
+/// sure of it (BOARD.md 11 "Power off"): the command is on the wire, then the chip is seen to let go of its RTS (our
+/// CTS) with nothing more to send. A chip not known to take commands (`fresh` false: never started, in a reset, broken
+/// or silent) is reset first; one that is not seen off (or holds its RTS high: hung) is reset and asked once more;
+/// failing that it is held in reset (about 0.2 mA, against mA for a hung chip whose radio may run) rather than left
+/// running. The lines are parked once it is off, and only then. Returns the attempt that saw it off (0 the first, 1 after
+/// the extra reset), None when it was held. Bounded: about 2.1 s at worst (two resets), only for a chip that fails.
+pub fn system_off(b: &mut impl Board, rx: &mut Rx, fresh: bool) -> Option<u8> {
+    let r = system_off_unparked(b, rx, fresh);
+    if r.is_some() {
+        b.nrf_park();
     }
-    // one put, short: power goes off next, so a chip that holds CTS is not worth waiting for
-    let _ = put(b, None, &[2, 0, CMD, SD_POWER_SYSTEM_OFF], 20);
+    r
+}
+
+/// [`system_off`] without the parking: the lines stay as the USART has them (the dev link's `bench nrfoff` reads the
+/// chip's RTS after it).
+pub fn system_off_unparked(b: &mut impl Board, rx: &mut Rx, fresh: bool) -> Option<u8> {
+    for attempt in 0..2 {
+        if attempt > 0 || !fresh || rx.broken || rx.timeouts > 0 {
+            // a mis-framed or silent chip would read the command as the rest of a frame
+            b.nrf_hold(true);
+            b.delay_ms(RESET_HOLD_MS);
+            b.nrf_hold(false);
+            b.delay_ms(BOOT_MS);
+            flush(b);
+            rx.reset();
+        }
+        if put(b, None, &[2, 0, CMD, SD_POWER_SYSTEM_OFF], 20).is_ok() && seen_off(b) {
+            return Some(attempt);
+        }
+    }
+    b.nrf_hold(true);
+    None
+}
+
+/// Reads (and drops) what the chip still sends, so that its frame in flight ends and the command gets its TX buffer,
+/// until our bytes are all out and its RTS stays released ([`OFF_SEEN`] checks), at most [`OFF_WAIT_MS`] (the reads
+/// count 10 us a byte).
+fn seen_off(b: &mut impl Board) -> bool {
+    let (mut buf, mut seen, mut us) = ([0; 64], 0, 0);
+    while us < OFF_WAIT_MS * 1000 {
+        let n = b.nrf_recv(&mut buf);
+        if n > 0 {
+            (seen, us) = (0, us + 10 * n as u32);
+            continue;
+        }
+        seen = if b.nrf_sent() && !b.nrf_cts() { seen + 1 } else { 0 };
+        if seen >= OFF_SEEN {
+            return floating(b);
+        }
+        b.delay_ms(1);
+        us += 1000;
+    }
+    false
+}
+
+/// The chip's RTS read high on our pull-up: released (System OFF: a disconnected input, BOARD.md 11) or driven high
+/// (a hung chip holds it). Our PD3 pulled down for 1 ms tells them apart: released, it follows the pull and reads low.
+fn floating(b: &mut impl Board) -> bool {
+    b.nrf_cts_pull(false);
+    b.delay_ms(1);
+    let low = b.nrf_cts();
+    b.nrf_cts_pull(true);
+    low
 }
 
 /// Starts an active scan for `seconds` (0: until stopped), with stock's low-power timing: a 30 ms window every
