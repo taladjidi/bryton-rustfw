@@ -85,6 +85,14 @@ impl App {
         self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
     }
 
+    /// A read now, whatever the wait: before a radio command that is known to be coming and may meet a silent chip
+    /// (the probe), so the receiver is not left unread for the wait and the time-out together.
+    pub(crate) fn read_gnss_now(&mut self, b: &mut impl Board) {
+        if !self.gps.off && self.gps.ms >= GNSS_ON_MS {
+            self.read_gnss(b, None);
+        }
+    }
+
     /// One read of the receiver: up to [`GNSS_READ`] bytes (`send` goes out with the first 32), the fixes in them
     /// taken. Found idle, the next read waits [`GNSS_FILL_MS`], or [`GNSS_PVT_WAIT_MS`] after a PVT with nothing
     /// left to send.

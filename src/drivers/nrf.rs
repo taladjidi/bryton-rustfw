@@ -38,11 +38,10 @@ pub const EVT_HVX: u16 = 0x39;
 /// Largest payload kept; a longer one is read through and dropped.
 pub const MAX: usize = 256;
 
-/// How long a command may take before it is given up (stock waits 5 s; replies take a few ms). Short on purpose: the
-/// pass that meets a silent chip is blocked this long, and the GNSS read that comes after it (a PVT wait of 800 ms
-/// before, app/gps.rs) must still land inside the receiver's 1.5 s stream time-out, less 300 ms of margin (1.2 s,
-/// sim/budget_tests.rs).
-pub const TIMEOUT_MS: u32 = 250;
+/// How long a command may take before it is given up (stock waits 5 s; replies take a few ms). Not shorter: a slow
+/// but alive chip must not be reset. The GNSS bound does not come from here but from [`Rx::stalled`] (one time-out
+/// per span between two receiver reads) and the receiver read right after a stalled pass (app/gps.rs).
+pub const TIMEOUT_MS: u32 = 500;
 
 /// A length header past this cannot be a frame (a BLE event is at most one ATT packet, about 250 bytes, and a
 /// header): it counts as garbage and is not read through, so a stray byte does not swallow up to 64 KB of real frames.
@@ -84,9 +83,10 @@ pub struct Rx {
     /// A frame went out partly (the chip held CTS for ever): the chip is mis-framed. No frame goes to it until it is
     /// reset ([`Rx::reset`]); the watchdog resets it at once (`app/nrf_watch.rs`).
     pub broken: bool,
-    /// A command timed out in this pass (500 ms of silence): every other command fails at once until [`Rx::reset`] or
-    /// the app clears it at the next pass, so a dead chip costs a pass one time-out, not one per command, and GNSS
-    /// reads (app/gps.rs) are never kept waiting for the radio more than that.
+    /// A command timed out ([`TIMEOUT_MS`] of silence): every other command is refused at once (`Err(Timeout)`, not
+    /// counted, nothing sent) until [`Rx::reset`] or the app clears it after its next receiver read (`App::step`), so
+    /// a dead chip costs one time-out between two GNSS reads, not one per command. Callers that must not lose
+    /// work to a refusal (the restart's stages, the probe) check it first and try again the next pass.
     pub stalled: bool,
 }
 
@@ -345,12 +345,14 @@ fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u
 /// How long a put has made no progress: time is counted in the 1 ms sleeps taken with nothing moving either way, and
 /// only a sent byte clears it (a flood of the chip's events, a scan's, read while CTS is held is not progress of
 /// ours). Two bounds that no sent byte resets: the bytes read since the last sent one ([`FLOOD_BYTES`]), and the
-/// whole put's time (sleeps and reads at 10 us a byte), the idle limit.
+/// whole put's time (sleeps and reads at 10 us a byte), the idle limit, twice it once a byte of the frame went.
 #[derive(Default)]
 struct Stall {
     idle_ms: u32,
     flood: u32,
     total_us: u32,
+    /// A byte of the frame went: a slow chip does not make us abandon a frame that was started.
+    started: bool,
 }
 
 impl Stall {
@@ -358,7 +360,7 @@ impl Stall {
     fn note(&mut self, took: usize, n: usize, limit_ms: u32) -> Result<bool, ()> {
         let idle = took + n == 0;
         if took > 0 {
-            (self.idle_ms, self.flood) = (0, 0);
+            (self.idle_ms, self.flood, self.started) = (0, 0, true);
         } else if idle {
             self.idle_ms += 1;
         } else {
@@ -366,7 +368,10 @@ impl Stall {
         }
         let us = if idle { 1000 } else { 10 * (took + n) as u32 };
         self.total_us = self.total_us.saturating_add(us);
-        if self.idle_ms >= limit_ms || self.flood >= FLOOD_BYTES || self.total_us >= limit_ms.saturating_mul(1000) {
+        if self.idle_ms >= limit_ms
+            || self.flood >= FLOOD_BYTES
+            || self.total_us >= limit_ms.saturating_mul(if self.started { 2000 } else { 1000 })
+        {
             Err(())
         } else {
             Ok(idle)
@@ -374,10 +379,12 @@ impl Stall {
     }
 }
 
-/// Bytes read with nothing sent before a put gives up: 16 KB (0.16 s of the chip talking at 1 Mbaud).
-const FLOOD_BYTES: u32 = 0x4000;
+/// Bytes read with nothing sent (or, in a wait, in all) before a put or a wait gives up: 32 KB (0.33 s of the chip
+/// talking at 1 Mbaud). It must cover the biggest legitimate burst: 96 queued events (the chip's queue) of at most an
+/// ATT MTU of 247 plus headers, about 264 B each, 25 KB; a larger MTU needs a larger value.
+const FLOOD_BYTES: u32 = 0x8000;
 
-/// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of silence, or
+/// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of waiting (the 1 ms pauses summed: a chip that chatters but never answers still times out), or
 /// 64 KB of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
 fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
     let mut buf = [0; 1];
