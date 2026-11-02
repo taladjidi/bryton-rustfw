@@ -753,7 +753,7 @@ A feature not listed here was seen on the unit.
 ## Next steps
 
 1. **Stop mode** between passes: plan and wake sources in docs/power.md (Stop mode: plan); the 250 ms idle loop is
-   merged, still to see on the unit.
+   merged and its clock drift seen on the unit (2026-11-02); the standby current of the radio chip's System OFF is owed first.
 2. **USB high speed** for the drive: the drops after 15 to 40 MB (above); full speed works.
 3. **A settings file** to free the backup registers (docs/roadmap.md).
 4. Everything under 'Not yet seen on the unit', on the unit, as the owner rides it.
