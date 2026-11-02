@@ -30,6 +30,9 @@ pub struct LoopModel {
     pub ran: Option<u32>,
     /// The slice timer: started at, ms.
     timer: Option<(u64, u32)>,
+    /// WFI wakes at uneven sub-ms instants (a byte, a key arrive at any time), as on the unit; off: every WFI is 1 ms.
+    pub jitter: bool,
+    lcg: u32,
     /// The touch INT and the keys at the last look (their edges latch in between, as the EXTI flags do).
     touch_was: bool,
     keys_was: u8,
@@ -103,6 +106,13 @@ impl UsbLink for SimLink {
     }
 }
 
+impl Sim {
+    /// The wall clock, ns: the whole ms and the sub-ms rest of the work's cost.
+    fn wall_ns(&self) -> u64 {
+        self.ms * 1_000_000 + self.cost_rem
+    }
+}
+
 impl LoopBoard for Sim {
     type Link = SimLink;
     fn canary(&mut self) -> u32 {
@@ -134,13 +144,14 @@ impl LoopBoard for Sim {
     }
     fn wake_on_io(&mut self, _: bool, _: bool) {}
     fn timer_start(&mut self, ms: u32) {
-        self.main.timer = Some((self.ms, ms));
+        self.main.timer = Some((self.wall_ns(), ms));
     }
     fn timer_done(&mut self) -> bool {
-        self.main.timer.is_some_and(|(t, n)| self.ms >= t + u64::from(n))
+        self.main.timer.is_some_and(|(t, n)| self.wall_ns() >= t + u64::from(n) * 1_000_000)
     }
-    fn timer_elapsed_ms(&mut self, ms: u32) -> u32 {
-        self.main.timer.map_or(0, |(t, _)| (self.ms - t).min(u64::from(ms)) as u32)
+    fn timer_elapsed_us(&mut self, ms: u32) -> u32 {
+        let wall = self.wall_ns();
+        self.main.timer.map_or(0, |(t, _)| ((wall - t) / 1000).min(u64::from(ms) * 1000) as u32)
     }
     fn timer_stop(&mut self) {
         self.main.timer = None;
@@ -166,7 +177,18 @@ impl LoopBoard for Sim {
         self.main.bytes_always || self.nordic.has_bytes(now)
     }
     fn sleep(&mut self) {
-        self.sleep_ms(1);
+        let mut step = 1_000_000;
+        if self.main.jitter {
+            self.main.lcg = self.main.lcg.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            step = 150_000 + u64::from(self.main.lcg >> 8) % 850_000;
+        }
+        let wall = self.wall_ns();
+        if let Some((t, n)) = self.main.timer {
+            step = step.min((t + u64::from(n) * 1_000_000).saturating_sub(wall).max(1)); // SysTick ends the WFI on time
+        }
+        let total = self.cost_rem + step;
+        self.cost_rem = total % 1_000_000;
+        self.sleep_ms((total / 1_000_000) as u32);
     }
     fn take_io(&mut self) -> (u32, u32, u32) {
         (0, 0, 0)

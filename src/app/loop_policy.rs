@@ -86,6 +86,8 @@ pub struct LoopPolicy {
     usb_tried: bool,
     /// Slept so far in this pass, ms, by SysTick: the cycle counter stops in WFI.
     slept: u32,
+    /// The sub-ms rest of the early-ended slices, us, kept for the next one.
+    slept_rest_us: u32,
     /// The sub-ms rest of the work, us, counted in the next pass.
     rest_us: u32,
     /// Slept since the panel was last read, ms.
@@ -107,6 +109,7 @@ impl LoopPolicy {
             usb_tried: false,
             slept: 0,
             rest_us: 0,
+            slept_rest_us: 0,
             since_touch: 0,
             awake: 0,
             ran: 0,
@@ -159,6 +162,13 @@ impl LoopPolicy {
     pub fn slept(&mut self, ms: u32) {
         self.slept += ms;
         self.since_touch = self.since_touch.saturating_add(ms);
+    }
+
+    /// A slice ended early after `us` of SysTick: whole ms are slept, the rest waits for the next slice.
+    pub fn slept_us(&mut self, us: u32) {
+        let total = us.saturating_add(self.slept_rest_us);
+        self.slept_rest_us = total % 1000;
+        self.slept(total / 1000);
     }
 
     /// Slept since the panel was last read, ms: it is read now.

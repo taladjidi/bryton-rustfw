@@ -2034,7 +2034,7 @@ fn idle_bytes_run_radio_passes_not_full_ones() {
 }
 
 /// A chip that always has a byte waiting (faster than a byte a ms) cannot hold an idle pass: every byte-ended slice
-/// counts at least 1 ms and the radio passes stop at [`crate::MAX_RADIO_PASSES`], so the pass ends and the next step
+/// counts its us (SysTick's, the rest carried; 0 in this model, whose WFI never runs) and the radio passes stop at [`crate::MAX_RADIO_PASSES`], so the pass ends and the next step
 /// runs well within its idle length (review of B4b: every slice was 0 ms, and the step never ran again).
 #[test]
 fn a_chip_that_never_stops_sending_cannot_hold_the_pass() {
@@ -2048,7 +2048,8 @@ fn a_chip_that_never_stops_sending_cannot_hold_the_pass() {
         // the model's WFI never runs (a byte waits before it): the clock does not move in the sleep
         assert_eq!(main.pass(&mut app, &mut sim), crate::MAX_RADIO_PASSES);
         let slept = app.prof().clock.sleep.0;
-        assert!((crate::MAX_RADIO_PASSES..=IDLE_POLL_MS).contains(&slept), "slept {slept} ms");
+        assert!(slept <= IDLE_POLL_MS, "slept {slept} ms");
+        sim.awake_ns += 1_000_000; // the unit's SysTick moves between bytes: here 1 ms of work does
         main.pass(&mut app, &mut sim);
         assert!(app.up_ms > up, "the next step ran");
     }

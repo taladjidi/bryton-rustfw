@@ -47,8 +47,8 @@ pub trait LoopBoard: Board {
     fn timer_start(&mut self, ms: u32);
     /// The slice's timer ran out.
     fn timer_done(&mut self) -> bool;
-    /// Milliseconds of a slice of `ms` gone so far.
-    fn timer_elapsed_ms(&mut self, ms: u32) -> u32;
+    /// Microseconds of a slice of `ms` gone so far.
+    fn timer_elapsed_us(&mut self, ms: u32) -> u32;
     /// Stops the slice's timer.
     fn timer_stop(&mut self);
     /// The touch INT fell since the last call.
@@ -124,9 +124,8 @@ impl<L: UsbLink> MainLoop<L> {
         // too (delay_ms), which would take over this timer.
         let mut press = None;
         let mut touched = None;
-        let sleep_start = b.cycles();
         let mut woke = false;
-        let (mut radio_passes, mut radio_cycles) = (0, 0u32);
+        let (mut radio_passes, mut slice_cycles) = (0, 0u32);
         // the pass's sleep, in slices: TOUCH_MS ones while a finger is on the panel, and one ends early when the
         // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
         // while the finger is down)
@@ -145,6 +144,7 @@ impl<L: UsbLink> MainLoop<L> {
             let Some(slice) = self.policy.slice(app.pass_ms(), app.touching()) else {
                 break;
             };
+            let slice_at = b.cycles();
             b.timer_start(slice);
             // SysTick's count before a USB command: one that slept (`worked`) took the timer over, so the slice's
             // length is this, and the command's own delays are in `waited` (counted once)
@@ -153,7 +153,7 @@ impl<L: UsbLink> MainLoop<L> {
             let w = loop {
                 let usb_at = b.cycles();
                 if let Some(l) = &mut self.link {
-                    before_poll = b.timer_elapsed_ms(slice);
+                    before_poll = b.timer_elapsed_us(slice);
                     match l.poll(&mut self.session, app, b, self.policy.stats()) {
                         Effect::Key(p) => press = Some(p),
                         Effect::Reset => {
@@ -224,11 +224,18 @@ impl<L: UsbLink> MainLoop<L> {
                 }
                 b.sleep();
             };
-            // a byte-ended slice counts 1 ms at least: SysTick counts whole ms, and a chip sending faster than a byte
-            // a ms (BOARD.md 11: 4 us after a full FIFO is read) would keep every slice at 0 and the pass from ending
-            let elapsed = if took_over { before_poll } else { b.timer_elapsed_ms(slice) };
-            self.policy.slept(if w.timer && !took_over { slice } else { elapsed.max(u32::from(w.bytes)) });
+            // an early end counts SysTick's us, the sub-ms rest carried (floored to whole ms each, ~0.5 ms was lost per
+            // radio wake: the app clock ran 0.35 % slow, 2026-11-02). A chip sending faster than a byte a ms would keep
+            // every slice near 0: the rests add up, and MAX_RADIO_PASSES bounds the pass all the same
+            if w.timer && !took_over {
+                self.policy.slept(slice);
+            } else {
+                let us = if took_over { before_poll } else { b.timer_elapsed_us(slice) };
+                self.policy.slept_us(us);
+            }
             b.timer_stop();
+            // only the cycles inside slices are "in the sleep's ms": the rest (the touch, the io toggles) is work
+            slice_cycles = slice_cycles.wrapping_add(b.cycles().wrapping_sub(slice_at));
             // the panel before the early end below: with the USB drive busy, every slice ends early, and touch was
             // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
             if w.read_touch(app.touching()) {
@@ -251,7 +258,6 @@ impl<L: UsbLink> MainLoop<L> {
                 app.radio_pass(b, self.policy.slept_ms());
                 let now = b.cycles();
                 app.prof().span(Sec::Radio, t, now);
-                radio_cycles = radio_cycles.wrapping_add(now.wrapping_sub(t));
                 radio_passes += 1;
                 if !app.radio_up() {
                     break; // the chip went down in it (a failed restart): nothing reads its bytes, as before
@@ -265,7 +271,7 @@ impl<L: UsbLink> MainLoop<L> {
         if wake.io {
             b.wake_on_io(false, false);
         }
-        let sleep_cycles = b.cycles().wrapping_sub(sleep_start).wrapping_sub(radio_cycles);
+        let sleep_cycles = slice_cycles;
         let slept = self.policy.slept_ms();
         app.prof().clock.slept(slept, sleep_cycles / (B::CPU_HZ / 1_000_000));
         let t1 = b.cycles();

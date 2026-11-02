@@ -734,3 +734,38 @@ fn a_stall_is_repaid_at_most_at_twice_real_speed() {
         "a {BANNER_MS} ms banner lasted {real} ms of real time"
     );
 }
+
+/// The unit's loop with WFI waking at uneven sub-ms instants (the radio's bytes, touches, keys): the app clock keeps real
+/// time (0.35 % slow on the unit, 2026-11-02: each early slice lost its sub-ms part, and the cycles outside the slices
+/// were counted as in them).
+fn loop_drift(ride: bool) {
+    let (mut sim, mut app) = radio_unit(40, board_wait_us(), crate::fat::tests::image(), true, |sim| {
+        sim.touch.set_finger(|ms| (ms % 9000 < 150).then_some((120, 5)));
+    });
+    sim.main.jitter = true;
+    if ride {
+        app.press(&mut sim, Press::Short(Key::Start));
+    }
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..100 {
+        main.pass(&mut app, &mut sim);
+    }
+    // the pass's sleep is in the clock's next step: counted here, or the lag of one pass shows
+    let now = |app: &App| u64::from(app.up_ms) + u64::from(app.prof.clock.sleep.0);
+    let (up0, real0) = (now(&app), sim.ms);
+    while sim.ms < real0 + 600_000 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (now(&app) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 5000 <= real, "app clock {up} ms against real {real} ms"); // 0.02 %
+}
+
+#[test]
+fn the_idle_loop_keeps_real_time_on_early_wakes() {
+    loop_drift(false);
+}
+
+#[test]
+fn the_ride_loop_keeps_real_time_on_early_wakes() {
+    loop_drift(true);
+}
