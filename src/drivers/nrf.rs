@@ -647,7 +647,8 @@ const EVENT_TRANSFER_TX_COMPLETED: u8 = 0x05;
 pub const SEARCH_TIMEOUT: u8 = 12;
 
 /// True if ANT event `p` is EVENT_QUE_OVERFLOW (0x35, Nordic `ant_parameters.h`): the SoftDevice's event queue was
-/// full and events were lost. Its length is `usNumberOfEvents` of the enable call (32, the floor).
+/// full and events were lost. The 44-byte layout (code at byte 42) is **inferred** from the other ANT events, not seen
+/// on the unit. Its length is `usNumberOfEvents` of the enable call (32, the floor).
 ///
 /// ```
 /// let mut p = [0u8; 44];

@@ -92,23 +92,38 @@ pub fn light_start(b: &mut impl Board) -> bool {
     b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[ALS_EN])
 }
 
-/// The ambient light in tenths of a lux (None: no answer, no new conversion yet, or the sensor had lost its set-up):
-/// called at least 500 ms after [`light_start`] and every [`crate::LIGHT_MS`] after. MAIN_STATUS and the data are one
-/// block read (the datasheet reads them as a group; one transaction, about 100 us more than the data alone), so a
-/// conversion that runs late (timing is +-20 %, and wake-up takes up to 10 ms) is never taken for a fresh one, and a
-/// supply glitch (power-on bit: gain back to 3, standby) is seen: the set-up is written again and the sensor started,
-/// the reading comes 100 ms on. (If those writes fail the glitch is not seen again: the next read has gain 3, 2x off;
-/// the bus failure it comes with goes through `sensor_ok`.) Does not stop the sensor: [`light_stop`] does.
-pub fn light_read(b: &mut impl Board) -> Option<u32> {
+/// What [`light_read`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightRead {
+    /// A new conversion, tenths of a lux.
+    Lux(u32),
+    /// The sensor answered but has nothing new (a late conversion), or had lost its set-up and was set up again: not a
+    /// bus failure, read again next pass.
+    Wait,
+    /// The bus failed.
+    Bus,
+    /// The set-up was lost and writing it again failed: a bus failure, and the sensor is not measuring.
+    Lost,
+}
+
+/// The last conversion, called at least 500 ms after [`light_start`] and every [`crate::LIGHT_MS`] after.
+/// MAIN_STATUS and the data are one block read (the datasheet reads them as a group; one transaction, about 100 us
+/// more than the data alone), so a conversion that runs late (timing is +-20 %, and wake-up takes up to 10 ms) is
+/// never taken for a fresh one ([`LightRead::Wait`]), and a supply glitch (power-on bit: gain back to 3, standby) is
+/// seen: the set-up is written again and the sensor started, the reading comes next pass. Does not stop the sensor:
+/// [`light_stop`] does.
+pub fn light_read(b: &mut impl Board) -> LightRead {
     let mut d = [0; 9]; // MAIN_STATUS 0x07 to ALS_DATA 0x0d..0x0f
     if !b.i2c_read(LIGHT_ADDR, MAIN_STATUS, &mut d) {
-        return None;
+        return LightRead::Bus;
     }
     if d[0] & POWER_ON != 0 {
-        let _ = light_config(b) && light_start(b);
-        return None;
+        return if light_config(b) && light_start(b) { LightRead::Wait } else { LightRead::Lost };
     }
-    (d[0] & ALS_NEW != 0).then(|| lux10(u32::from_le_bytes([d[6], d[7], d[8], 0])))
+    if d[0] & ALS_NEW == 0 {
+        return LightRead::Wait;
+    }
+    LightRead::Lux(lux10(u32::from_le_bytes([d[6], d[7], d[8], 0])))
 }
 
 /// Back to standby.

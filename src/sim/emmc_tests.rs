@@ -413,7 +413,7 @@ fn a_stall_longer_than_the_drivers_second_is_a_busy_error_today() {
     assert_eq!(emmc.write(&mut sim, 3, &[2; SECTOR]), Err(Error::Busy));
 }
 
-/// iNAND 7232 "Unstable Power-Supply": a voltage drop aborts the write and sets ERROR + CC_ERROR, in the first CMD13
+/// A voltage drop (inferred for this card, see emmc_model.rs) aborts the write and sets ERROR + CC_ERROR, in the first CMD13
 /// after the busy, not in CMD12's answer. The driver must fail the write (the host retries), not take it as done.
 #[test]
 fn a_voltage_drop_abort_in_the_first_cmd13_fails_the_write() {

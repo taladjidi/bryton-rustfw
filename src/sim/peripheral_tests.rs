@@ -4,6 +4,7 @@
 use super::key_model::bounce;
 use super::tests::run;
 use super::*;
+use crate::ambient::{LightRead, light_read};
 use crate::touch::Gesture;
 
 fn read(sim: &mut Sim, addr: u8, reg: u8, n: usize) -> Vec<u8> {
@@ -78,9 +79,9 @@ fn a_late_conversion_gives_no_reading_instead_of_an_old_one() {
     sim.bus.light_late_ms = 20;
     assert!(crate::ambient::light_start(&mut sim));
     sim.delay_ms(100);
-    assert_eq!(crate::ambient::light_read(&mut sim), None, "100 ms on: not done yet");
+    assert_eq!(light_read(&mut sim), LightRead::Wait, "100 ms on: not done yet");
     sim.delay_ms(21);
-    assert_eq!(crate::ambient::light_read(&mut sim), Some(3000));
+    assert_eq!(light_read(&mut sim), LightRead::Lux(3000));
     assert!(sim.bus.violations.is_empty());
 }
 
@@ -92,13 +93,44 @@ fn a_supply_glitch_on_the_light_sensor_is_seen_and_the_setup_written_again() {
     crate::ambient::init(&mut sim);
     assert!(crate::ambient::light_start(&mut sim));
     sim.delay_ms(500);
-    assert_eq!(crate::ambient::light_read(&mut sim), Some(3000));
+    assert_eq!(light_read(&mut sim), LightRead::Lux(3000));
     let now = sim.ms;
     sim.bus.light_glitch(now);
     sim.delay_ms(500);
-    assert_eq!(crate::ambient::light_read(&mut sim), None, "the glitch is seen, no reading taken at gain 3");
+    assert_eq!(light_read(&mut sim), LightRead::Wait, "the glitch is seen, no reading taken at gain 3");
     sim.delay_ms(100);
-    assert_eq!(crate::ambient::light_read(&mut sim), Some(3000), "set up again: gain 6, measuring");
+    assert_eq!(light_read(&mut sim), LightRead::Lux(3000), "set up again: gain 6, measuring");
+    assert!(sim.bus.violations.is_empty());
+}
+
+/// A glitch and a late conversion are not bus failures: no bus clear, no back-off, and the read is tried again next
+/// pass; a failed re-start after a glitch is counted, leaves the sensor not measuring, and it comes back.
+#[test]
+fn a_glitch_and_a_late_conversion_never_trigger_a_bus_clear_and_a_failed_restart_is_retried() {
+    let (mut sim, mut app) = started();
+    app.open(Screen::Menu(Menu::BuiltIn, 0));
+    app.show(&mut sim);
+    sim.bus.light_late_ms = 20;
+    run(&mut sim, &mut app, 3000);
+    let reads = sim.bus.light_reads;
+    assert!(reads > 0);
+    for _ in 0..4 {
+        let now = sim.ms;
+        sim.bus.light_glitch(now);
+        run(&mut sim, &mut app, 1500);
+    }
+    assert_eq!((sim.bus.recovers, app.light.hold_ms), (0, 0), "no bus clear, no back-off");
+    assert!(sim.bus.light_reads > reads, "the light is read again after each glitch");
+    // the re-start writes fail once after a glitch: counted, not measuring, then back
+    let now = sim.ms;
+    sim.bus.light_glitch(now);
+    sim.bus.nack_left = 0;
+    run(&mut sim, &mut app, 400);
+    sim.bus.nack_left = 2; // the config write fails
+    run(&mut sim, &mut app, 3000);
+    let after = sim.bus.light_reads;
+    run(&mut sim, &mut app, 3000);
+    assert!(sim.bus.light_reads > after && app.light.measuring, "the sensor came back");
     assert!(sim.bus.violations.is_empty());
 }
 
