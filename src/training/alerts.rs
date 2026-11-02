@@ -228,8 +228,9 @@ pub struct Alerts {
     over_s: u32,
     armed: bool,
     since_hr_s: u32,
-    /// The timer at the last call (a reminder is due when the timer reaches its minute, not while it stands still).
-    last_timer_s: u32,
+    /// The timer at the last call, None before the first: a reminder is due when the timer crosses its minute since
+    /// then (a stall's seconds come at once: app/pass.rs), not while it stands still, nor at a resumed ride's first.
+    last_timer_s: Option<u32>,
     /// Reminders due and not said yet (one a second): bit 0 eat, bit 1 drink.
     pending: u8,
     /// Seconds in a row under [`CADENCE_LOW_RPM`] in ERG, and since the last warning.
@@ -252,7 +253,7 @@ impl Alerts {
             over_s: 0,
             armed: true,
             since_hr_s: HR_EVERY_S,
-            last_timer_s: 0,
+            last_timer_s: None,
             pending: 0,
             slow_s: 0,
             since_cadence_s: CADENCE_EVERY_S,
@@ -390,8 +391,11 @@ impl Alerts {
             _ => self.over_s = 0,
         }
         // the reminders due are kept first: one said a second, the heart rate's alert ahead of them
-        let moved = timer_s != core::mem::replace(&mut self.last_timer_s, timer_s);
-        let due = |min: u16| moved && min > 0 && timer_s > 0 && timer_s.is_multiple_of(u32::from(min) * 60);
+        let last = self.last_timer_s.replace(timer_s);
+        let due = |min: u16| {
+            let every = u32::from(min) * 60;
+            min > 0 && last.is_some_and(|l| timer_s / every > l / every)
+        };
         self.pending |= u8::from(due(eat_min)) | u8::from(due(drink_min)) << 1;
         if self.armed && self.over_s >= HR_OVER_S && self.since_hr_s >= HR_EVERY_S {
             (self.armed, self.since_hr_s) = (false, 0);
@@ -471,6 +475,18 @@ mod tests {
         // no reading, or ERG off: nothing
         let mut b = Alerts::new();
         assert!((1..=100).all(|_| b.cadence(None, true).is_none() && b.cadence(Some(0), false).is_none()));
+    }
+
+    /// A stall's seconds go on the timer at once (app/pass.rs): a reminder minute jumped over is said all the same;
+    /// a fresh `Alerts` (a ride resumed after a reset, its timer far from 0) says nothing at its first second.
+    #[test]
+    fn a_reminder_jumped_over_by_a_stall_is_said() {
+        let mut a = Alerts::new();
+        assert_eq!(a.second(1190, None, 0, 20, 0), None, "the first second seen");
+        assert_eq!(a.second(1191, None, 0, 20, 0), None);
+        assert_eq!(a.second(1790, None, 0, 20, 0), Some(Alert::Drink), "20 min passed in the jump");
+        assert_eq!(a.second(1791, None, 0, 20, 0), None);
+        assert_eq!(a.second(2400, None, 0, 20, 0), Some(Alert::Drink), "on the minute, as before");
     }
 
     #[test]

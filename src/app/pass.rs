@@ -11,6 +11,12 @@ impl App {
     /// records: the file's times jump over them (a reader takes records at any interval). A clock set is no second
     /// gone: its setter moves `counted_s` with it ([`App::phone_time`], the only one); a step back, or forward by
     /// more than [`CLOCK_STEP_S`], counts one.
+    ///
+    /// What follows from the seconds put on the timer at once: the eat and drink reminders crossed are said
+    /// (`alerts::Alerts::second`); a workout's step clock and the ramp test follow ridden seconds only, so a stall does
+    /// not move them on; a stall longer than a time auto-lap makes one long lap; the FIT file holds up to 4 s x the
+    /// speed more distance than the screen for each stall over [`REPEAT_S`] (the writer's 5 s cap on the time between
+    /// two records, against the 5 s ticked), accepted.
     pub(crate) fn catch_up_seconds(&mut self, sec: u8) {
         if self.rtc_s != self.rec.counted_s {
             let gone = self.rtc_s.saturating_sub(self.rec.counted_s);
