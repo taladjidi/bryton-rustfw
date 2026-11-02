@@ -265,6 +265,8 @@ pub struct Nordic {
     pub reset: bool,
     /// Hung: no answer, no event, until the next reset (unlike `dead`, which a reset does not cure).
     pub hung: bool,
+    /// A slow but alive chip: each response comes this many ms after its command (the wait is real time).
+    pub slow_ms: u32,
     /// Hangs at this ANT command (1 is the first) after each reset, 0 never (survives resets).
     pub die_at_ant: u8,
     ant_cmds: u8,

@@ -603,7 +603,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     up after 10 ms on one byte and returned **mid-frame**: the chip then got a frame shorter than its header said and
     hung for ever. `nrf::send` now puts the header and the payload as one frame, keeps reading the chip's bytes into
     `Rx` while CTS is held (which lets the chip finish its event frame, queue the response and release CTS), sleeps 1 ms
-    when nothing moved, and fails with `Timeout` after 500 ms without a byte either way (a hung chip). A frame that went
+    when nothing moved, and fails with `Timeout` after 500 ms without a byte either way (a hung chip; then every other command is refused at once until the next receiver read, `Rx::stalled`). A frame that went
     out partly marks the link broken: no frame is sent before the watchdog resets the chip through PA6, on its next pass.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

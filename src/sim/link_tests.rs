@@ -57,7 +57,6 @@ fn a_stray_byte_is_resynced() {
 #[test]
 fn a_hung_chip_is_reset() {
     let (mut sim, mut app) = riding();
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     let t0 = sim.ms - 5000;
     sim.nordic.hung = true;
     run(&mut sim, &mut app, 20_000);
@@ -70,7 +69,7 @@ fn a_hung_chip_is_reset() {
     assert_eq!(app.live.get(Metric::Hr), Some(72), "the strap is back");
     assert_eq!(app.radio.sensors[Kind::Hr as usize], Sensor::Paired(STRAP));
     ride_ok(&app, t0, &sim);
-    sim.gnss.assert_reads(2008, 2);
+    sim.gnss.assert_reads(890, 0);
 }
 
 /// The bonded phone is connected when the chip hangs; after the reset the server is set up again and the unit
@@ -78,7 +77,6 @@ fn a_hung_chip_is_reset() {
 #[test]
 fn the_phone_comes_back_after_a_reset() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.emmc.image = crate::fat::tests::image();
     let mut p = PhoneSim::new(true);
     p.connect_at = 1000;
@@ -92,7 +90,7 @@ fn the_phone_comes_back_after_a_reset() {
     assert_eq!(app.watch.resets, 1);
     assert_ne!(app.phone.link(), Link::NoBle);
     assert!(sim.nordic.server.adv.is_some() || app.phone.link() == Link::Secure, "advertising, or already back");
-    sim.gnss.assert_reads(2007, 2);
+    sim.gnss.assert_reads(890, 0);
 }
 
 /// No sensor, no phone, a sensor paired that is not in range: 30 minutes of a quiet healthy link are never a
@@ -115,7 +113,6 @@ fn a_quiet_healthy_link_is_left_alone() {
 #[test]
 fn repeated_failures_back_off() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.nordic.dead = true;
     let mut app = App::start(&mut sim, Some(KEY));
     let (end, mut seen, mut begins) = (sim.ms + 9 * 60 * 1000, 0, Vec::new());
@@ -136,7 +133,7 @@ fn repeated_failures_back_off() {
     sim.nordic.dead = false;
     run(&mut sim, &mut app, 6 * 60 * 1000);
     assert!(app.ble.is_some() && app.ant, "started at last");
-    sim.gnss.assert_reads(1433, 0);
+    sim.gnss.assert_reads(890, 0);
 }
 
 /// Fuzz: bytes of the chip's stream dropped, added and flipped at random, over long rides, seeds fixed. No panic,
@@ -147,7 +144,6 @@ fn a_damaged_stream_is_recovered_from() {
     let (mut resyncs, mut resets) = (0, 0);
     for (seed, per_mille) in [(1u32, 1), (2, 2), (3, 5), (4, 20), (5, 100)] {
         let (mut sim, mut app) = riding();
-        sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
         let t0 = sim.ms - 5000;
         sim.nordic.chaos = Some((0x9e37_79b9 ^ seed.wrapping_mul(2_654_435_761), per_mille));
         run(&mut sim, &mut app, 40 * 60 * 1000);
@@ -171,9 +167,10 @@ fn a_damaged_stream_is_recovered_from() {
             sim.nordic.channels[0].open
         );
         super::budget_tests::print_gap_breakdown(&sim, "damaged stream");
-        // measured with the app clock counting the waits (2026-11-02): longest gap 1751 ms over the 5 seeds, no epoch
-        // lost (1802 before; bound: measured + 10 %)
-        sim.gnss.assert_reads(1930, 0);
+        // measured 2026-11-02 after the radio time-out went to 250 ms, once a pass (Rx::stalled): longest gap 1462 ms
+        // over the 5 seeds (1751 before), no epoch lost; a frame the chip takes slowly on a damaged link (a put may run 2x its
+        // bound to finish a started frame, review of a719c1c), and the receiver's own time-out is 1.5 s: the bound is measured + 10 %
+        sim.gnss.assert_reads(1610, 0);
         ride_ok(&app, t0, &sim);
     }
     assert!(resyncs > 20, "{resyncs} resyncs reached");
@@ -195,7 +192,6 @@ fn ant_refused_is_not_a_broken_link() {
 #[test]
 fn a_refusal_at_a_restart_is_not_retried_by_reset() {
     let (mut sim, mut app) = riding();
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.nordic.dead = true; // a real fault: one reset
     run(&mut sim, &mut app, 40_000);
     sim.nordic.dead = false;
@@ -205,7 +201,7 @@ fn a_refusal_at_a_restart_is_not_retried_by_reset() {
     assert!(n <= 3, "reset {n} times");
     run(&mut sim, &mut app, 60 * 60 * 1000);
     assert_eq!(app.watch.resets, n, "still resetting a chip that answers");
-    sim.gnss.assert_reads(2008, 2);
+    sim.gnss.assert_reads(1170, 0);
 }
 
 /// Review: a resync dropped the bytes of a connection's end, and the unit stayed "connected" for ever, advertising
@@ -251,7 +247,6 @@ fn a_silent_probe_keeps_the_last_failure() {
 #[test]
 fn a_reset_during_pairing_goes_on_pairing() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.gnss.expect = Some("stream time-out"); // the chip reset blocks the pass (950 ms) and the start-up after it: the longest unread gap is 2.2 to 3.3 s here, past the receiver's 1.5 s stream time-out (bounded by assert_reads)
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 4000);
@@ -263,5 +258,85 @@ fn a_reset_during_pairing_goes_on_pairing() {
     run(&mut sim, &mut app, 60_000);
     assert!(app.watch.resets >= 1);
     assert_eq!(app.phone.link(), Link::Pairing, "pairing resumed");
-    sim.gnss.assert_reads(2007, 2);
+    sim.gnss.assert_reads(890, 0);
+}
+
+/// The owner, 2026-11-02: GNSS reads do not depend on the radio. A ride with a fix walks every radio failure (a
+/// hung chip reset while running, a dead chip, a damaged stream with broken-link resets, a 48-event phone burst, a
+/// 32-ANT resume, a flood of events); whatever the chip does, no pass keeps the receiver unread past the budget's
+/// limit (1.2 s, budget_tests.rs), no epoch is lost to its stream time-out, and the app's fix is never dropped.
+#[test]
+fn no_radio_failure_delays_the_gnss_reads_or_loses_the_fix() {
+    type Fail = fn(&mut Sim);
+    fn flood(s: &mut Sim) {
+        (0..90).for_each(|_| s.nordic.queue(&[2, 0x39, 0, 0, 0, 0, 0, 0, 0, 0x25, 0, 1, 5, 0, 1, 2, 3, 4, 5]));
+    }
+    let cases: [(&str, Fail, bool); 7] = [
+        ("hung chip", |s| s.nordic.hung = true, true),
+        ("dead chip", |s| s.nordic.dead = true, false),
+        ("damaged stream", |s| s.nordic.chaos = Some((0x9e37_79b9, 100)), false),
+        ("phone burst", super::ride_radio_tests::phone_burst, false),
+        ("ant resume", super::ride_radio_tests::ant_resume, false),
+        ("flood", flood, false),
+        (
+            "flood and hang",
+            |s| {
+                s.nordic.hung = true;
+                flood(s);
+            },
+            true,
+        ),
+    ];
+    for (name, fail, recovers) in cases {
+        let (mut sim, mut app) = riding();
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 30_000);
+        assert!(app.gps.pvt.is_some_and(|p| p.good()), "{name}: a fix before the failure");
+        sim.gnss.longest_gap_ms = 0;
+        sim.gnss.lost_epochs = 0;
+        fail(&mut sim);
+        let end = sim.ms + 5 * 60_000;
+        while sim.ms < end {
+            app.step(&mut sim);
+            sim.sleep_ms(POLL_MS);
+            assert!(app.gps.pvt.is_some_and(|p| p.good()), "{name}: the fix was lost at {} ms", sim.ms);
+        }
+        std::eprintln!("{name}: longest GNSS gap {} ms", sim.gnss.longest_gap_ms);
+        assert!(sim.gnss.longest_gap_ms <= 1200, "{name}: longest unread gap {} ms", sim.gnss.longest_gap_ms);
+        assert_eq!(sim.gnss.lost_epochs, 0, "{name}: epochs lost");
+        if recovers {
+            // the reset's stages are never lost to a refused command: ANT, the BLE link and the strap's channel are back
+            run(&mut sim, &mut app, 120_000);
+            assert!(app.ble.is_some() && app.ant, "{name}: the radio is back up");
+            assert!(sim.nordic.channels[0].open, "{name}: the strap's channel is open again");
+            assert_eq!(app.live.get(Metric::Hr), Some(72), "{name}: the strap is heard again");
+        }
+    }
+}
+
+/// A slow but alive chip (every response 300 ms after its command): never reset, never resynced, no fix lost, and the
+/// receiver read inside the budget (the commands wait for real, one pass at a time).
+#[test]
+fn a_slow_chip_is_not_reset_and_does_not_hold_the_gnss_reads() {
+    let (mut sim, mut app) = riding();
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 30_000);
+    sim.gnss.longest_gap_ms = 0;
+    let resets = app.watch.resets;
+    sim.nordic.slow_ms = 300;
+    let (end, mut slowest) = (sim.ms + 3 * 60_000, 0);
+    while sim.ms < end {
+        let t = sim.ms;
+        if (t / 50) % 100 == 0 {
+            app.watch.quiet_ms = 30_000; // the probe is due: a command that waits 300 ms for its answer
+        }
+        app.step(&mut sim);
+        slowest = slowest.max(sim.ms - t);
+        sim.sleep_ms(POLL_MS);
+        assert!(app.gps.pvt.is_some_and(|p| p.good()), "the fix was lost at {} ms", sim.ms);
+    }
+    assert!(slowest >= 300, "the chip answered slowly: a pass took {slowest} ms");
+    assert_eq!((app.watch.resets, app.watch.resyncs), (resets, 0), "a slow chip is not a broken one");
+    std::eprintln!("slow chip: longest GNSS gap {} ms", sim.gnss.longest_gap_ms);
+    sim.gnss.assert_reads(1200, 0);
 }
