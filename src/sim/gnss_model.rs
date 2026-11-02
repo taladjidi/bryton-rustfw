@@ -181,19 +181,35 @@ impl Gnss {
 
     /// One SPI transfer (one chip select) at `now`: `buf` in, the receiver's bytes out.
     pub(super) fn transfer(&mut self, now: u64, utc: i64, buf: &mut [u8]) {
+        self.begin(now, utc);
+        for b in buf.iter_mut() {
+            *b = self.byte(now, *b);
+        }
+        self.end(now);
+    }
+
+    /// Chip select low: the three steps of [`Gnss::transfer`], apart for the Renode bridge (`gnss_serve.rs`), whose
+    /// bus hands the bytes over a word at a time.
+    pub(super) fn begin(&mut self, now: u64, utc: i64) {
         self.utc = utc;
         if self.powered {
             self.longest_gap_ms = self.longest_gap_ms.max(now.saturating_sub(self.last_xfer));
         }
         self.tick(now);
         (self.ff, self.rx_off, self.in_xfer) = (0, false, true);
-        for b in buf.iter_mut() {
-            self.got.push(*b);
-            if self.powered {
-                self.receive(now, *b);
-            }
-            *b = if self.powered { self.out.pop_front().unwrap_or(0xff) } else { 0xff };
+    }
+
+    /// One byte exchanged while chip select is low.
+    pub(super) fn byte(&mut self, now: u64, b: u8) -> u8 {
+        self.got.push(b);
+        if self.powered {
+            self.receive(now, b);
         }
+        if self.powered { self.out.pop_front().unwrap_or(0xff) } else { 0xff }
+    }
+
+    /// Chip select high.
+    pub(super) fn end(&mut self, now: u64) {
         self.in_xfer = false;
         self.out.extend(self.late.drain(..));
         self.last_xfer = now;
