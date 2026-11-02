@@ -189,6 +189,9 @@ namespace Antmicro.Renode.Peripherals.UART
                 // that finds the FIFO full is an overrun (ORE), dropped. Only RTS (below) keeps the chip from sending.
                 rxCredit = Math.Min(rxCredit + delta, 640);
                 var want = Rx() ? (int)Math.Min(rxCredit / 10, 64UL) : 0;
+                // With RTSE the chip stops at the threshold (RM0399: RTS deasserts as the FIFO reaches it), so after a long
+                // idle gap (credit 640 us) at most the room up to the threshold, plus the byte in flight, can arrive
+                if((cr3 & (1 << 8)) != 0 && !noDrain) want = Math.Min(want, rtsHeld ? 0 : Math.Max(0, RxThreshold - rx.Count) + 1);
                 if(want > 0 && !dead)
                 {
                     Cmd(new byte[] { (byte)'R', (byte)want, 0 });
