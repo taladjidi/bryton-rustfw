@@ -32,6 +32,8 @@ pub struct LoopModel {
     timer: Option<(u64, u32)>,
     /// WFI wakes at uneven sub-ms instants (a byte, a key arrive at any time), as on the unit; off: every WFI is 1 ms.
     pub jitter: bool,
+    /// Each look at the touch line costs this much CPU work, ns (a USB poll's own cycles, which SysTick counts too).
+    pub poll_work_ns: u64,
     lcg: u32,
     /// The touch INT and the keys at the last look (their edges latch in between, as the EXTI flags do).
     touch_was: bool,
@@ -157,6 +159,11 @@ impl LoopBoard for Sim {
         self.main.timer = None;
     }
     fn touch_edge(&mut self) -> bool {
+        let ns = self.main.poll_work_ns;
+        self.awake_ns += ns;
+        self.cost_rem += ns;
+        self.ms += self.cost_rem / 1_000_000;
+        self.cost_rem %= 1_000_000;
         let int = self.touch_int();
         let edge = int && !self.main.touch_was;
         self.main.touch_was = int;

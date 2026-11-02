@@ -149,11 +149,13 @@ impl<L: UsbLink> MainLoop<L> {
             // SysTick's count before a USB command: one that slept (`worked`) took the timer over, so the slice's
             // length is this, and the command's own delays are in `waited` (counted once)
             let mut before_poll = 0;
+            let mut before_cycles = slice_at; // the cycles at before_poll
             let mut took_over = false;
             let w = loop {
                 let usb_at = b.cycles();
                 if let Some(l) = &mut self.link {
                     before_poll = b.timer_elapsed_us(slice);
+                    before_cycles = b.cycles();
                     match l.poll(&mut self.session, app, b, self.policy.stats()) {
                         Effect::Key(p) => press = Some(p),
                         Effect::Reset => {
@@ -238,7 +240,10 @@ impl<L: UsbLink> MainLoop<L> {
             }
             b.timer_stop();
             // only the cycles inside slices are "in the sleep's ms": the rest (the touch, the io toggles) is work
-            slice_cycles = slice_cycles.wrapping_add(b.cycles().wrapping_sub(slice_at));
+            // a taken-over slice is `before_poll` long: the command's own cycles after it are work, not that sleep's ms
+            // (they were subtracted from the work: the 0.046 % left on the unit, 1200 such slices in 600 s)
+            let end = if took_over { before_cycles } else { b.cycles() };
+            slice_cycles = slice_cycles.wrapping_add(end.wrapping_sub(slice_at));
             // the panel before the early end below: with the USB drive busy, every slice ends early, and touch was
             // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
             if w.read_touch(app.touching()) {

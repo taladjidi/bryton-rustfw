@@ -712,6 +712,28 @@ fn a_busy_usb_drive_is_not_counted_twice() {
     assert!(real.abs_diff(up) * 1000 <= real, "app clock {up} ms against real {real} ms");
 }
 
+/// The same with each poll costing CPU cycles (the unit's USB poll: 0.046 % slow, 1200 taken-over slices in 600 s):
+/// a taken-over slice's cycles after its measured length are work, not sleep.
+#[test]
+fn a_busy_usb_drive_polls_cost_cycles_the_clock_counts() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let link = SimLink::default();
+    link.0.borrow_mut().busy_ms = 3;
+    (sim.main.link, sim.main.vbus, sim.main.poll_work_ns) = (Some(link), true, 200_000);
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    for _ in 0..50 {
+        main.pass(&mut app, &mut sim);
+    }
+    let now = |app: &App| u64::from(app.up_ms) + u64::from(app.prof.clock.sleep.0);
+    let (up0, real0) = (now(&app), sim.ms);
+    while sim.ms < real0 + 600_000 {
+        main.pass(&mut app, &mut sim);
+    }
+    let (up, real) = (now(&app) - up0, sim.ms - real0);
+    assert!(real.abs_diff(up) * 5000 <= real, "app clock {up} ms against real {real} ms"); // 0.02 %
+}
+
 /// After a 60 s stall the clock catches up at twice real speed at most: a banner (4 s) does not vanish at once.
 #[test]
 fn a_stall_is_repaid_at_most_at_twice_real_speed() {
