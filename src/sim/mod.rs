@@ -351,8 +351,11 @@ pub struct Nordic {
     /// Bytes a hung chip took since it hung, and the security contexts in use.
     hung_rx: u8,
     sec: u8,
-    /// ANT events the SoftDevice's queue of 32 had no room for (inferred: the newest is lost).
+    /// ANT events the SoftDevice's queue of 32 had no room for (the newest is lost: inferred); each overflow is reported
+    /// with event 0x35 once there is room.
     pub ant_dropped: u32,
+    /// An ANT event was dropped and the SoftDevice owes the app an EVENT_QUE_OVERFLOW (0x35) once there is room.
+    ant_overflow: bool,
     /// The chip's real limits (chip_link.rs).
     pub limits: ChipLimits,
     /// Times the chip hung (queue overflow, a command it cannot decode, ...) and the most events ever queued; both
@@ -698,7 +701,9 @@ impl Nordic {
                 self.resp.push_back(frame);
                 self.resp_ahead.push_back(self.events.len());
             }
-            [8, ..] if self.sd_ant.len() >= chip_link::ANT_QUEUE => self.ant_dropped += 1,
+            [8, ..] if self.sd_ant.len() >= chip_link::ANT_QUEUE => {
+                (self.ant_dropped, self.ant_overflow) = (self.ant_dropped + 1, true)
+            }
             [8, ..] => self.sd_ant.push_back(frame),
             _ => {
                 self.frees_context(payload);
@@ -796,6 +801,7 @@ impl Nordic {
         self.resp_ahead.clear();
         self.sd_ble.clear();
         self.sd_ant.clear();
+        self.ant_overflow = false;
         self.out.clear();
     }
 
@@ -1001,7 +1007,7 @@ impl Sim {
             display_on: false,
             panel: PanelRules::default(),
             colmod: 0x06,
-            ramctrl: [0x10, 0xf0],
+            ramctrl: [0x00, 0xf0], // 9.2.1 default; stock ends at 10h
             backlight: false,
             tones: Vec::new(),
             writable: true,
@@ -1212,7 +1218,7 @@ impl Board for Sim {
         self.panel.command(cmd, self.ms);
         self.cmds.push(cmd);
         match cmd {
-            SWRESET => (self.asleep, self.display_on) = (true, false),
+            SWRESET => (self.asleep, self.display_on, self.ramctrl) = (true, false, [0x00, 0xf0]),
             SLPIN => self.asleep = true,
             SLPOUT => self.asleep = false,
             DISPON => self.display_on = true,
@@ -1227,7 +1233,7 @@ impl Board for Sim {
     }
 
     fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16) {
-        assert_eq!(self.ramctrl[0] & 0x03, 0, "RAMCTRL routes RAM writes to the RGB interface, not SPI");
+        assert_eq!(self.ramctrl[0] & 0x13, 0, "RAMCTRL routes RAM writes to the RGB interface, not SPI");
         assert_eq!(self.colmod & 0x07, 0x05, "pixel format is not 16-bit");
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");

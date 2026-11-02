@@ -404,6 +404,8 @@ impl Session {
                 let (resyncs, broadcasts) = app.radio_counts();
                 h.send(b" resyncs ");
                 h.send(decimal(u64::from(resyncs), &mut [0; 20]));
+                h.send(b", ant events lost ");
+                h.send(decimal(u64::from(app.ant_events_lost()), &mut [0; 20]));
                 h.send(b", ant");
                 for (k, n) in crate::sensors::Kind::ALL.iter().zip(broadcasts) {
                     h.send(b" ");

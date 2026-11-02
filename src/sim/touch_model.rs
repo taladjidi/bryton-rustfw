@@ -1,12 +1,16 @@
 //! The simulated touch controller (Sitronix ST1633 class, I2C1 0x55, BOARD.md 17), strict about what the part's
-//! documents say. Sources (not re-read for this change: the pages timed out; "inferred" marks what no text settles):
-//! - T1 RESET low at least 5 ms, then Init for about 50 ms: ST1633 datasheet v1.6 (https://www.orientdisplay.com/pdf/ST1633.pdf);
-//!   a shorter low pulse leaves the chip dead until the next proper reset (the consequence is **inferred**).
-//! - T2 Timeout to Idle (register 0x03, 2 s on the unit): Sitronix Touch IC Protocol A v2.7
-//!   (https://www.crystalfontz.com/products/document/4590/Sitronix_Touch_IC_Protocol_A_V2.7.pdf). That the first
-//!   report after the chip idled is lost, status Idle (4), is **inferred**; `idle_ms` None switches it off.
-//! - T3 up to 5 contacts, one 3-byte slot each from 0x12, 4 bytes apart: same protocol document (slots past the
-//!   second are **inferred** to continue the pattern); the driver reads the first two only.
+//! documents say. Checked 2026-11-02 against the documents; "inferred" marks what no text settles (searched: both
+//! documents below, no text on a short pulse's consequence, on Idle's status value or on a lost first report):
+//! - T1 RESET: ST1633 datasheet v1.6 (https://www.orientdisplay.com/pdf/ST1633.pdf), 3.2: low for 1 us takes effect
+//!   (in operation); 3.3: 5 ms low at power-on after the supplies are stable. The model keeps the stricter 5 ms (the
+//!   firmware's, harmless; its clock is in ms). Init then lasts 50 ms for the ST1x33i / ST1x33 (Protocol A v2.7, 3.1,
+//!   status 0x01 low nibble 1 = Init, 0 = Normal). That a short pulse leaves the chip dead is **inferred**.
+//! - T2 Timeout to Idle (register 0x03: seconds, 0xFF off, 0 at once, chip default 8 s; the unit's 2 s is stock's): Sitronix
+//!   Touch IC Protocol A v2.7 4.4 (https://www.crystalfontz.com/products/document/4590/Sitronix_Touch_IC_Protocol_A_V2.7.pdf).
+//!   Idle as status value 4 and that the first report after Idle is lost are **inferred** (4.2 leaves 0x2 and 0x4
+//!   unnamed); `idle_ms` None switches it off.
+//! - T3 up to 5 contacts (datasheet 1), one 3-byte slot each from 0x12, 4 bytes apart up to 0x36 (Protocol A 4.10):
+//!   confirmed; the driver reads the first two only. Error code in status bits 7:4 (4.2).
 
 extern crate std;
 
@@ -18,7 +22,7 @@ pub(super) type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 
 /// Init lasts this long after the reset is released, ms.
 const INIT_MS: u64 = 50;
-/// RESET must be low this long, ms (T1).
+/// RESET must be low this long, ms (T1: the power-on hold; the datasheet needs only 1 us in operation).
 const RESET_LOW_MS: u64 = 5;
 
 /// The touch chip: Init after its reset is released, Normal, Idle after `idle_ms` without a touch; INT low while a

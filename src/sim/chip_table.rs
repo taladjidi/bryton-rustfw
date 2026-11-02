@@ -54,7 +54,8 @@ pub enum L {
     /// `len8data`: u8 length, presence byte, then the bytes when present, at most this many.
     Len8(usize),
     /// `uint8_vector_dec` after a u8 size: the size, then that many bytes. The SDK checks only the remaining length;
-    /// the bound of 9 (an ANT message) is inferred and not enforced.
+    /// the bound of 9 (an ANT message: 8 payload bytes, `ANT_STANDARD_DATA_PAYLOAD_SIZE`, plus the channel) is not enforced;
+    /// the S332 SDK's own bound was not found (searched Nordic's public S212 docs).
     Sized,
     /// `ble_gatts_hvx_params_t_dec`'s tail: a presence byte and a u16 length, then (if present) a presence byte and
     /// that many bytes.
@@ -496,7 +497,7 @@ pub const CMDS: &[Cmd] = &[
         Stock::Sends,
         "ant_channel_open_with_offset.c: ant_channel_open_with_offset_req_dec"
     ),
-    // the size byte is bounded by the ANT message (9, inferred); the SDK checks only the bytes left
+    // the size byte is bounded by the ANT message (9: 8 payload bytes and the channel); the SDK checks only the bytes left
     cmd!(
         6,
         0xc8,

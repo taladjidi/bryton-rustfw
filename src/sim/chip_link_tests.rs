@@ -127,6 +127,17 @@ fn the_ant_queue_of_32_overflows_while_suspended() {
     assert_eq!((s.nordic.sd_ant.len(), s.nordic.ant_dropped), (32, 8));
 }
 
+/// The overflow is reported as event 0x35 once the queue has room (Nordic ant_parameters.h EVENT_QUE_OVERFLOW).
+#[test]
+fn the_ant_overflow_is_reported_with_event_0x35() {
+    let mut s = chip();
+    s.nordic.suspended = true;
+    ant(&mut s, 40);
+    s.nordic.suspended = false;
+    let frames = drain(&mut s);
+    assert_eq!(frames.iter().filter(|f| nrf::ant_queue_overflow(f)).count(), 1);
+}
+
 /// A 9th security context without AUTH_STATUS or DISCONNECTED hangs the chip; those free one.
 #[test]
 fn a_ninth_security_context_hangs() {

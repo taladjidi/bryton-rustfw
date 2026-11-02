@@ -1,18 +1,26 @@
 //! The simulated sensor bus (I2C4, BOARD.md 16): LTR-308ALS (0x53), LPS22HH (0x5c), LIS2DH12 (0x18), strict like
 //! `gnss_model.rs`: a rule broken fails the test with its reason unless the test expects it (`expect`). Sources (the
-//! datasheet pages timed out when this was written, so the wording below is from the survey's reading and every rule
-//! is marked; a rule that needs the unit says "inferred"):
+//! LPS22HH datasheet and AN5209 could not be fetched (st.com stalled, 2026-11-02): its rules rest on ST's driver and
+//! docs.rs/lps22hh-rs register text; a rule nothing settles says "inferred"):
 //! - S1 LPS22HH with BDU set: the output registers lock once PRESS_OUT_XL / L is read until the high byte is read, so
 //!   a read that stops before the high byte (or a pressure read split in two transactions) mixes two conversions.
-//!   ST LPS22HH datasheet (https://www.st.com/resource/en/datasheet/lps22hh.pdf) BDU bit, and AN5209
+//!   ST LPS22HH datasheet (https://www.st.com/resource/en/datasheet/lps22hh.pdf) BDU bit ("not updated until MSB and LSB are read", checked in
+//!   https://docs.rs/lps22hh-rs/2.0.0/src/lps22hh_rs/register/main.rs.html), and AN5209
 //!   (https://www.st.com/resource/en/application_note/an5209-lps22hh-mems-nano-pressure-sensor-stmicroelectronics.pdf);
-//!   the exact lock wording is **inferred**. A split read is a violation here, not a lock.
+//!   the lock-start byte is **inferred**. A split read is a violation here, not a lock.
 //! - S2 ONE_SHOT (CTRL_REG2 0x11 bit 0) reads 1 while converting and self-clears at the end, STATUS 0x27 P_DA / T_DA
-//!   set then (AN5209); a one-shot asked while converting or with ODR != 0 is ignored (**inferred**).
-//! - S3 LTR-308 MAIN_STATUS 0x07 bit 3 (new data) is cleared by reading the ALS data (**inferred**: typical of the
-//!   family; Lite-On LTR-308ALS-01 datasheet, https://www.mouser.com/datasheet/2/239/lite-on_lite-s-a0002515146-1-1749840.pdf).
-//! - S4 18 bits conversion 100 ms (MEAS_RATE 0x22): data read inside it is the old measurement: a violation here,
-//!   as the firmware means to read after it (same datasheet).
+//!   set then (self-clearing: ST community answer on the LPS22HB, same register; docs.rs register text); a one-shot asked
+//!   with ODR != 0 is ignored (docs.rs: works "in power-down mode"); asked while converting is ignored (**inferred**:
+//!   nothing found). The conversion time is **inferred** (AN5209 not read).
+//! - S3 LTR-308 MAIN_STATUS 0x07 bit 3 (new data) is cleared after the data is read (Lite-On DS86-2016-0027 Rev C,
+//!   https://optoelectronics.liteon.com/upload/download/DS86-2016-0027/LTR-308ALS-01_Final_%20DS_V2.1.PDF, p.13).
+//!   Whether the status read or the data read clears it is not stated (**inferred**: the data read; the firmware
+//!   reads both in one block, so either way holds). Registers 0x0D..0x0F are read as a group (pseudo code p.23).
+//! - S4 18 bits conversion 100 ms (MEAS_RATE 0x22, p.12). Timing accuracy is +-20 % and wake-up takes up to 10 ms
+//!   (3.3), so `light_late_ms` lets the conversion finish late. Data read before it ends is old: a violation unless
+//!   the same read holds MAIN_STATUS, where the firmware can see it (ambient.rs `light_read`).
+//! - S7 a supply glitch sets MAIN_STATUS bit 5 (power-on) and puts every register back to its default (GAIN 3x, not
+//!   the firmware's 6; standby): [`Bus::light_glitch`]. The bit reads 1 after power-up too, cleared by reading it.
 //! - S5 a stuck bus (`stuck_sda`: a slave holding SDA low after a reset mid-read): every transfer fails until
 //!   [`Bus::recover`] (nine SCL pulses and a STOP, NXP UM10204 3.1.16 "bus clear"; the unit's clocking is
 //!   `i2c_recover` in main.rs, never run on the host).
@@ -31,6 +39,10 @@ pub struct Bus {
     light: [u8; 0x20],
     /// When the light sensor left standby (None: in standby).
     light_on_since: Option<u64>,
+    /// The conversion takes this much longer than 100 ms (+-20 % timing and up to 10 ms wake-up, datasheet 3.3).
+    pub light_late_ms: u64,
+    /// MAIN_STATUS bit 5: set at power-up, and by a supply glitch ([`Bus::light_glitch`]); cleared by reading it.
+    light_por: bool,
     /// The conversion (100 ms period from `light_on_since`) whose data was last read (S3).
     light_epoch: Option<u64>,
     /// Time the light sensor has spent measuring, ms (up to its last standby).
@@ -80,6 +92,8 @@ impl Bus {
             lux10: Some(3000), // 300 lux: indoors
             light: [0; 0x20],
             light_on_since: None,
+            light_late_ms: 0,
+            light_por: true,
             light_epoch: None,
             light_on_ms: 0,
             light_reads: 0,
@@ -132,7 +146,18 @@ impl Bus {
     /// The light sensor's conversion period number at `now` and whether the first one is done.
     fn light_epoch_at(&self, now: u64) -> (u64, bool) {
         let t = self.light_on_since.map_or(0, |t| now.saturating_sub(t));
-        (t / 100, self.light_on_since.is_some() && t >= 100)
+        let period = 100 + self.light_late_ms;
+        (t / period, self.light_on_since.is_some() && t >= period)
+    }
+
+    /// A supply glitch on the light sensor (S7): every register back to its default (MEAS_RATE 0x22, GAIN 0x01 =
+    /// 3x, standby), MAIN_STATUS bit 5 set until it is read (datasheet p.11 and p.13).
+    pub fn light_glitch(&mut self, now: u64) {
+        if let Some(t) = self.light_on_since.take() {
+            self.light_on_ms += now - t;
+        }
+        (self.light[0], self.light[4], self.light[5]) = (0, 0x22, 0x01);
+        self.light_por = true;
     }
 
     pub(super) fn read(&mut self, now: u64, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
@@ -148,13 +173,17 @@ impl Bus {
                 let raw = lux10.min(0x3_ffff);
                 let mut regs = self.light;
                 regs[0x06] = LIGHT_ID;
-                regs[0x07] = if ready && self.light_epoch != Some(epoch) { 0x08 } else { 0 }; // S3
+                regs[0x07] =
+                    if ready && self.light_epoch != Some(epoch) { 0x08 } else { 0 } | u8::from(self.light_por) << 5; // S3, S7
+                let status_read = r <= 0x07 && r + len > 0x07;
+                self.light_por &= !status_read;
                 regs[0x0d..0x10].copy_from_slice(&raw.to_le_bytes()[..3]);
                 if r <= 0x0f && r + len > 0x0d {
-                    if !ready {
+                    // with MAIN_STATUS in the same read the firmware can see the data is old or reset
+                    if !ready && !status_read {
                         self.violation("S4: ALS data read inside the first conversion (old data)");
                     }
-                    if (regs[0x04], regs[0x05]) != (0x22, 0x02) {
+                    if (regs[0x04], regs[0x05]) != (0x22, 0x02) && !status_read {
                         self.violation("S6: the lux scale assumes 18 bits, gain 6 (MEAS_RATE, GAIN rewritten)");
                     }
                     self.light_epoch = Some(epoch);
