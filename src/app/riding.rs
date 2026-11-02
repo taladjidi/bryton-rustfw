@@ -700,7 +700,8 @@ impl App {
                 kcal: self.power.kcal(),
                 kj: self.power.kj(),
             };
-            // held conditions count real seconds: the repeats of a stall (`lag_s` > 0) carry one old reading each
+            // held conditions count real seconds: the repeats of a stall (`lag_s` > 0) carry one old reading each, so a
+            // stall counts only its last tick toward a hold (a deliberate cost: a hold can be a few seconds late)
             if self.rec.lag_s == 0 {
                 self.alerts.limits(&r, &self.settings.limits, &mut self.alert);
                 // ERG: the trainer holds the watts, the resistance climbs as the rider slows

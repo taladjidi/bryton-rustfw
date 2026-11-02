@@ -118,10 +118,6 @@ pub struct Gnss {
     pub lost_epochs: u32,
     /// The longest gap between two SPI transfers while powered, ms: the stream's time-out (G2) must not be reached.
     pub longest_gap_ms: u64,
-    /// After a stream time-out the stream stays stopped until the host sends a frame or the supply is cycled
-    /// (**inferred**, G2b: seen on the unit 2026-11-02, a 60 s stall left the receiver silent for about 2 minutes, which
-    /// "restarts at the next access" does not explain; a test knob, off by default).
-    pub wedge_after_timeout: bool,
     /// The time aiding was wrong by more than its accuracy (G8).
     pub degraded: bool,
     /// The configuration in force (RAM layer; the receiver's defaults at power-up).
@@ -137,7 +133,6 @@ pub struct Gnss {
     /// The time of the last transfer, and whether a TIME_UTC was accepted since power-up.
     pub(super) last_xfer: u64,
     time_known: bool,
-    wedged: bool,
     out: std::collections::VecDeque<u8>,
     /// Answers made during this transfer: they come out from the next one (the receiver takes time to process).
     late: Vec<u8>,
@@ -166,7 +161,7 @@ impl Gnss {
     fn defaults(&mut self) {
         (self.pm_mode, self.signals_on) = (0, [true, true, true, false]); // GPS, Galileo, BeiDou B1I (data sheet)
         (self.maxff, self.extended_timeout, self.ack_aiding) = (50, false, false);
-        (self.time_known, self.wedged) = (false, false);
+        self.time_known = false;
     }
 
     /// The supply on or off at simulated time `now` (G10).
@@ -259,10 +254,6 @@ impl Gnss {
         if !self.powered || now < self.next_ms {
             return;
         }
-        if self.wedged {
-            self.next_ms = now + 1000;
-            return;
-        }
         let cutoff = self.last_xfer + self.timeout_ms.unwrap_or(STREAM_TIMEOUT_MS);
         if self.extended_timeout || now <= cutoff {
             // late by a second or more (powered, or not read for a while): from now
@@ -280,7 +271,6 @@ impl Gnss {
         }
         self.next_ms = now + 1000; // restarts at this access
         self.lost_epochs += lost;
-        self.wedged = lost > 0 && self.wedge_after_timeout;
         if buffered {
             self.pvt(now);
         }
@@ -367,7 +357,6 @@ impl Gnss {
 
     /// A whole, valid frame.
     fn message(&mut self, now: u64, class: u8, id: u8, p: &[u8]) {
-        self.wedged = false;
         match (class, id) {
             (0x06, 0x8a) => self.valset(now, p),
             (0x13, 0x20 | 0x40) => self.mga(now, id, p),

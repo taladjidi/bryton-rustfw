@@ -179,6 +179,15 @@ fn a_stall_does_not_count_as_held_seconds_for_the_cadence_alert() {
     app.press(&mut sim, Press::Short(Key::Start)); // START
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 8000);
+    // the control: 40 rpm held 6 s in ERG with no stall says it
+    sim.nordic.trainer.rpm = 40;
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(app.notes.text.as_str(), "CADENCE LOW", "held without a stall: said");
+    // the rider recovers, the banner goes, then 2 s slow again
+    sim.nordic.trainer.rpm = 90;
+    run(&mut sim, &mut app, 65_000); // the alert is said once a CADENCE_EVERY_S at most
+    app.notes.ms = None;
+    app.notes.text.clear();
     sim.nordic.trainer.rpm = 40;
     run(&mut sim, &mut app, 2000);
     sim.delay_ms(4000);

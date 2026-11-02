@@ -25,10 +25,9 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   - the app clock's drift without the cable: 0.003 % over 20 min (0.033 % with the cable);
   - PA2 driven low (BOARD.md 4): the USB dev link dropped after a few seconds, nothing else seen (inferred: the USB HS
     PHY's (ULPI) enable or supply); the standby current is still owed;
-  - the GNSS receiver silent about 2 minutes after a 60 s stall (label gone): the cause is not known (the model's
-    stream time-out restarts at the next read); the app now sends the configuration again when the fix goes stale and
-    every 10 s of silence, and cycles the supply after a minute in a ride (`sim::gnss_model_tests`); to check on the unit
-    with `dev.py stall 60`.
+  - the GNSS receiver after a stall: answering again at once after 15 s and 60 s stalls (label sampled every 0.5 s,
+    three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not
+    reproduced.
 
 - **Every second of a stall is on the timer (2026-11-02, no cap; 10 s before):** the ride's seconds are counted from
   the RTC (`catch_up_seconds`); the last `REPEAT_S` (5) of a stall are ticked with the pass's readings, as before,

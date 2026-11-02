@@ -25,7 +25,7 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py stackfault               run the stack past its canary on purpose (no ride open): the unit must reset
                                   with the fault marker (peek 0x580040c4 reads 0xfa0000nn within a minute)
-  dev.py stall S                  sleep the loop S seconds (1..600) in one go, a ride may be open: the recorder sees a gap
+  dev.py stall S                  sleep the loop S seconds (1..120) in one go (test only, never on a real ride): the recorder sees a gap
                                   in RTC seconds (src/link/dev.rs `bench stall`)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
@@ -456,7 +456,7 @@ def main():
     p = sub.add_parser('stepbench', help='run App::step N times back to back (2..16, default 8) and print each in us and the '
                        'first-to-rest ratio: a ratio well over 1 means the pass is code fetch')
     p.add_argument('n', nargs='?', type=int, default=8)
-    p = sub.add_parser('stall', help='sleep the unit\'s main loop S seconds (1..600) in one go, a ride may be open: '
+    p = sub.add_parser('stall', help='sleep the unit\'s main loop S seconds (1..120) in one go (test only, never on a real ride): '
                        'the recorder must take the gap on its RTC seconds')
     p.add_argument('seconds', type=int)
     sub.add_parser('nrfoff', help='switch the radio chip off as the switch-off does, unit kept up: the path taken (seen0 / '
@@ -559,8 +559,8 @@ def main():
             elif a.cmd == 'stepbench':
                 print(command(s, f'bench step {a.n}'))
             elif a.cmd == 'stall':
-                if not 1 <= a.seconds <= 600:
-                    sys.exit('dev.py: stall S: S is 1..600')
+                if not 1 <= a.seconds <= 120:
+                    sys.exit('dev.py: stall S: S is 1..120')
                 s.timeout = a.seconds + 10  # the answer comes after the sleep
                 r = command(s, f'bench stall {a.seconds}')
                 if not r.startswith('stall '):

@@ -32,7 +32,7 @@
 //!   <cts10> <cts100> <cts1000>`: path `seen0` (off at the first ask), `seen1` (after a reset), `held` (PA6 held), `us`
 //!   the time `system_off` took, `fresh` when the chip was up and asked at once (`reset`: reset first, it was not), each
 //!   cts `1` when the chip's RTS was low (it takes bytes), `0` released (BOARD.md 11 "Power off").
-//! - `bench stall <seconds>` (1 to 600): sleeps that long in one go, WFI, with nothing else run ([`Effect::BenchStall`],
+//! - `bench stall <seconds>` (1 to 120; test only, never on a real ride): sleeps that long in one go, WFI, with nothing else run ([`Effect::BenchStall`],
 //!   `bench_stall`), and answers `stall <ms>` (the sleep as the board timed it). Allowed while a ride is open: the
 //!   recorder must take the gap on its RTC seconds (the stall path of `catch_up_seconds`, docs/status.md).
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
@@ -404,9 +404,9 @@ impl Session {
             // a RAM run mid-ride loses up to 60 s of it; the card commands stall the loop (and the recorder) for
             // seconds; a poke can hit the card's controller: all wait for a settled ride, as wtest does
             // the one bench a ride allows: the stall is the test of the recorder's gap, and it writes nothing
-            Some(b"bench") if line.starts_with(b"bench stall") => match words.nth(1).and_then(parse) {
-                Some(secs @ 1..=600) => return Effect::BenchStall(secs),
-                _ => h.send(b"err usage: bench stall <1..600>\n"),
+            Some(b"bench") if line.starts_with(b"bench stall ") => match words.nth(1).and_then(parse) {
+                Some(secs @ 1..=120) => return Effect::BenchStall(secs),
+                _ => h.send(b"err usage: bench stall <1..120>\n"),
             },
             Some(b"load" | b"reset" | b"find" | b"bench" | b"sector" | b"poke") if !app.ride_settled() => {
                 h.send(b"err ride open\n");
