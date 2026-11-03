@@ -36,6 +36,14 @@ pub struct LoopModel {
     /// does not reach Stop: no STOPF).
     pub stop_off: bool,
     pub stop_fails: bool,
+    /// The ride's Stop not built (`POWER_STEPS` without bit 6: never tried on a ride).
+    pub ride_stop_off: bool,
+    /// The ride's Stops that slept (also in `stops`).
+    pub ride_stops: u32,
+    /// Stops not tried for the radio: a byte from the Nordic chip in or coming, or ours going out.
+    pub radio_pending: u32,
+    /// The SDRAM did not come back whole after a Stop (main.rs `image_marks` differ): the wake is broken.
+    pub sdram_lost: bool,
     /// The idle Stop's wake fails to put a clock back (PLL1 not locked again): the loop must reset.
     pub stop_broken: bool,
     /// The cable comes in at this time, ms (an edge that ends a Stop, as PC13's EXTI line).
@@ -52,6 +60,9 @@ pub struct LoopModel {
     /// The touch INT and the keys at the last look (their edges latch in between, as the EXTI flags do).
     touch_was: bool,
     keys_was: u8,
+    /// The time of that look at the keys, ms: a key that went down since (a falling edge) has its EXTI flag up until
+    /// the next look, whatever it is now.
+    keys_look_ms: u64,
     /// The stack was run past its canary.
     overflowed: bool,
     /// The Nordic chip always has a byte waiting (one that sends faster than the pass can read: review of B4b).
@@ -155,6 +166,7 @@ impl Sim {
 
 impl LoopBoard for Sim {
     type Link = SimLink;
+    const RIDE_STOP_BUILT: bool = true; // a test turns it off at run time (`ride_stop_off`)
     fn canary(&mut self) -> u32 {
         if self.main.overflowed { 0 } else { crate::STACK_CANARY }
     }
@@ -200,17 +212,32 @@ impl LoopBoard for Sim {
     }
     /// A sleep on the wake-up timer's 2048 Hz grid for `ms` (stopbench `wutr`), cut at the first ms a key goes down,
     /// the touch INT falls or the cable comes in (each latched as its EXTI flag, left for `key_edge` / `touch_edge`),
-    /// then the wake's work; timed as main.rs does, by two readings of the RTC's TR and SSR at its 1/1024 s.
-    fn idle_stop(&mut self, ms: u32) -> (u32, u32) {
+    /// then the wake's work; timed as main.rs does, by two readings of the RTC's TR and SSR at its 1/1024 s. The card
+    /// must be quiet (no transfer open, not programming): a Stop never begins inside card work.
+    fn idle_stop(&mut self, ms: u32, ride: bool) -> (u32, u32) {
         use crate::stopbench::{PASS_OK, PENDING, PLL, STOPF, WUTF, elapsed_us, wutr};
         let edge = |s: &mut Sim| {
             let vbus_in = s.main.vbus_at.is_some_and(|t| s.ms >= t) && !s.main.vbus;
             (s.touch_int() && !s.main.touch_was) || s.keys_down() & !s.main.keys_was != 0 || vbus_in
         };
-        if self.main.stop_off || edge(self) {
+        // a key's EXTI flag latched since the last look, released since or not (main.rs: a flag up, no Stop)
+        let was = self.main.keys_was;
+        let latched = (self.main.keys_look_ms..self.ms).any(|t| (self.keys)(t) & !was != 0);
+        if (if ride { self.main.ride_stop_off } else { self.main.stop_off }) || latched || edge(self) {
             return (0, PENDING);
         }
+        // timed from here, as main.rs; RTS high, its 20 us wait (CPU work), then a byte in or landing, or ours still
+        // going out: no Stop
         let before = self.rtc_ss();
+        self.awake_ns += 20_000;
+        self.advance_ns(20_000);
+        let now = self.ms;
+        if self.nrf_ext.is_none() && !self.nordic.hold(now) {
+            self.main.radio_pending += 1;
+            return (0, PENDING);
+        }
+        assert!(self.emmc.quiet(self.ms), "a Stop with card work in flight");
+        self.main.ride_stops += u32::from(ride);
         let mut left = u64::from(wutr(ms) + 1) * 1_000_000_000 / 2048;
         let mut woke = false;
         while left > 0 {
@@ -232,9 +259,15 @@ impl LoopBoard for Sim {
         let ns = self.main.wake_ns;
         self.awake_ns += ns;
         self.advance_ns(ns);
+        let now = self.ms;
+        if self.nrf_ext.is_none() {
+            self.nordic.release(now); // RTS back after the wake, as main.rs
+        }
         let us = elapsed_us(before, self.rtc_ss(), RTC_PREDIV_S);
         self.main.stops.push((ms, us));
-        let flags = if self.main.stop_broken {
+        let flags = if self.main.sdram_lost {
+            PASS_OK & !crate::stopbench::REFRESH_OUT
+        } else if self.main.stop_broken {
             PASS_OK & !PLL
         } else if self.main.stop_fails {
             PASS_OK & !STOPF
@@ -273,7 +306,7 @@ impl LoopBoard for Sim {
     fn key_edge(&mut self) -> bool {
         let keys = self.keys_down();
         let edge = keys & !self.main.keys_was != 0;
-        self.main.keys_was = keys;
+        (self.main.keys_was, self.main.keys_look_ms) = (keys, self.ms);
         edge
     }
     fn byte_waiting(&mut self) -> bool {

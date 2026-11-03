@@ -1571,7 +1571,7 @@ fn a_stall_while_auto_paused_adds_nothing() {
 
 /// The ride's timer events (event timer): (event_type, timer_trigger: None without the data field, the Start
 /// key's), after checking they alternate start, stop.
-fn timer_events(file: &[u8]) -> Vec<(u64, Option<u64>)> {
+pub(super) fn timer_events(file: &[u8]) -> Vec<(u64, Option<u64>)> {
     use crate::fit::tests::field;
     let m = crate::fit::tests::decode(file).unwrap();
     let ev: Vec<_> =

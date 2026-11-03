@@ -162,7 +162,7 @@ impl Nordic {
                     }
                 }
             }
-            while self.fifo.len() < FIFO && !self.hung {
+            while self.fifo.len() < FIFO && !self.hung && !self.held {
                 if self.out.is_empty() && !self.start_frame() {
                     break;
                 }
@@ -186,7 +186,7 @@ impl Nordic {
 
     /// When the chip's next byte reaches our FIFO, if it has one to send.
     fn next_arrival(&self) -> Option<u64> {
-        if self.hung || self.off || self.fifo.len() >= FIFO {
+        if self.hung || self.off || self.held || self.fifo.len() >= FIFO {
             return None;
         }
         let start = if !self.out.is_empty() {
@@ -274,6 +274,29 @@ impl Nordic {
         self.txq.clear();
         self.frame.clear();
         self.stall = None;
+    }
+
+    /// A Stop's RTS held high at `ms` (main.rs `idle_stop`: PD4 an output driven high, then a 20 us look): false,
+    /// holding nothing, when a byte is in our FIFO or lands within those 20 us, or our own TX still holds bytes
+    /// (USART_ISR TC clear). Held, the chip sends nothing and its events queue (`pull` goes on).
+    pub(super) fn hold(&mut self, ms: u64) -> bool {
+        self.sync(ms);
+        self.run();
+        let t = self.t;
+        let landing = self.next_arrival().is_some_and(|at| at <= t + 20);
+        if !self.fifo.is_empty() || landing || !self.txq.is_empty() {
+            return false;
+        }
+        self.held = true;
+        true
+    }
+
+    /// The Stop's end at `ms`: RTS back to the USART, the chip sends from now on (nothing went out meanwhile).
+    pub(super) fn release(&mut self, ms: u64) {
+        self.sync(ms);
+        self.held = false;
+        self.tx_at = self.tx_at.max(self.t);
+        self.run();
     }
 
     /// A byte is in the FIFO now (one still on the wire is not).

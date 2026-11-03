@@ -481,9 +481,13 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   (ready) under USART2; for the Stop it is a GPIO output driven high, so the chip keeps its bytes (inferred from RTS /
   CTS flow control: what the chip does with them while it waits is not known), and AF7 again after the wake. A byte
   already on the wire lands in 10 us at 1 Mbaud; one seen 20 us after RTS went high (RXFNE or BUSY) cancels the Stop.
+  So does a byte of ours still going out (USART2 enabled, USART_ISR TC clear: RM0399): the Stop would stop USART2's
+  clocks mid-byte (what the chip makes of a byte cut that way is inferred, not tried). A ride's Stop (phase 2b) holds
+  the chip for at most the rest of a 50 ms pass, as long as a ride pass's WFI already holds it once the RX FIFO is
+  full (below, "Receiving").
 
      PD4 RTS     ____/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\________   AF7, then output high, then AF7
-     MCU         run |<- 20 us ->| check, Stop (up to 250 ms) ...| wake: clocks, SDRAM back
+     MCU         run |<- 20 us ->| check, Stop (up to 250 ms idle, 50 ms on a ride) | wake
                      output high  RXFNE / BUSY set: no Stop
 
   The firmware does not wait inside a pass: the board has one primitive per edge (`Board::nrf_hold(true / false)`,

@@ -4,7 +4,7 @@
 //! Commands, one per line:
 //! - `where`: `where TITLE|row/rows|LABEL` (row from 0) in a menu, else `where OVERVIEW`, `RIDE n` or
 //!   `SCREEN name`; read-only (tools/walk.py moves the cursor by name).
-//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending, card writes yes|no` (CPU awake in the app's work, last second).
+//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending, card writes yes|no, ride stop built yes|no` (CPU awake in the app's work, last second).
 //! - `bat`: the battery history, one line a minute, oldest first: millivolts, ` c` while charging; then `end`.
 //! - `shot`: `shot 240 320`, then 240 x 320 RGB565 pixels, big endian, row by row (what the app drew).
 //! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (tools/pack.py, without its
@@ -195,10 +195,12 @@ pub struct Stats {
     /// Since boot, to tell where a clock drift comes from: slices ended early, the ms they slept, slices that ran out,
     /// slices a USB command took over, radio passes.
     pub slices: [u32; 5],
-    /// Since boot, the main loop's idle Stops (docs/power.md "Stop mode", phase 2a): those that slept, those of them
-    /// that failed (the system not in Stop, a clock or the SDRAM not back: [`crate::stopbench::PASS_OK`]), and the ms
-    /// they slept by the RTC.
-    pub stops: [u32; 3],
+    /// Since boot, the main loop's Stops (docs/power.md "Stop mode", phases 2a and 2b): those that slept, those of them
+    /// that failed (the system not in Stop, a clock or the SDRAM not back: [`crate::stopbench::PASS_OK`]), the ms
+    /// they slept by the RTC, then the ride's Stops among them, their failures and their ms.
+    pub stops: [u32; 6],
+    /// The build has the ride's Stop (main.rs `POWER_STEPS` bit 6; off by default in the card-writing build).
+    pub ride_stop: bool,
 }
 
 /// Configured, but no start of frame for this long (and no suspend seen): the computer dropped the device.
@@ -548,6 +550,7 @@ impl Session {
                 h.send(app.ride_word());
                 h.send(b", card writes ");
                 h.send(app.card_writes_word());
+                h.send(if stats.ride_stop { b", ride stop built yes" } else { b", ride stop built no" });
                 h.send(b"\n");
             }
             Some(b"where") => {
