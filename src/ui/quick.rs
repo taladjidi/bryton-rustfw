@@ -24,8 +24,8 @@ pub const MEDIA: [(Button, u32, u32, u32, u32); 5] = {
         (Button::VolUp, 124, VY, 112, 44),
     ]
 };
-/// A sensor line's height.
-pub const ROW: u32 = 16;
+/// The space the sensor lines share: from SENSORS_Y to the brightness row, less a 4 px gap.
+pub const SENSORS_H: u32 = BRIGHT_Y - 4 - SENSORS_Y;
 /// Where the sensor lines start: right under the volume row.
 pub const SENSORS_Y: u32 = MEDIA[3].2 + 44 + 4;
 /// The most sensor lines: the power meter's (POWER, with its ZERO button) and one a kind.
@@ -39,6 +39,20 @@ pub const BRIGHT: [(u32, u32, u32, u32); 2] = [(8, BRIGHT_Y, 64, 44), (168, BRIG
 /// The level between the buttons: x, y, width.
 pub const LEVEL: (u32, u32, u32) = (76, BRIGHT_Y + 15, 88);
 
+/// Top and height of sensor line `k` of `n` (`power`: the POWER line's index). The lines share [`SENSORS_H`]: the
+/// POWER line gets two shares (at most 44 px, a thumb target for ZERO), the others one (at most 28 px).
+pub fn line(k: usize, n: usize, power: Option<usize>) -> (u32, u32) {
+    let shares = (n + power.is_some() as usize).max(1) as u32;
+    let unit = SENSORS_H / shares;
+    let height = |j: usize| if Some(j) == power { (2 * unit).min(44) } else { unit.min(28) };
+    (SENSORS_Y + (0..k).map(&height).sum::<u32>(), height(k))
+}
+
+/// The y of the text (and of a button's label) in a sensor line at `y` of height `h`: centred, `y` itself at 16 px.
+pub fn text_y(y: u32, h: u32) -> u32 {
+    y + h.saturating_sub(LABEL.height()) / 2
+}
+
 /// What a touch hits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -50,15 +64,20 @@ pub enum Hit {
     Light(bool),
 }
 
-/// The control under a touch at (`x`, `y`), if any (`power`: the POWER line's index among the sensor lines).
-pub fn hit(x: u16, y: u16, power: Option<usize>) -> Option<Hit> {
+/// The control under a touch at (`x`, `y`), if any (`power`: the POWER line's index among the `n` sensor lines).
+pub fn hit(x: u16, y: u16, power: Option<usize>, n: usize) -> Option<Hit> {
     let at = |(bx, by, w, h): (u32, u32, u32, u32)| Rect(bx, by, w, h).contains(x, y);
     MEDIA
         .iter()
         .find(|&&(_, bx, by, w, h)| at((bx, by, w, h)))
         .map(|b| Hit::Media(b.0))
         .or_else(|| {
-            power.filter(|&k| Rect(0, SENSORS_Y + k as u32 * ROW, super::W, ROW).contains(x, y)).map(|_| Hit::Zero)
+            power
+                .filter(|&k| {
+                    let (top, h) = line(k, n, power);
+                    Rect(0, top, super::W, h).contains(x, y)
+                })
+                .map(|_| Hit::Zero)
         })
         .or_else(|| BRIGHT.iter().position(|&r| at(r)).map(|i| Hit::Light(i == 1)))
 }
@@ -178,8 +197,6 @@ mod tests {
     #[test]
     fn layout_fits_and_hits() {
         assert!(BRIGHT[0].1 + BRIGHT[0].3 <= super::super::H, "the brightness row fits");
-        assert!(SENSORS_Y + ROWS as u32 * ROW <= BRIGHT_Y, "six sensor lines");
-        assert!(SENSORS_Y + (ROWS as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell");
         assert!(TITLE_Y + 20 <= ARTIST_Y && ARTIST_Y + 20 <= MEDIA[0].2 && MEDIA[4].2 + 44 <= SENSORS_Y);
         for (i, a) in MEDIA.iter().enumerate() {
             for m in &MEDIA[i + 1..] {
@@ -188,21 +205,45 @@ mod tests {
         }
         for &(b, x, y, w, h) in &MEDIA {
             assert!(w >= 44 && h >= 44, "a 44 px target");
-            assert_eq!(hit((x + w / 2) as u16, (y + h / 2) as u16, None), Some(Hit::Media(b)));
+            assert_eq!(hit((x + w / 2) as u16, (y + h / 2) as u16, None, 4), Some(Hit::Media(b)));
         }
         // the gaps between buttons hit nothing
-        assert_eq!(hit(80, (MEDIA[0].2 + 20) as u16, Some(0)), None);
-        assert_eq!(hit(160, (MEDIA[1].2 + 20) as u16, Some(0)), None);
-        assert_eq!(hit(120, (MEDIA[3].2 + 20) as u16, Some(0)), None);
-        assert_eq!(hit(100, (MEDIA[0].2 + 47) as u16, Some(0)), None);
-        let row = |k: u32| (SENSORS_Y + k * ROW + ROW / 2) as u16;
-        assert_eq!(hit(2, row(2), Some(2)), Some(Hit::Zero), "anywhere on the line");
-        assert_eq!(hit(237, row(2), Some(2)), Some(Hit::Zero));
-        assert_eq!(hit(120, row(2), Some(1)), None, "another line");
-        assert_eq!(hit(120, row(2), None), None, "no power meter");
-        assert_eq!(hit(40, (BRIGHT_Y + 20) as u16, None), Some(Hit::Light(false)));
-        assert_eq!(hit(200, (BRIGHT_Y + 20) as u16, None), Some(Hit::Light(true)));
-        assert_eq!(hit(120, TITLE_Y as u16, Some(0)), None);
+        assert_eq!(hit(80, (MEDIA[0].2 + 20) as u16, Some(0), 4), None);
+        assert_eq!(hit(160, (MEDIA[1].2 + 20) as u16, Some(0), 4), None);
+        assert_eq!(hit(120, (MEDIA[3].2 + 20) as u16, Some(0), 4), None);
+        assert_eq!(hit(100, (MEDIA[0].2 + 47) as u16, Some(0), 4), None);
+        let mid = |(top, h): (u32, u32)| (top + h / 2) as u16;
+        let power = Some(2);
+        assert_eq!(hit(2, mid(line(2, 4, power)), power, 4), Some(Hit::Zero), "anywhere on the power line");
+        assert_eq!(hit(237, mid(line(2, 4, power)), power, 4), Some(Hit::Zero));
+        assert_eq!(hit(120, mid(line(1, 4, power)), power, 4), None, "the line above");
+        assert_eq!(hit(120, mid(line(3, 4, power)), power, 4), None, "the line below");
+        assert_eq!(hit(120, mid(line(2, 4, power)), None, 4), None, "no power meter");
+        assert_eq!(hit(40, (BRIGHT_Y + 20) as u16, None, 4), Some(Hit::Light(false)));
+        assert_eq!(hit(200, (BRIGHT_Y + 20) as u16, None, 4), Some(Hit::Light(true)));
+        assert_eq!(hit(120, TITLE_Y as u16, Some(0), 4), None);
+    }
+
+    #[test]
+    fn sensor_lines_share_the_space() {
+        assert_eq!(SENSORS_H, 112);
+        for n in 0..=ROWS {
+            for power in core::iter::once(None).chain((0..n).map(Some)) {
+                let mut end = SENSORS_Y;
+                for k in 0..n {
+                    let (top, h) = line(k, n, power);
+                    assert_eq!(top, end, "line {k} of {n} ({power:?}) follows the one above");
+                    assert!(h >= 16, "line {k} of {n} ({power:?}): {h} px");
+                    end = top + h;
+                }
+                assert!(end <= BRIGHT_Y - 4, "{n} lines ({power:?}) end at {end}");
+            }
+        }
+        assert_eq!(line(2, 4, Some(2)), (SENSORS_Y + 44, 44), "the power line of four: two shares");
+        assert_eq!(line(3, 4, Some(2)), (SENSORS_Y + 88, 22));
+        assert_eq!(line(0, 6, Some(0)), (SENSORS_Y, 32));
+        assert_eq!(line(1, 6, Some(0)), (SENSORS_Y + 32, 16));
+        assert_eq!(line(5, 6, None), (SENSORS_Y + 90, 18));
     }
 
     #[test]

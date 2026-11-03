@@ -304,7 +304,6 @@ impl App {
 
     /// Draws box `i` (the media buttons whole, each other box in its fixed place).
     fn quick_draw_box(&self, c: &mut impl Canvas, i: usize) {
-        let sens_y = q::SENSORS_Y;
         let (text, color) = self.quick_text(i);
         let s = text.as_str();
         match i {
@@ -317,15 +316,17 @@ impl App {
             B_LEVEL => q::draw_text(c, q::LEVEL, Align::Centre, color, s),
             _ if i >= B_ROWS => {
                 let (k, part) = ((i - B_ROWS) / 3, (i - B_ROWS) % 3);
-                let y = sens_y + k as u32 * q::ROW;
+                let (top, h) = q::line(k, self.quick_shape() as usize, self.quick_power());
+                let y = q::text_y(top, h);
                 let Some(kind) = self.quick_kinds().nth(k) else { return };
                 let Some(&(x, w)) = q::SENSOR_BOXES.get(part) else { return };
                 match part {
                     2 => q::draw_battery(c, x, y, self.quick_battery(kind)),
-                    // the button fills its own 16 px row only: the next line's ink is not touched
+                    // the button fills its own line only (a 2 px margin when the line is tall): the next line's ink is not touched
                     1 if kind == Kind::Power => {
                         let (l, fg, bg) = self.quick_button();
-                        q::draw_button(c, (x, y, w, q::ROW), bg, fg, l.as_str());
+                        let m = if h >= 32 { 2 } else { 0 };
+                        q::draw_button(c, (x, top + m, w, h - 2 * m), bg, fg, l.as_str());
                     }
                     _ => q::draw_text(c, (x, y, w), Align::Left, color, s),
                 }
@@ -387,7 +388,8 @@ impl App {
                     (self.quick.vals.get(k).copied().unwrap_or_default(), self.quick_value(kind));
                 if let Some(&(x, w)) = q::SENSOR_BOXES.get(1).filter(|_| was_color == color && !was.as_str().is_empty())
                 {
-                    q::redraw_text(&mut p, (x, q::SENSORS_Y + k as u32 * q::ROW, w), color, was.as_str(), v.as_str());
+                    let (top, h) = q::line(k, self.quick_shape() as usize, self.quick_power());
+                    q::redraw_text(&mut p, (x, q::text_y(top, h), w), color, was.as_str(), v.as_str());
                     continue;
                 }
             }
@@ -406,7 +408,7 @@ impl App {
                 self.close();
             }
             Input::Touch(Gesture::Tap(x, y)) => {
-                match q::hit(x, y, self.quick_power()) {
+                match q::hit(x, y, self.quick_power(), self.quick_shape() as usize) {
                     Some(Hit::Media(button)) => {
                         use ui::media::Button;
                         let key = match button {
