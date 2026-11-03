@@ -5369,13 +5369,14 @@ fn recovery_records() {
                 lap: core::array::from_fn(|_| next()),
                 more: core::array::from_fn(|_| next()),
                 timer: next(),
+                by_hand: ride[0].is_multiple_of(2),
             };
             recovery_sectors(&mut next, &r, r.to_sector(), Rec::from_sector, &mut recorder);
             // the totals a resume goes on from (riding.rs `Resumed`), whatever the record holds: read back as written,
             // then a few seconds of ride on them and every total read, nothing panics
-            let back = Rec::from_sector(&r.to_sector()).map(|b| (b.ride, b.more, b.timer));
-            assert_eq!(back, Some((ride, r.more, r.timer)));
-            let mut rd = crate::ride::Ride::resumed(&ride, &r.more);
+            let back = Rec::from_sector(&r.to_sector()).map(|b| (b.ride, b.more, b.timer, b.by_hand));
+            assert_eq!(back, Some((ride, r.more, r.timer, r.by_hand)));
+            let mut rd = crate::ride::Ride::resumed(&ride, &r.more, r.by_hand);
             let mut p = crate::power::Power::new();
             p.resume(&crate::ride::power_words(&r.more));
             rd.start_pause();

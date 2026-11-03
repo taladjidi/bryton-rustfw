@@ -450,14 +450,13 @@ fn a_ride_wake_that_breaks_resets_once_and_stops_no_more() {
     let mut main2 = MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
     until(&mut sim2, &mut app2, &mut main2, 3_000);
     assert!(app2.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app2.notes.list[0].as_str());
-    // it comes back paused, and moving does not start it again (any fault's resume: Ride::resumed); Start does
+    // it comes back paused, and moving starts it again by itself (any fault's resume: Ride::resumed)
     let t = sim2.ms + 30_000;
     while sim2.ms < t {
         app2.live.set(Metric::Speed, 300);
         main2.pass(&mut app2, &mut sim2);
     }
-    assert_eq!(app2.ride.state(), ride::State::Paused, "30 s moving after the resume");
-    app2.press(&mut sim2, Press::Short(Key::Start));
+    assert_eq!(app2.ride.state(), ride::State::Running, "30 s moving after the resume");
     until(&mut sim2, &mut app2, &mut main2, 200_000);
     assert_eq!(app2.ride.state(), ride::State::Running);
     assert_eq!(sim2.main.ride_stops, 0, "a ride's Stop after a wake that broke");

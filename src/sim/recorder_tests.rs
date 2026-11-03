@@ -1288,7 +1288,7 @@ fn a_ride_across_the_dst_change_keeps_its_name_and_times() {
     assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")));
     assert_eq!(app.rec.clean.name(), name, "the same file reopened");
     assert_eq!((app.settings.tz, app.strip.time), (crate::TZ_UTC + 4, (2, 2)), "the zone back from the file");
-    app.press(&mut sim2, Press::Short(Key::Start)); // resume
+    assert_eq!(app.ride.state(), ride::State::Running, "gone on by itself at the fix's 18 km/h");
     run(&mut sim2, &mut app, 30_000);
     app.press(&mut sim2, Press::Short(Key::Start)); // pause
     save_ride(&mut sim2, &mut app);
@@ -1659,6 +1659,199 @@ fn a_reset_during_an_auto_pause_keeps_the_timer() {
     assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
     // the stop ended by the resume (the Start key's start), no stop event at the reset
     assert_eq!(timer_events(&file), [(0, None), (4, Some(1)), (0, None), (4, None)]);
+}
+
+/// A reset mid-ride (owner, 2026-11-03: "Resume automatically"): the ride comes back paused with RIDE RESUMED and,
+/// with nothing read (the sensors not back) or standing still, stays so; the first second at speed it goes on by
+/// itself, counted. The file: the time off an auto-pause's stop (stop_all, trigger auto, at the last record) that
+/// the first moving second ends (start, trigger auto); its records never repeat a time, its lap in the file kept (the
+/// screen's lap count restarts after a resume, as before), each lap's and
+/// the session's timer the screen's. The file goes to `target/fit/autoresume.fit` for tools/fit_check.py (`--timer`).
+#[test]
+fn a_reset_mid_ride_goes_on_once_riding() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 70_000, POLL_MS, 300, Some(200));
+    app.lap();
+    ride_passes(&mut sim, &mut app, 60_000, POLL_MS, 300, Some(200)); // a checkpoint at 60 s and 120 s
+    let before = app.ride.timer_s();
+    let (mut sim, mut app) = reboot(&mut sim, 3);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    let back = app.ride.timer_s();
+    assert!(back > 60 && back <= before && back + 60 >= before, "the checkpoint's timer: {back} of {before}");
+    assert_eq!(app.ride.state(), ride::State::Paused);
+    run(&mut sim, &mut app, 10_000);
+    ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 0, None);
+    assert_eq!((app.ride.state(), app.ride.timer_s()), (ride::State::Paused, back), "nothing read, then stopped");
+    sim.tones.clear();
+    ride_passes(&mut sim, &mut app, 1000, POLL_MS, 300, Some(200));
+    assert_eq!(app.ride.state(), ride::State::Running, "riding: gone on within the second");
+    assert_eq!(app.notes.text.as_str(), "RESUMED", "said as a Start resume");
+    assert!(sim.tones.windows(2).any(|w| w == [1800, 2600]), "BEEP_START: {:?}", sim.tones);
+    assert!(app.ride.moving() && (back + 1..=back + 2).contains(&app.ride.timer_s()), "{}", app.ride.timer_s());
+    ride_passes(&mut sim, &mut app, 30_000, POLL_MS, 300, Some(200));
+    let timer = app.ride.timer_s();
+    let name = app.rec.clean.name();
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's, the time off left out");
+    let auto = |k| (k, Some(1));
+    assert_eq!(timer_events(&file), [(0, None), auto(4), auto(0), (4, None)], "the time off an auto stop");
+    let times = record_times(&sim.emmc.image, &std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap()));
+    assert!(times.windows(2).all(|p| p[1] > p[0]), "no time twice: {times:?}");
+    let m = crate::fit::tests::decode(&file).unwrap();
+    assert_eq!(m.iter().filter(|x| x.0 == 19).count(), 2, "the lap before the reset and the last");
+    to_fit_dir("autoresume.fit", &file);
+}
+
+/// `file` as `target/fit/<name>` for tools/fit_check.py (check.sh, `--timer`).
+fn to_fit_dir(name: &str, file: &[u8]) {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/fit");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(name), file).unwrap();
+}
+
+/// A ride at 30 km/h and 200 W for 70 s, then `stop_s` stopped (0 km/h, the meter silent), then a reset: the unit
+/// after it, the RIDE RESUMED notice up and the ride paused at its checkpoint's timer.
+fn resumed_after(stop_s: u64) -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 70_000, POLL_MS, 300, Some(200));
+    ride_passes(&mut sim, &mut app, stop_s * 1000, POLL_MS, 0, None);
+    let (mut sim, mut app) = reboot(&mut sim, 3);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    assert_eq!(app.ride.state(), ride::State::Paused);
+    (sim, app)
+}
+
+/// A reset during an auto-pause (its stop open at the checkpoint) goes on by itself once ridden: one auto stop (the
+/// auto-pause's, none written at the reset) and one auto start; the file's timer the screen's.
+#[test]
+fn a_reset_during_an_auto_pause_goes_on_once_riding() {
+    let (mut sim, mut app) = resumed_after(60); // a checkpoint at 120 s, stopped
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 300, Some(200));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    let timer = app.ride.timer_s();
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
+    let auto = |k| (k, Some(1));
+    assert_eq!(timer_events(&file), [(0, None), auto(4), auto(0), (4, None)]);
+    to_fit_dir("autoresume_open.fit", &file);
+}
+
+/// Start during the wait goes on as ever: the reset's auto stop ended by the Start key's start.
+#[test]
+fn start_during_the_wait_goes_on_by_hand() {
+    let (mut sim, mut app) = resumed_after(0);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 300, Some(200));
+    let timer = app.ride.timer_s();
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
+    assert_eq!(timer_events(&file), [(0, None), (4, Some(1)), (0, None), (4, None)]);
+    to_fit_dir("autoresume_start.fit", &file);
+}
+
+/// The end-ride screen up on a resumed ride waiting to go on: held paused (its recorders' stop the rider's, a
+/// checkpoint at once), so after Back and another reset it stays paused while ridden, until Start.
+#[test]
+fn the_end_screen_holds_a_resumed_ride_across_a_reset() {
+    let (mut sim, mut app) = resumed_after(0);
+    app.press(&mut sim, Press::Long(Key::Start));
+    assert!(matches!(app.screen(), Screen::End(_)), "{:?}", app.screen());
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Back));
+    ride_passes(&mut sim, &mut app, 5000, POLL_MS, 300, Some(200));
+    assert_eq!(app.ride.state(), ride::State::Paused, "held: not gone on");
+    let (mut sim, mut app) = reboot(&mut sim, 6);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    let timer = app.ride.timer_s();
+    ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 300, Some(200));
+    assert_eq!((app.ride.state(), app.ride.timer_s()), (ride::State::Paused, timer), "held across the reset");
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 300, Some(200));
+    let timer = app.ride.timer_s();
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
+    assert_eq!(timer_events(&file), [(0, None), (4, Some(1)), (0, None), (4, None)]);
+    to_fit_dir("autoresume_held.fit", &file);
+}
+
+/// A record of a build before byte 30 (all zeros there) of a ride paused with Start: not known paused by hand, so it
+/// goes on once ridden, the Start key's stop ended by an auto start.
+#[test]
+fn an_older_record_of_a_ride_paused_by_hand_goes_on_once_riding() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 70_000, POLL_MS, 300, Some(200));
+    app.press(&mut sim, Press::Short(Key::Start)); // paused by hand (a checkpoint)
+    run(&mut sim, &mut app, 5000);
+    // both copies' records as a build before byte 30 writes them
+    let mut older = 0;
+    for c in sim.emmc.image.as_chunks_mut::<512>().0 {
+        if let Some(r) = crate::recorder::rec::Rec::from_sector(c).filter(|r| r.by_hand) {
+            *c = crate::recorder::rec::Rec { by_hand: false, ..r }.to_sector();
+            older += 1;
+        }
+    }
+    assert!(older >= 2, "{older} records paused by hand");
+    let (mut sim, mut app) = reboot(&mut sim, 3);
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.ride.state(), ride::State::Paused);
+    ride_passes(&mut sim, &mut app, 20_000, POLL_MS, 300, Some(200));
+    assert_eq!(app.ride.state(), ride::State::Running, "not known paused by hand: gone on");
+    let timer = app.ride.timer_s();
+    let (file, timer_s) = saved_timer(&mut sim, &mut app);
+    assert_eq!(timer_s, u64::from(timer), "the session's timer: the screen's");
+    assert_eq!(timer_events(&file), [(0, None), (4, None), (0, Some(1)), (4, None)]);
+    to_fit_dir("autoresume_old.fit", &file);
+}
+
+/// A ride paused with Start before the reset stays paused after it, riding or not, until Start (the recovery record
+/// says so); AUTO PAUSE OFF does not make a resumed ride go on before it is ridden, and once gone on it is never
+/// auto-paused.
+#[test]
+fn a_ride_paused_by_hand_stays_paused_after_a_reset_and_auto_pause_off_waits_for_riding() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    ride_passes(&mut sim, &mut app, 70_000, POLL_MS, 300, Some(200));
+    app.press(&mut sim, Press::Short(Key::Start)); // paused by hand (a checkpoint)
+    run(&mut sim, &mut app, 5000);
+    let timer = app.ride.timer_s();
+    let (mut sim, mut app) = reboot(&mut sim, 3);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 300, Some(200));
+    assert_eq!((app.ride.state(), app.ride.timer_s()), (ride::State::Paused, timer), "paused by hand: riding or not");
+    app.press(&mut sim, Press::Short(Key::Start)); // resume
+    ride_passes(&mut sim, &mut app, 70_000, POLL_MS, 300, Some(200)); // a checkpoint since: no longer paused by hand
+    assert_eq!(app.ride.state(), ride::State::Running);
+
+    // AUTO PAUSE OFF: back paused, stopped it stays so; ridden it goes on, then stopped it is not auto-paused
+    let (mut sim, mut app) = reboot(&mut sim, 6);
+    run(&mut sim, &mut app, 1000); // the resume reads BIKE's settings: OFF set after it
+    app.settings.auto_pause = crate::AUTO_PAUSE_KMH.iter().position(|&k| k == 255).unwrap();
+    let back = app.ride.timer_s();
+    ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 0, None);
+    assert_eq!((app.ride.state(), app.ride.timer_s()), (ride::State::Paused, back), "OFF: not gone on standing still");
+    ride_passes(&mut sim, &mut app, 1000, POLL_MS, 300, Some(200));
+    ride_passes(&mut sim, &mut app, 10_000, POLL_MS, 0, None);
+    assert!(app.ride.moving() && app.ride.timer_s() >= back + 10, "OFF: never auto-paused once gone on");
 }
 
 /// A card that fails during a 10 min stall and for 5 s after it: the stall's seconds go on the timer, the few
