@@ -221,6 +221,11 @@ impl EmmcCard {
         self.now < self.busy_until
     }
 
+    /// No operation open at `now` ms: no transfer between its command and its stop (states 5, 6), not programming.
+    pub(super) fn quiet(&self, now: u64) -> bool {
+        !matches!(self.state, 5 | 6) && now >= self.busy_until
+    }
+
     /// The state as the card is: the transfer state reads as programming (7) while busy (E1).
     fn state(&self) -> u32 {
         if self.state == 4 && self.busy() { 7 } else { self.state }

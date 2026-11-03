@@ -115,6 +115,21 @@ pub const TAG_A: u32 = 0x57;
 /// Register 31's tag, bits 24..31.
 pub const TAG_B: u32 = 0x58;
 
+/// Backup register 0's word ([`pack`]) is the report of a wake that did not put everything back ([`Outcome::Broken`]):
+/// the main loop's (then a reset) or a bench's. A ride does not stop while it is there ([`crate::App::ride_stop_ok`]),
+/// so a wake that breaks cannot reset the unit once a minute through a ride; a USB drop's or the standby's word
+/// (their own tags) or the next bench's clears it.
+///
+/// ```
+/// use bryton_rustfw::stopbench::*;
+/// let word = |flags| pack(&StopReport { stop: true, flags, ..StopReport::default() })[0];
+/// assert!(broke(word(PASS_OK & !PLL)));
+/// assert!(!broke(word(PASS_OK)) && !broke(word(STOP_OK)) && !broke(0) && !broke(0x0b00_0001));
+/// ```
+pub fn broke(word: u32) -> bool {
+    word >> 24 == TAG_A && outcome(word >> 12 & 0xfff) == Outcome::Broken
+}
+
 /// The bench asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {

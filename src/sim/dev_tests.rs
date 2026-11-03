@@ -72,7 +72,7 @@ fn info_answers() {
     assert_eq!(
         format!("{head} appup N, {tail}").as_bytes(),
         format!(
-            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, loop early 0 0 0 0 0 stops 0 0 0 appup N, radio resets 0 resyncs 0, ant events lost 0, ant HR 0 SPEED 0 CAD 0 SPD+CAD 0 POWER 0 SHIFT 0 DI2 0 TRAIN 0, climb tile us last 0 max 0 slice max 0, auto off held 65, ride idle, card writes yes\n",
+            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, loop early 0 0 0 0 0 stops 0 0 0 0 0 0 appup N, radio resets 0 resyncs 0, ant events lost 0, ant HR 0 SPEED 0 CAD 0 SPD+CAD 0 POWER 0 SHIFT 0 DI2 0 TRAIN 0, climb tile us last 0 max 0 slice max 0, auto off held 65, ride idle, card writes yes, ride stop built no\n",
             env!("CARGO_PKG_VERSION"),
             env!("GIT_DESCRIBE")
         )

@@ -372,6 +372,8 @@ pub struct Nordic {
     /// survive a reset.
     pub hangs: u32,
     pub high_water: usize,
+    /// Our RTS held high for a Stop (chip_link.rs `hold`): the chip sends nothing, its events queue.
+    held: bool,
 }
 
 /// The Nordic app's limits (chip_link.rs for the model, BOARD.md 11 for the facts): `slots` queue slots, then a hang

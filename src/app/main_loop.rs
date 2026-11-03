@@ -51,8 +51,12 @@ pub trait LoopBoard: Board {
     /// off meanwhile (RTS high). The slice's timer is not running. Returns the us slept by the RTC, from the call to its
     /// return, and the flags (stopbench.rs: [`crate::stopbench::PENDING`] when it did not try, [`crate::stopbench::PASS_OK`] when all went
     /// right, [`WUTF`] when its timer ended it). The key and touch EXTI flags stay for [`LoopBoard::key_edge`] and
-    /// [`LoopBoard::touch_edge`].
-    fn idle_stop(&mut self, ms: u32) -> (u32, u32);
+    /// [`LoopBoard::touch_edge`]. `ride`: a ride's Stop (phase 2b, [`App::ride_stop_ok`]), built or not on its own
+    /// (main.rs `POWER_STEPS` bit 6, the idle one's bit 5). It does not try while our bytes to the Nordic chip are
+    /// still going out.
+    fn idle_stop(&mut self, ms: u32, ride: bool) -> (u32, u32);
+    /// The ride's Stop is built in (main.rs `POWER_STEPS` bit 6), for `info`.
+    const RIDE_STOP_BUILT: bool;
     /// Drops what the Nordic chip sent (nobody reads it).
     fn nrf_flush(&mut self);
     /// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`bytes`).
@@ -165,10 +169,13 @@ impl<L: UsbLink> MainLoop<L> {
         // radio pass (App::radio_pass), so neither waits for it (the chip's own buffers are not known: it is read as
         // soon as it sends, as before); a ride's pass is the short one (LoopPolicy::begin_sleep)
         let wake = self.policy.begin_sleep(app.pass_ms(), app.radio_up());
-        // one idle Stop a pass, for the pass's whole sleep (docs/power.md "Stop mode", phase 2a): the app's rules, then
-        // the loop's (no USB link but for the bench, not after failures in a row)
+        // one Stop a pass, for the pass's whole sleep (docs/power.md "Stop mode"): an idle pass's (phase 2a) or a ride's
+        // (2b: at most the rest of its POLL_MS, after the step that did the recorder's card work), the app's rules,
+        // then the loop's (no USB link but for the bench, not after failures in a row)
+        self.policy.stops.ride_built = B::RIDE_STOP_BUILT;
         let cable = self.link.is_some() || b.vbus();
-        let mut stop = wake.io && app.stop_ok(b) && self.policy.stops.allowed(cable, self.policy.now_ms());
+        let ride = !wake.io && app.ride_stop_ok(b);
+        let mut stop = (ride || wake.io && app.stop_ok(b)) && self.policy.stops.allowed(cable, self.policy.now_ms());
         if !wake.radio {
             b.nrf_flush();
         }
@@ -180,14 +187,24 @@ impl<L: UsbLink> MainLoop<L> {
             let Some(slice) = self.policy.slice(app.pass_ms(), app.touching()) else {
                 break;
             };
-            let slice_at = b.cycles();
+            let mut slice_at = b.cycles();
             // a Stop that slept is this slice; one that did not try (a wake source pending) leaves it to WFI
             let stopped = if core::mem::take(&mut stop) {
-                let (us, flags) = b.idle_stop(app.pass_ms().saturating_sub(self.policy.slept_ms()));
-                match self.policy.stops.count(us, flags, cable, self.policy.now_ms()) {
-                    Outcome::NotTried => None,
-                    // the clocks or the SDRAM not as before: the report kept as `bench stop` keeps it, then a reset
-                    // (no ride is open: `App::stop_ok`)
+                if ride {
+                    // a short pass never reads the keys' EXTI flags (`key_edge`): one left from a press would keep
+                    // every ride Stop out (PENDING); the step polls the keys themselves
+                    let _ = b.key_edge();
+                }
+                let (us, flags) = b.idle_stop(app.pass_ms().saturating_sub(self.policy.slept_ms()), ride);
+                match self.policy.stops.count(us, flags, cable, self.policy.now_ms(), ride) {
+                    // its look (the radio's 20 us) was work: the slice starts after it, or the app clock loses it
+                    Outcome::NotTried => {
+                        slice_at = b.cycles();
+                        None
+                    }
+                    // the clocks or the SDRAM not as before: the report kept as `bench stop` keeps it, then a reset;
+                    // a ride resumes from its checkpoint, and does not stop again while the report is there
+                    // (`App::ride_stop_ok`, `stopbench::broke`)
                     Outcome::Broken => {
                         let r = StopReport { stop: true, flags, slept_ms: us / 1000, ..StopReport::default() };
                         for (n, w) in BKP.into_iter().zip(pack(&r)) {
