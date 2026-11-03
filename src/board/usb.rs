@@ -459,6 +459,10 @@ impl UsbLink for Link {
         w
     }
 
+    fn recover(&mut self, now_ms: u32) {
+        self.reconnect(now_ms);
+    }
+
     /// The first failure's registers since the link came up, once (the app keeps them in backup registers).
     fn snapshot(&mut self) -> Option<UsbSnap> {
         self.msc.snap.take()

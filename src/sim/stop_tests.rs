@@ -207,6 +207,24 @@ fn the_bench_allows_stop_with_the_cable_in_for_its_seconds() {
     assert_eq!(sim.backup[drops], 0x0b00_0001, "a drop well after the bench is logged");
 }
 
+#[test]
+fn a_link_left_suspended_after_the_bench_is_reconnected() {
+    let (mut sim, mut app, mut main) = unit();
+    let link = SimLink::default();
+    (sim.main.link, sim.main.vbus) = (Some(link.clone()), true);
+    until(&mut sim, &mut app, &mut main, 80_000);
+    link.0.borrow_mut().effects.push_back(Effect::BenchIdleStop(10));
+    // macOS forgot the port: the device sees a suspend that never ends (the unit, 2026-11-03)
+    link.0.borrow_mut().watches.extend([UsbWatch::Suspended; 400_000]);
+    until(&mut sim, &mut app, &mut main, 112_000);
+    let n = link.0.borrow().log.iter().filter(|l| **l == "recover").count();
+    let l = link.0.borrow();
+    let polls = l.log.iter().filter(|x| **x == "poll").count();
+    assert!((1..=3).contains(&n), "reconnected {n} times, {} watches left, {polls} polls", l.watches.len());
+    drop(l);
+    assert_eq!(main.stats().usb_recoveries as usize, n);
+}
+
 /// A heart-rate strap at 72 bpm: page 0 with the last beat's time (1/1024 s) and count moving on with the clock, so the
 /// RR intervals (HRV, the full copy's `hrv` messages) come from the broadcasts' own timing, as on a strap.
 fn hr_beats(t: u64) -> [u8; 8] {

@@ -4,7 +4,7 @@
 //! Commands, one per line:
 //! - `where`: `where TITLE|row/rows|LABEL` (row from 0) in a menu, else `where OVERVIEW`, `RIDE n` or
 //!   `SCREEN name`; read-only (tools/walk.py moves the cursor by name).
-//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending, card writes yes|no, ride stop built yes|no` (CPU awake in the app's work, last second).
+//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending, card writes yes|no, ride stop built yes|no, usb recoveries <n>` (CPU awake in the app's work, last second).
 //! - `bat`: the battery history, one line a minute, oldest first: millivolts, ` c` while charging; then `end`.
 //! - `shot`: `shot 240 320`, then 240 x 320 RGB565 pixels, big endian, row by row (what the app drew).
 //! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (tools/pack.py, without its
@@ -201,6 +201,9 @@ pub struct Stats {
     pub stops: [u32; 6],
     /// The build has the ride's Stop (main.rs `POWER_STEPS` bit 6; off by default in the card-writing build).
     pub ride_stop: bool,
+    /// Since boot, the soft reconnects the loop made on its own after a Stop with the cable in or a long stall left the
+    /// link not up (main_loop.rs `recover`); the bench's quiet drops hide the rest.
+    pub usb_recoveries: u32,
 }
 
 /// Configured, but no start of frame for this long (and no suspend seen): the computer dropped the device.
@@ -551,6 +554,8 @@ impl Session {
                 h.send(b", card writes ");
                 h.send(app.card_writes_word());
                 h.send(if stats.ride_stop { b", ride stop built yes" } else { b", ride stop built no" });
+                h.send(b", usb recoveries ");
+                h.send(decimal(u64::from(stats.usb_recoveries), &mut [0; 20]));
                 h.send(b"\n");
             }
             Some(b"where") => {

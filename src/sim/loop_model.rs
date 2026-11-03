@@ -132,6 +132,9 @@ impl UsbLink for SimLink {
         s.log.push("snapshot");
         s.snap.take()
     }
+    fn recover(&mut self, _: u32) {
+        self.0.borrow_mut().log.push("recover");
+    }
     fn worked(&mut self) -> bool {
         core::mem::take(&mut self.0.borrow_mut().worked)
     }

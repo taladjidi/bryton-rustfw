@@ -167,3 +167,11 @@ Sources:
 - ST community, mass storage on an H723 with a USB3300 PHY (FIFO sizes, the 48 MHz clock):
   https://community.st.com/stm32-mcus-products-25/stm32h723-usb-mass-storage-131452
 - The patch repo's recovery notes (bryton-S510-mods docs/recovery.md, "If the USB link drops").
+
+## Link recovery after a Stop or a stall (2026-11-03)
+
+`bench idle-stop` with the cable in leaves the core unserved for each Stop; the Mac sometimes forgets the port and
+the device then sits in `Suspended` for good (the watch leaves a suspend alone), so no replug-free way back (4 windows
+on the unit: 2 never came back). Inferred cause: nothing resumes a port the host dropped. Fix (main_loop.rs): after a
+Stop with the link up, or a poll more than 3 s after the last, the link must be `Up` 3 s later, else a soft
+disconnect and connect (3 tries, 10 s apart); `info` ends with `usb recoveries <n>`.
