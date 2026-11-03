@@ -39,6 +39,10 @@ pub trait LoopBoard: Board {
     fn run_image(&mut self, size: u32);
     /// Runs the stack down past its canary on purpose (the dev link's `stackfault`), then returns.
     fn overflow_stack(&mut self);
+    /// The dev link's Stop benches (docs/power.md "Stop mode", phase 1): the SDRAM in self-refresh around one WFI of
+    /// `ms` ended by the RTC wake-up timer, the system in Stop if `stop` (else CSleep, the clocks kept), the clocks and
+    /// the SDRAM restored, the image's CRC compared; SysTick is left stopped (the slice's timer is lost).
+    fn low_power(&mut self, ms: u32, stop: bool) -> crate::stopbench::StopReport;
     /// Drops what the Nordic chip sent (nobody reads it).
     fn nrf_flush(&mut self);
     /// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`bytes`).
@@ -171,6 +175,26 @@ impl<L: UsbLink> MainLoop<L> {
                             if stack_ok(b) {
                                 b.reset();
                             }
+                            return radio_passes;
+                        }
+                        Effect::BenchSrefresh(ms) => {
+                            let r = b.low_power(ms, false);
+                            crate::stopbench::send(l, &r);
+                            l.flush();
+                            // SysTick was stopped: the slice's end is lost, as after a drive command that slept
+                            took_over = true;
+                            woke = true;
+                        }
+                        Effect::BenchStop(ms) => {
+                            // the `ok` reaches the computer, then the device leaves the bus: USB needs VOS1 and its
+                            // clocks, which Stop takes away (docs/power.md "Stop mode")
+                            l.linger(50);
+                            l.disconnect();
+                            let r = b.low_power(ms, true);
+                            for (n, w) in crate::stopbench::BKP.into_iter().zip(crate::stopbench::pack(&r)) {
+                                b.backup_write(n, w);
+                            }
+                            b.reset();
                             return radio_passes;
                         }
                         Effect::Run(size) => {

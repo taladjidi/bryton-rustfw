@@ -3,7 +3,9 @@
    data and the stack live in DTCM (128 KB at 0x20000000, always on, not cached). The stack grows down from the top
    towards .bss; the word just above .bss (_stack_canary, not zeroed with .bss) holds a fixed pattern that main.rs
    writes at start and checks every pass: an overflow that reaches it is a fault (a reset, the ride resumes). The RAM-run trampoline (hw.rs)
-   lives in ITCM, so it can overwrite the image it came from. SDRAM from 0xd0800000 is the staging area for
+   lives in ITCM, so it can overwrite the image it came from, and so does hw.rs stop_itcm, which runs while the SDRAM
+   is in self-refresh (Stop mode); the two take under 1 KB of the 4 KB (tools/stack_check.py checks the second never
+   reaches outside ITCM). SDRAM from 0xd0800000 is the staging area for
    images loaded over USB (hw.rs STAGE): nothing is linked there. MAP (16 MB in, past the 6 MB the bootloader
    copies and the staging area) is the map's memory, handed out once by hw.rs map_memory: nothing is linked there
    either. AXISRAM (D1, 512 KB, unused by this firmware otherwise) holds the app itself (main.rs make_app's static

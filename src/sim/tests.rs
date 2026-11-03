@@ -2066,6 +2066,30 @@ fn plugged(effects: Vec<Effect>, watches: Vec<UsbWatch>) -> (Sim, App, SimLink, 
     (sim, app, link, crate::MainLoop::new(<Sim as Board>::CPU_HZ, 80))
 }
 
+/// The Stop benches through the pass (docs/power.md "Stop mode", phase 1): `bench srefresh` sleeps, answers its line
+/// and the loop goes on; `bench stop` lingers (its `ok` was sent), leaves the bus, sleeps in Stop, keeps its report in
+/// backup registers 0 and 31 behind their tags and resets.
+#[test]
+fn stop_benches_answer_or_keep_their_report() {
+    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::BenchSrefresh(100)], vec![]);
+    main.pass(&mut app, &mut sim);
+    assert_eq!((sim.main.low_power.as_slice(), sim.main.resets), ([(100, false)].as_slice(), 0));
+    let sent = std::string::String::from_utf8(link.0.borrow().sent.clone()).unwrap_or_default();
+    assert!(
+        sent.starts_with("srefresh ok flags 000000c3 slept 100 wake 338 cycles ") && sent.ends_with('\n'),
+        "{sent:?}"
+    );
+    main.pass(&mut app, &mut sim);
+    assert_eq!(sim.main.low_power.len(), 1, "the loop goes on");
+    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::BenchStop(1000)], vec![]);
+    main.pass(&mut app, &mut sim);
+    assert_eq!((sim.main.low_power.as_slice(), sim.main.resets), ([(1000, true)].as_slice(), 1));
+    assert_eq!(link.0.borrow().log, ["poll", "linger", "disconnect"]);
+    let (a, b) = (sim.backup_read(0), sim.backup_read(31));
+    assert_eq!((a >> 24, a >> 14 & 0x1ff, a & 0x3fff), (0x57, crate::stopbench::STOP_OK, 1000));
+    assert_eq!(b >> 24, 0x58);
+}
+
 /// The USB link's effects as main.rs had them before the loop moved into the library (finding 31): the cable starts
 /// USB once; a reset, the staged image's run and the stack test linger first, the run disconnects after it, the stack
 /// test faults instead of resetting; a restart the app wants is taken after the effect's answer and before the watch.

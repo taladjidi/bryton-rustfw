@@ -224,7 +224,25 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
   needs longer than 20 us between frames (inferred), so a pass took about one frame and a ride's events outran the
   drain (docs/status.md).
 
-## Stop mode: plan (design, not built)
+## Stop mode: plan (phase 1 built: the primitive and its benches; the main loop's use is phase 2)
+
+**Phase 1, built 2026-11-03, not yet run on the unit** (docs/status.md):
+- **hw.rs `stop(deep, svos, report)`:** `stop_itcm`, in link.x `.itcm` beside the RAM-run trampoline (about 600 B of
+  the 4 KB), is register accesses, counted waits (at most 1,000,000 reads each) and stores into the caller's report
+  (DTCM): no call, no table, no literal into the SDRAM, which `tools/stack_check.py` checks in the release ELF on every
+  gate (`itcm_calls`). Steps 2 to 5 below, with two changes: the clocks are put back as RCC_CR and RCC_CFGR SW read just
+  before (the bootloader sets PLL1, main.rs never did, so there are no boot values to reuse; BOARD.md 1), and there is
+  no FMC busy flag to wait on (the H7's FMC_SDSR has none: BOARD.md 3). If self-refresh is not confirmed there is no
+  WFI; whatever fails on the wake, the normal-mode command is sent before it returns. `deep` false is unit step 1
+  (CSleep, the clocks kept), true is step 2 (SVOS3, main.rs `STOP_SVOS`).
+- **The wake (main.rs `low_power`, `wakeup_timer`):** the RTC wake-up timer on EXTI line 19 (checked: STM32CubeH7's
+  `RTC_EXTI_LINE_WAKEUPTIMER_EVENT`, BOARD.md 8) and IRQ 3, every other NVIC line and the CPU's EXTI masks saved,
+  cleared, then put back; SysTick off; the image's CRC before and after; the sleep timed by the RTC (SSR, RSF
+  resynchronised after the wake).
+- **The benches (src/link/dev.rs, src/link/stopbench.rs, `tools/dev.py srefresh / stop / stopreport`):** refused
+  while a ride is open. `bench stop` leaves its report in backup registers 0 (tag 0x57) and 31 (tag 0x58), the shared
+  diagnostics words, then resets. Not done in phase 1: RTS held high for the Nordic chip (the bench resets after), the
+  wake on keys, touch, VBUS or the Nordic chip, the sleep's time for the profiler and the uptime.
 
 **Why.** In WFI (CSleep) the STM32H747 draws 16.5 mA at VOS3, 200 MHz with every peripheral clock off and 47.1 mA
 with all on (DS12930 Rev 1, table 44, LDO, typical at 25 C); this firmware keeps FMC, SDMMC1, the RAMs, USART2,
@@ -263,8 +281,8 @@ calls out of ITCM). The I-cache keeps its lines in Stop (D1 logic retained); the
 6. PWR_CPUCR.STOPF says whether the system really was in Stop (it is also what a DIAG stage reads).
 
 **Wake sources.**
-- The pass's timer: the RTC wakeup timer (RTC_WUTR, from RTCCLK / 16: 0.49 ms steps), its EXTI line (19 on this
-  family, recalled: to check in RM0399's EXTI event input table) unmasked for the CPU; or LPTIM2 on the LSE.
+- The pass's timer: the RTC wakeup timer (RTC_WUTR, from RTCCLK / 16: 0.49 ms steps), its EXTI line (19, IRQ 3:
+  BOARD.md 8) unmasked for the CPU; or LPTIM2 on the LSE.
 - Keys (EXTI 1 to 4), the touch INT (EXTI 6), VBUS (PC13, EXTI 13, rising: today it is read each pass, which a
   250 ms pass still does), the power key (WKUP1, EXTI 55, as standby): configurable EXTI lines wake from Stop at any
   SVOS (DS12930 3.5.3, "wakeup ... through GPIO or asynchronous interrupt").

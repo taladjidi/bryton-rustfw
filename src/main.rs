@@ -777,6 +777,123 @@ fn standby() -> ! {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// The Stop benches (the dev link's `bench srefresh` / `bench stop`, hw.rs `stop`; docs/power.md "Stop mode", phase 1).
+// The one wake source: the RTC wake-up timer (RM0399 RTC, "Periodic auto-wakeup"), set as STM32CubeH7's
+// HAL_RTCEx_SetWakeUpTimer_IT does (WUTE off, WUTWF awaited, WUTR, WUCKSEL, then WUTIE and WUTE), on EXTI line 19 for
+// this core, rising edge (stm32h7xx_hal_rtc_ex.h: RTC_EXTI_LINE_WAKEUPTIMER_EVENT = EXTI_IMR1_IM19, "External interrupt
+// line 19 Connected to the RTC Wakeup event"; __HAL_RTC_WAKEUPTIMER_EXTI_ENABLE_IT writes EXTI_D1->IMR1), IRQ 3
+// (stm32h747xx.h RTC_WKUP_IRQn). Registers: stm32h747xx.h RTC_TypeDef (CR 0x08, ISR 0x0c, PRER 0x10, WUTR 0x14, SSR
+// 0x28; RTC_CR WUCKSEL 0..2, WUTE 10, WUTIE 14; RTC_ISR WUTWF 2, RSF 5, INIT 7, WUTF 10), EXTI RTSR1 at 0x58000000,
+// EXTI_D1 (CPUIMR1 / 2 / 3) at 0x58000080 / 90 / a0.
+// ---------------------------------------------------------------------------------------------------------------
+const RTC_CR: u32 = 0x5800_4008;
+const RTC_PRER: u32 = 0x5800_4010;
+const RTC_WUTR: u32 = 0x5800_4014;
+const RTC_SSR: u32 = 0x5800_4028;
+const EXTI_RTSR1: u32 = 0x5800_0000;
+const EXTI_CPUIMR3: u32 = 0x5800_00a0;
+const RTC_WKUP_LINE: u32 = 1 << 19;
+const RTC_WKUP_IRQ: u32 = 1 << 3;
+/// The regulator in Stop (PWR_CR1 SVOS, hw.rs `stop`): SVOS3, the reset value and stock's (its idle hook leaves it),
+/// the one that keeps D3's peripherals able to wake the system (DS12930 3.5.3); SVOS4 / 5 are lower, to try after.
+const STOP_SVOS: u32 = 3;
+
+/// Writes RTC_ISR (here RTC_ICSR) clearing the rc_w0 flags in `flags`, every other flag kept (a 1 written leaves it)
+/// and INIT as it is: STM32CubeH7's `__HAL_RTC_WAKEUPTIMER_CLEAR_FLAG`. Called with the write protection off.
+fn rtc_clear(flags: u32) {
+    wr(RTC_ICSR, !(flags | 1 << 7) | (rd(RTC_ICSR) & 1 << 7));
+}
+
+/// The RTC wake-up timer: armed to fire once in `ms` (its flag cleared first), or off (`None`, its flag cleared).
+fn wakeup_timer(ms: Option<u32>) {
+    modify(PWR_CR1, 0, 1 << 8); // DBP
+    wr(RTC_WPR, 0xca);
+    wr(RTC_WPR, 0x53);
+    modify(RTC_CR, (1 << 10) | (1 << 14), 0); // WUTE, WUTIE
+    let t0 = cycles();
+    while rd(RTC_ICSR) & (1 << 2) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {} // WUTWF, 10 ms max
+    rtc_clear(1 << 10); // WUTF
+    if let Some(ms) = ms {
+        wr(RTC_WUTR, bryton_rustfw::stopbench::wutr(ms));
+        modify(RTC_CR, 0b111, 0); // WUCKSEL 000: RTCCLK / 16
+        modify(RTC_CR, 0, (1 << 10) | (1 << 14));
+    }
+    wr(RTC_WPR, 0xff);
+}
+
+/// (RTC_TR, RTC_SSR), read together: SSR first, which locks TR and DR until DR is read (stm32h7xx_hal_rtc.c, the
+/// note of `HAL_RTC_GetTime`), after RSF (10 ms at most).
+fn rtc_ss() -> (u32, u32) {
+    let t0 = cycles();
+    while rd(RTC_ICSR) & (1 << 5) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {} // RSF
+    let ss = rd(RTC_SSR);
+    let tr = rd(RTC_TR);
+    let _ = rd(RTC_DR);
+    (tr, ss)
+}
+
+/// The CRC-32 of the image in SDRAM, from its first word to its size (vector table word 0x98, hw.rs; 1 MB at most):
+/// what a self-refresh must leave as it was.
+fn image_crc() -> u32 {
+    let words = rd(0xd000_0098).min(0x0010_0000) / 4;
+    bryton_rustfw::inflate::crc32((0..words).flat_map(|k| rd(0xd000_0000 + 4 * k).to_le_bytes()))
+}
+
+/// One sleep of `ms` with the SDRAM in self-refresh, in Stop (`deep`) or CSleep, woken by the RTC wake-up timer alone:
+/// SysTick stopped, every NVIC line and the CPU's EXTI masks saved and cleared but the timer's, then all put back; the
+/// image's CRC before and after. A bench's (the dev link's); the main loop's use is phase 2 (docs/power.md).
+fn low_power(ms: u32, deep: bool) -> bryton_rustfw::stopbench::StopReport {
+    use bryton_rustfw::stopbench::{CRC, STOPF, StopReport, WUTF, elapsed_ms};
+    let mut r = StopReport { stop: deep, ..StopReport::default() };
+    let crc = image_crc();
+    timer_stop();
+    let iser: [u32; 8] = core::array::from_fn(|k| rd(NVIC_ISER0 + 4 * k as u32));
+    let imr = (rd(EXTI_CPUIMR1), rd(EXTI_CPUIMR2), rd(EXTI_CPUIMR3));
+    for k in 0..8 {
+        wr(NVIC_ICER0 + 4 * k, u32::MAX);
+        wr(NVIC_ICPR0 + 4 * k, u32::MAX);
+    }
+    wr(EXTI_CPUIMR1, RTC_WKUP_LINE);
+    wr(EXTI_CPUIMR2, 0);
+    wr(EXTI_CPUIMR3, 0);
+    modify(EXTI_RTSR1, 0, RTC_WKUP_LINE);
+    wakeup_timer(Some(ms));
+    wr(EXTI_CPUPR1, RTC_WKUP_LINE);
+    wr(NVIC_ICPR0, RTC_WKUP_IRQ);
+    wr(NVIC_ISER0, RTC_WKUP_IRQ);
+    let before = rtc_ss();
+    hw::stop(deep, STOP_SVOS, &mut r);
+    // after a Stop the calendar's shadow registers are stale until RSF is set again (stm32h7xx_hal_rtc.c `HAL_RTC_WaitForSynchro`)
+    wr(RTC_WPR, 0xca);
+    wr(RTC_WPR, 0x53);
+    rtc_clear(1 << 5);
+    wr(RTC_WPR, 0xff);
+    let after = rtc_ss();
+    r.slept_ms = elapsed_ms(before, after, rd(RTC_PRER) & 0x7fff);
+    if rd(RTC_ICSR) & (1 << 10) != 0 {
+        r.flags |= WUTF;
+    }
+    if deep && r.cpucr & (1 << 5) != 0 {
+        r.flags |= STOPF;
+    }
+    wakeup_timer(None);
+    wr(EXTI_CPUPR1, RTC_WKUP_LINE);
+    modify(EXTI_RTSR1, RTC_WKUP_LINE, 0);
+    wr(EXTI_CPUIMR1, imr.0);
+    wr(EXTI_CPUIMR2, imr.1);
+    wr(EXTI_CPUIMR3, imr.2);
+    wr(NVIC_ICER0, RTC_WKUP_IRQ);
+    wr(NVIC_ICPR0, RTC_WKUP_IRQ);
+    for (k, v) in iser.iter().enumerate() {
+        wr(NVIC_ISER0 + 4 * k as u32, *v);
+    }
+    if image_crc() == crc {
+        r.flags |= CRC;
+    }
+    r
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Power while the core sleeps (WFI is CSleep: the CPU clock stops, every peripheral clock whose LPEN bit is set keeps
 // running; RM0399 RCC, "Peripheral clock gating control"). The core is awake under 1 % of the time, so this is where
 // the battery goes. Each step is a bit of POWER_STEPS (build time, default all), so a hang on the unit can be bisected:
@@ -1733,6 +1850,9 @@ impl bryton_rustfw::LoopBoard for S510 {
     }
     fn overflow_stack(&mut self) {
         stack_fault(hw::stack_canary());
+    }
+    fn low_power(&mut self, ms: u32, stop: bool) -> bryton_rustfw::stopbench::StopReport {
+        low_power(ms, stop)
     }
     fn nrf_flush(&mut self) {
         nrf_flush();

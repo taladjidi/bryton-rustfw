@@ -12,6 +12,11 @@ depth: main calls make_app).
     stack_check.py [ELF]      check the release ELF (check.sh also runs it on the ride build's)
     stack_check.py selftest   offline checks of the parsing and the call chain (check.sh runs it)
 
+The code in ITCM is checked too (`itcm_calls`): hw.rs `stop_itcm` runs while the SDRAM is in self-refresh (docs/power.md
+"Stop mode"), so it must not call, branch or point anywhere outside ITCM (a `bl`, a branch out, a call through a
+register, a literal word in the FMC's SDRAM space 0xc0000000..0xdfffffff would fetch from the sleeping SDRAM). The
+RAM-run trampoline is exempt: it writes the image and jumps into it on purpose.
+
 The frames are also summed along the longest call chain (`chain`: a depth-first search over the `bl` call graph; a
 cycle, i.e. recursion, is cut where it closes and listed). It fails above the stack minus MARGIN. `blx rN` calls
 (through a pointer: closures and trait objects) cannot be followed: their callers are listed, so a chain through
@@ -128,6 +133,34 @@ def chain(fr, graph):
     return top[0], top[1], [' -> '.join(c) for c in comps if len(c) > 1]
 
 
+def itcm_calls(text, syms):
+    """The ITCM functions' reaches outside ITCM, a line each, from llvm-objdump text (`ram_trampoline` exempt); and
+    the failure if hw.rs `stop_itcm` is not there at all (its section name or link.x changed)."""
+    lo, hi = syms.get('_sitcm', 0), syms.get('_eitcm', 0)
+    out, fn, seen = [], None, False
+    for line in text.splitlines():
+        m = re.match(r'^([0-9a-f]+) <(.*)>:$', line)
+        if m:
+            inside = lo <= int(m.group(1), 16) < hi and 'ram_trampoline' not in m.group(2)
+            fn = m.group(2) if inside else None
+            seen |= inside and 'stop_itcm' in m.group(2)
+            continue
+        if fn is None or not line.strip():
+            continue
+        short = re.sub(r'17h[0-9a-f]+E$', '', fn)[-40:]
+        b = re.search(r'\b(bl|blx|b(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)?(?:\.[wn])?)\s+0x([0-9a-f]+)\b', line)
+        word = re.search(r'\.word\s+0x([0-9a-f]+)', line)
+        if b and (b.group(1) in ('bl', 'blx') or not lo <= int(b.group(2), 16) < hi):
+            out.append(f'{short}: leaves ITCM: {line.strip()}')
+        elif re.search(r'\bblx\s+r\d+|\bbx\s+(?!lr\b)r\d+|\bldr(?:\.w)?\s+pc,|\bmov\s+pc,', line):
+            out.append(f'{short}: calls through a register: {line.strip()}')
+        elif word and 0xc000_0000 <= int(word.group(1), 16) < 0xe000_0000:
+            out.append(f'{short}: points into the SDRAM: {line.strip()}')
+    if not seen:
+        out.append('hw.rs stop_itcm is not in ITCM (_sitcm.._eitcm)')
+    return out
+
+
 def symbols(text):
     """The stack's bounds from llvm-nm text."""
     return {m.group(2): int(m.group(1), 16) for m in re.finditer(r'^([0-9a-f]+) \w (\w+)$', text, re.M)}
@@ -193,6 +226,17 @@ def selftest():
     o, s = check(deepfr, syms, deepg)
     assert any('longest call chain' in x for x in o) and 'longest chain 120000 B' in s, (o, s)
     assert check({n: 100 for n in names}, syms, deepg)[0] == []
+    # the ITCM check: a clean stop_itcm passes; a call, a branch out, a register call, an SDRAM literal fail; the
+    # trampoline's jump and its SDRAM address are its job; code outside ITCM is not this check's
+    isyms = {'_sitcm': 0x1000, '_eitcm': 0x1300}
+    head = ['1000 <ram_trampoline>:', '1000: mov.w r2, #0xd0000000', '1028: bx\tr3', '102c: 50 ef 00 e0 \t.word\t0xd0000000',
+            '1030 <_ZN13bryton_rustfw5board2hw9stop_itcm17h0123456789abcdefE>:', '1030: wfi',
+            '1032: blo\t0x1080 <_ZN13bryton_rustfw5board2hw9stop_itcm17h0123456789abcdefE+0x50>', '1034: pop\t{r4, pc}']
+    assert itcm_calls('\n'.join(head), isyms) == [], itcm_calls('\n'.join(head), isyms)
+    for bad in ('1036: bl\t0x1100 <x>', '1036: b.w\t0xd0001234 <memcpy>', '1036: blx\tr3', '1036: 00 10 00 d0 \t.word\t0xd0001000'):
+        assert len(itcm_calls('\n'.join(head + [bad]), isyms)) == 1, bad
+    assert itcm_calls('\n'.join(head[:4]), isyms) == ['hw.rs stop_itcm is not in ITCM (_sitcm.._eitcm)']
+    assert itcm_calls('\n'.join(head + ['d0000000 <main>:', 'd0000000: bl\t0xd0001000 <x>']), isyms) == []
     print('stack_check.py selftest ok')
 
 
@@ -206,7 +250,9 @@ if __name__ == '__main__':
     run = lambda tool, *a: subprocess.run([str(bins / tool), *a, str(elf)], capture_output=True, text=True, check=True).stdout
     dis = run('llvm-objdump', '-d', '--no-show-raw-insn')
     graph, indirect = calls(dis)
-    over, summary = check(frames(dis), symbols(run('llvm-nm')), graph, indirect)
+    syms = symbols(run('llvm-nm'))
+    over, summary = check(frames(dis), syms, graph, indirect)
+    over += itcm_calls(dis, syms)
     print(summary)
     if over:
         sys.exit('stack over budget:\n' + '\n'.join(over))

@@ -603,6 +603,27 @@ fn dev_link_input() {
         pc.got.clear();
     }
     assert!(maps > 0, "bench map reached");
+    // `bench srefresh` / `bench stop` with sleeps at and past their bounds (stopbench::MAX_MS), broken and hex
+    let sleeps: [&str; 8] = ["0", "1", "30000", "30001", "0x10", "-1", "x", "4294967296"];
+    let (mut srefresh, mut stops) = (0, 0);
+    for c in bytes(10, 2 << 10).collect::<std::vec::Vec<_>>().chunks_exact(2) {
+        let kind = if c[0] % 2 == 0 { "srefresh" } else { "stop" };
+        let line = std::format!("bench {kind} {}\n", sleeps[usize::from(c[1]) % sleeps.len()]);
+        match session.feed(line.as_bytes(), &app, Stats::default(), &mut pc) {
+            crate::dev::Effect::BenchSrefresh(ms) => {
+                assert!((1..=crate::stopbench::MAX_MS).contains(&ms) && kind == "srefresh", "{line:?}");
+                srefresh += 1;
+            }
+            crate::dev::Effect::BenchStop(ms) => {
+                assert!((1..=crate::stopbench::MAX_MS).contains(&ms) && kind == "stop", "{line:?}");
+                assert_eq!(pc.got, b"ok\n", "the answer goes before the reset");
+                stops += 1;
+            }
+            e => assert!(e == crate::dev::Effect::None && pc.got.starts_with(b"err usage: bench"), "{line:?}: {e:?}"),
+        }
+        pc.got.clear();
+    }
+    assert!(srefresh > 50 && stops > 50, "bench srefresh reached {srefresh} times, bench stop {stops}");
     dev_link_lines(&app);
     dev_link_ride_open();
 }
@@ -630,6 +651,8 @@ fn dev_link_ride_open() {
             4 => "bench nrfoff\n".into(),
             5 if c[1] % 2 == 0 => std::format!("bench step {}\n", c[2] % 20),
             5 => std::format!("bench map {} 0 0\n", c[2] % 61),
+            6 if c[1] % 3 == 0 => std::format!("bench srefresh {}\n", 1 + u32::from(c[2]) * 100),
+            6 if c[1] % 3 == 1 => std::format!("bench stop {}\n", 1 + u32::from(c[2]) * 100),
             6 => std::format!("sector {}\n", c[2]),
             7 => std::format!("poke {a} {}\n", c[3]),
             8 => std::format!("peek {a}\n"),
@@ -652,6 +675,8 @@ fn dev_link_ride_open() {
                     | Effect::BenchMap(..)
                     | Effect::BenchStep(_)
                     | Effect::BenchNrfOff
+                    | Effect::BenchSrefresh(_)
+                    | Effect::BenchStop(_)
             ),
             "{line:?} got out with a ride open"
         );

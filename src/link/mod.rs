@@ -7,4 +7,5 @@ pub mod msc;
 pub mod packets;
 pub mod phone;
 pub mod prof;
+pub mod stopbench;
 pub mod usbsnap;

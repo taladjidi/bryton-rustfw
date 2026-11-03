@@ -28,6 +28,8 @@ pub struct LoopModel {
     pub resets: u32,
     pub faults: u32,
     pub ran: Option<u32>,
+    /// The Stop benches asked (ms, Stop rather than CSleep), in order.
+    pub low_power: Vec<(u32, bool)>,
     /// The slice timer: started at, ms.
     timer: Option<(u64, u32)>,
     /// WFI wakes at uneven sub-ms instants (a byte, a key arrive at any time), as on the unit; off: every WFI is 1 ms.
@@ -49,6 +51,8 @@ pub struct LoopModel {
 /// What a [`SimLink`] answers and what it was asked, shared with the test (the link itself goes into the loop).
 #[derive(Default)]
 pub struct LinkScript {
+    /// What the pass sent the computer.
+    pub sent: Vec<u8>,
     /// What each poll returns, in turn; then [`Effect::None`].
     pub effects: VecDeque<Effect>,
     /// What each watch returns, in turn; then [`UsbWatch::Up`].
@@ -68,7 +72,9 @@ pub struct LinkScript {
 pub struct SimLink(pub Rc<RefCell<LinkScript>>);
 
 impl Host for SimLink {
-    fn send(&mut self, _: &[u8]) {}
+    fn send(&mut self, data: &[u8]) {
+        self.0.borrow_mut().sent.extend_from_slice(data);
+    }
     fn stage(&mut self, _: u32, _: &[u8]) {}
     fn peek(&mut self, _: u32) -> u32 {
         0
@@ -146,6 +152,25 @@ impl LoopBoard for Sim {
     }
     fn overflow_stack(&mut self) {
         self.main.overflowed = true;
+    }
+    /// The sleep passes on the clock and everything went right; the slice's timer is stopped, as main.rs's SysTick.
+    fn low_power(&mut self, ms: u32, stop: bool) -> crate::stopbench::StopReport {
+        use crate::stopbench::{REFRESH_OK, STOP_OK, StopReport};
+        self.main.low_power.push((ms, stop));
+        self.main.timer = None;
+        self.advance_ns(u64::from(ms) * 1_000_000);
+        let flags = if stop { STOP_OK } else { REFRESH_OK };
+        StopReport {
+            stop,
+            flags,
+            slept_ms: ms,
+            vos: 320,
+            hse: 64_000,
+            pll: 3200,
+            sw: 64,
+            fmc: 200,
+            ..StopReport::default()
+        }
     }
     fn nrf_flush(&mut self) {
         self.nordic.out.clear();

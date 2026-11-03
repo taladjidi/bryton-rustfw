@@ -21,6 +21,15 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   nothing it uses runs from them. **Inferred, not yet seen on the unit.** Which PLLs and peripherals the
   bootloader leaves on: to read (`tools/dev.py peek 0x58024400` RCC_CR, `0x580244d4 9` RCC_AHB3ENR..APB4ENR,
   `0x580244fc 9` the LPENR registers).
+- **Stop mode** (docs/power.md "Stop mode"; phase 1, the dev link's benches, **not yet seen on the unit**): Stop turns
+  the HSE and the PLLs off and wakes on the HSI (RCC_CFGR STOPWUCK 0; RM0399 RCC, inferred from the plan, the manual
+  not re-read). The registers keep their values, so hw.rs `stop` puts back what RCC_CR had on before (HSE, HSI48,
+  CSI, then PLL1..3, each ready flag the bit above its enable: stm32h747xx.h), then SYSCLK's source (RCC_CFGR SW,
+  awaited in SWS), after the regulator is ready (PWR_D3CR VOSRDY bit 13 and PWR_CSR1 ACTVOSRDY bit 13). Stock does the
+  same order in its idle hook's wake (bryton repo ghidra/HARDWARE.md 13: SystemClock_Config, VOSRDY first, then HSE and
+  PLL1 M 5 N 160 P 4, SYSCLK = PLL1P), its regulator left at SVOS3 (PWR_CR1 SVOS 11, the reset value). The M4's
+  PWR_CPU2CR (PWR + 0x14: PDDS_D3 bit 2, RUN_D3 bit 11) must also let D3 stop (inferred, RM0399 PWR): the bench
+  reports it, and PWR_CPUCR STOPF (bit 5) says whether the system was in Stop.
 
 ## 2. Boot hand-off
 
@@ -73,7 +82,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 
 | region | address | size | notes |
 |---|---|---|---|
-| ITCM | 0x00000000 | 64 KB | executable; this firmware puts its RAM-run trampoline at 0x1000 |
+| ITCM | 0x00000000 | 64 KB | executable; this firmware puts its RAM-run trampoline and its Stop routine at 0x1000 (link.x 4 KB, under 1 KB used) |
 | DTCM | 0x20000000 | 128 KB | data, bss and stack here |
 | AXI SRAM | 0x24000000 | 512 KB | |
 | SRAM1 to 3 | 0x30000000 | 288 KB | |
@@ -82,6 +91,13 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 
 - The image runs in place from SDRAM 0xd0000000, code and constants included.
 - This firmware's image is 1 MB at most (`link.x`). SDRAM from 0xd0800000 is its staging area for RAM-run.
+- **SDRAM self-refresh** (for Stop, hw.rs `stop`; **not yet seen on the unit**): FMC_SDCMR (0x52004150) MODE 101 with
+  CTB2 (bank 2) and NRFS 0, the value 0x0d in its low bits, as stock's `Pwr_SdramSelfRefresh` (bryton repo
+  ghidra/recovered_src/system/board.c: command {5, bank 2, 1 refresh, 0}, then mode status 2 checked); FMC_SDSR
+  (0x52004158) MODES2 (bits 3..4) reads 01 in self-refresh, 00 in normal mode (stm32h7xx_ll_fmc.c
+  `FMC_SDRAM_GetModeStatus`); the H7's SDSR has no busy flag. Back with MODE 000 (normal) and CTB2. Stock never sends
+  the normal-mode command after its Stop: the FMC leaving self-refresh on the first access (inferred from that) is
+  what it relies on; this firmware sends it and waits for MODES2 00.
 
 ## 4. Pins
 
@@ -375,6 +391,14 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
   system reset (seen), and should through standby (backup domain, RM0399; to see).
+- **Wake-up timer** (the Stop benches, main.rs `wakeup_timer`; **not yet seen on the unit**): RTC_WUTR (0x58004014)
+  counts RTCCLK / 16 (RTC_CR WUCKSEL 000), 2048 Hz from the LSE, so up to 32 s; RTC_CR WUTE bit 10, WUTIE bit 14; RTC_ISR
+  WUTWF bit 2 (WUTR writable) and WUTF bit 10 (cleared by writing 0, INIT kept). Its EXTI line for this core is **19**,
+  rising edge (STM32CubeH7 stm32h7xx_hal_rtc_ex.h: `RTC_EXTI_LINE_WAKEUPTIMER_EVENT` = `EXTI_IMR1_IM19`, unmasked in
+  EXTI_D1 IMR1 at 0x58000080), its IRQ **3** (stm32h747xx.h `RTC_WKUP_IRQn`). After a Stop, RSF is cleared and
+  awaited before reading the calendar (stm32h7xx_hal_rtc.c `HAL_RTC_WaitForSynchro`: "after wakeup from low power
+  modes the software must first clear the RSF flag"); RTC_SSR (0x58004028) counts down from PREDIV_S (1023 here), and
+  reading the time locks TR and DR until DR is read (same file, `HAL_RTC_GetTime`).
 
 ## 9. Standby (power off)
 

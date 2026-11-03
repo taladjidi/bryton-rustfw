@@ -377,3 +377,26 @@ fn bench_stall_runs_during_a_ride() {
     assert_eq!(s.feed(b"bench step 2\n", &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(pc.got, b"err ride open\n");
 }
+
+/// `bench srefresh` and `bench stop` (docs/power.md "Stop mode", phase 1) are the main loop's: parsed here, refused with
+/// a ride open (the SDRAM path is under test, and `stop` ends in a reset), `stop`'s `ok` sent before its reset.
+#[test]
+fn stop_benches_wait_for_a_settled_ride() {
+    let (mut sim, mut app) = app_at(9, 0, 0);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    assert_eq!(s.feed(b"bench srefresh 100\n", &app, Stats::default(), &mut pc), Effect::BenchSrefresh(100));
+    assert!(pc.got.is_empty());
+    assert!(!app.serve(&mut sim, &mut pc, &s, Effect::BenchSrefresh(100)), "the loop's, not serve's");
+    assert_eq!(s.feed(b"bench stop 1000\n", &app, Stats::default(), &mut pc), Effect::BenchStop(1000));
+    assert_eq!(pc.got, b"ok\n");
+    pc.got.clear();
+    assert_eq!(s.feed(b"bench stop 30001\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert!(pc.got.starts_with(b"err usage: bench stop"), "{:?}", pc.got);
+    app.press(&mut sim, crate::Press::Short(crate::Key::Start));
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    for line in [&b"bench srefresh 100\n"[..], b"bench stop 1000\n"] {
+        pc.got.clear();
+        assert_eq!(s.feed(line, &app, Stats::default(), &mut pc), Effect::None);
+        assert_eq!(pc.got, b"err ride open\n");
+    }
+}

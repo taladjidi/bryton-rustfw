@@ -35,6 +35,12 @@
 //! - `bench stall <seconds>` (1 to 120; test only, never on a real ride): sleeps that long in one go, WFI, with nothing else run ([`Effect::BenchStall`],
 //!   `bench_stall`), and answers `stall <ms>` (the sleep as the board timed it). Allowed while a ride is open: the
 //!   recorder must take the gap on its RTC seconds (the stall path of `catch_up_seconds`, docs/status.md).
+//! - `bench srefresh <ms>` (1 to 30000; no ride open): the SDRAM in self-refresh around one CSleep WFI of `ms`, ended by
+//!   the RTC wake-up timer, the image's CRC compared before and after ([`Effect::BenchSrefresh`], main.rs `low_power`,
+//!   docs/power.md "Stop mode" step 1); answers [`stopbench::send`]'s line, `srefresh ok ...` when all went right.
+//! - `bench stop <ms>` (1 to 30000; no ride open): `ok`, then USB disconnected, the system in Stop for `ms` (the RTC
+//!   wake-up timer), the clocks and the SDRAM restored, the report in backup registers 0 and 31 ([`stopbench::pack`])
+//!   and a system reset ([`Effect::BenchStop`], step 2); `tools/dev.py stopreport` decodes it once the unit is back.
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
@@ -67,7 +73,7 @@
 //!   fault, which parks the CPU (four-button restart).
 
 use crate::ui::{H, W};
-use crate::{App, emmc, nrf};
+use crate::{App, emmc, nrf, stopbench};
 
 /// The other end of the link, as the protocol needs it.
 pub trait Host {
@@ -281,6 +287,10 @@ pub enum Effect {
     BenchNrfOff,
     /// Sleep this many seconds in one go with nothing else run (`bench_stall`); answer `stall <ms>`.
     BenchStall(u32),
+    /// The SDRAM in self-refresh around a CSleep WFI of this many ms; answer [`stopbench::send`] (the main loop's).
+    BenchSrefresh(u32),
+    /// Stop for this many ms, the report to backup registers, then a reset (the main loop's; `ok` already sent).
+    BenchStop(u32),
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
     Drive,
     /// Start a new profiler window ([`crate::prof::Prof::reset`]).
@@ -582,6 +592,17 @@ impl Session {
                 }
             }
             Some(b"bench") if line == b"bench nrfoff" => return Effect::BenchNrfOff,
+            Some(b"bench") if line.starts_with(b"bench srefresh") => match words.nth(1).and_then(parse) {
+                Some(ms @ 1..=stopbench::MAX_MS) => return Effect::BenchSrefresh(ms),
+                _ => h.send(b"err usage: bench srefresh <1..30000 ms>\n"),
+            },
+            Some(b"bench") if line.starts_with(b"bench stop") => match words.nth(1).and_then(parse) {
+                Some(ms @ 1..=stopbench::MAX_MS) => {
+                    h.send(b"ok\n");
+                    return Effect::BenchStop(ms);
+                }
+                _ => h.send(b"err usage: bench stop <1..30000 ms>\n"),
+            },
             Some(b"bench") if line.starts_with(b"bench step") => match words.nth(1).and_then(parse) {
                 Some(n @ 2..=16) => return Effect::BenchStep(n),
                 _ => h.send(b"err usage: bench step <2..16>\n"),
@@ -727,7 +748,13 @@ impl App {
     /// caller's (main.rs): false for them.
     pub fn serve(&mut self, b: &mut impl crate::Board, h: &mut impl Host, session: &Session, effect: Effect) -> bool {
         match effect {
-            Effect::None | Effect::Key(_) | Effect::Reset | Effect::Run(_) | Effect::StackFault => return false,
+            Effect::None
+            | Effect::Key(_)
+            | Effect::Reset
+            | Effect::Run(_)
+            | Effect::StackFault
+            | Effect::BenchSrefresh(_)
+            | Effect::BenchStop(_) => return false,
             Effect::ProfReset => {
                 self.prof().reset();
                 return false;
@@ -1033,7 +1060,7 @@ fn parse(w: &[u8]) -> Option<u32> {
 }
 
 /// `v` as 8 hex digits and a newline.
-fn hex(v: u32) -> [u8; 9] {
+pub(crate) fn hex(v: u32) -> [u8; 9] {
     let mut out = [b'\n'; 9];
     for (i, d) in out.iter_mut().take(8).enumerate() {
         *d = digit((v >> (28 - 4 * i)) as u8);
@@ -1046,7 +1073,7 @@ fn digit(n: u8) -> u8 {
     b"0123456789abcdef".get(usize::from(n & 15)).copied().unwrap_or(b'0')
 }
 
-fn decimal(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
+pub(crate) fn decimal(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
     let mut i = buf.len();
     loop {
         i -= 1;

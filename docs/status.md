@@ -29,6 +29,15 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
     three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not
     reproduced.
 
+- **Stop mode, phase 1 (2026-11-03, docs/power.md "Stop mode"):** the two bench steps, from RAM (`tools/dev.py run`),
+  no ride open, nothing written to the eMMC:
+  1. `tools/dev.py srefresh 100`: the SDRAM in self-refresh around a CSleep WFI; pass = `srefresh ok flags 000000c3`,
+     slept about 100 ms. Then `srefresh 1000`.
+  2. `tools/dev.py stop 1000`, then once the installed firmware is back, `tools/dev.py stopreport`: pass = `Stop OK`
+     (STOPF set, slept about 1000 ms, the wake's us). A hang ends at the four-button restart.
+  To learn there: whether PWR_CPU2CR lets D3 stop (the M4 never started), the HSE's start-up time, and whether
+  anything fetches from the SDRAM meanwhile (the CRC).
+
 - **The ride file's timer stops at an auto-pause (2026-11-02, as Garmin's):** timer stop_all and start events with
   timer_trigger auto at each stop and when moving again; each lap's and the session's total_timer_time leave the stops
   out, so they are the screen's timer (the unit had saved 241 s for a 4.5 min ride at 0 km/h showing TIMER 0:00); a reset
