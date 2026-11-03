@@ -485,7 +485,14 @@ fn relink(fat: &mut Fat, d: &mut impl DiskWrite, src: File, name: &[u8; 12], fir
     };
     let mut buf = [0u8; 20];
     for j in 0..=SUFFIXES {
-        if fat.relink_long_name(d, src, &h, file_name(name, j, &mut buf)?)? {
+        let candidate = file_name(name, j, &mut buf)?;
+        // a name a live entry already has (a computer's) is never given to this one: two live entries, one name
+        match fat.find(d, src, candidate) {
+            Ok(_) => continue,
+            Err(Error::Io) => return Err(Error::Io),
+            Err(_) => {}
+        }
+        if fat.relink_long_name(d, src, &h, candidate)? {
             return Ok(true);
         }
     }
@@ -1606,6 +1613,20 @@ pub(crate) mod tests {
 
     /// A move that cannot finish (the card full) whose put back finds every name of the ride's taken in
     /// `\Activities` (the plain one and `-1` to `-99`): a card error, the move left pending, no 100th name made up.
+    /// A torn remove whose ride's name a computer has since given to a live `<name>-1.fit`: the put back never names
+    /// the torn entry that name (two live entries, one name), and the computer's entry keeps its own chain.
+    #[test]
+    fn a_relink_skips_a_name_already_live() {
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+        fat.create(&mut d, acts, "261020080000-1.fit", T).unwrap();
+        let mine = file(&d.0, "Activities/261020080000-1.fit");
+        assert!(finish(&mut d, T).is_ok(), "finished or put back");
+        assert_eq!(file(&d.0, "Activities/261020080000-1.fit"), mine, "the computer's entry untouched");
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
     #[test]
     fn a_put_back_with_every_suffix_taken_stays_pending() {
         let mut d = Ram(cut_midway(), 0);
