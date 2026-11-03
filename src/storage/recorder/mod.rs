@@ -944,8 +944,10 @@ impl Recorder {
         self.put(16, |w, sink| w.resume(sink, time));
     }
 
-    /// The resumed ride's stop is the rider's from here (the end-ride screen up: [`fit::Writer::hold`]), and a
-    /// checkpoint follows, so a reset from here keeps it paused until Start.
+    /// The resumed ride's stop is the rider's from here (the end-ride screen up: [`fit::Writer::hold`]), and the next
+    /// checkpoint follows soon, as after a pause (it respects the retry backoff), so a reset from here keeps it paused until Start. If the card is behind or the event write
+    /// fails, the ride is held on screen but its recovery record may still say not paused by hand, so after a reset
+    /// it goes on once ridden; as with [`Recorder::pause`] on a failed write, no data is lost.
     pub fn hold(&mut self) {
         self.put(16, |w, sink| {
             let t = w.last_time();

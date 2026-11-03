@@ -421,7 +421,7 @@ Built-in names cannot be a file's. Fonts in a theme come later (docs/theming.md)
   power; nothing read yet (the sensors not back, no fix) is not riding. In the file the time off is an auto-pause's
   stop (stop_all, trigger auto) that the first moving second ends, said ("RESUMED", the Start beep) as a Start resume;
   Start still goes on by hand, and the end-ride screen holds it paused (a reset after it too: its stop becomes the
-  rider's, checkpointed at once). A ride paused by hand and resumed less than a minute (its next checkpoint) before the
+  rider's, the next checkpoint follows soon, as after a pause). A ride paused by hand and resumed less than a minute (its next checkpoint) before the
   reset, or recorded by a build before this one, keeps the record's word: the first waits for Start, the second
   goes on once riding. Its end card's NP, TSS and kJ
   then cover the part after the restart only (the recovery record keeps the ride's totals, not the power sums); the

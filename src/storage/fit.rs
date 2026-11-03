@@ -1982,6 +1982,30 @@ pub(crate) mod tests {
         assert_eq!(field(r, 13), Some(0xfe), "-2 C");
     }
 
+    /// `hold` on a ride not paused (the end-ride screen after a resume): a timer stop at the last record's time, paused
+    /// until the resume's start; held again while paused, it writes nothing.
+    #[test]
+    fn hold_stops_the_timer_at_the_last_record() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        w.record(&mut f, &Sample { time: T0 + 10, ..Sample::default() }).unwrap();
+        w.hold(&mut f, T0 + 10).unwrap();
+        assert!(w.paused(), "held: paused");
+        let len = f.len();
+        w.hold(&mut f, T0 + 20).unwrap();
+        assert_eq!(f.len(), len, "a second hold while paused writes nothing");
+        w.resume(&mut f, T0 + 30).unwrap();
+        assert!(!w.paused());
+        w.finish(&mut f, T0 + 40).unwrap();
+        let m = decode(&f).unwrap();
+        let events: Vec<(u64, u64)> =
+            m.iter().filter(|x| x.0 == 21).map(|x| (field(x, 1).unwrap(), field(x, 253).unwrap())).collect();
+        assert_eq!(
+            events,
+            [(0, u64::from(T0)), (4, u64::from(T0 + 10)), (0, u64::from(T0 + 30)), (4, u64::from(T0 + 40))]
+        );
+    }
+
     /// Gear changes: front_gear_change (42) and rear_gear_change (43) events, marker, with the gears in their data;
     /// the definition, written once, is known again from a recovery record (local 8, past the record's old byte).
     #[test]
