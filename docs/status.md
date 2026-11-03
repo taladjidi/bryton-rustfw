@@ -29,6 +29,20 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
     three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not
     reproduced.
 
+- **Stop mode, phase 2b (2026-11-03, docs/power.md "Stop mode": Stop between a ride's passes):** owed, with the owner
+  (the ride build, `EMMC_WRITE=1`, run from RAM: `tools/dev.py run`), the heart-rate strap and the power meter paired,
+  the phone linked:
+  1. Start a ride, wait past its first minute, then `tools/dev.py idlestop 600` (the bench allows Stop with the cable
+     in) and ride or spin the sensors for the 10 minutes. After: `tools/dev.py info`: ride Stops near 20 a second of the
+     bench (12,000 in 600 s; a pass with a byte coming in or our bytes going out does not stop), 0 failed, radio resets
+     0, resyncs 0, ant events lost 0, each sensor's broadcasts at its rate (HR 4 Hz); `tools/dev.py prof`: `wake` about
+     20 calls a second (its us up to 3 times short, on the HSI), the awake share up by the wakes' share.
+  2. A lap, an auto-pause (stand still), a pause and a resume during the bench, then the save: the FIT through
+     `tools/fit_check.py` (a record a second, no time twice, the laps and the session's timer and distance), its full
+     copy's `hrv` messages present with RR near the strap's, and the HRV field on the ride page alive.
+  3. A key, a tap and the power key during the ride's bench: each acts at once.
+  4. On battery, an installed build (with the owner): a ride, the battery history against one without
+     (`POWER_STEPS=63`).
 - **Stop mode, phase 2a (2026-11-03, docs/power.md "Stop mode": Stop between idle passes, no ride open):**
   - **Seen on the unit 2026-11-03 (RAM run of 361c5fc, cable in, `idlestop 150`, no touch):** 377 Stops, 0 failed,
     mean 250 ms, 94.2 s in Stop; radio resets 0, resyncs 0; the USB link answered after; `appup` 178.29 s against
@@ -40,7 +54,7 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
      (from battery) starts USB at the next pass.
   3. The same right after a switch-off and a power-key wake (the 931d594 case: WKUPF1 and PDDS left set).
   4. On battery, an installed build (with the owner): a night idle, the battery history against one without
-     (`POWER_STEPS=31`).
+     (`POWER_STEPS=95`).
 - **Stop mode, phase 1 (2026-11-03, docs/power.md "Stop mode"):** from RAM (`tools/dev.py run`), no ride open,
   nothing written to the eMMC.
   - **Seen on the unit 2026-11-03 (931d594, cable in):** `srefresh 100` and `1000` OK (flags 0xff: self-refresh in and

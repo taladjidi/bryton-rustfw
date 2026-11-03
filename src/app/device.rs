@@ -89,6 +89,11 @@ const KEEP_MOVING: u32 = 16;
 /// [`App::keep_on`]'s reasons that keep the idle Stop out ([`App::stop_ok`]): all but the charger (bit 15: the main
 /// loop's cable rule, which `bench idle-stop` lifts) and movement (16 on: no ride is open, the radio's bytes wait).
 const KEEP_STOP: u32 = (1 << 15) - 1;
+/// [`App::keep_on`]'s reasons a ride's Stop ([`App::ride_stop_ok`]) leaves to its own rules: the ride itself (1, open;
+/// 12 and 13, the recorders' phases; 14, the ride marked open on the card) and the files whose writes wait for the
+/// ride's end by design (6 pages.bin and settings.bin, 8 sensors.bin, 9 the altitude calibration: written only once the
+/// ride is settled, so they would keep a whole ride out of Stop; a Stop keeps every RAM).
+const KEEP_RIDE_OWN: u32 = 1 << 1 | 1 << 6 | 1 << 8 | 1 << 9 | 1 << 12 | 1 << 13 | 1 << 14;
 /// A pass's work counted at most ([`prof::Clock::us`]): the first pass, or a stall, is not a key held for seconds.
 pub const MAX_PASS_MS: u32 = 1000;
 
@@ -250,9 +255,37 @@ impl App {
     /// after the start, and none of AUTO OFF's reasons to stay on but the cable and movement (`App::keep_on`: the
     /// recorder holding anything, a resume or the full copy pending, the ride marked open on the card, a file waiting
     /// to be written, stock's scan, a call). The card has no operation in flight between passes (every eMMC command ends inside the step)
-    /// and the panel's DMA is the board's to check. A ride open never stops: phase 2b.
+    /// and the panel's DMA is the board's to check. A ride open stops by its own rules: [`App::ride_stop_ok`].
     pub fn stop_ok(&self, b: &mut impl Board) -> bool {
         self.pass_ms() == IDLE_POLL_MS && self.up_ms >= STOP_AFTER_BOOT_MS && self.keep_on(b) & KEEP_STOP == 0
+    }
+
+    /// The sleep after this ride pass may be Stop (docs/power.md "Stop mode", phase 2b; the main loop adds the board's
+    /// rules as for [`App::stop_ok`], and main.rs `POWER_STEPS` bit 6): a ride open (running, auto-paused or paused) at
+    /// least [`STOP_AFTER_BOOT_MS`] after the start (a resumed ride's first minute clears the resets in a row first),
+    /// neither recorder starting or saving, nor with card work due ([`recorder::Recorder::due`]: this pass's step ran
+    /// it), failing, waiting to retry or holding a start; no tone, no finger, the GNSS read between two frames, none of
+    /// AUTO OFF's other reasons (a key in the last second, the end-ride screens, the card lent, a call, stock's scan, a
+    /// resume or the full copy pending); and no wake broken since the last Stop report ([`stopbench::broke`] on
+    /// backup register 0: after one, a ride never stops again until a bench or a USB drop writes that register).
+    /// A Stop is at most the rest of this pass's [`POLL_MS`]: the Nordic chip held no longer than a pass already holds it.
+    pub fn ride_stop_ok(&self, b: &mut impl Board) -> bool {
+        use recorder::Phase;
+        let quiet = |r: &recorder::Recorder| {
+            matches!(r.phase(), Phase::Recording | Phase::Done)
+                && !r.due()
+                && !r.failing()
+                && !r.waiting()
+                && !r.pending()
+        };
+        self.ride.state() != ride::State::Idle
+            && self.up_ms >= STOP_AFTER_BOOT_MS
+            && quiet(&self.rec.clean)
+            && quiet(&self.rec.full)
+            && self.tones.quiet()
+            && self.gps.parser.idle()
+            && self.keep_on(b) & KEEP_STOP & !KEEP_RIDE_OWN == 0
+            && !stopbench::broke(b.backup_read(stopbench::BKP[0]))
     }
 
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.

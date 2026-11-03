@@ -86,13 +86,20 @@ def card_writes(info):
 
 
 def stops_line(info):
-    """`info`'s idle Stop counts (src/link/dev.rs `Stats::stops`) in words, or None for a build without them."""
-    m = re.search(r' stops (\d+) (\d+) (\d+) ', info)
+    """`info`'s Stop counts (src/link/dev.rs `Stats::stops`: all Stops, failed, ms, then the ride's Stops and ms) in
+    words, or None for a build without them. A build of phase 2a has the first three only."""
+    m = re.search(r' stops (\d+) (\d+) (\d+)((?: \d+){2})? ', info)
     if m is None:
         return None
-    n, fails, ms = map(int, m.groups())
-    mean = f', mean {ms / n:.0f} ms' if n else ''
-    return f'idle Stops {n} ({fails} failed){mean}, {ms / 1000:.1f} s in Stop'
+    n, fails, ms = map(int, m.groups()[:3])
+    ride_n, ride_ms = map(int, m.group(4).split()) if m.group(4) else (0, 0)
+    idle_n, idle_ms = n - ride_n, ms - ride_ms
+    mean = f', mean {idle_ms / idle_n:.0f} ms' if idle_n else ''
+    line = f'idle Stops {idle_n} ({fails} failed){mean}, {idle_ms / 1000:.1f} s in Stop'
+    if m.group(4):
+        ride_mean = f', mean {ride_ms / ride_n:.0f} ms' if ride_n else ''
+        line += f'; ride Stops {ride_n}{ride_mean}, {ride_ms / 1000:.1f} s'
+    return line
 
 
 class Regs:
@@ -386,6 +393,8 @@ def selftest():
     assert card_writes('x, ride idle') is None  # an older build: unknown
     assert stops_line('loop early 1 2 3 4 5 stops 8 1 2000 appup 9') == 'idle Stops 8 (1 failed), mean 250 ms, 2.0 s in Stop'
     assert stops_line('loop early 1 2 3 4 5 stops 0 0 0 appup 9') == 'idle Stops 0 (0 failed), 0.0 s in Stop'
+    assert stops_line('loop early 1 2 3 4 5 stops 108 1 6800 100 4800 appup 9') == \
+        'idle Stops 8 (1 failed), mean 250 ms, 2.0 s in Stop; ride Stops 100, mean 48 ms, 4.8 s'
     assert stops_line('loop early 1 2 3 4 5 appup 9') is None
     global command
     real, log = command, []

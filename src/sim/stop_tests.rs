@@ -32,14 +32,15 @@ fn idle_passes_stop_after_the_first_minute() {
     assert!(n > 200, "{n} Stops in the idle minute");
     // the whole idle pass in one Stop, ended by its timer
     assert!(sim.main.stops.iter().all(|&(ms, us)| ms <= IDLE_POLL_MS && us >= ms * 1000), "{:?}", sim.main.stops);
-    let [stops, fails, ms] = main_stops(&main);
+    let [stops, fails, ms, ride, _] = main_stops(&main);
+    assert_eq!(ride, 0, "no ride open");
     assert_eq!((stops as usize, fails), (n, 0));
     assert!(ms >= 200 * IDLE_POLL_MS, "{ms} ms in Stop");
     assert!(app.prof.slots[crate::prof::Sec::Wake as usize].count as usize >= n, "the wake is its own section");
 }
 
 /// The loop's Stop counts, as `info` reports them.
-fn main_stops(main: &MainLoop<SimLink>) -> [u32; 3] {
+fn main_stops(main: &MainLoop<SimLink>) -> [u32; 5] {
     main.stats().stops
 }
 
@@ -95,13 +96,14 @@ fn each_blocker_keeps_the_pass_out_of_stop() {
         block(&mut sim, &mut app);
         assert!(!app.stop_ok(&mut sim), "{what}");
     }
-    // a ride open: its passes are short and never stop (phase 2b)
+    // a ride open: never an idle Stop; its own (phase 2b) take at most the rest of a short pass
     let (mut sim, mut app, mut main) = idle();
     let n = sim.main.stops.len();
     app.press(&mut sim, Press::Short(Key::Start));
     until(&mut sim, &mut app, &mut main, 140_000);
     assert!(app.busy() && !app.stop_ok(&mut sim));
-    assert_eq!(sim.main.stops.len(), n, "a Stop with a ride open");
+    assert!(sim.main.stops[n..].iter().all(|&(ms, _)| ms <= POLL_MS), "a ride's Stop longer than its pass");
+    assert_eq!(sim.main.stops.len() - n, sim.main.ride_stops as usize);
 }
 
 #[test]
@@ -125,7 +127,7 @@ fn the_kill_switch_and_failures_fall_back_to_wfi() {
     sim.main.stop_off = true; // POWER_STEPS without bit 5
     until(&mut sim, &mut app, &mut main, 120_000);
     assert!(sim.main.stops.is_empty());
-    assert_eq!(main_stops(&main), [0; 3], "not built: nothing counted");
+    assert_eq!(main_stops(&main), [0; 5], "not built: nothing counted");
     let (mut sim, mut app, mut main) = unit();
     sim.main.stop_fails = true; // the system never reaches Stop
     until(&mut sim, &mut app, &mut main, 120_000);
@@ -203,4 +205,256 @@ fn the_bench_allows_stop_with_the_cable_in_for_its_seconds() {
     link.0.borrow_mut().watches.push_back(UsbWatch::Drop);
     until(&mut sim, &mut app, &mut main, 121_000);
     assert_eq!(sim.backup[drops], 0x0b00_0001, "a drop well after the bench is logged");
+}
+
+/// A heart-rate strap at 72 bpm: page 0 with the last beat's time (1/1024 s) and count moving on with the clock, so the
+/// RR intervals (HRV, the full copy's `hrv` messages) come from the broadcasts' own timing, as on a strap.
+fn hr_beats(t: u64) -> [u8; 8] {
+    let n = t / 833;
+    let at = (n * 833 * 1024 / 1000) as u16;
+    [0, 0, 0, 0, at as u8, (at >> 8) as u8, n as u8, 72]
+}
+
+/// What one ride left: the clean copy's record times, its laps, its session's timer (s) and distance (cm), the full
+/// copy's `hrv` messages, the auto-pauses in its events, the radio (hangs, resets, broadcasts per kind, ANT events
+/// lost), the ride's Stops and its passes.
+struct RideOut {
+    times: Vec<u32>,
+    laps: usize,
+    timer_s: u64,
+    dist_cm: u64,
+    hrv: usize,
+    auto_pauses: usize,
+    radio: (u32, usize, [u32; 3], u16),
+    stops: u32,
+    passes: u32,
+}
+
+/// An hour's ride through the unit's own pass, the ride's Stop built or not (`ride_stop`): three sensors (heart rate
+/// with beats, power, Di2) and the phone's notifications under the Nordic chip's strict limits, the GNSS model; 30 km/h
+/// with an auto-pause (2 min stopped), a lap, a pause with Start (2 min), then the save. After every pass that took a
+/// ride's Stop the recorders had nothing due (the step before did their card work), and the card model asserts no
+/// Stop begins inside card work.
+fn hour_ride(ride_stop: bool) -> RideOut {
+    use super::ride_radio_tests::radio_unit;
+    let image = crate::fat::tests::image();
+    let (mut sim, mut app) = radio_unit(62, board_wait_us(), image, false, |s| s.nordic.sensors[0].data = hr_beats);
+    app.settings.auto_off = 0;
+    sim.main.wake_ns = 1_500_000;
+    sim.main.ride_stop_off = !ride_stop;
+    let mut main = MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    until(&mut sim, &mut app, &mut main, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (start, resets0, heard0, lost0) =
+        (sim.ms, sim.nordic.resets.len(), app.radio_counts().1, app.ant_events_lost());
+    let name = app.rec.clean.name();
+    let (mut passes, mut lapped, mut paused, mut resumed) = (0, false, false, false);
+    while sim.ms < start + 3_600_000 {
+        let min = (sim.ms - start) / 60_000;
+        if min >= 30 && !lapped {
+            lapped = true;
+            app.press(&mut sim, Press::Short(Key::Lap));
+        }
+        if min >= 40 && !paused {
+            paused = true;
+            app.press(&mut sim, Press::Short(Key::Start));
+            assert_eq!(app.ride.state(), ride::State::Paused);
+        }
+        if min >= 42 && !resumed {
+            resumed = true;
+            app.press(&mut sim, Press::Short(Key::Start));
+            assert_eq!(app.ride.state(), ride::State::Running);
+        }
+        app.live.set(Metric::Speed, if (20..22).contains(&min) { 0 } else { 300 });
+        let n = sim.main.ride_stops;
+        main.pass(&mut app, &mut sim);
+        passes += 1;
+        if sim.main.ride_stops > n {
+            assert!(!app.rec.clean.due() && !app.rec.full.due(), "a ride's Stop with card work due");
+        }
+    }
+    // the receiver read as often with Stops as without: no fix waits past its second (ride_radio_tests' bound, 816 ms)
+    sim.gnss.assert_reads(900, 0);
+    let heard = app.radio_counts().1;
+    let radio = (
+        sim.nordic.hangs,
+        sim.nordic.resets.len() - resets0,
+        [Kind::Hr, Kind::Power, Kind::Di2].map(|k| heard[k as usize] - heard0[k as usize]),
+        app.ant_events_lost() - lost0,
+    );
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    let end = sim.ms + 3000;
+    until(&mut sim, &mut app, &mut main, end);
+    assert_eq!(app.ride.state(), ride::State::Idle, "saved");
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    let times = super::recorder_tests::record_times(&sim.emmc.image, &path);
+    let file = super::recorder_tests::ride_file(&sim, "Activities", name).unwrap();
+    let full = super::recorder_tests::ride_file(&sim, "Rustfw/Activities", name).unwrap();
+    use crate::fit::tests::{decode, field};
+    let m = decode(&file).unwrap();
+    let session = m.iter().find(|x| x.0 == 18).unwrap();
+    let auto_pauses = super::recorder_tests::timer_events(&file).iter().filter(|e| e == &&(4, Some(1))).count();
+    RideOut {
+        times,
+        laps: m.iter().filter(|x| x.0 == 19).count(),
+        timer_s: field(session, 8).unwrap() / 1000,
+        dist_cm: field(session, 9).unwrap(),
+        hrv: decode(&full).unwrap().iter().filter(|x| x.0 == 78).count(),
+        auto_pauses,
+        radio,
+        stops: sim.main.ride_stops,
+        passes,
+    }
+}
+
+/// The ride's Stop (phase 2b) costs the ride nothing: an hour with Stops between most of its passes records a
+/// record every second of its timer, no second twice or skipped, the same laps, timer, distance and HRV as the same
+/// ride without, and the radio as healthy (no hang, no reset, no broadcast or ANT event lost beyond the ride without).
+#[test]
+fn an_hour_ride_with_stops_records_as_one_without() {
+    let (on, off) = (hour_ride(true), hour_ride(false));
+    std::println!(
+        "ride Stops {} of {} passes; records {}, timer {} s, laps {}, auto-pauses {}, hrv {}, radio {:?} (without: {:?})",
+        on.stops,
+        on.passes,
+        on.times.len(),
+        on.timer_s,
+        on.laps,
+        on.auto_pauses,
+        on.hrv,
+        on.radio,
+        off.radio
+    );
+    assert_eq!(off.stops, 0, "not built: no ride Stop");
+    assert!(on.stops * 10 >= on.passes * 8, "{} ride Stops in {} passes", on.stops, on.passes);
+    // a record every second of the hour but the pause's 2 minutes (an auto-pause records on, its timer stopped), in
+    // order, none twice, none skipped: one gap, the pause
+    assert!(on.times.windows(2).all(|w| w[1] > w[0]), "a record time twice or back");
+    let gaps: Vec<u32> = on.times.windows(2).map(|w| w[1] - w[0]).filter(|&d| d > 1).collect();
+    assert!(gaps.len() == 1 && gaps[0].abs_diff(121) <= 1, "gaps in the records {gaps:?}: the pause only");
+    assert!(on.times.len().abs_diff(3600 - 120) <= 1, "{} records in the hour less the pause", on.times.len());
+    assert!(on.timer_s.abs_diff(3600 - 240) <= 1, "timer {} s: the hour less the pause and the auto-pause", on.timer_s);
+    assert_eq!((on.laps, on.auto_pauses), (off.laps, off.auto_pauses));
+    assert!(on.auto_pauses >= 1, "the auto-pause in the file");
+    assert!(on.timer_s.abs_diff(off.timer_s) <= 1, "timer {} s against {} s", on.timer_s, off.timer_s);
+    assert!(on.dist_cm.abs_diff(off.dist_cm) * 200 <= off.dist_cm, "{} cm against {} cm", on.dist_cm, off.dist_cm);
+    assert!(on.times.len().abs_diff(off.times.len()) <= 1, "{} records against {}", on.times.len(), off.times.len());
+    assert!(on.hrv > 0 && on.hrv.abs_diff(off.hrv) <= 1, "hrv messages {} against {}", on.hrv, off.hrv);
+    let (hangs, resets, heard, lost) = on.radio;
+    assert_eq!((hangs, resets), (0, 0), "the chip hung or was reset");
+    assert!(lost <= off.radio.3, "ANT events lost {lost} against {}", off.radio.3);
+    for (k, (a, b)) in heard.iter().zip(off.radio.2).enumerate() {
+        assert!(a.abs_diff(b) * 1000 <= b, "broadcasts of kind {k}: {a} against {b}");
+        assert!(u64::from(*a) >= 60 * 240 - 60, "broadcasts of kind {k}: {a} in an hour at 4 Hz");
+    }
+}
+
+/// A unit 70 s into a ride (its Stops allowed), its loop.
+fn riding() -> (Sim, App, MainLoop<SimLink>) {
+    let (mut sim, mut app, mut main) = unit();
+    sim.emmc.image = crate::fat::tests::image();
+    until(&mut sim, &mut app, &mut main, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    until(&mut sim, &mut app, &mut main, 70_000);
+    assert!(app.ride_stop_ok(&mut sim) && sim.main.ride_stops > 0, "a ride's Stops");
+    (sim, app, main)
+}
+
+#[test]
+fn each_blocker_keeps_a_ride_pass_out_of_stop() {
+    type Blocker = (&'static str, fn(&mut Sim, &mut App));
+    let blockers: [Blocker; 10] = [
+        ("a tone (TIM1 stops in Stop)", |_, app| app.tones.play(&crate::BEEP_ALERT)),
+        ("the first minute (a resumed ride's resets in a row)", |_, app| app.up_ms = STOP_AFTER_BOOT_MS - 1),
+        ("a checkpoint due", |_, app| app.rec.clean.checkpoint_soon()),
+        ("the full copy's checkpoint due", |_, app| app.rec.full.checkpoint_soon()),
+        ("the card failing", |sim, app| {
+            sim.emmc.dead = true;
+            app.rec.clean.checkpoint_soon();
+            app.step(sim);
+            assert!(app.rec.clean.failing());
+        }),
+        ("the GNSS read inside a frame", |_, app| {
+            let _ = app.gps.parser.push(0xb5);
+        }),
+        ("the end-ride screen, the save to come", |sim, app| app.press(sim, Press::Long(Key::Start))),
+        ("a call", |_, app| app.phone.ringing = true),
+        ("a key in the last second", |_, app| app.light.idle_ms = 0),
+        ("a wake that broke, its report in register 0", |sim, _| {
+            use crate::stopbench::{BKP, PASS_OK, PLL, StopReport, pack};
+            sim.backup[BKP[0]] = pack(&StopReport { stop: true, flags: PASS_OK & !PLL, ..StopReport::default() })[0];
+        }),
+    ];
+    for (what, block) in blockers {
+        let (mut sim, mut app, _) = riding();
+        block(&mut sim, &mut app);
+        assert!(!app.ride_stop_ok(&mut sim), "{what}");
+    }
+    // the files whose writes wait for the ride's end do not keep a whole ride out of Stop
+    let (mut sim, mut app, _) = riding();
+    app.settings_store.file.dirty = true;
+    app.store.file.dirty = true;
+    app.sensors_store.dirty = true;
+    assert!(app.ride_stop_ok(&mut sim), "a setting changed during the ride");
+}
+
+#[test]
+fn the_ride_kill_switch_leaves_the_idle_stop() {
+    let (mut sim, mut app, mut main) = unit();
+    sim.emmc.image = crate::fat::tests::image();
+    sim.main.ride_stop_off = true; // POWER_STEPS without bit 6
+    until(&mut sim, &mut app, &mut main, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    until(&mut sim, &mut app, &mut main, 120_000);
+    assert!(sim.main.stops.is_empty() && main_stops(&main) == [0; 5], "a ride's Stop not built");
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    until(&mut sim, &mut app, &mut main, 125_000);
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Idle, Screen::Summary));
+    app.press(&mut sim, Press::Short(Key::Start)); // the summary closed
+    until(&mut sim, &mut app, &mut main, 200_000);
+    let [n, _, _, ride, _] = main_stops(&main);
+    assert!(n > 100 && ride == 0, "{n} idle Stops after the ride, {ride} of the ride");
+}
+
+#[test]
+fn a_ride_wake_that_breaks_resets_once_and_stops_no_more() {
+    let (mut sim, mut app, mut main) = riding();
+    sim.main.stop_broken = true;
+    let n = sim.main.ride_stops;
+    while sim.main.ride_stops == n {
+        main.pass(&mut app, &mut sim);
+    }
+    assert_eq!(sim.main.resets, 1, "the clocks not back: a reset (the ride resumes from its checkpoint)");
+    assert!(crate::stopbench::broke(sim.backup[crate::stopbench::BKP[0]]), "the report kept in register 0");
+    // the ride resumed after the reset (the backup registers kept) never stops again while the report is there
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    (sim2.emmc.rel_param, sim2.emmc.rel_sectors) = (sim.emmc.rel_param, sim.emmc.rel_sectors);
+    sim2.backup = sim.backup;
+    let mut app2 = App::start(&mut sim2, None);
+    app2.settings.auto_off = 0;
+    let mut main2 = MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    until(&mut sim2, &mut app2, &mut main2, 3_000);
+    assert!(app2.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app2.notes.list[0].as_str());
+    app2.press(&mut sim2, Press::Short(Key::Start)); // resumed paused: go on
+    until(&mut sim2, &mut app2, &mut main2, 200_000);
+    assert_eq!(app2.ride.state(), ride::State::Running);
+    assert_eq!(sim2.main.ride_stops, 0, "a ride's Stop after a wake that broke");
+}
+
+/// A key pressed and released during a ride leaves its EXTI flag up (a short pass never reads it): the ride's Stops go
+/// on after it all the same (the loop clears the flag before each), and the press acted.
+#[test]
+fn a_key_on_a_ride_does_not_keep_its_stops_out() {
+    let (mut sim, mut app, mut main) = riding();
+    let at = sim.ms + 500;
+    sim.keys = Box::new(move |t| if (at..at + 120).contains(&t) { Key::Page as u8 } else { 0 });
+    let page = app.screen();
+    until(&mut sim, &mut app, &mut main, at + 2000);
+    assert_ne!(app.screen(), page, "the press acted");
+    let (n, t) = (sim.main.ride_stops, sim.ms);
+    until(&mut sim, &mut app, &mut main, t + 10_000);
+    assert!(sim.main.ride_stops - n >= 150, "{} ride Stops in the 10 s after a key", sim.main.ride_stops - n);
 }

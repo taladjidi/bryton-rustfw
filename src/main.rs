@@ -922,8 +922,8 @@ fn low_power(ms: u32, mode: Mode) -> StopReport {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The main loop's idle Stop (docs/power.md "Stop mode", phase 2a; lib main_loop.rs `LoopBoard::idle_stop`, which the
-// library calls only between idle passes with no ride open). As `low_power`, with more wake sources and nothing that
+// The main loop's Stop (docs/power.md "Stop mode", phases 2a and 2b; lib main_loop.rs `LoopBoard::idle_stop`, which
+// the library calls between idle passes, and between a ride's passes when nothing is due: `App::ride_stop_ok`). As `low_power`, with more wake sources and nothing that
 // takes a whole millisecond (no image CRC). Wake sources, each an EXTI line unmasked for this core and its NVIC line
 // enabled for the sleep only (interrupts stay masked: a pending enabled IRQ ends WFI, no handler runs): the RTC wake-up
 // timer (line 19, IRQ 3), the keys (lines 1..4, IRQ 7..10) and the touch INT (line 6, IRQ 23) as `key_lines_init` and
@@ -931,7 +931,10 @@ fn low_power(ms: u32, mode: Mode) -> StopReport {
 // EXTI15_10: stm32h747xx.h), the power key (WKUP1, line 55, IRQ 149, as `standby`). Configurable EXTI lines wake the
 // system from Stop (DS12930 3.5.3). The Nordic chip: RTS (PD4) held high as an output meanwhile, as stock's
 // Pwr_ConfigGpioPin4SleepOrActive (ghidra HARDWARE.md 13), so it keeps its bytes; its request line PH8 is not a wake
-// source (what it signals is not known: HARDWARE.md 10, inferred), so its bytes wait for the pass's end (250 ms).
+// source (what it signals is not known: HARDWARE.md 10, inferred), so its bytes wait for the pass's end (250 ms idle,
+// 50 ms on a ride, as long as a ride pass's WFI holds them once the RX FIFO is full). Not while our own bytes to it are
+// going out (USART_ISR TC clear, RM0399): Stop stops USART2's clocks, and a byte cut mid-frame would mis-frame the chip
+// (inferred: what the USART does to a byte being shifted out when its kernel clock stops is not read in RM0399).
 // ---------------------------------------------------------------------------------------------------------------
 /// SYSCFG_EXTICR4 (lines 12..15; stm32h747xx.h SYSCFG_TypeDef EXTICR[3] at 0x14).
 const SYSCFG_EXTICR4: u32 = 0x5800_0414;
@@ -946,9 +949,12 @@ const RTS_MODER: (u32, u32) = (0x5802_0c00, 3 << 8);
 /// One Stop of `ms` at most between idle passes; see the section above. `(us slept by the RTC, flags)`: [`PENDING`]
 /// without trying when it is not built, the panel's DMA runs (`dma_busy`), a key's or the touch's EXTI flag is up (the
 /// loop acts on it) or a byte from the Nordic chip comes in. The key and touch flags are left for `key_edge` /
-/// `touch_edge`; every register changed is put back as it was.
-fn idle_stop(ms: u32, dma_busy: bool) -> (u32, u32) {
-    if POWER_STEPS & IDLE_STOP == 0 || dma_busy || rd(EXTI_CPUPR1) & (KEY_LINES | TOUCH_LINE) != 0 {
+/// `touch_edge`; every register changed is put back as it was. `ride`: a ride's Stop, built with bit 6 (`RIDE_STOP`).
+fn idle_stop(ms: u32, dma_busy: bool, ride: bool) -> (u32, u32) {
+    let built = POWER_STEPS & if ride { RIDE_STOP } else { IDLE_STOP } != 0;
+    // our bytes still going out: USART2 enabled (CR1.UE, bit 0) and TC clear (a disabled one sends nothing)
+    let sending = rd(U_CR1) & 1 != 0 && rd(U_ISR) & U_ISR_TC == 0;
+    if !built || dma_busy || sending || rd(EXTI_CPUPR1) & (KEY_LINES | TOUCH_LINE) != 0 {
         return (0, PENDING);
     }
     let before = rtc_ss();
@@ -1034,11 +1040,12 @@ fn idle_stop(ms: u32, dma_busy: bool) -> (u32, u32) {
 // ---------------------------------------------------------------------------------------------------------------
 /// Bit 0: idle peripherals and the flash interface clocked off in sleep. Bit 1: the GPIO ports too. Bit 2: PLL2 and
 /// PLL3 off. Bit 3: SPI1 (the panel) at 50 MHz from PLL1Q instead of 8 from the HSI. Bit 4: the panel's pixel runs by DMA.
-/// Bit 5: Stop between idle passes (`idle_stop`, docs/power.md "Stop mode", phase 2a): `POWER_STEPS=31` builds without.
+/// Bit 5: Stop between idle passes (`idle_stop`, docs/power.md "Stop mode", phase 2a): `POWER_STEPS=95` builds without.
+/// Bit 6: Stop between a ride's passes (phase 2b): `POWER_STEPS=63` builds without it alone.
 const POWER_STEPS: u32 = match option_env!("POWER_STEPS") {
     Some(s) => parse_u32(s),
     // bits 0..2 seen on the unit 2026-10-25 (keys, touch, backlight, USB drive, a ride, power button); 3 and 4 2026-10-27
-    None => 0x3f,
+    None => 0x7f,
 };
 const SLEEP_GATE: u32 = 1;
 const SLEEP_GATE_GPIO: u32 = 2;
@@ -1046,6 +1053,7 @@ const PLLS_OFF: u32 = 4;
 const SPI1_FAST: u32 = 8;
 const PANEL_DMA: u32 = 16;
 const IDLE_STOP: u32 = 32;
+const RIDE_STOP: u32 = 64;
 
 /// The sleep clock registers RCC_AHB3LPENR..RCC_APB4LPENR (RCC + 0xfc..0x11c: stm32h747xx.h `RCC_TypeDef`, AHB3 AHB1
 /// AHB2 AHB4 APB3 APB1L APB1H APB2 APB4), with the bits kept: every other one is cleared (bit positions:
@@ -1989,8 +1997,8 @@ impl bryton_rustfw::LoopBoard for S510 {
     fn low_power(&mut self, ms: u32, mode: Mode) -> StopReport {
         low_power(ms, mode)
     }
-    fn idle_stop(&mut self, ms: u32) -> (u32, u32) {
-        idle_stop(ms, self.dma.as_ref().is_some_and(|d| d.busy()))
+    fn idle_stop(&mut self, ms: u32, ride: bool) -> (u32, u32) {
+        idle_stop(ms, self.dma.as_ref().is_some_and(|d| d.busy()), ride)
     }
     fn nrf_flush(&mut self) {
         nrf_flush();

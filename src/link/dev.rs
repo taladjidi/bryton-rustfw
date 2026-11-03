@@ -195,10 +195,10 @@ pub struct Stats {
     /// Since boot, to tell where a clock drift comes from: slices ended early, the ms they slept, slices that ran out,
     /// slices a USB command took over, radio passes.
     pub slices: [u32; 5],
-    /// Since boot, the main loop's idle Stops (docs/power.md "Stop mode", phase 2a): those that slept, those of them
-    /// that failed (the system not in Stop, a clock or the SDRAM not back: [`crate::stopbench::PASS_OK`]), and the ms
-    /// they slept by the RTC.
-    pub stops: [u32; 3],
+    /// Since boot, the main loop's Stops (docs/power.md "Stop mode", phases 2a and 2b): those that slept, those of them
+    /// that failed (the system not in Stop, a clock or the SDRAM not back: [`crate::stopbench::PASS_OK`]), the ms
+    /// they slept by the RTC, then the ride's Stops among them and their ms.
+    pub stops: [u32; 5],
 }
 
 /// Configured, but no start of frame for this long (and no suspend seen): the computer dropped the device.
