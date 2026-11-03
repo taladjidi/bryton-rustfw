@@ -29,6 +29,18 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
     three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not
     reproduced.
 
+- **Stop mode, phase 2a (2026-11-03, docs/power.md "Stop mode": Stop between idle passes, no ride open):**
+  - **Seen on the unit 2026-11-03 (RAM run of 361c5fc, cable in, `idlestop 150`, no touch):** 377 Stops, 0 failed,
+    mean 250 ms, 94.2 s in Stop; radio resets 0, resyncs 0; the USB link answered after; `appup` 178.29 s against
+    the RTC's 179 s (1 s resolution, consistent).
+  - Owed (the review's fixes since: a broken wake resets, `App::keep_on` blockers, the bench's drop not logged):
+  1. The same `idlestop` run on the fixed build: `info` as above, and no USB RECONNECT notice or new USB drop
+     (`tools/dev.py usbdrop`) from the bench's end.
+  2. A key, a tap and the power key during an idle Stop: each acts at once (no 250 ms lag); the cable plugged in
+     (from battery) starts USB at the next pass.
+  3. The same right after a switch-off and a power-key wake (the 931d594 case: WKUPF1 and PDDS left set).
+  4. On battery, an installed build (with the owner): a night idle, the battery history against one without
+     (`POWER_STEPS=31`).
 - **Stop mode, phase 1 (2026-11-03, docs/power.md "Stop mode"):** from RAM (`tools/dev.py run`), no ride open,
   nothing written to the eMMC.
   - **Seen on the unit 2026-11-03 (931d594, cable in):** `srefresh 100` and `1000` OK (flags 0xff: self-refresh in and

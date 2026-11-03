@@ -224,7 +224,60 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
   needs longer than 20 us between frames (inferred), so a pass took about one frame and a ride's events outran the
   drain (docs/status.md).
 
-## Stop mode: plan (phase 1 built: the primitive and its benches; the main loop's use is phase 2)
+## Stop mode: plan (phase 1 built: the primitive and its benches; phase 2a built: Stop between idle passes)
+
+**Phase 2a, built 2026-11-03: Stop between idle passes, no ride open** (lib app/main_loop.rs `MainLoop::pass`,
+app/device.rs `App::stop_ok`, app/loop_policy.rs `Stops`; main.rs `idle_stop`; src/sim/stop_tests.rs). Not yet seen
+on the unit (docs/status.md).
+- **When:** an idle pass (`App::pass_ms` is 250 ms: no ride open nor its card work, no tone, banner or finger, the card
+  not lent, no key for 30 s) a minute after the start (`STOP_AFTER_BOOT_MS`), no cable (VBUS low, no USB link), the
+  build's kill switch on (main.rs `POWER_STEPS` bit 5, default on: `POWER_STEPS=31` builds without), fewer than
+  `STOP_FAILS_MAX` (4) failed Stops in a row (then WFI only until the next start), and none of AUTO OFF's reasons to
+  stay on but the cable and movement (`App::keep_on`, one list for both: the recorder holding anything, a resume or the
+  full copy pending, the ride marked open on the card, a file waiting to be written, stock's scan, a call). The board
+  does not try (`PENDING`, not counted) while the panel's DMA runs, a key's or the touch's EXTI flag is up, or a byte
+  from the Nordic chip is coming in.
+- **Outcomes** (stopbench.rs `outcome`): OK; interrupted (no STOPF, but a key, touch or cable EXTI flag or a WKUPF
+  flag up after the wake, `WAKE_PENDING`: a wake source that came between the check and the WFI; not a failure);
+  failed (no timer, no self-refresh, or the system stayed in Run: harmless, counted toward the 4 in a row); broken (the
+  SDRAM's normal mode, the regulator, an oscillator, a PLL or SYSCLK's source not back after a WFI: the unit could be
+  left on the HSI with the FMC on hclk3 and SPI1 / SDMMC1 on a dead PLL1Q), which writes its report to backup
+  registers 0 and 31 as `bench stop` does (`tools/dev.py stopreport` reads it) and resets: no ride is open.
+- **How:** one Stop a pass, for the pass's whole sleep, through phase 1's `hw::stop` at SVOS3. Wake sources: the RTC
+  wake-up timer, the keys, the touch INT, VBUS rising (PC13 on EXTI 13: the next pass starts USB as before) and the
+  power key (WKUP1); every NVIC line but theirs off meanwhile and all put back after (PRIMASK stays set, no handler).
+  The Nordic chip is held off with RTS (PD4) high as an output (stock's way); after it goes high, 20 us for a byte
+  on the wire to land, and a byte there cancels the Stop. Its request line PH8 is not a wake source (what it
+  signals is not known): its bytes wait for the pass's end, 250 ms at most, as stock's 100 ms alarm makes it wait.
+- **Time:** the Stop is timed by the RTC (TR and SSR, 1/1024 s) from the call to its return, in us with the sub-ms
+  rest carried (`LoopPolicy::slept_stop_us`), so the app clock, the uptime and the profiler's sleep count it; the
+  cycles of the call (entry and wake) are sleep-loop cycles for the time (the RTC counts them already), but work for
+  the awake share (`LoopPolicy::woke`). `stop_tests.rs` checks the app clock against the RTC over 600 s of Stops
+  (0.02 %), the simulated Stop slept on the wake-up timer's 2048 Hz grid and timed by two readings of the RTC at its
+  1/1024 s, as on the unit: a bias of one tick a Stop would be 0.4 %. Seen on the unit (RAM run of 361c5fc, cable in,
+  `idlestop 150`): 377 Stops, none failed, mean 250 ms, 94.2 s in Stop; `appup` 178.29 s against the RTC's 179 s
+  (1 s resolution).
+- **Seen from the computer:** `info`'s `stops N F MS` (Stops, failed ones, ms in Stop; `tools/dev.py info` adds the
+  mean) and `prof`'s `wake` section (calls/s: Stops a second; its us are up to 3 times short, the wake running on the
+  HSI's 64 MHz). With the cable in, `tools/dev.py idlestop S` (`bench idle-stop`) allows Stop for S seconds with USB
+  on, for that measurement only: the link is not served during a Stop, so it may drop and come back, and the bench
+  ends by time-out only. A drop the watch decides within 5 s of such a Stop is not logged (no backup register, no
+  USB RECONNECT notice).
+- **Why 931d594's `bench stop` stayed in Run** (the first unit run, docs/status.md): that run followed a switch-off
+  and a power-key wake. Its `srefresh` read PWR_CPUCR 0x1a3 (PDDS_D1, PDDS_D2, STOPF, SBF_D1, SBF_D2: `standby`'s D1 /
+  D2 DStandby, kept since PWR sits in D3, which only stopped) and PWR_CPU2CR 0x1e7 (the same SBF bits). Two things
+  were left from it: PDDS_D1 / D2 set (but `stop_itcm` clears them before its WFI, so not the cause there; a WFI with
+  SLEEPDEEP and them set would be a D1 standby, a reset), and the wake-up flag WKUPF1 with WKUPEN1 still on (cleared
+  only by PWR_WKUPCR or NRST, RM0399 PWR_WKUPFR; stock clears it at boot, App_HardwareInit, this firmware did not): a
+  wake-up source pending, which keeps the system out of Stop (inferred: RM0399 not re-read on the point). cc2cd49
+  cleared WKUPF1 before the WFI and reached Stop, but after a reset, not a switch-off, so it does not prove which.
+  Either way each idle Stop now clears all six WKUPF flags, writes PDDS_D1..D3 = 0 with CSSF, and `stop_itcm` reads
+  PDDS back before its WFI (none if one is still set). To see on the unit: a Stop right after a switch-off and a
+  power-key wake.
+- **Phase 2b (later): Stop while a ride is open.** What it adds: the ride's 50 ms pass (a Stop there costs a wake of
+  about 2 ms in 50, so it needs a longer pass or a lower clock first), the recorder's card work never in a Stop's
+  window, the GNSS receiver's 1 Hz read and the sensors' 4 Hz broadcasts on a wake each (PH8, or USART2's own
+  wake-up at SVOS3), and a unit ride with the battery history before and after.
 
 **Phase 1, built 2026-11-03; first unit run the same day** (docs/status.md): the self-refresh around a CSleep WFI
 works (the image's CRC unchanged over 1 s); `bench stop` with the cable in did not reach system Stop (no STOPF, the
@@ -286,7 +339,7 @@ calls out of ITCM). The I-cache keeps its lines in Stop (D1 logic retained); the
 
 **Wake sources.**
 - The pass's timer: the RTC wakeup timer (RTC_WUTR, from RTCCLK / 16: 0.49 ms steps), its EXTI line (19, IRQ 3:
-  BOARD.md 8) unmasked for the CPU; or LPTIM2 on the LSE.
+  BOARD.md 8) unmasked for the CPU; or LPTIM2 on the LSE. (Phase 2a: the RTC wake-up timer.)
 - Keys (EXTI 1 to 4), the touch INT (EXTI 6), VBUS (PC13, EXTI 13, rising: today it is read each pass, which a
   250 ms pass still does), the power key (WKUP1, EXTI 55, as standby): configurable EXTI lines wake from Stop at any
   SVOS (DS12930 3.5.3, "wakeup ... through GPIO or asynchronous interrupt").

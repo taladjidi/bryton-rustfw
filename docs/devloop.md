@@ -33,6 +33,9 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
                                   # `Stop OK` (a hang: the four-button restart; nothing is written to the eMMC)
                                   # --usboff: USB fully off first (as on battery); --keep: USB left on, no reset, the
                                   # registers before / after the WFI printed (docs/status.md, Stop mode)
+    ./dev.py idlestop S           # phase 2a: the idle Stop allowed with the cable in for S s (0..3600); it ends by
+                                  # time-out only (the link is not served during a Stop, so `idlestop 0` may never get
+                                  # there); the drop at its end is not logged; then ./dev.py info: `idle Stops ...`
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
                                   # reset / load / find / bench / sector / poke answer `err ride open` while a ride or its save is
                                   # open; a wedged recorder needs the four-button restart (Engineer Mode gesture, AGENTS.md)

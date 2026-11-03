@@ -370,6 +370,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   zero offset), `curve_tests.rs` (the power curve screen), `pmc_tests.rs` (training load, its chart and the month rows), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/saver_tests.rs`: BATT SAVER: each knob applied and given back, AUTO at 20 % once and off on the charger, the recording unchanged, the strip tag.
 - `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.
+- `src/sim/stop_tests.rs`: the idle Stop between passes (docs/power.md "Stop mode", phase 2a): when it is chosen, each
+  blocker, the kill switch and failures, the keys, the touch and the cable ending it at once, the app clock against the
+  RTC across 600 s of them, the dev link's `bench idle-stop`.
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
   counted while riding, a system that goes silent.
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,

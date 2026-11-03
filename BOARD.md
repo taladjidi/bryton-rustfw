@@ -205,7 +205,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PC6 | touch interrupt, low while the chip has a point (EXTI falling in stock; EXTI6 falling edge wakes the idle sleep, section 17) | 17 |
 | PC13 | USB / charger present, 1 = plugged (also standby wake-up WKUP4) | 7 |
 | PD2 | eMMC CMD, SDMMC1 (AF12) | 15 |
-| PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up) | 11 |
+| PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up; PD4 an output driven high during an idle Stop) | 11 |
 | PD7 | SPI1 MOSI (panel), AF5 | 6 |
 | PD11 | accelerometer INT1 (EXTI rising in stock; unused here) | 16 |
 | PD12 PD13 | I2C4 SCL, SDA: the sensor bus (AF4, open drain, no pull; plain GPIO for the bus clear, 16) | 16 |
@@ -409,6 +409,13 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   modes the software must first clear the RSF flag"); RTC_SSR (0x58004028) counts down from PREDIV_S (1023 here), and
   reading the time locks TR and DR until DR is read (same file, `HAL_RTC_GetTime`).
 
+- **Stop between idle passes** (main.rs `idle_stop`, docs/power.md "Stop mode", phase 2a; not yet seen on the unit):
+  the wake-up timer as above, plus the keys (EXTI 1..4, IRQ 7..10), the touch INT (EXTI 6, IRQ 23), VBUS on **EXTI 13**
+  (PC13 through SYSCFG_EXTICR4 bits 4..7 = 2, port C, at 0x58000414; rising, EXTI_RTSR1 bit 13; IRQ **40**
+  EXTI15_10: stm32h747xx.h `SYSCFG_TypeDef`, `EXTI15_10_IRQn`) and WKUP1 (EXTI 55, IRQ 149, as standby), each
+  unmasked in EXTI_D1 IMR1 / IMR2 for the Stop only. RTS (PD4) is an output driven high for it, back to AF7 after (stock:
+  Pwr_ConfigGpioPin4SleepOrActive, bryton repo ghidra/HARDWARE.md 13). Timed from RTC_SSR (PREDIV_S 1023: 1/1024 s).
+
 ## 9. Standby (power off)
 
 - Wake-up pins **WKUP1 (PA0, power button)** and **WKUP4 (PC13, USB)**, rising, no pull.
@@ -470,6 +477,15 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
      PD5 TX      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\_/ first command
                     |<- 150 ms -->|<----------- 800 ms ----------->|
                     USART2 up     released                 drop one glitch byte, clear errors
+- **Held off during an idle Stop** (main.rs `idle_stop`, as stock's Pwr_ConfigGpioPin4SleepOrActive): RTS is low
+  (ready) under USART2; for the Stop it is a GPIO output driven high, so the chip keeps its bytes (inferred from RTS /
+  CTS flow control: what the chip does with them while it waits is not known), and AF7 again after the wake. A byte
+  already on the wire lands in 10 us at 1 Mbaud; one seen 20 us after RTS went high (RXFNE or BUSY) cancels the Stop.
+
+     PD4 RTS     ____/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\________   AF7, then output high, then AF7
+     MCU         run |<- 20 us ->| check, Stop (up to 250 ms) ...| wake: clocks, SDRAM back
+                     output high  RXFNE / BUSY set: no Stop
+
   The firmware does not wait inside a pass: the board has one primitive per edge (`Board::nrf_hold(true / false)`,
   main.rs `nrf_hold` / `nrf_release`), and the library times the two waits across the main loop's passes
   (`nrf::RESET_HOLD_MS` 150, `nrf::BOOT_MS` 800, app/nrf_watch.rs `restart_step`: Held, Boot, then the configuration,

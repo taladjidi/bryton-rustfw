@@ -1587,6 +1587,8 @@ mod start_cue_tests;
 #[cfg(test)]
 mod stock_tests;
 #[cfg(test)]
+mod stop_tests;
+#[cfg(test)]
 mod storage_tests;
 #[cfg(test)]
 mod tests;
