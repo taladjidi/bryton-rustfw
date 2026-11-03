@@ -167,6 +167,19 @@ pub struct Ride {
     down9: u64,
     /// The balance's right share, % (the moving seconds with a reading).
     balance: Avg,
+    /// A ride resumed after a reset that the rider had not paused with Start: paused, it goes on by itself at the
+    /// first sign of riding ([`Ride::resumed`]).
+    waits: bool,
+}
+
+/// A second of riding for a resumed ride to go on ([`Ride::resumed`]): a speed at or above the auto-pause's, or any
+/// cadence or power.
+fn riding(i: &Input) -> bool {
+    let at = match i.pause_kmh {
+        0 | 255 => AUTO_PAUSE_X10,
+        k => u16::from(k) * 10,
+    };
+    i.speed_x10.is_some_and(|v| v >= at) || i.cadence.is_some_and(|c| c > 0) || i.power.is_some_and(|p| p > 0)
 }
 
 impl Default for Ride {
@@ -212,11 +225,13 @@ impl Ride {
             up9: 0,
             down9: 0,
             balance: Avg { sum: 0, n: 0 },
+            waits: false,
         }
     }
 
     /// The Start key: starts a new ride, pauses, or resumes.
     pub fn start_pause(&mut self) -> Event {
+        self.waits = false; // the rider's Start rules from here
         match self.state {
             State::Idle => {
                 *self = Ride { state: State::Running, moving: true, ..Ride::new() };
@@ -274,6 +289,11 @@ impl Ride {
             self.alt_high = self.alt_high.map(|h| h.saturating_add(i.alt_corr_mm));
             self.max_alt_mm = self.max_alt_mm.map(|h| h.saturating_add(i.alt_corr_mm));
             self.climb.shift(i.alt_corr_mm);
+        }
+        if self.waits && self.state == State::Paused && riding(i) {
+            // resumed after a reset (owner, 2026-11-03: "Resume automatically"): it goes on as an auto-pause ends,
+            // this second the first one counted; AUTO PAUSE then as it is set (OFF: never paused again)
+            (self.state, self.waits, self.still_s) = (State::Running, false, 0);
         }
         if self.state != State::Running {
             return None;
@@ -409,9 +429,12 @@ impl Ride {
     }
 
     /// A ride from [`Ride::to_words`] and [`Ride::more_words`], paused (a ride resumed after a reset: Start goes
-    /// on, a long Start ends it). The climbing window starts again. Zeros (a record of a build before them): no
-    /// descent, uphill, downhill or max altitude before the resume.
-    pub fn resumed(w: &[u32; RIDE_WORDS], more: &[u32; MORE_WORDS]) -> Ride {
+    /// on, a long Start ends it). Unless the rider had paused it with Start (`by_hand`), it also goes on by itself
+    /// at the first second of riding: a speed at or above the auto-pause's (its km/h set, else
+    /// [`AUTO_PAUSE_X10`], AUTO PAUSE OFF too), or any cadence or power; no reading at all (the sensors not back yet,
+    /// no fix) is not riding. The climbing window starts again. Zeros (a record of a build before them): no descent,
+    /// uphill, downhill or max altitude before the resume.
+    pub fn resumed(w: &[u32; RIDE_WORDS], more: &[u32; MORE_WORDS], by_hand: bool) -> Ride {
         let at = |i: usize| w.get(i).copied().unwrap_or(0);
         let m = |i: usize| more.get(i).copied().unwrap_or(0);
         let avg = |i: usize| Avg { sum: at(i), n: at(i + 1) };
@@ -438,6 +461,7 @@ impl Ride {
             // a resume whose first altitude comes from another source than before (GPS vs the barometer) drops the
             // restored max altitude and ascent points, as it did before the resume totals
             max_alt_mm: (m(4) & 1 != 0).then_some(m(5) as i32),
+            waits: !by_hand,
             ..Ride::new()
         }
     }
@@ -445,6 +469,12 @@ impl Ride {
     /// Where the ride is.
     pub fn state(&self) -> State {
         self.state
+    }
+
+    /// A paused ride stays so whatever the rider does (the end-ride screen up): a resumed ride no longer goes on
+    /// by itself ([`Ride::resumed`]). True when it was waiting to (the recorders then hold it too).
+    pub fn hold(&mut self) -> bool {
+        core::mem::take(&mut self.waits)
     }
 
     /// Running and not auto-paused.
@@ -1756,7 +1786,7 @@ mod tests {
         for _ in 0..50 {
             r.second(&Input { alt_mm: Some(100_000), ..at(200) });
         }
-        let back = Ride::resumed(&r.to_words(), &[0; MORE_WORDS]);
+        let back = Ride::resumed(&r.to_words(), &[0; MORE_WORDS], true);
         assert!(
             back.elapsed_s() >= back.timer_s() && back.elapsed_s() == 50,
             "trip {} timer {}",
@@ -1771,6 +1801,44 @@ mod tests {
             r.second(&Input { alt_mm: Some(alt), ..at(200) });
         }
         assert_eq!((r.uphill_m(), r.downhill_m()), (0, 0), "noise under the hysteresis");
+    }
+
+    /// A ride resumed after a reset (owner, 2026-11-03) goes on by itself at its first second of riding, counted,
+    /// whatever AUTO PAUSE says: no reading at all, or standing still, is not riding. Paused by hand before, the end-ride
+    /// screen up, or Start pressed since: it waits for Start.
+    #[test]
+    fn a_resumed_ride_goes_on_when_riding() {
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..30 {
+            r.second(&at(200));
+        }
+        let w = r.to_words();
+        let none = Input { speed_x10: None, hr: None, cadence: None, power: None, ..at(0) };
+        let still = |v| Input { cadence: Some(0), power: Some(0), ..at(v) };
+        for pause_kmh in [0, 5, 255] {
+            let mut back = Ride::resumed(&w, &[0; MORE_WORDS], false);
+            for i in [none, still(10), still(40)] {
+                // 4 km/h: under 5 km/h's threshold, riding at the others'
+                if i == still(40) && pause_kmh != 5 {
+                    continue;
+                }
+                assert_eq!(back.second(&Input { pause_kmh, ..i }), None, "{pause_kmh}: {i:?}");
+            }
+            assert_eq!((back.state(), back.timer_s()), (State::Paused, 30), "{pause_kmh}");
+            assert_eq!(back.second(&Input { pause_kmh, ..at(60) }), Some(Event::Second), "{pause_kmh}: riding");
+            assert!(back.moving() && back.timer_s() == 31, "{pause_kmh}: the first second counted");
+        }
+        let cadence = Input { speed_x10: None, power: None, ..at(0) };
+        assert_eq!(Ride::resumed(&w, &[0; MORE_WORDS], false).second(&cadence), Some(Event::Second), "cadence alone");
+        let mut by_hand = Ride::resumed(&w, &[0; MORE_WORDS], true);
+        let mut held = Ride::resumed(&w, &[0; MORE_WORDS], false);
+        held.hold();
+        let mut started = Ride::resumed(&w, &[0; MORE_WORDS], false);
+        assert_eq!((started.start_pause(), started.start_pause()), (Event::Resume, Event::Pause));
+        for r in [&mut by_hand, &mut held, &mut started] {
+            assert_eq!((r.second(&at(300)), r.state()), (None, State::Paused));
+        }
     }
 
     #[test]

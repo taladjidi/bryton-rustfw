@@ -42,6 +42,10 @@ pub(crate) struct Rec {
     /// The FIT timer's state ([`crate::fit::Writer::timer_word`]), bytes 280..284: 0 in the records of the builds
     /// before it, which ignore these bytes.
     pub(crate) timer: u32,
+    /// The rider had paused the ride with Start ([`crate::fit::Writer::paused`]), byte 30: a resume keeps it paused
+    /// until Start. 0 in the records of the builds before it, which ignore the byte: a ride they recorded resumes as
+    /// one not paused by hand (it goes on once riding), whatever it was.
+    pub(crate) by_hand: bool,
 }
 
 impl Rec {
@@ -55,6 +59,7 @@ impl Rec {
         s[22] = u8::from(self.discard);
         s[23] = u8::from(self.checked.is_some());
         s[28..30].copy_from_slice(&self.checked.unwrap_or(0).to_le_bytes());
+        s[30] = u8::from(self.by_hand);
         s[24..28].copy_from_slice(&self.cluster.to_le_bytes());
         s[32..32 + RECORD_LEN].copy_from_slice(&self.fit);
         for (c, w) in s[128..128 + 4 * RIDE_WORDS].chunks_exact_mut(4).zip(self.ride) {
@@ -95,6 +100,7 @@ impl Rec {
             lap: core::array::from_fn(|k| word(LAP_AT + 4 * k)),
             more: core::array::from_fn(|k| word(MORE_AT + 4 * k)),
             timer: word(TIMER_AT),
+            by_hand: s[30] == 1,
         };
         r.name.copy_from_slice(&s[9..21]);
         r.fit.copy_from_slice(&s[32..32 + RECORD_LEN]);

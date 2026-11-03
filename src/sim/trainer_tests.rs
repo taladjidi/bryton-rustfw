@@ -1831,7 +1831,8 @@ fn power_totals_go_on_after_a_reset() {
             }
             run(&mut sim, &mut app, 1000);
         }
-        app.press(&mut sim, Press::Short(Key::Start)); // resume
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(app.ride.state(), ride::State::Running, "{late}: gone on by itself with the trainer's power");
         run(&mut sim, &mut app, 60_000);
         app.press(&mut sim, Press::Short(Key::Start)); // pause
         let (kj_end, max, np) = (app.power.kj(), app.power.max(), app.power.np());
