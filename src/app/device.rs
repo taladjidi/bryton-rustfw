@@ -222,17 +222,28 @@ impl App {
         let (op, st) = log.iter().last().map_or((0, 0), |e| (e.0, e.3));
         let count = |code: u8| log.iter().filter(|e| e.0 == code).count().min(15) as u32;
         let w = 0xd100_0000 | u32::from(op) << 16 | u32::from(st) << 8 | count(0xfe) << 4 | count(0xff);
-        b.backup_write(USB_LAST_BKP, w);
+        if !self.stop_latched(b) {
+            b.backup_write(USB_LAST_BKP, w);
+        }
         self.notice("USB RECONNECT");
     }
 
     /// The first failure of a USB link (src/board/usb.rs): its registers into [`SNAP_BKP`], for `dev.py usbdrop`
     /// after the replug. The board hands over one snapshot a link, so a later drop does not overwrite it.
     pub fn usb_snapshot(&mut self, b: &mut impl Board, s: &usbsnap::UsbSnap) {
+        if self.stop_latched(b) {
+            return; // its words 0 and 31 would clear the ride's latch: the drops are counted instead
+        }
         for (r, w) in SNAP_BKP.iter().zip(usbsnap::pack(s)) {
             b.backup_write(*r, w);
         }
         self.saver.usb_snapped = true;
+    }
+
+    /// A ride is open and register 0 holds a broken wake's report ([`stopbench::broke`]): the latch that keeps the
+    /// ride's Stop off ([`App::ride_stop_ok`]), which the USB diagnostics leave alone until the ride ends.
+    fn stop_latched(&self, b: &mut impl Board) -> bool {
+        self.ride.state() != ride::State::Idle && stopbench::broke(b.backup_read(USB_LAST_BKP))
     }
 
     /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,

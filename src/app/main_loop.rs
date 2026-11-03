@@ -55,6 +55,8 @@ pub trait LoopBoard: Board {
     /// (main.rs `POWER_STEPS` bit 6, the idle one's bit 5). It does not try while our bytes to the Nordic chip are
     /// still going out.
     fn idle_stop(&mut self, ms: u32, ride: bool) -> (u32, u32);
+    /// The ride's Stop is built in (main.rs `POWER_STEPS` bit 6), for `info`.
+    const RIDE_STOP_BUILT: bool;
     /// Drops what the Nordic chip sent (nobody reads it).
     fn nrf_flush(&mut self);
     /// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`bytes`).
@@ -170,6 +172,7 @@ impl<L: UsbLink> MainLoop<L> {
         // one Stop a pass, for the pass's whole sleep (docs/power.md "Stop mode"): an idle pass's (phase 2a) or a ride's
         // (2b: at most the rest of its POLL_MS, after the step that did the recorder's card work), the app's rules,
         // then the loop's (no USB link but for the bench, not after failures in a row)
+        self.policy.stops.ride_built = B::RIDE_STOP_BUILT;
         let cable = self.link.is_some() || b.vbus();
         let ride = !wake.io && app.ride_stop_ok(b);
         let mut stop = (ride || wake.io && app.stop_ok(b)) && self.policy.stops.allowed(cable, self.policy.now_ms());
@@ -184,7 +187,7 @@ impl<L: UsbLink> MainLoop<L> {
             let Some(slice) = self.policy.slice(app.pass_ms(), app.touching()) else {
                 break;
             };
-            let slice_at = b.cycles();
+            let mut slice_at = b.cycles();
             // a Stop that slept is this slice; one that did not try (a wake source pending) leaves it to WFI
             let stopped = if core::mem::take(&mut stop) {
                 if ride {
@@ -194,7 +197,11 @@ impl<L: UsbLink> MainLoop<L> {
                 }
                 let (us, flags) = b.idle_stop(app.pass_ms().saturating_sub(self.policy.slept_ms()), ride);
                 match self.policy.stops.count(us, flags, cable, self.policy.now_ms(), ride) {
-                    Outcome::NotTried => None,
+                    // its look (the radio's 20 us) was work: the slice starts after it, or the app clock loses it
+                    Outcome::NotTried => {
+                        slice_at = b.cycles();
+                        None
+                    }
                     // the clocks or the SDRAM not as before: the report kept as `bench stop` keeps it, then a reset;
                     // a ride resumes from its checkpoint, and does not stop again while the report is there
                     // (`App::ride_stop_ok`, `stopbench::broke`)

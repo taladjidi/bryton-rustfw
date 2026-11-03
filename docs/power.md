@@ -280,8 +280,10 @@ main.rs `idle_stop` with `ride`; src/sim/stop_tests.rs). Not yet seen on the uni
 while recording (ghidra HARDWARE.md 13): this goes beyond it, so it is bounded so that a missed Stop costs power only.
 - **When:** a ride open (running, auto-paused or paused) a minute after the start (a resumed ride's first minute clears
   the resets in a row first), the board's rules of 2a (no cable but for the bench, the panel's DMA idle, no key or
-  touch EXTI flag) and the build's own kill switch (main.rs `POWER_STEPS` bit 6, default on: `POWER_STEPS=63` builds
-  without it alone); then the app's: neither recorder starting or saving, nor with card work due (`Recorder::due`: a
+  touch EXTI flag) and the build's own kill switch (main.rs `POWER_STEPS` bit 6: **off by default in the card-writing
+  build**, `EMMC_WRITE=1`, the installed ride image, until the unit's ride procedure passes, docs/status.md; on by
+  default in the plain build that RAM runs use; `POWER_STEPS=127` turns it on, `63` off; `info` ends with `ride stop
+  built yes|no`); then the app's: neither recorder starting or saving, nor with card work due (`Recorder::due`: a
   chunk, a checkpoint, the full copy, the save), failing, waiting to retry or holding a start; no tone, no finger, the
   GNSS read between two UBX frames, none of AUTO OFF's other reasons (a key in the last second, the end-ride and
   discard screens, the card lent, a call, stock's scan, a resume or the full copy pending). The files whose writes wait
@@ -293,7 +295,10 @@ while recording (ghidra HARDWARE.md 13): this goes beyond it, so it is bounded s
   enabled and USART_ISR TC clear, RM0399): Stop stops its clocks, and a byte cut mid-frame would mis-frame the chip
   (inferred). A short pass never reads the keys' EXTI flags, so the loop clears them before a ride's Stop (a press
   left one up, which would keep every later Stop out; `a_key_on_a_ride_does_not_keep_its_stops_out`); the step polls
-  the keys themselves, as before.
+  the keys themselves, as before. After the wake, 32 words of the image spread over the SDRAM's banks (main.rs
+  `image_marks`, folded at boot) must read as at boot, or the wake counts as broken (REFRESH_OUT cleared, the reset):
+  32 uncached reads, a few us (estimated: about 140 ns each at the FMC's 50 MHz on a 16-bit bus; the unit's `wake`
+  section in `prof` includes them).
 - **Length: the ride's pass stays 50 ms (`POLL_MS`), and a Stop is at most the rest of it.** Why not a longer pass:
   the 100 ms ride pass of 2026-10-31 was taken out as a suspect of the radio dropouts (above), and a Stop pays already
   at 50 ms. Per pass, the sleep today is about 48.5 ms of CSleep at 16.5 to 47 mA (DS12930 table 44) plus the SDRAM's
@@ -314,9 +319,11 @@ while recording (ghidra HARDWARE.md 13): this goes beyond it, so it is bounded s
   and a phone's burst of 12 notifications 14. (3) The simulator's strict chip model (96 slots, one frame at a time while
   the host reads): 10 minutes of ride traffic leave a high-water of 12 at 50 ms passes and 12 at 100 ms
   (sim/ride_radio_tests.rs); an hour through the unit's own pass with the ride's Stops
-  (`an_hour_ride_with_stops_records_as_one_without`: heart rate with beats, power, Di2, the phone's notifications):
-  68,792 Stops in 70,032 passes (98 %), 14,400 broadcasts of each sensor (4 Hz), no ANT event lost, no hang, no
-  reset, the same as without. (4) HRV takes the RR intervals from the strap's own beat time (1/1024 s, in the
+  (`an_hour_ride_with_stops_records_as_one_without`: heart rate with beats, power, Di2, the phone's notifications),
+  the simulated Stop holding RTS as main.rs does (the chip sends nothing for its span while its events queue; no
+  Stop with a byte in our FIFO or landing within the 20 us look, or ours still going out): 54,294 Stops in 70,382
+  passes (77 %; 14,848 passes met a byte of the chip's and slept in WFI), the chip's queue high-water 14 of 96 (12
+  without), 14,400 broadcasts of each sensor (4 Hz), no ANT event lost, no hang, no reset, as without. (4) HRV takes the RR intervals from the strap's own beat time (1/1024 s, in the
   broadcast: drivers/sensors.rs `Beats`), not the arrival, so a held message keeps its beats' timing; only a lost
   broadcast loses beats (the full copy's `hrv` messages: 865 in the hour with Stops and without). PH8 is not a wake:
   the Ghidra notes call it the chip's request line, inferred, only cleared by stock (HARDWARE.md 10).
@@ -325,13 +332,15 @@ while recording (ghidra HARDWARE.md 13): this goes beyond it, so it is bounded s
   early: in the hour, the longest unread gap 840 ms with Stops (820 without), no epoch lost. The recorder records once
   a second from the RTC, and the app clock is the RTC's across Stops (2a): 3,481 records in the hour (all but the
   pause's 2 minutes, an auto-pause records on), one gap (the pause), none twice; the same laps, auto-pause, timer
-  (3,361 s) and distance as without.
+  (3,360 s) and distance as without.
 - **A wake that broke** resets as in 2a: the ride resumes from its checkpoint (at most its last chunk lost, as any
   fault), and its report stays in backup register 0 (`stopbench::broke`): while it is there no ride stops again, so a
-  wake that keeps breaking cannot reset the unit once a minute through a ride. A bench or a USB drop's word there
-  clears it (`tools/dev.py stopreport` reads it first).
-- **Seen from the computer:** `info`'s `stops N F MS RN RMS` (all Stops, failed, ms; then the ride's Stops and their
-  ms; `tools/dev.py info` says both). On a ride from RAM the cable is in, so `tools/dev.py idlestop S` (the bench)
+  wake that keeps breaking cannot reset the unit once a minute through a ride. While a ride is open the USB
+  diagnostics (a drop's word, a snapshot) leave it there; once the ride is over a bench or a USB drop's word clears it
+  (`tools/dev.py stopreport` reads it first). A ride resumed after any fault comes back paused and stays so until
+  Start, moving or not (`Ride::resumed`; `a_ride_wake_that_breaks_resets_once_and_stops_no_more`).
+- **Seen from the computer:** `info`'s `stops N F MS RN RF RMS` (all Stops, failed, ms; then the ride's Stops, failed
+  and ms; `tools/dev.py info` says idle and ride apart) and `ride stop built yes|no`. On a ride from RAM the cable is in, so `tools/dev.py idlestop S` (the bench)
   allows the ride's Stops too, for S seconds.
 
 **Phase 1, built 2026-11-03; first unit run the same day** (docs/status.md): the self-refresh around a CSleep WFI

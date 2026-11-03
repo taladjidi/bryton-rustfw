@@ -98,7 +98,9 @@ pub struct Stops {
     /// Failed Stops in a row.
     fails_in_row: u8,
     /// [`Stats::stops`].
-    counts: [u32; 5],
+    counts: [u32; 6],
+    /// The board has the ride's Stop built in ([`Stats::ride_stop`]: main.rs `POWER_STEPS` bit 6).
+    pub ride_built: bool,
 }
 
 impl Stops {
@@ -115,7 +117,7 @@ impl Stops {
 
     /// What the board's Stop answered (`flags`, stopbench.rs; `us` slept by the RTC; `cable` in, at `now_ms`; a
     /// `ride` open) counted: Stops that slept, failures (a [`Outcome::Broken`] one too: the reset follows), failures in
-    /// a row, and the ride's own Stops and ms among them.
+    /// a row, and the ride's own Stops, failures and ms among them.
     ///
     /// ```
     /// use bryton_rustfw::stopbench::{Outcome, PASS_OK, PENDING, STOPF, WAKE_PENDING, WUTF};
@@ -130,7 +132,8 @@ impl Stops {
     ///     assert_eq!(s.count(0, run, false, 0, false), Outcome::Failed);
     /// }
     /// assert!(!s.allowed(false, 0)); // WFI only from now on
-    /// assert_eq!(s.counts(), [3 + u32::from(STOP_FAILS_MAX), u32::from(STOP_FAILS_MAX), 299, 1, 48]);
+    /// assert_eq!(s.count(0, run, false, 0, true), Outcome::Failed); // a ride's that failed
+    /// assert_eq!(s.counts(), [4 + u32::from(STOP_FAILS_MAX), 1 + u32::from(STOP_FAILS_MAX), 299, 2, 1, 48]);
     /// ```
     pub fn count(&mut self, us: u32, flags: u32, cable: bool, now_ms: u32, ride: bool) -> Outcome {
         let o = outcome(flags);
@@ -146,12 +149,13 @@ impl Stops {
         if cable {
             self.cable_stop_ms = Some(now_ms);
         }
-        let [n, fails, ms, ride_n, ride_ms] = &mut self.counts;
+        let [n, fails, ms, ride_n, ride_fails, ride_ms] = &mut self.counts;
         *n = n.wrapping_add(1);
         *fails = fails.wrapping_add(u32::from(fail));
         *ms = ms.wrapping_add(us / 1000);
         if ride {
             *ride_n = ride_n.wrapping_add(1);
+            *ride_fails = ride_fails.wrapping_add(u32::from(fail));
             *ride_ms = ride_ms.wrapping_add(us / 1000);
         }
         o
@@ -171,8 +175,8 @@ impl Stops {
         self.cable_stop_ms.is_some_and(|t| now_ms.wrapping_sub(t) < BENCH_DROP_MS)
     }
 
-    /// Stops, failures, ms slept in Stop, then the ride's Stops and their ms, since boot.
-    pub fn counts(&self) -> [u32; 5] {
+    /// Stops, failures, ms slept in Stop, then the ride's Stops, failures and ms, since boot.
+    pub fn counts(&self) -> [u32; 6] {
         self.counts
     }
 }
@@ -218,8 +222,15 @@ impl LoopPolicy {
             awake: 0,
             ran: 0,
             window_ms: 0,
-            stats: Stats { uptime_ms: 0, awake_permille: 0, cpu_permille: 0, slices: [0; 5], stops: [0; 5] },
-            stops: Stops { bench_until_ms: 0, cable_stop_ms: None, fails_in_row: 0, counts: [0; 5] },
+            stats: Stats {
+                uptime_ms: 0,
+                awake_permille: 0,
+                cpu_permille: 0,
+                slices: [0; 5],
+                stops: [0; 6],
+                ride_stop: false,
+            },
+            stops: Stops { bench_until_ms: 0, cable_stop_ms: None, fails_in_row: 0, counts: [0; 6], ride_built: false },
         }
     }
 
@@ -318,7 +329,7 @@ impl LoopPolicy {
 
     /// The running figures for the dev link's `info`.
     pub fn stats(&self) -> Stats {
-        Stats { stops: self.stops.counts, ..self.stats }
+        Stats { stops: self.stops.counts, ride_stop: self.stops.ride_built, ..self.stats }
     }
 
     /// An idle Stop's entry and wake ran `cycles` (inside the sleep for the time, which the RTC counts): work for the
@@ -482,7 +493,14 @@ mod tests {
         }
         assert_eq!(
             p.stats(),
-            Stats { uptime_ms: 1000, awake_permille: 20, cpu_permille: 30, slices: p.stats().slices, stops: [0; 5] }
+            Stats {
+                uptime_ms: 1000,
+                awake_permille: 20,
+                cpu_permille: 30,
+                slices: p.stats().slices,
+                stops: [0; 6],
+                ride_stop: false
+            }
         );
         // the window starts again: a long pass (an eMMC scan, 1.2 s awake) is a window by itself
         p.begin_sleep(POLL_MS, false);
@@ -495,7 +513,8 @@ mod tests {
                 awake_permille: 1000,
                 cpu_permille: 1000,
                 slices: p.stats().slices,
-                stops: [0; 5]
+                stops: [0; 6],
+                ride_stop: false,
             }
         );
     }

@@ -40,6 +40,10 @@ pub struct LoopModel {
     pub ride_stop_off: bool,
     /// The ride's Stops that slept (also in `stops`).
     pub ride_stops: u32,
+    /// Stops not tried for the radio: a byte from the Nordic chip in or coming, or ours going out.
+    pub radio_pending: u32,
+    /// The SDRAM did not come back whole after a Stop (main.rs `image_marks` differ): the wake is broken.
+    pub sdram_lost: bool,
     /// The idle Stop's wake fails to put a clock back (PLL1 not locked again): the loop must reset.
     pub stop_broken: bool,
     /// The cable comes in at this time, ms (an edge that ends a Stop, as PC13's EXTI line).
@@ -162,6 +166,7 @@ impl Sim {
 
 impl LoopBoard for Sim {
     type Link = SimLink;
+    const RIDE_STOP_BUILT: bool = true; // a test turns it off at run time (`ride_stop_off`)
     fn canary(&mut self) -> u32 {
         if self.main.overflowed { 0 } else { crate::STACK_CANARY }
     }
@@ -221,9 +226,18 @@ impl LoopBoard for Sim {
         if (if ride { self.main.ride_stop_off } else { self.main.stop_off }) || latched || edge(self) {
             return (0, PENDING);
         }
+        // timed from here, as main.rs; RTS high, its 20 us wait (CPU work), then a byte in or landing, or ours still
+        // going out: no Stop
+        let before = self.rtc_ss();
+        self.awake_ns += 20_000;
+        self.advance_ns(20_000);
+        let now = self.ms;
+        if self.nrf_ext.is_none() && !self.nordic.hold(now) {
+            self.main.radio_pending += 1;
+            return (0, PENDING);
+        }
         assert!(self.emmc.quiet(self.ms), "a Stop with card work in flight");
         self.main.ride_stops += u32::from(ride);
-        let before = self.rtc_ss();
         let mut left = u64::from(wutr(ms) + 1) * 1_000_000_000 / 2048;
         let mut woke = false;
         while left > 0 {
@@ -245,9 +259,15 @@ impl LoopBoard for Sim {
         let ns = self.main.wake_ns;
         self.awake_ns += ns;
         self.advance_ns(ns);
+        let now = self.ms;
+        if self.nrf_ext.is_none() {
+            self.nordic.release(now); // RTS back after the wake, as main.rs
+        }
         let us = elapsed_us(before, self.rtc_ss(), RTC_PREDIV_S);
         self.main.stops.push((ms, us));
-        let flags = if self.main.stop_broken {
+        let flags = if self.main.sdram_lost {
+            PASS_OK & !crate::stopbench::REFRESH_OUT
+        } else if self.main.stop_broken {
             PASS_OK & !PLL
         } else if self.main.stop_fails {
             PASS_OK & !STOPF

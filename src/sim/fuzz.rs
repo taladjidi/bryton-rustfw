@@ -177,7 +177,9 @@ fn radio_passes_idle() {
                 sim.main.later.push((at, frame));
             }
             radio += main.pass(&mut app, &mut sim);
-            assert!(app.prof().clock.sleep.0 <= crate::IDLE_POLL_MS, "a pass slept {} ms", app.prof().clock.sleep.0);
+            // a Stop's sleep is timed by the RTC from before its 20 us radio look to after its wake (main.rs): 1 ms over
+            let slept = app.prof().clock.sleep.0;
+            assert!(slept <= crate::IDLE_POLL_MS + 1, "a pass slept {slept} ms");
         }
     }
     assert!(radio > 100, "radio passes reached: {radio}");

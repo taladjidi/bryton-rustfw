@@ -32,7 +32,7 @@ fn idle_passes_stop_after_the_first_minute() {
     assert!(n > 200, "{n} Stops in the idle minute");
     // the whole idle pass in one Stop, ended by its timer
     assert!(sim.main.stops.iter().all(|&(ms, us)| ms <= IDLE_POLL_MS && us >= ms * 1000), "{:?}", sim.main.stops);
-    let [stops, fails, ms, ride, _] = main_stops(&main);
+    let [stops, fails, ms, ride, ..] = main_stops(&main);
     assert_eq!(ride, 0, "no ride open");
     assert_eq!((stops as usize, fails), (n, 0));
     assert!(ms >= 200 * IDLE_POLL_MS, "{ms} ms in Stop");
@@ -40,7 +40,7 @@ fn idle_passes_stop_after_the_first_minute() {
 }
 
 /// The loop's Stop counts, as `info` reports them.
-fn main_stops(main: &MainLoop<SimLink>) -> [u32; 5] {
+fn main_stops(main: &MainLoop<SimLink>) -> [u32; 6] {
     main.stats().stops
 }
 
@@ -127,7 +127,7 @@ fn the_kill_switch_and_failures_fall_back_to_wfi() {
     sim.main.stop_off = true; // POWER_STEPS without bit 5
     until(&mut sim, &mut app, &mut main, 120_000);
     assert!(sim.main.stops.is_empty());
-    assert_eq!(main_stops(&main), [0; 5], "not built: nothing counted");
+    assert_eq!(main_stops(&main), [0; 6], "not built: nothing counted");
     let (mut sim, mut app, mut main) = unit();
     sim.main.stop_fails = true; // the system never reaches Stop
     until(&mut sim, &mut app, &mut main, 120_000);
@@ -228,6 +228,8 @@ struct RideOut {
     radio: (u32, usize, [u32; 3], u16),
     stops: u32,
     passes: u32,
+    high_water: usize,
+    radio_pending: u32,
 }
 
 /// An hour's ride through the unit's own pass, the ride's Stop built or not (`ride_stop`): three sensors (heart rate
@@ -305,6 +307,8 @@ fn hour_ride(ride_stop: bool) -> RideOut {
         radio,
         stops: sim.main.ride_stops,
         passes,
+        high_water: sim.nordic.high_water,
+        radio_pending: sim.main.radio_pending,
     }
 }
 
@@ -315,9 +319,13 @@ fn hour_ride(ride_stop: bool) -> RideOut {
 fn an_hour_ride_with_stops_records_as_one_without() {
     let (on, off) = (hour_ride(true), hour_ride(false));
     std::println!(
-        "ride Stops {} of {} passes; records {}, timer {} s, laps {}, auto-pauses {}, hrv {}, radio {:?} (without: {:?})",
+        "ride Stops {} of {} passes ({} not tried for the radio); chip queue high-water {} (without: {}); records {}, \
+         timer {} s, laps {}, auto-pauses {}, hrv {}, radio {:?} (without: {:?})",
         on.stops,
         on.passes,
+        on.radio_pending,
+        on.high_water,
+        off.high_water,
         on.times.len(),
         on.timer_s,
         on.laps,
@@ -327,7 +335,10 @@ fn an_hour_ride_with_stops_records_as_one_without() {
         off.radio
     );
     assert_eq!(off.stops, 0, "not built: no ride Stop");
-    assert!(on.stops * 10 >= on.passes * 8, "{} ride Stops in {} passes", on.stops, on.passes);
+    // a pass whose end meets a byte of the chip's (in our FIFO, or landing in the 20 us look) sleeps in WFI: about 1 in 5
+    assert!(on.stops * 10 >= on.passes * 7, "{} ride Stops in {} passes", on.stops, on.passes);
+    // the chip held through the Stops: its queue a little higher, far from its 96 slots
+    assert!(on.high_water <= off.high_water + 8 && on.high_water < 48, "queue high-water {}", on.high_water);
     // a record every second of the hour but the pause's 2 minutes (an auto-pause records on, its timer stopped), in
     // order, none twice, none skipped: one gap, the pause
     assert!(on.times.windows(2).all(|w| w[1] > w[0]), "a record time twice or back");
@@ -407,14 +418,14 @@ fn the_ride_kill_switch_leaves_the_idle_stop() {
     until(&mut sim, &mut app, &mut main, 2000);
     app.press(&mut sim, Press::Short(Key::Start));
     until(&mut sim, &mut app, &mut main, 120_000);
-    assert!(sim.main.stops.is_empty() && main_stops(&main) == [0; 5], "a ride's Stop not built");
+    assert!(sim.main.stops.is_empty() && main_stops(&main) == [0; 6], "a ride's Stop not built");
     app.press(&mut sim, Press::Short(Key::Start));
     save_ride(&mut sim, &mut app);
     until(&mut sim, &mut app, &mut main, 125_000);
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Idle, Screen::Summary));
     app.press(&mut sim, Press::Short(Key::Start)); // the summary closed
     until(&mut sim, &mut app, &mut main, 200_000);
-    let [n, _, _, ride, _] = main_stops(&main);
+    let [n, _, _, ride, ..] = main_stops(&main);
     assert!(n > 100 && ride == 0, "{n} idle Stops after the ride, {ride} of the ride");
 }
 
@@ -426,6 +437,7 @@ fn a_ride_wake_that_breaks_resets_once_and_stops_no_more() {
     while sim.main.ride_stops == n {
         main.pass(&mut app, &mut sim);
     }
+    let reset_ms = sim.ms;
     assert_eq!(sim.main.resets, 1, "the clocks not back: a reset (the ride resumes from its checkpoint)");
     assert!(crate::stopbench::broke(sim.backup[crate::stopbench::BKP[0]]), "the report kept in register 0");
     // the ride resumed after the reset (the backup registers kept) never stops again while the report is there
@@ -438,10 +450,59 @@ fn a_ride_wake_that_breaks_resets_once_and_stops_no_more() {
     let mut main2 = MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
     until(&mut sim2, &mut app2, &mut main2, 3_000);
     assert!(app2.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app2.notes.list[0].as_str());
-    app2.press(&mut sim2, Press::Short(Key::Start)); // resumed paused: go on
+    // it comes back paused, and moving does not start it again (any fault's resume: Ride::resumed); Start does
+    let t = sim2.ms + 30_000;
+    while sim2.ms < t {
+        app2.live.set(Metric::Speed, 300);
+        main2.pass(&mut app2, &mut sim2);
+    }
+    assert_eq!(app2.ride.state(), ride::State::Paused, "30 s moving after the resume");
+    app2.press(&mut sim2, Press::Short(Key::Start));
     until(&mut sim2, &mut app2, &mut main2, 200_000);
     assert_eq!(app2.ride.state(), ride::State::Running);
     assert_eq!(sim2.main.ride_stops, 0, "a ride's Stop after a wake that broke");
+    // the saved ride: its records reach within a checkpoint (60 s) of the reset, and none repeats
+    let name = app2.rec.clean.name();
+    app2.press(&mut sim2, Press::Short(Key::Start));
+    save_ride(&mut sim2, &mut app2);
+    until(&mut sim2, &mut app2, &mut main2, 205_000);
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    let times = super::recorder_tests::record_times(&sim2.emmc.image, &path);
+    assert!(times.windows(2).all(|w| w[1] > w[0]), "a record time twice or back");
+    let reset_at = times[0] + ((reset_ms - 2000) / 1000) as u32; // the ride started at 2 s
+    let before = times.iter().copied().filter(|&t| t <= reset_at + 1).max().unwrap();
+    assert!(reset_at - before <= 60, "the last record before the reset {} s before it", reset_at - before);
+}
+
+#[test]
+fn a_ride_wake_with_the_sdram_changed_resets() {
+    let (mut sim, mut app, mut main) = riding();
+    sim.main.sdram_lost = true; // main.rs `image_marks` differ after the wake
+    let n = sim.main.ride_stops;
+    while sim.main.ride_stops == n {
+        main.pass(&mut app, &mut sim);
+    }
+    assert_eq!(sim.main.resets, 1, "the SDRAM not back whole: a reset");
+    assert!(crate::stopbench::broke(sim.backup[crate::stopbench::BKP[0]]));
+}
+
+#[test]
+fn the_usb_diagnostics_keep_the_latch_while_a_ride_is_open() {
+    let (mut sim, mut app, _) = riding();
+    use crate::stopbench::{BKP, PASS_OK, PLL, StopReport, pack};
+    let latch = pack(&StopReport { stop: true, flags: PASS_OK & !PLL, ..StopReport::default() })[0];
+    sim.backup[BKP[0]] = latch;
+    app.usb_snapshot(&mut sim, &crate::usbsnap::UsbSnap::default());
+    app.usb_dropped(&mut sim);
+    assert_eq!(sim.backup[BKP[0]], latch, "register 0 kept through a USB snapshot and a drop");
+    assert!(!app.ride_stop_ok(&mut sim));
+    // no ride open: the diagnostics write it as before
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ride.state(), ride::State::Idle);
+    app.usb_dropped(&mut sim);
+    assert_eq!(sim.backup[BKP[0]] >> 24, 0xd1, "a drop's word once the ride is saved");
 }
 
 /// A key pressed and released during a ride leaves its EXTI flag up (a short pass never reads it): the ride's Stops go

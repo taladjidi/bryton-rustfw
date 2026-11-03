@@ -162,7 +162,7 @@ pub fn rd(a: u32) -> u32 {
     // on every caller, and these are all of them. Register addresses (constants, each naming RM0399 or BOARD.md);
     // in this module, the link.x section bounds and the fault marker; main.rs's stack canary (link.x _stack_canary,
     // a DTCM word no Rust object holds: an overflow may write it, which is what the check looks for); main.rs's
-    // `image_crc` (aligned words of the image in SDRAM below its size word, read-only code and constants); and usb.rs's peek / poke, the dev link's
+    // `image_crc` and `image_marks` (aligned words of the image in SDRAM below its size word, read-only code and constants); and usb.rs's peek / poke, the dev link's
     // computer-given addresses, which they check first (aligned; poke in the peripheral space only, peek there or in
     // the DTCM or the SDRAM: all mapped). A peek of RAM may read a value a Rust object holds (it writes nothing,
     // and the value may be stale). A reserved address inside the peripheral space can still bus-fault: a reset

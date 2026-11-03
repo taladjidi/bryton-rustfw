@@ -797,7 +797,9 @@ const RTC_WKUP_IRQ: u32 = 1 << 3;
 /// The regulator in Stop (PWR_CR1 SVOS, hw.rs `stop`): SVOS3, the reset value and stock's (its idle hook leaves it),
 /// the one that keeps D3's peripherals able to wake the system (DS12930 3.5.3); SVOS4 / 5 are lower, to try after.
 const STOP_SVOS: u32 = 3;
-use bryton_rustfw::stopbench::{CRC, KEY, Mode, NO_TIMER, PENDING, STOPF, StopReport, WAKE_PENDING, WUTF, elapsed_us};
+use bryton_rustfw::stopbench::{
+    CRC, KEY, Mode, NO_TIMER, PENDING, REFRESH_OUT, STOPF, StopReport, WAKE_PENDING, WUTF, elapsed_us,
+};
 
 /// Writes RTC_ISR (here RTC_ICSR) clearing the rc_w0 flags in `flags`, every other flag kept (a 1 written leaves it)
 /// and INIT as it is: STM32CubeH7's `__HAL_RTC_WAKEUPTIMER_CLEAR_FLAG`. Called with the write protection off.
@@ -845,6 +847,19 @@ fn rtc_ss() -> (u32, u32) {
 fn image_crc() -> u32 {
     let words = rd(0xd000_0098).min(0x0010_0000) / 4;
     bryton_rustfw::inflate::crc32((0..words).flat_map(|k| rd(0xd000_0000 + 4 * k).to_le_bytes()))
+}
+
+/// 32 words of the image spread over it, folded: each 1/32 of the image apart plus 1 KB times its number (mod the
+/// image), so the samples fall in different rows and, the FMC's bank bits sitting between the row's and the
+/// column's (RM0399 FMC, SDRAM address mapping), in each of the SDRAM's 4 internal banks (inferred: the part's
+/// geometry is BOARD.md 3's, not checked word by word). After a Stop they must read as at boot: 32 uncached reads,
+/// a few us (`prof`'s `wake` section counts them; docs/power.md "Phase 2b").
+fn image_marks() -> u32 {
+    let words = (rd(0xd000_0098).min(0x0010_0000) / 4).max(1);
+    (0..32u32).fold(0, |a, k| {
+        let w = (k * (words / 32) + k * 256) % words;
+        a.rotate_left(5) ^ rd(0xd000_0000 + 4 * w)
+    })
 }
 
 /// One sleep of `ms` with the SDRAM in self-refresh, in Stop or CSleep as `mode` says (USB fully off first for
@@ -950,7 +965,9 @@ const RTS_MODER: (u32, u32) = (0x5802_0c00, 3 << 8);
 /// without trying when it is not built, the panel's DMA runs (`dma_busy`), a key's or the touch's EXTI flag is up (the
 /// loop acts on it) or a byte from the Nordic chip comes in. The key and touch flags are left for `key_edge` /
 /// `touch_edge`; every register changed is put back as it was. `ride`: a ride's Stop, built with bit 6 (`RIDE_STOP`).
-fn idle_stop(ms: u32, dma_busy: bool, ride: bool) -> (u32, u32) {
+/// `marks`: `image_marks` at boot; after the wake they must read the same, or the SDRAM did not come back whole
+/// (REFRESH_OUT cleared: a broken wake, the reset; on a ride it resumes from its checkpoint).
+fn idle_stop(ms: u32, dma_busy: bool, ride: bool, marks: u32) -> (u32, u32) {
     let built = POWER_STEPS & if ride { RIDE_STOP } else { IDLE_STOP } != 0;
     // our bytes still going out: USART2 enabled (CR1.UE, bit 0) and TC clear (a disabled one sends nothing)
     let sending = rd(U_CR1) & 1 != 0 && rd(U_ISR) & U_ISR_TC == 0;
@@ -994,6 +1011,10 @@ fn idle_stop(ms: u32, dma_busy: bool, ride: bool) -> (u32, u32) {
         wr(NVIC_ISER0 + 4, EXTI15_10_IRQ);
         wr(NVIC_ISER0 + 4 * (WKUP_IRQ / 32), 1 << (WKUP_IRQ % 32));
         hw::stop(true, STOP_SVOS, &mut r);
+        // the SDRAM back in normal mode: 32 words of the image, all its banks, as they were at boot (a few us)
+        if r.flags & REFRESH_OUT != 0 && image_marks() != marks {
+            r.flags &= !REFRESH_OUT;
+        }
         // the calendar's shadow registers stale after a Stop until RSF is set again (`low_power`)
         wr(RTC_WPR, 0xca);
         wr(RTC_WPR, 0x53);
@@ -1041,10 +1062,13 @@ fn idle_stop(ms: u32, dma_busy: bool, ride: bool) -> (u32, u32) {
 /// Bit 0: idle peripherals and the flash interface clocked off in sleep. Bit 1: the GPIO ports too. Bit 2: PLL2 and
 /// PLL3 off. Bit 3: SPI1 (the panel) at 50 MHz from PLL1Q instead of 8 from the HSI. Bit 4: the panel's pixel runs by DMA.
 /// Bit 5: Stop between idle passes (`idle_stop`, docs/power.md "Stop mode", phase 2a): `POWER_STEPS=95` builds without.
-/// Bit 6: Stop between a ride's passes (phase 2b): `POWER_STEPS=63` builds without it alone.
+/// Bit 6: Stop between a ride's passes (phase 2b): `POWER_STEPS=63` builds without it alone. **Off by default in the
+/// card-writing build** (`EMMC_WRITE=1`, the installed ride image) until the unit's ride procedure passes
+/// (docs/status.md, phase 2b); on in the default build (RAM runs); `POWER_STEPS=127` turns it on in either.
 const POWER_STEPS: u32 = match option_env!("POWER_STEPS") {
     Some(s) => parse_u32(s),
     // bits 0..2 seen on the unit 2026-10-25 (keys, touch, backlight, USB drive, a ride, power button); 3 and 4 2026-10-27
+    None if EMMC_WRITE => 0x3f,
     None => 0x7f,
 };
 const SLEEP_GATE: u32 = 1;
@@ -1819,6 +1843,8 @@ struct S510 {
     io: (u32, u32, u32),
     /// The panel's DMA (None: pixels by the CPU, without POWER_STEPS bit 4 or after a DMA failure).
     dma: Option<hw::PanelDma>,
+    /// `image_marks` at boot: what the SDRAM must still hold after a Stop.
+    marks: u32,
 }
 
 impl Board for S510 {
@@ -1997,8 +2023,9 @@ impl bryton_rustfw::LoopBoard for S510 {
     fn low_power(&mut self, ms: u32, mode: Mode) -> StopReport {
         low_power(ms, mode)
     }
+    const RIDE_STOP_BUILT: bool = POWER_STEPS & RIDE_STOP != 0;
     fn idle_stop(&mut self, ms: u32, ride: bool) -> (u32, u32) {
-        idle_stop(ms, self.dma.as_ref().is_some_and(|d| d.busy()), ride)
+        idle_stop(ms, self.dma.as_ref().is_some_and(|d| d.busy()), ride, self.marks)
     }
     fn nrf_flush(&mut self) {
         nrf_flush();
@@ -2220,7 +2247,7 @@ fn main() -> ! {
     key_lines_init();
     sleep_power_init();
     checkpoint(4);
-    let mut board = S510 { io: (0, 0, 0), dma };
+    let mut board = S510 { io: (0, 0, 0), dma, marks: image_marks() };
     let app = make_app(&mut board, make_stock_scan(), make_past());
     // what one profiler section costs (link/prof.rs): two counter reads and an add, the second time (the first
     // fills the I-cache from SDRAM)
