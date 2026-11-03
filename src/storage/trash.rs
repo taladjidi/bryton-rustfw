@@ -1611,22 +1611,54 @@ pub(crate) mod tests {
         }
     }
 
-    /// A move that cannot finish (the card full) whose put back finds every name of the ride's taken in
-    /// `\Activities` (the plain one and `-1` to `-99`): a card error, the move left pending, no 100th name made up.
-    /// A torn remove whose ride's name a computer has since given to a live `<name>-1.fit`: the put back never names
-    /// the torn entry that name (two live entries, one name), and the computer's entry keeps its own chain.
+    /// A torn remove (the long name's pieces deleted, the 8.3 entry live under its alias) of a ride's `-1` name,
+    /// which a computer has since given to a live file: the relink never names the torn entry that name (two live
+    /// entries, one name); the computer's entry keeps its own chain and content, the volume stays whole.
     #[test]
     fn a_relink_skips_a_name_already_live() {
-        let mut d = Ram(cut_midway(), 0);
+        const NAME: &str = "261020080000-1.fit";
+        let ride = cluster(&volume(), RIDE);
+        let mut d = Ram(moved_then_taken(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let acts = fat.open(&mut d, ACTIVITIES).unwrap();
-        fat.create(&mut d, acts, "261020080000-1.fit", T).unwrap();
-        let mine = file(&d.0, "Activities/261020080000-1.fit");
+        let h = Handle { first: ride.cluster, size: ride.size, ..Handle::default() };
+        fat.link(&mut d, acts, NAME, &h, T).unwrap();
+        let h = fat.locate(&mut d, acts, NAME).unwrap();
+        let at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32;
+        let short0 = d.0[at];
+        fat.remove(&mut d, &h).unwrap();
+        d.0[at] = short0;
+        assert!(fat.find(&mut d, acts, NAME).is_err(), "the alias alone");
+        fat.create(&mut d, acts, NAME, T).unwrap();
+        let theirs = fat.locate(&mut d, acts, NAME).unwrap();
+        assert!(theirs.first != ride.cluster);
+        // the two entries (2 long name pieces and the 8.3 entry each, in one sector) swapped: the computer's first,
+        // where the name looked up finds it, the ride's torn one after it
+        assert_eq!((theirs.entry_lba, theirs.slot > 2, h.slot > 2), (h.entry_lba, true, true), "one sector");
+        let base = h.entry_lba as usize * SECTOR;
+        let (a, b) = (base + (usize::from(h.slot) - 2) * 32, base + (usize::from(theirs.slot) - 2) * 32);
+        for k in 0..96 {
+            d.0.swap(a + k, b + k);
+        }
+        assert!(fat.find(&mut d, acts, NAME).is_ok_and(|f| f.cluster == theirs.first), "the computer's first");
+        let full = fat.open(&mut d, TO[1]).unwrap();
+        let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
+        fat.remove(&mut d, &other).unwrap(); // the move can finish
         assert!(finish(&mut d, T).is_ok(), "finished or put back");
-        assert_eq!(file(&d.0, "Activities/261020080000-1.fit"), mine, "the computer's entry untouched");
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+        let (mut c, mut live) = (fat.cursor(acts).unwrap(), 0);
+        while let Ok(Some(e)) = fat.list(&mut d, &mut c) {
+            live += usize::from(e.name() == NAME.as_bytes());
+        }
+        assert_eq!(live, 1, "one live entry of the name");
+        let now = fat.locate(&mut d, acts, NAME).unwrap();
+        assert_eq!(now.first, theirs.first, "the computer's entry keeps its chain");
         assert_eq!(fsck(&d.0), Ok(0));
     }
 
+    /// A move that cannot finish (the card full) whose put back finds every name of the ride's taken in
+    /// `\Activities` (the plain one and `-1` to `-99`): a card error, the move left pending, no 100th name made up.
     #[test]
     fn a_put_back_with_every_suffix_taken_stays_pending() {
         let mut d = Ram(cut_midway(), 0);
