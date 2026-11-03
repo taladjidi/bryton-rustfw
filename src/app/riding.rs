@@ -529,11 +529,13 @@ impl App {
         match o {
             recorder::Outcome::Nothing => {}
             recorder::Outcome::Resumed(words, name) => {
-                // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it
+                // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it; unless the
+                // rider had paused it with Start, it also goes on by itself once riding (an auto-pause's stop in the
+                // file: storage/recorder/mod.rs `recover_from`)
                 // its totals from the record (one of a build before them: zeros, counted from the resume), at the boot
                 // and when the card answered late alike (both reach here)
                 let more = self.rec.clean.more();
-                self.ride = ride::Ride::resumed(&words, &more);
+                self.ride = ride::Ride::resumed(&words, &more, self.rec.clean.paused_by_hand());
                 // the record keeps GRAVEL, CX and COMMUTE as ROAD: BIKE (settings.bin) says which, read now
                 if !self.settings_store.file.loaded {
                     self.load_settings(b);
@@ -672,6 +674,9 @@ impl App {
                 k => k,
             },
         };
+        if matches!(self.screen, Screen::End(_) | Screen::Discard(_)) {
+            self.ride.hold(); // the rider is ending it: a resumed ride no longer goes on by itself
+        }
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {
             self.recorder(ev);

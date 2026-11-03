@@ -33,7 +33,8 @@
 //! file and checks both), the FIT writer's state ([`fit::RECORD_LEN`] bytes, its own CRC) and the app's ride totals
 //! (`ride::Ride::to_words`, their count checked), the current lap's sums ([`fit::Writer::lap_words`]), the totals a
 //! resume goes on from beyond them (`ride::Ride::more_words`: uphill, downhill, max altitude, the power's NP, work,
-//! max and W' balance), the FIT timer's word ([`fit::Writer::timer_word`]); the sector's CRC last.
+//! max and W' balance), the FIT timer's word ([`fit::Writer::timer_word`]), whether the rider had paused with Start
+//! (a resume keeps that ride paused; any other goes on once riding: `recover_from`); the sector's CRC last.
 //!
 //! **The save** (End), each step done again after a reset by [`Recorder::recover`] from the phase in the record:
 //! 1. the end messages and a checkpoint whose record says "saving";
@@ -342,7 +343,7 @@ pub const BEATS_QUEUED: usize = 40;
 /// (the record also holds [`RIDE_WORDS`], byte 21, checked). One exception: a new field may go in bytes every
 /// earlier build writes as zero (`to_sector` starts from a zeroed sector, the CRC covers the whole sector and
 /// earlier builds ignore those bytes), provided all zeros reads as "absent" and is harmless: `checked` (bytes 23,
-/// 28..30), the lap sums (192..228, rec.rs `LAP_AT`), the ride's descent (its word 15, bytes 188..192), its other
+/// 28..30), paused by hand (byte 30, rec.rs `by_hand`), the lap sums (192..228, rec.rs `LAP_AT`), the ride's descent (its word 15, bytes 188..192), its other
 /// totals and its power's (228..280, rec.rs `MORE_AT`).
 const TAG: [u8; 4] = *b"RFR2";
 const _: () = assert!(128 + 4 * RIDE_WORDS <= SECTOR - 2 && RIDE_WORDS < 256);
@@ -937,9 +938,16 @@ impl Recorder {
         self.more
     }
 
-    /// Resumed at `time`.
+    /// Resumed at `time`. No checkpoint here: until the next one (a minute of records) the recovery record still
+    /// says paused by hand, so a reset in that minute resumes the ride paused until Start, as before 2026-11-03.
     pub fn resume(&mut self, time: u32) {
         self.put(16, |w, sink| w.resume(sink, time));
+    }
+
+    /// The ride [`Recorder::recover`] reopened (`Resumed`) was paused with Start: it stays paused until Start (else
+    /// its stop is an auto-pause's, ended by the first moving second).
+    pub fn paused_by_hand(&self) -> bool {
+        self.writer.paused()
     }
 
     /// A lap at `time`.
@@ -1491,8 +1499,9 @@ impl Recorder {
         let mut rec = self.rec.ok_or(Error::NotFound)?;
         let seq = self.seq.wrapping_add(1);
         let (name, fit, ride, discard) = (self.name, self.writer.to_record(), self.ride, self.discard);
-        let (lap, more, timer) = (self.writer.lap_words(), self.more, self.writer.timer_word());
-        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap, more, timer };
+        let (lap, more, timer, by_hand) =
+            (self.writer.lap_words(), self.more, self.writer.timer_word(), self.writer.paused());
+        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked, lap, more, timer, by_hand };
         let slot = 3 * (seq % 2);
         match copies {
             Some((first, last)) => {
@@ -1893,10 +1902,12 @@ impl Recorder {
                 // back paused, to be ended again: a DISCARD chosen before the cut (a ride ended before its first
                 // checkpoint) is asked again, never carried to a later SAVE
                 self.discard = false;
-                // the time the unit was off is a pause: timer stop at the last record (the app shows it paused)
-                if !self.writer.paused() {
+                // the time the unit was off is a stop from the last record (the app shows it paused): the Start
+                // key's if the rider had paused it (it waits for Start), else an auto-pause's, which the first moving
+                // second ends (the app's ride goes on by itself once riding: training/ride.rs `Ride::resumed`)
+                if !(r.by_hand && self.writer.paused()) {
                     let last = self.writer.last_time();
-                    self.put(16, |w, sink| w.pause(sink, last));
+                    self.put(16, |w, sink| w.stop_auto(sink, last));
                 }
                 Ok(Outcome::Resumed(self.ride, self.name))
             }

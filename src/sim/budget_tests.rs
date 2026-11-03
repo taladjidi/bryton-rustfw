@@ -519,7 +519,7 @@ fn three_hours(s: Setting) -> Vec<Row1> {
     let mut b = Rig::on(image, s, |sim| {
         (sim.backup, sim.start_s, (sim.emmc.rel_param, sim.emmc.rel_sectors)) = (backup, start_s, params);
     });
-    assert!(b.app.ride.state() == crate::ride::State::Paused, "resumed");
+    assert!(b.app.ride.state() != crate::ride::State::Idle, "resumed");
     rows.push(b.done("boot resume, 3 h ride"));
 
     r.press(Press::Short(Key::Start));

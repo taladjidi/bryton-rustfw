@@ -63,9 +63,12 @@
 //! timer leaves it out as the screen's does. Records go on while auto-paused (one a second, as before): our choice,
 //! nothing of a stop lost; whether Garmin's units write them then is not checked (inferred: some do not), and the
 //! readers take records while the timer is stopped. The Start key during an auto-pause writes no second stop (the
-//! timer is stopped): the stop becomes the pause, and the resume's start ends it. A recovery record taken during an
-//! auto-pause comes back paused, as after a Start pause (the recorder's resume writes no stop then); the seconds the
-//! timer was stopped when the current lap began go beside it ([`Writer::timer_word`]; a record of a build before has
+//! timer is stopped): the stop becomes the pause, and the resume's start ends it. A ride resumed after a reset
+//! (owner, 2026-11-03: "Resume automatically") has the time the unit was off as a stop from its last record: the
+//! Start key's if the rider had paused it (the recovery record says so), else an auto-pause's ([`Writer::stop_auto`]:
+//! its stop_all, trigger auto, unless a stop was open at the checkpoint), which the first moving second's record ends
+//! with its auto start, or the Start key's start; the seconds the timer was stopped when the current lap began go
+//! beside the record ([`Writer::timer_word`]; a record of a build before has
 //! 0 there, and the stops before the lap are then taken as the ride's at the checkpoint).
 //!
 //! The profile ([`Sample::profile`], [`Sample::by_hand`]) is the last second's, or the one given since by
@@ -547,7 +550,8 @@ pub struct Writer {
     paused_s: u32,
     paused_at: u32,
     /// The current stop is an auto-pause's (module doc, "The timer"): a moving second starts the timer again. Not in
-    /// the recovery record: a ride resumed after a reset is paused, its stop the Start key's from then on.
+    /// the recovery record, which says instead whether the rider paused with Start ([`Writer::paused`]): a ride
+    /// resumed after a reset not paused by hand has its stop an auto-pause's again ([`Writer::stop_auto`]).
     auto: bool,
     /// Seconds stopped ([`Writer::paused_total`]) when the current lap began ([`Writer::timer_word`]).
     lap_paused: u32,
@@ -654,6 +658,19 @@ impl Writer {
             self.paused_at = 0;
         }
         self.auto = false;
+        Ok(())
+    }
+
+    /// A ride reopened after a reset not paused by hand (storage/recorder/mod.rs `recover_from`): the time the unit
+    /// was off is an auto-pause's stop from `time` (the last record), its stop_all with trigger auto unless the timer
+    /// is stopped already; the first moving second's record ends it, as any auto-pause (module doc, "The timer").
+    pub fn stop_auto(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
+        self.last = self.last.max(time);
+        if self.paused_at == 0 {
+            self.auto_event(sink, self.last, 4)?;
+            self.paused_at = self.last;
+        }
+        self.auto = true;
         Ok(())
     }
 

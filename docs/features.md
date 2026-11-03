@@ -415,7 +415,14 @@ Built-in names cannot be a file's. Fonts in a theme come later (docs/theming.md)
   timer time is the screen's timer and the elapsed time every second; a lap message per Lap and per workout step, with the lap's own average and maximum heart rate, cadence and power
   over its moving seconds (the lap banner's numbers, until a reset: the banner then starts again from the resume; the session's over every record), invalid when none had one, kept across a reset by the recovery record), from RAM to the card
   at a checkpoint at least every minute, at each pause and when switched off. A reset or a power cut loses at most
-  the last minute: at the next start the ride comes back paused ("RIDE RESUMED"). Its end card's NP, TSS and kJ
+  the last minute: at the next start the ride comes back paused ("RIDE RESUMED") and, unless the rider had paused it
+  with Start (the recovery record says so), goes on by itself at the first second of riding (owner, 2026-11-03:
+  "Resume automatically"): a speed at or above the auto-pause's (2 km/h with AUTO PAUSE OFF), or any cadence or
+  power; nothing read yet (the sensors not back, no fix) is not riding. In the file the time off is an auto-pause's
+  stop (stop_all, trigger auto) that the first moving second ends; Start still goes on by hand, and the end-ride
+  screen holds it paused. A ride paused by hand and resumed less than a minute (its next checkpoint) before the
+  reset, or recorded by a build before this one, keeps the record's word: the first waits for Start, the second
+  goes on once riding. Its end card's NP, TSS and kJ
   then cover the part after the restart only (the recovery record keeps the ride's totals, not the power sums); the
   file holds every second's power, so the history's and a computer's numbers cover the whole ride. At the end it is
   read back whole, then moved to
