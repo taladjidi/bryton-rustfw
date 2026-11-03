@@ -2068,12 +2068,14 @@ fn plugged(effects: Vec<Effect>, watches: Vec<UsbWatch>) -> (Sim, App, SimLink, 
 
 /// The Stop benches through the pass (docs/power.md "Stop mode", phase 1): `bench srefresh` sleeps, answers its line
 /// and the loop goes on; `bench stop` lingers (its `ok` was sent), leaves the bus, sleeps in Stop, keeps its report in
-/// backup registers 0 and 31 behind their tags and resets.
+/// backup registers 0 and 31 behind their tags and resets (`usboff` the same); `bench stop <ms> keep` stays on the
+/// bus, keeps its verdict in register 0, answers its line and the loop goes on.
 #[test]
 fn stop_benches_answer_or_keep_their_report() {
+    use crate::stopbench::{Mode, STOP_OK};
     let (mut sim, mut app, link, mut main) = plugged(vec![Effect::BenchSrefresh(100)], vec![]);
     main.pass(&mut app, &mut sim);
-    assert_eq!((sim.main.low_power.as_slice(), sim.main.resets), ([(100, false)].as_slice(), 0));
+    assert_eq!((sim.main.low_power.as_slice(), sim.main.resets), ([(100, Mode::Refresh)].as_slice(), 0));
     let sent = std::string::String::from_utf8(link.0.borrow().sent.clone()).unwrap_or_default();
     assert!(
         sent.starts_with("srefresh ok flags 000000c3 slept 100 wake 338 cycles ") && sent.ends_with('\n'),
@@ -2081,13 +2083,23 @@ fn stop_benches_answer_or_keep_their_report() {
     );
     main.pass(&mut app, &mut sim);
     assert_eq!(sim.main.low_power.len(), 1, "the loop goes on");
-    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::BenchStop(1000)], vec![]);
+    for mode in [Mode::Stop, Mode::UsbOff] {
+        let (mut sim, mut app, link, mut main) = plugged(vec![Effect::BenchStop(1000, mode)], vec![]);
+        main.pass(&mut app, &mut sim);
+        assert_eq!((sim.main.low_power.as_slice(), sim.main.resets), ([(1000, mode)].as_slice(), 1));
+        assert_eq!(link.0.borrow().log, ["poll", "linger", "disconnect"]);
+        let (a, b) = (sim.backup_read(0), sim.backup_read(31));
+        assert_eq!((a >> 24, a >> 12 & 0xfff, a & 0xfff), (0x57, STOP_OK, 1000));
+        assert_eq!(b >> 24, 0x58);
+    }
+    let (mut sim, mut app, link, mut main) = plugged(vec![Effect::BenchStop(500, Mode::Keep)], vec![]);
     main.pass(&mut app, &mut sim);
-    assert_eq!((sim.main.low_power.as_slice(), sim.main.resets), ([(1000, true)].as_slice(), 1));
-    assert_eq!(link.0.borrow().log, ["poll", "linger", "disconnect"]);
-    let (a, b) = (sim.backup_read(0), sim.backup_read(31));
-    assert_eq!((a >> 24, a >> 14 & 0x1ff, a & 0x3fff), (0x57, crate::stopbench::STOP_OK, 1000));
-    assert_eq!(b >> 24, 0x58);
+    assert_eq!((sim.main.low_power.as_slice(), sim.main.resets), ([(500, Mode::Keep)].as_slice(), 0));
+    assert!(!link.0.borrow().log.contains(&"disconnect"));
+    let sent = std::string::String::from_utf8(link.0.borrow().sent.clone()).unwrap_or_default();
+    assert!(sent.starts_with("stop ok flags 000003ff slept 500 ") && sent.contains(" post "), "{sent:?}");
+    assert_eq!(sim.backup_read(0) >> 12, 0x57 << 12 | STOP_OK);
+    assert_eq!(sim.backup_read(31) >> 24, 0, "only the verdict");
 }
 
 /// The USB link's effects as main.rs had them before the loop moved into the library (finding 31): the cable starts

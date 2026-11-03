@@ -21,7 +21,11 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   nothing it uses runs from them. **Inferred, not yet seen on the unit.** Which PLLs and peripherals the
   bootloader leaves on: to read (`tools/dev.py peek 0x58024400` RCC_CR, `0x580244d4 9` RCC_AHB3ENR..APB4ENR,
   `0x580244fc 9` the LPENR registers).
-- **Stop mode** (docs/power.md "Stop mode"; phase 1, the dev link's benches, **not yet seen on the unit**): Stop turns
+- **Stop mode** (docs/power.md "Stop mode"; phase 1, the dev link's benches). **Seen on the unit 2026-11-03, cable
+  in:** a Stop entered from the bench with USB only soft-disconnected (VOS1, the OTG core and PHY clocked) left
+  PWR_CPUCR STOPF clear and the HSE and PLL1 running (their waits took a few cycles): the system stayed in Run. Stock's
+  switch-off does reach system Stop / Standby on this unit (its flags word: PWR_CPUCR 0x1a3, STOPF set). DBGMCU_CR
+  (0x5c001004) reads 0. What held it is to find (`bench stop --usboff`, `--keep`). Inferred, not re-read: Stop turns
   the HSE and the PLLs off and wakes on the HSI (RCC_CFGR STOPWUCK 0; RM0399 RCC, inferred from the plan, the manual
   not re-read). The registers keep their values, so hw.rs `stop` puts back what RCC_CR had on before (HSE, HSI48,
   CSI, then PLL1..3, each ready flag the bit above its enable: stm32h747xx.h), then SYSCLK's source (RCC_CFGR SW,
@@ -91,7 +95,11 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 
 - The image runs in place from SDRAM 0xd0000000, code and constants included.
 - This firmware's image is 1 MB at most (`link.x`). SDRAM from 0xd0800000 is its staging area for RAM-run.
-- **SDRAM self-refresh** (for Stop, hw.rs `stop`; **not yet seen on the unit**): FMC_SDCMR (0x52004150) MODE 101 with
+- **Reserved holes of the peripheral space bus-fault** (seen on the unit 2026-11-03: a dev link `peek 0x584244a8`, a
+  typo for RCC_D3AMR 0x580244a8, reset the unit and its USB did not come back): the dev link's peek and poke now reach
+  only the 1 KB pages stm32h747xx.h puts a peripheral in (src/link/dev.rs `IO`).
+- **SDRAM self-refresh** (for Stop, hw.rs `stop`; **seen on the unit 2026-11-03**: entered and left around a 1 s
+  CSleep WFI, the image's CRC unchanged): FMC_SDCMR (0x52004150) MODE 101 with
   CTB2 (bank 2) and NRFS 0, the value 0x0d in its low bits, as stock's `Pwr_SdramSelfRefresh` (bryton repo
   ghidra/recovered_src/system/board.c: command {5, bank 2, 1 refresh, 0}, then mode status 2 checked); FMC_SDSR
   (0x52004158) MODES2 (bits 3..4) reads 01 in self-refresh, 00 in normal mode (stm32h7xx_ll_fmc.c
@@ -391,7 +399,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
   system reset (seen), and should through standby (backup domain, RM0399; to see).
-- **Wake-up timer** (the Stop benches, main.rs `wakeup_timer`; **not yet seen on the unit**): RTC_WUTR (0x58004014)
+- **Wake-up timer** (the Stop benches, main.rs `wakeup_timer`; **seen on the unit 2026-11-03**: WUTF set after 99
+  and 1000 ms sleeps of 100 and 1000 asked): RTC_WUTR (0x58004014)
   counts RTCCLK / 16 (RTC_CR WUCKSEL 000), 2048 Hz from the LSE, so up to 32 s; RTC_CR WUTE bit 10, WUTIE bit 14; RTC_ISR
   WUTWF bit 2 (WUTR writable) and WUTF bit 10 (cleared by writing 0, INIT kept). Its EXTI line for this core is **19**,
   rising edge (STM32CubeH7 stm32h7xx_hal_rtc_ex.h: `RTC_EXTI_LINE_WAKEUPTIMER_EVENT` = `EXTI_IMR1_IM19`, unmasked in

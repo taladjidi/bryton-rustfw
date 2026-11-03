@@ -797,6 +797,7 @@ const RTC_WKUP_IRQ: u32 = 1 << 3;
 /// The regulator in Stop (PWR_CR1 SVOS, hw.rs `stop`): SVOS3, the reset value and stock's (its idle hook leaves it),
 /// the one that keeps D3's peripherals able to wake the system (DS12930 3.5.3); SVOS4 / 5 are lower, to try after.
 const STOP_SVOS: u32 = 3;
+use bryton_rustfw::stopbench::{CRC, KEY, Mode, NO_TIMER, STOPF, StopReport, WUTF, elapsed_ms};
 
 /// Writes RTC_ISR (here RTC_ICSR) clearing the rc_w0 flags in `flags`, every other flag kept (a 1 written leaves it)
 /// and INIT as it is: STM32CubeH7's `__HAL_RTC_WAKEUPTIMER_CLEAR_FLAG`. Called with the write protection off.
@@ -804,21 +805,28 @@ fn rtc_clear(flags: u32) {
     wr(RTC_ICSR, !(flags | 1 << 7) | (rd(RTC_ICSR) & 1 << 7));
 }
 
-/// The RTC wake-up timer: armed to fire once in `ms` (its flag cleared first), or off (`None`, its flag cleared).
-fn wakeup_timer(ms: Option<u32>) {
+/// The RTC wake-up timer: armed to fire once in `ms` (its flag cleared first), or off (`None`, its flag cleared). True
+/// when armed: WUTWF was seen (WUTR writable) and WUTE reads back set; false for `None`.
+fn wakeup_timer(ms: Option<u32>) -> bool {
     modify(PWR_CR1, 0, 1 << 8); // DBP
     wr(RTC_WPR, 0xca);
     wr(RTC_WPR, 0x53);
     modify(RTC_CR, (1 << 10) | (1 << 14), 0); // WUTE, WUTIE
     let t0 = cycles();
     while rd(RTC_ICSR) & (1 << 2) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {} // WUTWF, 10 ms max
+    let writable = rd(RTC_ICSR) & (1 << 2) != 0;
     rtc_clear(1 << 10); // WUTF
-    if let Some(ms) = ms {
+    let mut armed = false;
+    if let Some(ms) = ms
+        && writable
+    {
         wr(RTC_WUTR, bryton_rustfw::stopbench::wutr(ms));
         modify(RTC_CR, 0b111, 0); // WUCKSEL 000: RTCCLK / 16
         modify(RTC_CR, 0, (1 << 10) | (1 << 14));
+        armed = rd(RTC_CR) & (1 << 10) != 0;
     }
     wr(RTC_WPR, 0xff);
+    armed
 }
 
 /// (RTC_TR, RTC_SSR), read together: SSR first, which locks TR and DR until DR is read (stm32h7xx_hal_rtc.c, the
@@ -839,51 +847,71 @@ fn image_crc() -> u32 {
     bryton_rustfw::inflate::crc32((0..words).flat_map(|k| rd(0xd000_0000 + 4 * k).to_le_bytes()))
 }
 
-/// One sleep of `ms` with the SDRAM in self-refresh, in Stop (`deep`) or CSleep, woken by the RTC wake-up timer alone:
-/// SysTick stopped, every NVIC line and the CPU's EXTI masks saved and cleared but the timer's, then all put back; the
-/// image's CRC before and after. A bench's (the dev link's); the main loop's use is phase 2 (docs/power.md).
-fn low_power(ms: u32, deep: bool) -> bryton_rustfw::stopbench::StopReport {
-    use bryton_rustfw::stopbench::{CRC, STOPF, StopReport, WUTF, elapsed_ms};
+/// One sleep of `ms` with the SDRAM in self-refresh, in Stop or CSleep as `mode` says (USB fully off first for
+/// [`Mode::UsbOff`]: usb.rs `power_down`), woken by the RTC wake-up timer or the power key (WKUP1, EXTI 55, IRQ 149, as
+/// `standby` arms it): SysTick stopped, every NVIC line and the CPU's EXTI masks saved and cleared but those two, then
+/// all put back; the image's CRC before and after. No sleep if the timer did not arm ([`NO_TIMER`]). A bench's (the
+/// dev link's); the main loop's use is phase 2 (docs/power.md).
+fn low_power(ms: u32, mode: Mode) -> StopReport {
+    let deep = mode != Mode::Refresh;
     let mut r = StopReport { stop: deep, ..StopReport::default() };
+    if mode == Mode::UsbOff {
+        usb::power_down();
+    }
     let crc = image_crc();
     timer_stop();
     let iser: [u32; 8] = core::array::from_fn(|k| rd(NVIC_ISER0 + 4 * k as u32));
     let imr = (rd(EXTI_CPUIMR1), rd(EXTI_CPUIMR2), rd(EXTI_CPUIMR3));
+    let wkup = rd(PWR_WKUPEPR);
     for k in 0..8 {
         wr(NVIC_ICER0 + 4 * k, u32::MAX);
         wr(NVIC_ICPR0 + 4 * k, u32::MAX);
     }
     wr(EXTI_CPUIMR1, RTC_WKUP_LINE);
-    wr(EXTI_CPUIMR2, 0);
+    wr(EXTI_CPUIMR2, WKUP1_LINE);
     wr(EXTI_CPUIMR3, 0);
     modify(EXTI_RTSR1, 0, RTC_WKUP_LINE);
-    wakeup_timer(Some(ms));
-    wr(EXTI_CPUPR1, RTC_WKUP_LINE);
-    wr(NVIC_ICPR0, RTC_WKUP_IRQ);
-    wr(NVIC_ISER0, RTC_WKUP_IRQ);
-    let before = rtc_ss();
-    hw::stop(deep, STOP_SVOS, &mut r);
-    // after a Stop the calendar's shadow registers are stale until RSF is set again (stm32h7xx_hal_rtc.c `HAL_RTC_WaitForSynchro`)
-    wr(RTC_WPR, 0xca);
-    wr(RTC_WPR, 0x53);
-    rtc_clear(1 << 5);
-    wr(RTC_WPR, 0xff);
-    let after = rtc_ss();
-    r.slept_ms = elapsed_ms(before, after, rd(RTC_PRER) & 0x7fff);
+    wr(PWR_WKUPCR, 1); // WKUPF1 cleared, then WKUPEN1 with the polarity and pull as they were
+    modify(PWR_WKUPEPR, 0, 1);
+    if wakeup_timer(Some(ms)) {
+        wr(EXTI_CPUPR1, RTC_WKUP_LINE);
+        wr(NVIC_ICPR0, RTC_WKUP_IRQ);
+        wr(NVIC_ISER0, RTC_WKUP_IRQ);
+        wr(NVIC_ISER0 + 4 * (WKUP_IRQ / 32), 1 << (WKUP_IRQ % 32));
+        let before = rtc_ss();
+        hw::stop(deep, STOP_SVOS, &mut r);
+        // after a Stop the calendar's shadow registers are stale until RSF is set again (stm32h7xx_hal_rtc.c
+        // `HAL_RTC_WaitForSynchro`)
+        wr(RTC_WPR, 0xca);
+        wr(RTC_WPR, 0x53);
+        rtc_clear(1 << 5);
+        wr(RTC_WPR, 0xff);
+        let after = rtc_ss();
+        r.slept_ms = elapsed_ms(before, after, rd(RTC_PRER) & 0x7fff);
+    } else {
+        r.flags |= NO_TIMER;
+    }
     if rd(RTC_ICSR) & (1 << 10) != 0 {
         r.flags |= WUTF;
     }
-    if deep && r.cpucr & (1 << 5) != 0 {
+    if rd(PWR_WKUPFR) & 1 != 0 {
+        r.flags |= KEY;
+    }
+    if deep && r.post.cpucr & (1 << 5) != 0 {
         r.flags |= STOPF;
     }
     wakeup_timer(None);
+    wr(PWR_WKUPEPR, wkup);
+    wr(PWR_WKUPCR, 1);
     wr(EXTI_CPUPR1, RTC_WKUP_LINE);
     modify(EXTI_RTSR1, RTC_WKUP_LINE, 0);
     wr(EXTI_CPUIMR1, imr.0);
     wr(EXTI_CPUIMR2, imr.1);
     wr(EXTI_CPUIMR3, imr.2);
-    wr(NVIC_ICER0, RTC_WKUP_IRQ);
-    wr(NVIC_ICPR0, RTC_WKUP_IRQ);
+    for k in 0..8 {
+        wr(NVIC_ICER0 + 4 * k, u32::MAX);
+        wr(NVIC_ICPR0 + 4 * k, u32::MAX);
+    }
     for (k, v) in iser.iter().enumerate() {
         wr(NVIC_ISER0 + 4 * k as u32, *v);
     }
@@ -1851,8 +1879,8 @@ impl bryton_rustfw::LoopBoard for S510 {
     fn overflow_stack(&mut self) {
         stack_fault(hw::stack_canary());
     }
-    fn low_power(&mut self, ms: u32, stop: bool) -> bryton_rustfw::stopbench::StopReport {
-        low_power(ms, stop)
+    fn low_power(&mut self, ms: u32, mode: Mode) -> StopReport {
+        low_power(ms, mode)
     }
     fn nrf_flush(&mut self) {
         nrf_flush();

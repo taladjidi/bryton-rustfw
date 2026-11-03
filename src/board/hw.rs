@@ -360,15 +360,40 @@ fn wait_for(a: u32, mask: u32, want: u32) -> bool {
     rd(a) & mask == want
 }
 
+/// RCC_D3AMR (stm32h747xx.h `RCC_TypeDef` D3AMR at 0xa8): the D3 peripherals in autonomous mode, which keep D3 running.
+const RCC_D3AMR: u32 = 0x5802_44a8;
+/// RCC_D1CCIPR (stm32h747xx.h, offset 0x4c): FMCSEL in bits 0..1, 00 hclk3, 01 pll1_q, 10 pll2_r, 11 per_ck.
+const RCC_D1CCIPR: u32 = 0x5802_444c;
+/// EXTI_CPUPR1..3: this core's pending lines (EXTI_D1 at 0x58000080, PR1 / 2 / 3 at + 0x08 / 0x18 / 0x28).
+const EXTI_CPUPR1: u32 = 0x5800_0088;
+/// The DTCM, where the report must be (the caller's stack): the only RAM sure to answer while the SDRAM sleeps.
+const DTCM: core::ops::Range<u32> = 0x2000_0000..0x2002_0000;
+
+/// The registers that say why the system did or did not stop (lib stopbench.rs `Regs`).
+#[inline(always)]
+fn snap(g: &mut bryton_rustfw::stopbench::Regs) {
+    g.cpucr = rd(PWR_CPUCR);
+    g.cpu2cr = rd(PWR_CPU2CR);
+    g.d3cr = rd(PWR_D3CR);
+    g.d3amr = rd(RCC_D3AMR);
+    g.rcc_cr = rd(RCC_CR);
+    g.cfgr = rd(RCC_CFGR);
+    g.pr = [rd(EXTI_CPUPR1), rd(EXTI_CPUPR1 + 0x10), rd(EXTI_CPUPR1 + 0x20)];
+}
+
 /// The SDRAM in self-refresh around one WFI, in Stop (`deep`, the regulator at `svos`: 3 for SVOS3, 2 SVOS4, 1 SVOS5)
 /// or in CSleep (the clocks kept), then the clocks as they were (HSE, PLLs, SYSCLK's source, read before) and the
-/// SDRAM in normal mode. Flags and cycles go into `r` (lib link/stopbench.rs). If the self-refresh is not confirmed,
-/// no WFI: the normal-mode command is sent and it returns. Whatever failed on the wake, the SDRAM is put back in
-/// normal mode before returning (on the HSI, 64 MHz, the FMC runs slower, which the SDRAM allows: its refresh only
-/// comes more often).
+/// SDRAM in normal mode. Flags, cycles and the registers just before and after the WFI go into `r` (lib
+/// link/stopbench.rs). If the self-refresh is not confirmed, no WFI: the normal-mode command is sent and it returns.
+/// Whatever failed on the wake, the SDRAM is put back in normal mode before returning: on a PLL that did not lock
+/// again, the FMC's kernel clock is moved to hclk3 first (the HSI's 64 MHz then, which the SDRAM allows: its refresh
+/// only comes more often). Nothing is done (no flag set) unless `r` is in the DTCM.
 /// The caller (main.rs `low_power`) arms the wake-up first: the RTC wake-up timer's EXTI line and IRQ, every other
 /// NVIC line off, SysTick off, no DMA running, USB off the bus for a Stop.
 pub fn stop(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport) {
+    if !DTCM.contains(&address(r)) {
+        return;
+    }
     barrier(); // every write to the SDRAM done before the command
     stop_itcm(deep, svos, r);
     barrier();
@@ -377,7 +402,7 @@ pub fn stop(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport)
 // SAFETY: `link_section` places this function in .itcm (link.x: ITCM, copied there by `reset` before main runs, as
 // `ram_trampoline`); nothing else is in a section of that name but the trampoline. It must stay free of any fetch from
 // the SDRAM between the self-refresh command and the normal-mode one: its body only inlines rd / wr / barrier / wfi
-// and stores into `r` (on the caller's stack, DTCM), no call, no constant table (the literals LLVM puts beside the
+// and stores into `r` (in the DTCM: `stop` checks), no call, no constant table (the literals LLVM puts beside the
 // code are in .itcm too), checked in the ELF by tools/stack_check.py. No exception can fetch a vector from the SDRAM
 // meanwhile: PRIMASK is set (reset's `cpsid i`), so a pending IRQ only ends WFI, and no fault can occur (the
 // accesses are to fixed registers; `r` is a valid reference).
@@ -386,7 +411,6 @@ pub fn stop(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport)
 fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport) {
     use bryton_rustfw::stopbench as sb;
     let (cr, sw) = (rd(RCC_CR), rd(RCC_CFGR) & 7);
-    r.cpu2cr = rd(PWR_CPU2CR);
     wr(FMC_SDCMR, (rd(FMC_SDCMR) & !SDCMR_FIELDS) | SDCMR_SELF_REFRESH);
     let mut flags = 0;
     if wait_for(FMC_SDSR, SDSR_MODES2, SDSR_SELF_REFRESH) {
@@ -399,10 +423,14 @@ fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport
             wr(RCC_CFGR, rd(RCC_CFGR) & !(0b11 << 6));
             wr(SCB_SCR, rd(SCB_SCR) | 1 << 2);
         }
+        snap(&mut r.pre);
         barrier();
         wfi();
+        snap(&mut r.post);
         wr(SCB_SCR, rd(SCB_SCR) & !(1 << 2));
-        r.cpucr = rd(PWR_CPUCR);
+        if r.post.cfgr & (7 << 3) != sw << 3 {
+            flags |= sb::CLOCKS;
+        }
         // the regulator at its Run voltage before any faster clock (stock waits VOSRDY first; ACTVOSRDY too: inferred)
         let t = rd(DWT_CYCCNT);
         if wait_for(PWR_D3CR, 1 << 13, 1 << 13) && wait_for(PWR_CSR1, 1 << 13, 1 << 13) {
@@ -423,6 +451,9 @@ fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport
         wr(RCC_CR, rd(RCC_CR) | pll);
         if wait_for(RCC_CR, pll << 1, pll << 1) {
             flags |= sb::PLL;
+        } else if matches!(rd(RCC_D1CCIPR) & 0b11, 1 | 2) {
+            // the FMC's kernel clock is a PLL output that did not come back: hclk3 instead, so it has a clock
+            wr(RCC_D1CCIPR, rd(RCC_D1CCIPR) & !0b11);
         }
         let t3 = rd(DWT_CYCCNT);
         r.pll = t3.wrapping_sub(t2);
@@ -438,7 +469,7 @@ fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport
         flags |= sb::REFRESH_OUT;
     }
     r.fmc = rd(DWT_CYCCNT).wrapping_sub(t);
-    r.flags = flags;
+    r.flags |= flags;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

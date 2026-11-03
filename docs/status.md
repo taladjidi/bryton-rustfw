@@ -29,14 +29,21 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
     three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not
     reproduced.
 
-- **Stop mode, phase 1 (2026-11-03, docs/power.md "Stop mode"):** the two bench steps, from RAM (`tools/dev.py run`),
-  no ride open, nothing written to the eMMC:
-  1. `tools/dev.py srefresh 100`: the SDRAM in self-refresh around a CSleep WFI; pass = `srefresh ok flags 000000c3`,
-     slept about 100 ms. Then `srefresh 1000`.
-  2. `tools/dev.py stop 1000`, then once the installed firmware is back, `tools/dev.py stopreport`: pass = `Stop OK`
-     (STOPF set, slept about 1000 ms, the wake's us). A hang ends at the four-button restart.
-  To learn there: whether PWR_CPU2CR lets D3 stop (the M4 never started), the HSE's start-up time, and whether
-  anything fetches from the SDRAM meanwhile (the CRC).
+- **Stop mode, phase 1 (2026-11-03, docs/power.md "Stop mode"):** from RAM (`tools/dev.py run`), no ride open,
+  nothing written to the eMMC.
+  - **Seen on the unit 2026-11-03 (931d594, cable in):** `srefresh 100` and `1000` OK (flags 0xff: self-refresh in and
+    out, the clocks put back, woken by the timer, the image's CRC unchanged; slept 99 and 1000 ms); `stop 1000` came
+    back and reset, but **no STOPF**, and the wake's waits were a few cycles: the clocks never stopped, so the system
+    stayed in Run (D1 at most in DStop).
+  - **Owed, in this order** (each answers one suspect):
+    1. `tools/dev.py stop 1000 --keep`: Stop with USB as it is, no reset; the line's `pre` / `post` registers
+       (decoded below it: PWR_CPUCR, PWR_CPU2CR, PWR_D3CR, RCC_D3AMR, RCC_CR, RCC_CFGR, EXTI_CPUPR1..3) say what stayed
+       on and what was pending. If the link dies, `tools/dev.py stopreport` after a replug reads the verdict in
+       register 0.
+    2. `tools/dev.py stop 1000 --usboff`, then `tools/dev.py stopreport`: USB fully off (core and ULPI clocks, the
+       PHY's enable PA7, PA2, HSI48, VOS3) as on battery. `Stop OK` (STOPF, clocks stopped) means USB is what held the
+       system in Run: phase 2 only stops without the cable anyway. Still no STOPF: the `--keep` registers (the M4's
+       PWR_CPU2CR, D3AMR, a pending line) are the next lead.
 
 - **The ride file's timer stops at an auto-pause (2026-11-02, as Garmin's):** timer stop_all and start events with
   timer_trigger auto at each stop and when moving again; each lap's and the session's total_timer_time leave the stops

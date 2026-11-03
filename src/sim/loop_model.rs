@@ -28,8 +28,8 @@ pub struct LoopModel {
     pub resets: u32,
     pub faults: u32,
     pub ran: Option<u32>,
-    /// The Stop benches asked (ms, Stop rather than CSleep), in order.
-    pub low_power: Vec<(u32, bool)>,
+    /// The Stop benches asked (ms, mode), in order.
+    pub low_power: Vec<(u32, crate::stopbench::Mode)>,
     /// The slice timer: started at, ms.
     timer: Option<(u64, u32)>,
     /// WFI wakes at uneven sub-ms instants (a byte, a key arrive at any time), as on the unit; off: every WFI is 1 ms.
@@ -154,11 +154,12 @@ impl LoopBoard for Sim {
         self.main.overflowed = true;
     }
     /// The sleep passes on the clock and everything went right; the slice's timer is stopped, as main.rs's SysTick.
-    fn low_power(&mut self, ms: u32, stop: bool) -> crate::stopbench::StopReport {
-        use crate::stopbench::{REFRESH_OK, STOP_OK, StopReport};
-        self.main.low_power.push((ms, stop));
+    fn low_power(&mut self, ms: u32, mode: crate::stopbench::Mode) -> crate::stopbench::StopReport {
+        use crate::stopbench::{Mode, REFRESH_OK, STOP_OK, StopReport};
+        self.main.low_power.push((ms, mode));
         self.main.timer = None;
         self.advance_ns(u64::from(ms) * 1_000_000);
+        let stop = mode != Mode::Refresh;
         let flags = if stop { STOP_OK } else { REFRESH_OK };
         StopReport {
             stop,

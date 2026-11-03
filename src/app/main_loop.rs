@@ -7,6 +7,7 @@
 
 use crate::dev::{Effect, Host, Session, Stats, UsbWatch};
 use crate::prof::Sec;
+use crate::stopbench::{BKP, Mode, pack};
 use crate::ui::UsbDot;
 use crate::usbsnap::UsbSnap;
 use crate::{App, Board, Cable, LoopPolicy, Woke};
@@ -40,9 +41,10 @@ pub trait LoopBoard: Board {
     /// Runs the stack down past its canary on purpose (the dev link's `stackfault`), then returns.
     fn overflow_stack(&mut self);
     /// The dev link's Stop benches (docs/power.md "Stop mode", phase 1): the SDRAM in self-refresh around one WFI of
-    /// `ms` ended by the RTC wake-up timer, the system in Stop if `stop` (else CSleep, the clocks kept), the clocks and
-    /// the SDRAM restored, the image's CRC compared; SysTick is left stopped (the slice's timer is lost).
-    fn low_power(&mut self, ms: u32, stop: bool) -> crate::stopbench::StopReport;
+    /// `ms` ended by the RTC wake-up timer (or the power key), the system in Stop but for [`Mode::Refresh`] (CSleep,
+    /// the clocks kept), USB fully off first for [`Mode::UsbOff`], the clocks and the SDRAM restored, the image's CRC
+    /// compared; SysTick is left stopped (the slice's timer is lost).
+    fn low_power(&mut self, ms: u32, mode: Mode) -> crate::stopbench::StopReport;
     /// Drops what the Nordic chip sent (nobody reads it).
     fn nrf_flush(&mut self);
     /// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`bytes`).
@@ -65,6 +67,18 @@ pub trait LoopBoard: Board {
     fn sleep(&mut self);
     /// The profiler's I/O counts since the last call (pixels to the panel, eMMC sectors read, written).
     fn take_io(&mut self) -> (u32, u32, u32);
+}
+
+/// A Stop bench that answers instead of resetting (`bench srefresh`, `bench stop <ms> keep`): the sleep, then its line;
+/// for `keep` the verdict goes to backup register 0 first, so it survives a link that does not.
+fn bench_answer<B: LoopBoard>(b: &mut B, l: &mut B::Link, ms: u32, mode: Mode) {
+    let r = b.low_power(ms, mode);
+    if mode == Mode::Keep {
+        let ([reg, _], [verdict, _]) = (BKP, pack(&r));
+        b.backup_write(reg, verdict);
+    }
+    crate::stopbench::send(l, &r);
+    l.flush();
 }
 
 /// The USB link as the pass serves it (main.rs: usb.rs `Link`).
@@ -177,21 +191,22 @@ impl<L: UsbLink> MainLoop<L> {
                             }
                             return radio_passes;
                         }
+                        // SysTick was stopped: the slice's end is lost, as after a drive command that slept
                         Effect::BenchSrefresh(ms) => {
-                            let r = b.low_power(ms, false);
-                            crate::stopbench::send(l, &r);
-                            l.flush();
-                            // SysTick was stopped: the slice's end is lost, as after a drive command that slept
-                            took_over = true;
-                            woke = true;
+                            bench_answer(b, l, ms, Mode::Refresh);
+                            (took_over, woke) = (true, true);
                         }
-                        Effect::BenchStop(ms) => {
+                        Effect::BenchStop(ms, Mode::Keep) => {
+                            bench_answer(b, l, ms, Mode::Keep);
+                            (took_over, woke) = (true, true);
+                        }
+                        Effect::BenchStop(ms, mode) => {
                             // the `ok` reaches the computer, then the device leaves the bus: USB needs VOS1 and its
                             // clocks, which Stop takes away (docs/power.md "Stop mode")
                             l.linger(50);
                             l.disconnect();
-                            let r = b.low_power(ms, true);
-                            for (n, w) in crate::stopbench::BKP.into_iter().zip(crate::stopbench::pack(&r)) {
+                            let r = b.low_power(ms, mode);
+                            for (n, w) in BKP.into_iter().zip(pack(&r)) {
                                 b.backup_write(n, w);
                             }
                             b.reset();

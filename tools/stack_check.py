@@ -150,6 +150,10 @@ def itcm_calls(text, syms):
         short = re.sub(r'17h[0-9a-f]+E$', '', fn)[-40:]
         b = re.search(r'\b(bl|blx|b(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)?(?:\.[wn])?)\s+0x([0-9a-f]+)\b', line)
         word = re.search(r'\.word\s+0x([0-9a-f]+)', line)
+        movt = re.search(r'\bmovt(?:\.w)?\s+\w+,\s*#(0x[0-9a-f]+|\d+)', line)
+        if movt and 0xc000 <= int(movt.group(1), 0) < 0xe000:   # the high half of an SDRAM address built in code
+            out.append(f'{re.sub(r"17h[0-9a-f]+E$", "", fn)[-40:]}: points into the SDRAM: {line.strip()}')
+            continue
         if b and (b.group(1) in ('bl', 'blx') or not lo <= int(b.group(2), 16) < hi):
             out.append(f'{short}: leaves ITCM: {line.strip()}')
         elif re.search(r'\bblx\s+r\d+|\bbx\s+(?!lr\b)r\d+|\bldr(?:\.w)?\s+pc,|\bmov\s+pc,', line):
@@ -233,7 +237,9 @@ def selftest():
             '1030 <_ZN13bryton_rustfw5board2hw9stop_itcm17h0123456789abcdefE>:', '1030: wfi',
             '1032: blo\t0x1080 <_ZN13bryton_rustfw5board2hw9stop_itcm17h0123456789abcdefE+0x50>', '1034: pop\t{r4, pc}']
     assert itcm_calls('\n'.join(head), isyms) == [], itcm_calls('\n'.join(head), isyms)
-    for bad in ('1036: bl\t0x1100 <x>', '1036: b.w\t0xd0001234 <memcpy>', '1036: blx\tr3', '1036: 00 10 00 d0 \t.word\t0xd0001000'):
+    head.append('1036: movt\tr2, #0xff80')   # a mask, not an address
+    for bad in ('1038: bl\t0x1100 <x>', '1038: b.w\t0xd0001234 <memcpy>', '1038: blx\tr3', '1038: 00 10 00 d0 \t.word\t0xd0001000',
+                '1038: movt\tr3, #0xd000', '1038: movt\tr3, #53248'):
         assert len(itcm_calls('\n'.join(head + [bad]), isyms)) == 1, bad
     assert itcm_calls('\n'.join(head[:4]), isyms) == ['hw.rs stop_itcm is not in ITCM (_sitcm.._eitcm)']
     assert itcm_calls('\n'.join(head + ['d0000000 <main>:', 'd0000000: bl\t0xd0001000 <x>']), isyms) == []

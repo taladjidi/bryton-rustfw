@@ -226,7 +226,10 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
 
 ## Stop mode: plan (phase 1 built: the primitive and its benches; the main loop's use is phase 2)
 
-**Phase 1, built 2026-11-03, not yet run on the unit** (docs/status.md):
+**Phase 1, built 2026-11-03; first unit run the same day** (docs/status.md): the self-refresh around a CSleep WFI
+works (the image's CRC unchanged over 1 s); `bench stop` with the cable in did not reach system Stop (no STOPF, the
+clocks never stopped). The benches now record the registers around the WFI (`stop --keep`) and can switch USB fully
+off first (`stop --usboff`, as on battery), to find what holds the system in Run.
 - **hw.rs `stop(deep, svos, report)`:** `stop_itcm`, in link.x `.itcm` beside the RAM-run trampoline (about 600 B of
   the 4 KB), is register accesses, counted waits (at most 1,000,000 reads each) and stores into the caller's report
   (DTCM): no call, no table, no literal into the SDRAM, which `tools/stack_check.py` checks in the release ELF on every
@@ -241,7 +244,8 @@ The walk's idle bound is 1.7 % awake (tools/walk.py ends with a 20 s window on t
   resynchronised after the wake).
 - **The benches (src/link/dev.rs, src/link/stopbench.rs, `tools/dev.py srefresh / stop / stopreport`):** refused
   while a ride is open. `bench stop` leaves its report in backup registers 0 (tag 0x57) and 31 (tag 0x58), the shared
-  diagnostics words, then resets. Not done in phase 1: RTS held high for the Nordic chip (the bench resets after), the
+  diagnostics words, then resets; `--usboff` turns USB fully off first, `--keep` stays on the bus and answers the
+  registers before and after the WFI. The power key (WKUP1, EXTI 55) ends the sleep too. Not done in phase 1: RTS held high for the Nordic chip (the bench resets after), the
   wake on keys, touch, VBUS or the Nordic chip, the sleep's time for the profiler and the uptime.
 
 **Why.** In WFI (CSleep) the STM32H747 draws 16.5 mA at VOS3, 200 MHz with every peripheral clock off and 47.1 mA

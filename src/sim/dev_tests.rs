@@ -387,14 +387,32 @@ fn stop_benches_wait_for_a_settled_ride() {
     assert_eq!(s.feed(b"bench srefresh 100\n", &app, Stats::default(), &mut pc), Effect::BenchSrefresh(100));
     assert!(pc.got.is_empty());
     assert!(!app.serve(&mut sim, &mut pc, &s, Effect::BenchSrefresh(100)), "the loop's, not serve's");
-    assert_eq!(s.feed(b"bench stop 1000\n", &app, Stats::default(), &mut pc), Effect::BenchStop(1000));
-    assert_eq!(pc.got, b"ok\n");
+    use crate::stopbench::Mode;
+    for (line, mode) in [(&b"bench stop 1000\n"[..], Mode::Stop), (b"bench stop 1000 usboff\n", Mode::UsbOff)] {
+        assert_eq!(s.feed(line, &app, Stats::default(), &mut pc), Effect::BenchStop(1000, mode));
+        assert_eq!(pc.got, b"ok\n");
+        pc.got.clear();
+    }
+    assert_eq!(s.feed(b"bench stop 1000 keep\n", &app, Stats::default(), &mut pc), Effect::BenchStop(1000, Mode::Keep));
+    assert!(pc.got.is_empty(), "keep answers with its report line");
+    for bad in [&b"bench stop 30001\n"[..], b"bench stop 100 kept\n", b"bench stop 100 keep usboff\n"] {
+        assert_eq!(s.feed(bad, &app, Stats::default(), &mut pc), Effect::None);
+        assert!(pc.got.starts_with(b"err usage: bench stop"), "{:?}", pc.got);
+        pc.got.clear();
+    }
+    // peek and poke reach the mapped peripheral blocks only: the typo that faulted the unit is refused
+    s.feed(b"peek 0x584244a8\n", &app, Stats::default(), &mut pc);
+    assert!(pc.got.starts_with(b"err usage: peek") && pc.peeked.is_empty(), "{:?}", pc.got);
     pc.got.clear();
-    assert_eq!(s.feed(b"bench stop 30001\n", &app, Stats::default(), &mut pc), Effect::None);
-    assert!(pc.got.starts_with(b"err usage: bench stop"), "{:?}", pc.got);
+    s.feed(b"peek 0x580244a8\n", &app, Stats::default(), &mut pc);
+    assert_eq!(pc.peeked, [0x5802_44a8]);
+    pc.got.clear();
+    s.feed(b"poke 0x40002800 1\n", &app, Stats::default(), &mut pc);
+    assert!(pc.got.starts_with(b"err usage: poke") && pc.regs.is_empty(), "{:?}", pc.got);
+    pc.got.clear();
     app.press(&mut sim, crate::Press::Short(crate::Key::Start));
     assert_eq!(app.ride.state(), crate::ride::State::Running);
-    for line in [&b"bench srefresh 100\n"[..], b"bench stop 1000\n"] {
+    for line in [&b"bench srefresh 100\n"[..], b"bench stop 1000\n", b"bench stop 1000 keep\n"] {
         pc.got.clear();
         assert_eq!(s.feed(line, &app, Stats::default(), &mut pc), Effect::None);
         assert_eq!(pc.got, b"err ride open\n");
