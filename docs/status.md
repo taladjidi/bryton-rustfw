@@ -18,6 +18,14 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **A resumed ride goes on by itself once ridden (2026-11-03, owner: "Resume automatically"):** a reset mid-ride
+  comes back paused (RIDE RESUMED) and goes on at the first second at speed, cadence or power, the time off an
+  auto stop in the file; a ride paused with Start before the reset waits for Start. Seen in the simulator
+  (`a_reset_mid_ride_goes_on_once_riding`, `a_ride_paused_by_hand_stays_paused_after_a_reset_and_auto_pause_off_waits_for_riding`,
+  `a_resumed_ride_goes_on_when_riding`, `fit_check.py --timer` on `autoresume.fit`); owed on the unit: a restart
+  mid-ride (`tools/dev.py reset`) then riding off without a key, the saved timer against the screen's; a restart
+  while paused by hand staying paused.
+
 - **Seen on the unit 2026-11-02 (indoors, receiver searching, no fix):**
   - a long stall on a ride (`bench stall`): 60 s gave a jump of 56 s in the records, then 5 ticked; 6 s a jump of 2 s;
     4 s none; the session's elapsed and timer totals were exact;

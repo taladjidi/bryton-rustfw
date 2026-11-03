@@ -63,9 +63,12 @@
 //! timer leaves it out as the screen's does. Records go on while auto-paused (one a second, as before): our choice,
 //! nothing of a stop lost; whether Garmin's units write them then is not checked (inferred: some do not), and the
 //! readers take records while the timer is stopped. The Start key during an auto-pause writes no second stop (the
-//! timer is stopped): the stop becomes the pause, and the resume's start ends it. A recovery record taken during an
-//! auto-pause comes back paused, as after a Start pause (the recorder's resume writes no stop then); the seconds the
-//! timer was stopped when the current lap began go beside it ([`Writer::timer_word`]; a record of a build before has
+//! timer is stopped): the stop becomes the pause, and the resume's start ends it. A ride resumed after a reset
+//! (owner, 2026-11-03: "Resume automatically") has the time the unit was off as a stop from its last record: the
+//! Start key's if the rider had paused it (the recovery record says so), else an auto-pause's ([`Writer::stop_auto`]:
+//! its stop_all, trigger auto, unless a stop was open at the checkpoint), which the first moving second's record ends
+//! with its auto start, or the Start key's start; the seconds the timer was stopped when the current lap began go
+//! beside the record ([`Writer::timer_word`]; a record of a build before has
 //! 0 there, and the stops before the lap are then taken as the ride's at the checkpoint).
 //!
 //! The profile ([`Sample::profile`], [`Sample::by_hand`]) is the last second's, or the one given since by
@@ -547,7 +550,8 @@ pub struct Writer {
     paused_s: u32,
     paused_at: u32,
     /// The current stop is an auto-pause's (module doc, "The timer"): a moving second starts the timer again. Not in
-    /// the recovery record: a ride resumed after a reset is paused, its stop the Start key's from then on.
+    /// the recovery record, which says instead whether the rider paused with Start ([`Writer::paused`]): a ride
+    /// resumed after a reset not paused by hand has its stop an auto-pause's again ([`Writer::stop_auto`]).
     auto: bool,
     /// Seconds stopped ([`Writer::paused_total`]) when the current lap began ([`Writer::timer_word`]).
     lap_paused: u32,
@@ -652,6 +656,30 @@ impl Writer {
         if self.paused_at != 0 {
             self.paused_s = self.paused_s.saturating_add(self.last.saturating_sub(self.paused_at));
             self.paused_at = 0;
+        }
+        self.auto = false;
+        Ok(())
+    }
+
+    /// A ride reopened after a reset not paused by hand (storage/recorder/mod.rs `recover_from`): the time the unit
+    /// was off is an auto-pause's stop from `time` (the last record), its stop_all with trigger auto unless the timer
+    /// is stopped already; the first moving second's record ends it, as any auto-pause (module doc, "The timer").
+    pub fn stop_auto(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
+        self.last = self.last.max(time);
+        if self.paused_at == 0 {
+            self.auto_event(sink, self.last, 4)?;
+            self.paused_at = self.last;
+        }
+        self.auto = true;
+        Ok(())
+    }
+
+    /// The stop is the rider's from here (a resumed ride held paused: storage/recorder/mod.rs `hold`): an
+    /// auto-pause's becomes a pause by the Start key ([`Writer::paused`], what the recovery record keeps); with no
+    /// stop open (its [`Writer::stop_auto`] lost for lack of room), a timer stop at `time`.
+    pub fn hold(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
+        if self.paused_at == 0 {
+            return self.pause(sink, time);
         }
         self.auto = false;
         Ok(())
@@ -1952,6 +1980,30 @@ pub(crate) mod tests {
         assert_eq!(field(session, 26), Some(2), "laps");
         let r = m.iter().filter(|x| x.0 == 20).nth(3).unwrap();
         assert_eq!(field(r, 13), Some(0xfe), "-2 C");
+    }
+
+    /// `hold` on a ride not paused (the end-ride screen after a resume): a timer stop at the last record's time, paused
+    /// until the resume's start; held again while paused, it writes nothing.
+    #[test]
+    fn hold_stops_the_timer_at_the_last_record() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        w.record(&mut f, &Sample { time: T0 + 10, ..Sample::default() }).unwrap();
+        w.hold(&mut f, T0 + 10).unwrap();
+        assert!(w.paused(), "held: paused");
+        let len = f.len();
+        w.hold(&mut f, T0 + 20).unwrap();
+        assert_eq!(f.len(), len, "a second hold while paused writes nothing");
+        w.resume(&mut f, T0 + 30).unwrap();
+        assert!(!w.paused());
+        w.finish(&mut f, T0 + 40).unwrap();
+        let m = decode(&f).unwrap();
+        let events: Vec<(u64, u64)> =
+            m.iter().filter(|x| x.0 == 21).map(|x| (field(x, 1).unwrap(), field(x, 253).unwrap())).collect();
+        assert_eq!(
+            events,
+            [(0, u64::from(T0)), (4, u64::from(T0 + 10)), (0, u64::from(T0 + 30)), (4, u64::from(T0 + 40))]
+        );
     }
 
     /// Gear changes: front_gear_change (42) and rear_gear_change (43) events, marker, with the gears in their data;

@@ -1884,6 +1884,7 @@ fn a_damaged_record_is_refused() {
             lap: [seq; crate::fit::LAP_WORDS],
             more: [seq + 1; crate::ride::MORE_WORDS],
             timer: seq | 1 << 31,
+            by_hand: false,
         }
     };
     let s = r(5, Phase::Recording).to_sector();
@@ -1896,6 +1897,10 @@ fn a_damaged_record_is_refused() {
     assert_eq!((c.to_sector()[23], s[23]), (1, 0));
     assert_eq!(Rec::from_sector(&c.to_sector()), Some(c));
     assert_eq!(Rec::from_sector(&d.to_sector()), Some(d));
+    // paused with Start, byte 30; 0 in the records of the builds before it (read as not paused by hand)
+    let h = Rec { by_hand: true, ..r(8, Phase::Recording) };
+    assert_eq!((h.to_sector()[30], s[30]), (1, 0));
+    assert_eq!(Rec::from_sector(&h.to_sector()), Some(h));
     // the lap sums, bytes 192..228: zero in the records of the builds before them, read as no sums (no new tag)
     let mut old = s;
     old[192..228].fill(0);
@@ -3926,9 +3931,10 @@ fn restarted(r: &crate::ride::Ride, p: &crate::power::Power) -> (crate::ride::Ri
         lap: [0; crate::fit::LAP_WORDS],
         more: r.more_words(p),
         timer: 0,
+        by_hand: true,
     };
     let back = Rec::from_sector(&rec.to_sector()).unwrap();
-    let mut r = crate::ride::Ride::resumed(&back.ride, &back.more);
+    let mut r = crate::ride::Ride::resumed(&back.ride, &back.more, back.by_hand);
     let mut p2 = crate::power::Power::new();
     p2.resume(&crate::ride::power_words(&back.more));
     r.start_pause();
@@ -4009,7 +4015,7 @@ fn totals_go_on_across_one_restart_and_an_older_record_starts_them_again() {
     totals_ride(&mut r, &mut p, 0, 1800);
     let mut old = r.to_words();
     old[15] = 0;
-    let mut back = Ride::resumed(&old, &[0; crate::ride::MORE_WORDS]);
+    let mut back = Ride::resumed(&old, &[0; crate::ride::MORE_WORDS], true);
     let mut p2 = p;
     p2.resume(&[0; crate::power::POWER_WORDS]);
     let mut fresh = p;
