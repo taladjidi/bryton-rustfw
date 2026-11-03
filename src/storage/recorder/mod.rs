@@ -944,6 +944,16 @@ impl Recorder {
         self.put(16, |w, sink| w.resume(sink, time));
     }
 
+    /// The resumed ride's stop is the rider's from here (the end-ride screen up: [`fit::Writer::hold`]), and a
+    /// checkpoint follows, so a reset from here keeps it paused until Start.
+    pub fn hold(&mut self) {
+        self.put(16, |w, sink| {
+            let t = w.last_time();
+            w.hold(sink, t)
+        });
+        self.want = true;
+    }
+
     /// The ride [`Recorder::recover`] reopened (`Resumed`) was paused with Start: it stays paused until Start (else
     /// its stop is an auto-pause's, ended by the first moving second).
     pub fn paused_by_hand(&self) -> bool {

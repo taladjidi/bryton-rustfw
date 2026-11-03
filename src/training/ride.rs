@@ -472,9 +472,9 @@ impl Ride {
     }
 
     /// A paused ride stays so whatever the rider does (the end-ride screen up): a resumed ride no longer goes on
-    /// by itself ([`Ride::resumed`]).
-    pub fn hold(&mut self) {
-        self.waits = false;
+    /// by itself ([`Ride::resumed`]). True when it was waiting to (the recorders then hold it too).
+    pub fn hold(&mut self) -> bool {
+        core::mem::take(&mut self.waits)
     }
 
     /// Running and not auto-paused.

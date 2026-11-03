@@ -674,6 +674,17 @@ impl Writer {
         Ok(())
     }
 
+    /// The stop is the rider's from here (a resumed ride held paused: storage/recorder/mod.rs `hold`): an
+    /// auto-pause's becomes a pause by the Start key ([`Writer::paused`], what the recovery record keeps); with no
+    /// stop open (its [`Writer::stop_auto`] lost for lack of room), a timer stop at `time`.
+    pub fn hold(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
+        if self.paused_at == 0 {
+            return self.pause(sink, time);
+        }
+        self.auto = false;
+        Ok(())
+    }
+
     /// Seconds the timer was stopped up to the latest message, the current stop included.
     fn paused_total(&self) -> u32 {
         let now = if self.paused_at != 0 { self.last.saturating_sub(self.paused_at) } else { 0 };

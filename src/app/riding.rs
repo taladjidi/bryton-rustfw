@@ -674,12 +674,19 @@ impl App {
                 k => k,
             },
         };
-        if matches!(self.screen, Screen::End(_) | Screen::Discard(_)) {
-            self.ride.hold(); // the rider is ending it: a resumed ride no longer goes on by itself
+        if matches!(self.screen, Screen::End(_) | Screen::Discard(_)) && self.ride.hold() {
+            // the rider is ending it: a resumed ride no longer goes on by itself, after a reset either
+            self.rec.clean.hold();
+            self.rec.full.hold();
         }
-        let timer = self.ride.timer_s();
+        let (timer, was) = (self.ride.timer_s(), self.ride.state());
         if let Some(ev) = self.ride.second(&input) {
             self.recorder(ev);
+        }
+        if was == ride::State::Paused && self.ride.state() == ride::State::Running {
+            // a resumed ride gone on by itself once ridden: said as a Start resume is
+            self.tones.play(&BEEP_START);
+            self.say("RESUMED");
         }
         // only the seconds the timer ran, keyed by the wall clock: a stop longer than FILL_S ends the efforts
         let now = self.now_s();
