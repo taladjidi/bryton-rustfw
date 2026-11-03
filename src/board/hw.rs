@@ -425,7 +425,11 @@ fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport
         }
         snap(&mut r.pre);
         barrier();
-        wfi();
+        // PDDS_Dx read back 0 before a Stop's WFI: one left set (by `standby` before a switch-off) would make it
+        // DStandby, a reset of D1 with the image's code in the SDRAM; then no WFI, and no STOPF to report
+        if !deep || rd(PWR_CPUCR) & 0b111 == 0 {
+            wfi();
+        }
         snap(&mut r.post);
         wr(SCB_SCR, rd(SCB_SCR) & !(1 << 2));
         if r.post.cfgr & (7 << 3) != sw << 3 {

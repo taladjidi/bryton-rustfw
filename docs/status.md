@@ -29,6 +29,17 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
     three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not
     reproduced.
 
+- **Stop mode, phase 2a (2026-11-03, docs/power.md "Stop mode": Stop between idle passes, no ride open):** sim only.
+  Owed, from RAM with the cable in (`tools/dev.py run`), no ride open, nothing written:
+  1. `tools/dev.py idlestop 60`, leave the unit idle (no key for 30 s), then after the minute `tools/dev.py info`:
+     `idle Stops` about 4 a second of idle (240 for 60 s), `0 failed`, mean near 250 ms; the app clock against the
+     RTC (`appup` and the RTC's time before and after) within 0.05 %. `tools/dev.py prof` in a second run shows `wake`
+     at about 4 calls/s.
+  2. A key, a tap and the power key during an idle Stop: each acts at once (no 250 ms lag); the cable plugged in
+     (from battery) starts USB at the next pass.
+  3. The same right after a switch-off and a power-key wake (the 931d594 case: WKUPF1 and PDDS left set).
+  4. On battery, an installed build (with the owner): a night idle, the battery history against one without
+     (`POWER_STEPS=31`).
 - **Stop mode, phase 1 (2026-11-03, docs/power.md "Stop mode"):** from RAM (`tools/dev.py run`), no ride open,
   nothing written to the eMMC.
   - **Seen on the unit 2026-11-03 (931d594, cable in):** `srefresh 100` and `1000` OK (flags 0xff: self-refresh in and

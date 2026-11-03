@@ -32,6 +32,8 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py stop [MS] [--usboff|--keep]  Stop mode step 2 (no ride open; from RAM, `dev.py run`): USB off, Stop for MS ms
                                   (default 1000), clocks and SDRAM back, the report kept, a reset (docs/power.md)
   dev.py stopreport               decode the report `stop` kept in backup registers 0 and 31, after the reset
+  dev.py idlestop S               allow the main loop's idle Stop with the cable in for S seconds (0..3600, 0 ends it;
+                                  no ride open; phase 2a): the link may drop meanwhile, `info` counts the Stops after
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
 import argparse, os, re, struct, sys, time, zlib
@@ -44,7 +46,7 @@ CPU_HZ = 200_000_000               # src/main.rs CPU_HZ: the profiler counts the
 # sections that hold others (src/link/prof.rs): left out of the sums
 INCLUSIVE = ('step', 'tiles')
 # the main loop's own sections, outside App::step
-OUTSIDE = ('touch', 'input', 'usb')
+OUTSIDE = ('touch', 'input', 'usb', 'wake')
 
 
 def find_port(timeout=10.0):
@@ -80,6 +82,16 @@ def card_writes(info):
     """`info`'s card-write flag: True, False, or None for a build that does not say (older than the flag)."""
     m = re.search(r', card writes (yes|no)\b', info)
     return None if m is None else m.group(1) == 'yes'
+
+
+def stops_line(info):
+    """`info`'s idle Stop counts (src/link/dev.rs `Stats::stops`) in words, or None for a build without them."""
+    m = re.search(r' stops (\d+) (\d+) (\d+) ', info)
+    if m is None:
+        return None
+    n, fails, ms = map(int, m.groups())
+    mean = f', mean {ms / n:.0f} ms' if n else ''
+    return f'idle Stops {n} ({fails} failed){mean}, {ms / 1000:.1f} s in Stop'
 
 
 class Regs:
@@ -371,6 +383,9 @@ def selftest():
         assert struct.unpack_from('<I', data, 0x98)[0] == len(data) and total == sum(data) & 0xffffffff
     assert card_writes('x, ride idle, card writes no') is False and card_writes('a, card writes yes') is True
     assert card_writes('x, ride idle') is None  # an older build: unknown
+    assert stops_line('loop early 1 2 3 4 5 stops 8 1 2000 appup 9') == 'idle Stops 8 (1 failed), mean 250 ms, 2.0 s in Stop'
+    assert stops_line('loop early 1 2 3 4 5 stops 0 0 0 appup 9') == 'idle Stops 0 (0 failed), 0.0 s in Stop'
+    assert stops_line('loop early 1 2 3 4 5 appup 9') is None
     global command
     real, log = command, []
     command = lambda s, c: (log.append(c), '0x000000ff' if c.startswith('peek') else 'ok')[1]
@@ -527,6 +542,9 @@ def main():
     g.add_argument('--usboff', action='store_true', help='USB fully off first (clocks, PHY, VOS3): as on battery')
     g.add_argument('--keep', action='store_true', help='USB left on, no reset: the full report line if the link survives')
     sub.add_parser('stopreport', help='decode the report `stop` left in backup registers 0 and 31 (after the reset)')
+    p = sub.add_parser('idlestop', help='allow the idle Stop with the cable in for S seconds (0..3600, 0 ends it; no ride '
+                       'open): the link may drop meanwhile; `info` counts the Stops after (docs/power.md, phase 2a)')
+    p.add_argument('seconds', type=int)
     sub.add_parser('nrfoff', help='switch the radio chip off as the switch-off does, unit kept up: the path taken (seen0 / '
                    'seen1 / held), the time, the chip\'s RTS (our CTS, PD3) 10 ms, 100 ms, 1 s after; then the radio restarts')
     p = sub.add_parser('mapbench', help='time the basemap of the full-page map at the unit\'s position: mapbench LEVEL '
@@ -583,7 +601,14 @@ def main():
                     r = line(s)
             elif a.cmd == 'wtest':
                 print(command(s, f'wtest {a.lba}'))
-            elif a.cmd in ('info', 'where', 'reset', 'drive', 'stackfault'):
+            elif a.cmd == 'info':
+                r = command(s, 'info')
+                print('\n'.join([r] + [x for x in [stops_line(r)] if x]))
+            elif a.cmd == 'idlestop':
+                if not 0 <= a.seconds <= 3600:
+                    sys.exit('dev.py: idlestop S: S is 0..3600')
+                print(command(s, f'bench idle-stop {a.seconds}'))
+            elif a.cmd in ('where', 'reset', 'drive', 'stackfault'):
                 print(command(s, a.cmd))
             elif a.cmd == 'usbdrop':
                 got = [command(s, f'peek {BKP0 + 4 * r:#x} 1') for r in SNAP_BKP]

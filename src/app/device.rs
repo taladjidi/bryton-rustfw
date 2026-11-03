@@ -81,6 +81,9 @@ pub const fn stack_intact(word: u32) -> bool {
 pub const IDLE_POLL_MS: u32 = 250;
 /// No key for this long (the backlight's default OFF AFTER), and the loop may slow to [`IDLE_POLL_MS`].
 pub const IDLE_AFTER_MS: u32 = 30_000;
+/// No Stop in the first minute after the start ([`App::stop_ok`]): the boot's own work (the radio's start, stock's
+/// rides scanned, the receiver's first fix) settles first, and Renode's runs (under 30 s emulated) never reach it.
+pub const STOP_AFTER_BOOT_MS: u32 = 60_000;
 /// A pass's work counted at most ([`prof::Clock::us`]): the first pass, or a stall, is not a key held for seconds.
 pub const MAX_PASS_MS: u32 = 1000;
 
@@ -234,6 +237,15 @@ impl App {
             && !self.emmc.lent()
             && (self.gps.off || self.gps.ano.done()); // AssistNow Offline messages go out at a pass each
         if quiet && !self.busy() && self.light.idle_ms >= IDLE_AFTER_MS { IDLE_POLL_MS } else { POLL_MS }
+    }
+
+    /// The sleep after this pass may be Stop (docs/power.md "Stop mode", phase 2a; main loop `MainLoop::pass` adds
+    /// the board's rules: no USB link, its kill switch): an idle pass ([`App::pass_ms`]: no ride open nor its card work,
+    /// no tone, banner or finger, the card not lent, no key for [`IDLE_AFTER_MS`]) at least [`STOP_AFTER_BOOT_MS`]
+    /// after the start. The card has no operation in flight between passes (every eMMC command ends inside the step)
+    /// and the panel's DMA is the board's to check. A ride open never stops: phase 2b.
+    pub fn stop_ok(&self) -> bool {
+        self.pass_ms() == IDLE_POLL_MS && self.up_ms >= STOP_AFTER_BOOT_MS
     }
 
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.

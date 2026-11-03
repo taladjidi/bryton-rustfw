@@ -34,10 +34,20 @@ pub const NO_TIMER: u32 = 1 << 10;
 /// The power key (WKUP1, PWR_WKUPFR bit 0) ended the sleep.
 pub const KEY: u32 = 1 << 11;
 
+/// The main loop's idle Stop (main.rs `idle_stop`, phase 2a) did not try: a wake source was already pending (a key, the
+/// touch INT), a byte from the Nordic chip was coming in, the panel's DMA ran, or the build has no Stop (main.rs
+/// POWER_STEPS bit 5). Not a failure: the pass sleeps in WFI.
+/// Above register 0's 12 flag bits: never set by a bench.
+pub const PENDING: u32 = 1 << 12;
+
 /// What a self-refresh needs to have gone right.
 pub const REFRESH_OK: u32 = REFRESH_IN | REFRESH_OUT | WUTF | CRC;
 /// What a Stop needs to have gone right.
 pub const STOP_OK: u32 = REFRESH_OK | VOS | HSE | PLL | SW | STOPF | CLOCKS;
+
+/// What the main loop's idle Stop needs to have gone right: as [`STOP_OK`], but its end may be a key or the touch
+/// (no [`WUTF`]) and the image's CRC is not taken (a 780 KB read, every pass).
+pub const PASS_OK: u32 = STOP_OK & !(WUTF | CRC);
 
 /// The longest sleep a bench asks, ms: the wake-up timer's 16 bits at 2048 Hz hold 32 s.
 pub const MAX_MS: u32 = 30_000;
@@ -142,22 +152,23 @@ pub fn wutr(ms: u32) -> u32 {
     (ms.min(MAX_MS) * 2048 / 1000).saturating_sub(1)
 }
 
-/// Milliseconds from `a` to `b`, each (RTC_TR, RTC_SSR) read together; `prediv_s` is RTC_PRER's PREDIV_S (SSR counts
-/// down from it, RM0399 RTC_SSR). Across midnight too.
+/// Microseconds from `a` to `b`, each (RTC_TR, RTC_SSR) read together; `prediv_s` is RTC_PRER's PREDIV_S (SSR counts
+/// down from it, RM0399 RTC_SSR). Across midnight too. In us, so the main loop carries the sub-ms rest of each Stop.
 ///
 /// ```
-/// use bryton_rustfw::stopbench::elapsed_ms;
-/// assert_eq!(elapsed_ms((0x0012_3456, 255), (0x0012_3457, 127), 255), 1500);
-/// assert_eq!(elapsed_ms((0x0023_5959, 0), (0x0000_0000, 255), 255), 4); // 255 / 256 s in, then midnight
+/// use bryton_rustfw::stopbench::elapsed_us;
+/// assert_eq!(elapsed_us((0x0012_3456, 255), (0x0012_3457, 127), 255), 1_500_000);
+/// assert_eq!(elapsed_us((0x0023_5959, 0), (0x0000_0000, 255), 255), 3907); // 255 / 256 s in, then midnight
+/// assert_eq!(elapsed_us((0x0012_3456, 1023), (0x0012_3456, 767), 1023), 250_000);
 /// ```
-pub fn elapsed_ms(a: (u32, u32), b: (u32, u32), prediv_s: u32) -> u32 {
-    const DAY_MS: u32 = 86_400_000;
+pub fn elapsed_us(a: (u32, u32), b: (u32, u32), prediv_s: u32) -> u32 {
+    const DAY_US: u64 = 86_400_000_000;
     let at = |(tr, ssr): (u32, u32)| {
         let (h, m, s) = crate::rtc_time_from_tr(tr);
-        let sub = prediv_s.saturating_sub(ssr) * 1000 / (prediv_s + 1);
-        (u32::from(h) * 3600 + u32::from(m) * 60 + u32::from(s)) * 1000 + sub
+        let sub = u64::from(prediv_s.saturating_sub(ssr)) * 1_000_000 / (u64::from(prediv_s) + 1);
+        (u64::from(h) * 3600 + u64::from(m) * 60 + u64::from(s)) * 1_000_000 + sub
     };
-    (at(b) + DAY_MS - at(a)) % DAY_MS
+    u32::try_from((at(b) + DAY_US - at(a)) % DAY_US).unwrap_or(u32::MAX)
 }
 
 /// The two backup words of a Stop's report, for [`BKP`]: register 0 is [`TAG_A`], the flags in bits 12..23 and the

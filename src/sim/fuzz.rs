@@ -628,6 +628,21 @@ fn dev_link_input() {
         pc.got.clear();
     }
     assert!(srefresh > 50 && stops > 50, "bench srefresh reached {srefresh} times, bench stop {stops}");
+    // `bench idle-stop` with seconds at and past its bounds, broken and hex
+    let secs: [&str; 9] = ["0", "1", "3600", "3601", "0x10", "-1", "x", "", "4294967296"];
+    let mut idle = 0;
+    for c in bytes(11, 1 << 10) {
+        let line = std::format!("bench idle-stop {}\n", secs[usize::from(c) % secs.len()]);
+        match session.feed(line.as_bytes(), &app, Stats::default(), &mut pc) {
+            crate::dev::Effect::BenchIdleStop(s) => {
+                assert!(s <= 3600 && pc.got == b"ok\n", "{line:?}");
+                idle += 1;
+            }
+            e => assert!(e == crate::dev::Effect::None && pc.got.starts_with(b"err usage: bench"), "{line:?}: {e:?}"),
+        }
+        pc.got.clear();
+    }
+    assert!(idle > 200, "bench idle-stop reached {idle} times");
     dev_link_lines(&app);
     dev_link_ride_open();
 }
@@ -681,6 +696,7 @@ fn dev_link_ride_open() {
                     | Effect::BenchNrfOff
                     | Effect::BenchSrefresh(_)
                     | Effect::BenchStop(..)
+                    | Effect::BenchIdleStop(_)
             ),
             "{line:?} got out with a ride open"
         );

@@ -7,7 +7,7 @@
 
 use crate::dev::{Effect, Host, Session, Stats, UsbWatch};
 use crate::prof::Sec;
-use crate::stopbench::{BKP, Mode, pack};
+use crate::stopbench::{BKP, Mode, PASS_OK, WUTF, pack};
 use crate::ui::UsbDot;
 use crate::usbsnap::UsbSnap;
 use crate::{App, Board, Cable, LoopPolicy, Woke};
@@ -45,6 +45,14 @@ pub trait LoopBoard: Board {
     /// the clocks kept), USB fully off first for [`Mode::UsbOff`], the clocks and the SDRAM restored, the image's CRC
     /// compared; SysTick is left stopped (the slice's timer is lost).
     fn low_power(&mut self, ms: u32, mode: Mode) -> crate::stopbench::StopReport;
+    /// An idle Stop of `ms` at most between passes (docs/power.md "Stop mode", phase 2a; [`App::stop_ok`] and
+    /// [`crate::Stops::allowed`] said yes): the SDRAM in self-refresh, the system in Stop, ended by the RTC wake-up
+    /// timer, a key, the touch INT, the cable or the power key, the clocks and the SDRAM restored; the Nordic chip held
+    /// off meanwhile (RTS high). The slice's timer is not running. Returns the us slept by the RTC, from the call to its
+    /// return, and the flags (stopbench.rs: [`crate::stopbench::PENDING`] when it did not try, [`PASS_OK`] when all went
+    /// right, [`WUTF`] when its timer ended it). The key and touch EXTI flags stay for [`LoopBoard::key_edge`] and
+    /// [`LoopBoard::touch_edge`].
+    fn idle_stop(&mut self, ms: u32) -> (u32, u32);
     /// Drops what the Nordic chip sent (nobody reads it).
     fn nrf_flush(&mut self);
     /// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`bytes`).
@@ -110,6 +118,12 @@ impl<L: UsbLink> MainLoop<L> {
         MainLoop { link: None, session: Session::new(), policy: LoopPolicy::new(cpu_hz, timer_max_ms) }
     }
 
+    /// The figures `info` reports.
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> Stats {
+        self.policy.stats()
+    }
+
     /// One pass: the step, then the sleep until the next one (USB served, the touch read, a key or the link's input
     /// acted on after it). Returns the radio passes run in the sleep. On the unit it returns only to run again, or
     /// never (a reset, a fault, the staged image).
@@ -151,6 +165,10 @@ impl<L: UsbLink> MainLoop<L> {
         // radio pass (App::radio_pass), so neither waits for it (the chip's own buffers are not known: it is read as
         // soon as it sends, as before); a ride's pass is the short one (LoopPolicy::begin_sleep)
         let wake = self.policy.begin_sleep(app.pass_ms(), app.radio_up());
+        // one idle Stop a pass, for the pass's whole sleep (docs/power.md "Stop mode", phase 2a): the app's rules, then
+        // the loop's (no USB link but for the bench, not after failures in a row)
+        let cable = self.link.is_some() || b.vbus();
+        let mut stop = wake.io && app.stop_ok() && self.policy.stops.allowed(cable, self.policy.now_ms());
         if !wake.radio {
             b.nrf_flush();
         }
@@ -163,107 +181,123 @@ impl<L: UsbLink> MainLoop<L> {
                 break;
             };
             let slice_at = b.cycles();
-            b.timer_start(slice);
+            // a Stop that slept is this slice; one that did not try (a wake source pending) leaves it to WFI
+            let stopped = if core::mem::take(&mut stop) {
+                let (us, flags) = b.idle_stop(app.pass_ms().saturating_sub(self.policy.slept_ms()));
+                self.policy.stops.count(us, flags).then_some((us, flags))
+            } else {
+                None
+            };
             // SysTick's count before a USB command: one that slept (`worked`) took the timer over, so the slice's
             // length is this, and the command's own delays are in `waited` (counted once)
             let mut before_poll = 0;
             let mut before_cycles = slice_at; // the cycles at before_poll
             let mut took_over = false;
-            let w = loop {
-                let usb_at = b.cycles();
-                if let Some(l) = &mut self.link {
-                    before_poll = b.timer_elapsed_us(slice);
-                    before_cycles = b.cycles();
-                    match l.poll(&mut self.session, app, b, self.policy.stats()) {
-                        Effect::Key(p) => press = Some(p),
-                        Effect::Reset => {
-                            l.linger(50);
-                            b.reset();
-                            return radio_passes;
-                        }
-                        Effect::StackFault => {
-                            l.linger(50);
-                            b.overflow_stack();
-                            // a pass: resets with the fault marker; a miss (no marker): the tail of .bss is
-                            // overwritten all the same, so never run on
-                            if stack_ok(b) {
+            let w = if let Some((_, flags)) = stopped {
+                app.prof().span(Sec::Wake, slice_at, b.cycles());
+                // its timer, or something to act on now; a failed one sleeps the rest of the pass in WFI
+                let early = flags & WUTF == 0 && flags & PASS_OK == PASS_OK;
+                Woke { touch: b.touch_edge(), io: wake.io && b.key_edge(), stop: early, ..Woke::default() }
+            } else {
+                b.timer_start(slice);
+                loop {
+                    let usb_at = b.cycles();
+                    if let Some(l) = &mut self.link {
+                        before_poll = b.timer_elapsed_us(slice);
+                        before_cycles = b.cycles();
+                        match l.poll(&mut self.session, app, b, self.policy.stats()) {
+                            Effect::Key(p) => press = Some(p),
+                            Effect::Reset => {
+                                l.linger(50);
                                 b.reset();
+                                return radio_passes;
                             }
-                            return radio_passes;
+                            Effect::StackFault => {
+                                l.linger(50);
+                                b.overflow_stack();
+                                // a pass: resets with the fault marker; a miss (no marker): the tail of .bss is
+                                // overwritten all the same, so never run on
+                                if stack_ok(b) {
+                                    b.reset();
+                                }
+                                return radio_passes;
+                            }
+                            // SysTick was stopped: the slice's end is lost, as after a drive command that slept
+                            Effect::BenchSrefresh(ms) => {
+                                bench_answer(b, l, ms, Mode::Refresh);
+                                (took_over, woke) = (true, true);
+                            }
+                            Effect::BenchIdleStop(secs) => self.policy.stops.bench(self.policy.now_ms(), secs),
+                            Effect::BenchStop(ms, Mode::Keep) => {
+                                bench_answer(b, l, ms, Mode::Keep);
+                                (took_over, woke) = (true, true);
+                            }
+                            Effect::BenchStop(ms, mode) => {
+                                // the `ok` reaches the computer, then the device leaves the bus: USB needs VOS1 and its
+                                // clocks, which Stop takes away (docs/power.md "Stop mode")
+                                l.linger(50);
+                                l.disconnect();
+                                let r = b.low_power(ms, mode);
+                                for (n, w) in BKP.into_iter().zip(pack(&r)) {
+                                    b.backup_write(n, w);
+                                }
+                                b.reset();
+                                return radio_passes;
+                            }
+                            Effect::Run(size) => {
+                                l.linger(50);
+                                l.disconnect();
+                                b.run_image(size);
+                                return radio_passes;
+                            }
+                            e => woke |= app.serve(b, l, &self.session, e),
                         }
-                        // SysTick was stopped: the slice's end is lost, as after a drive command that slept
-                        Effect::BenchSrefresh(ms) => {
-                            bench_answer(b, l, ms, Mode::Refresh);
-                            (took_over, woke) = (true, true);
-                        }
-                        Effect::BenchStop(ms, Mode::Keep) => {
-                            bench_answer(b, l, ms, Mode::Keep);
-                            (took_over, woke) = (true, true);
-                        }
-                        Effect::BenchStop(ms, mode) => {
-                            // the `ok` reaches the computer, then the device leaves the bus: USB needs VOS1 and its
-                            // clocks, which Stop takes away (docs/power.md "Stop mode")
+                        // after the effect's own answer: the computer wrote to the volume and ejected it, a restart drops
+                        // every cache of it
+                        if app.restart_wanted() {
                             l.linger(50);
-                            l.disconnect();
-                            let r = b.low_power(ms, mode);
-                            for (n, w) in BKP.into_iter().zip(pack(&r)) {
-                                b.backup_write(n, w);
-                            }
                             b.reset();
                             return radio_passes;
                         }
-                        Effect::Run(size) => {
-                            l.linger(50);
-                            l.disconnect();
-                            b.run_image(size);
-                            return radio_passes;
+                        let watched = l.watch(self.policy.now_ms(), app.drive_failed());
+                        // before usb_dropped, which leaves registers 0 and 31 to a snapshot written for this drop
+                        if let Some(s) = l.snapshot() {
+                            app.usb_snapshot(b, &s);
                         }
-                        e => woke |= app.serve(b, l, &self.session, e),
+                        let dot = match watched {
+                            UsbWatch::Up => UsbDot::Ready,
+                            UsbWatch::Suspended => UsbDot::Suspended,
+                            UsbWatch::Down => UsbDot::Powered,
+                            UsbWatch::Drop => {
+                                app.usb_dropped(b);
+                                UsbDot::Powered
+                            }
+                        };
+                        // a drive command read or wrote the card, which may have slept and taken over SysTick: without
+                        // this, the sleep's end is lost and the main loop stalls while USB is still served (seen on the
+                        // unit, 2026-10-24: the uptime stopped, the dev link kept answering)
+                        let worked = l.worked();
+                        took_over |= worked;
+                        woke |= worked;
+                        app.set_usb(b, dot);
+                        app.prof().span(Sec::Usb, usb_at, b.cycles());
                     }
-                    // after the effect's own answer: the computer wrote to the volume and ejected it, a restart drops
-                    // every cache of it
-                    if app.restart_wanted() {
-                        l.linger(50);
-                        b.reset();
-                        return radio_passes;
-                    }
-                    let watched = l.watch(self.policy.now_ms(), app.drive_failed());
-                    // before usb_dropped, which leaves registers 0 and 31 to a snapshot written for this drop
-                    if let Some(s) = l.snapshot() {
-                        app.usb_snapshot(b, &s);
-                    }
-                    let dot = match watched {
-                        UsbWatch::Up => UsbDot::Ready,
-                        UsbWatch::Suspended => UsbDot::Suspended,
-                        UsbWatch::Down => UsbDot::Powered,
-                        UsbWatch::Drop => {
-                            app.usb_dropped(b);
-                            UsbDot::Powered
-                        }
+                    let w = Woke {
+                        touch: b.touch_edge(),
+                        timer: b.timer_done(),
+                        io: wake.io && b.key_edge(),
+                        bytes: wake.bytes && b.byte_waiting(),
+                        key: press.is_some(),
+                        usb: woke,
+                        stop: false,
                     };
-                    // a drive command read or wrote the card, which may have slept and taken over SysTick: without
-                    // this, the sleep's end is lost and the main loop stalls while USB is still served (seen on the
-                    // unit, 2026-10-24: the uptime stopped, the dev link kept answering)
-                    let worked = l.worked();
-                    took_over |= worked;
-                    woke |= worked;
-                    app.set_usb(b, dot);
-                    app.prof().span(Sec::Usb, usb_at, b.cycles());
+                    if w.any() {
+                        // a key from the link acts now, so the next command cannot replace it; board work done for the
+                        // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
+                        break w;
+                    }
+                    b.sleep();
                 }
-                let w = Woke {
-                    touch: b.touch_edge(),
-                    timer: b.timer_done(),
-                    io: wake.io && b.key_edge(),
-                    bytes: wake.bytes && b.byte_waiting(),
-                    key: press.is_some(),
-                    usb: woke,
-                };
-                if w.any() {
-                    // a key from the link acts now, so the next command cannot replace it; board work done for the
-                    // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
-                    break w;
-                }
-                b.sleep();
             };
             // SysTick keeps counting through WFI (ARMv7-M ARM B3.3), so its count is the wall time of the slice.
             // An early end counts SysTick's us, the sub-ms rest carried (floored to whole ms each, ~0.5 ms was lost per
@@ -272,7 +306,9 @@ impl<L: UsbLink> MainLoop<L> {
             if took_over {
                 self.policy.count(true);
             }
-            if w.timer && !took_over {
+            if let Some((us, _)) = stopped {
+                self.policy.slept_stop_us(us); // by the RTC: SysTick and the cycle counter stop in Stop
+            } else if w.timer && !took_over {
                 self.policy.slept(slice);
             } else {
                 let us = if took_over { before_poll } else { b.timer_elapsed_us(slice) };

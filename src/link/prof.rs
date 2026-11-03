@@ -56,10 +56,14 @@ pub enum Sec {
     Input,
     /// The USB link served during the sleep (only while a cable is in).
     Usb,
+    /// An idle Stop between passes (main.rs `idle_stop`): the entry and the wake, the clocks and the SDRAM restored
+    /// (calls/s: Stops a second). Its cycles are counted at 200 MHz, but the wake runs on the HSI's 64 MHz until
+    /// SYSCLK is back, so its us are up to 3 times short.
+    Wake,
 }
 
 /// How many sections.
-pub const SECTIONS: usize = Sec::Usb as usize + 1;
+pub const SECTIONS: usize = Sec::Wake as usize + 1;
 
 impl Sec {
     /// Every section, in order.
@@ -85,6 +89,7 @@ impl Sec {
         Sec::Touch,
         Sec::Input,
         Sec::Usb,
+        Sec::Wake,
     ];
 
     /// Its name in `prof`'s answer (tools/dev.py prints it).
@@ -111,6 +116,7 @@ impl Sec {
             Sec::Touch => "touch",
             Sec::Input => "input",
             Sec::Usb => "usb",
+            Sec::Wake => "wake",
         }
     }
 }

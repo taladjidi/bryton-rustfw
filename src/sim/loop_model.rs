@@ -30,6 +30,16 @@ pub struct LoopModel {
     pub ran: Option<u32>,
     /// The Stop benches asked (ms, mode), in order.
     pub low_power: Vec<(u32, crate::stopbench::Mode)>,
+    /// The idle Stops that slept (ms asked, us slept), in order.
+    pub stops: Vec<(u32, u32)>,
+    /// The idle Stop: not built (`POWER_STEPS` without bit 5: never tried), or failing (it sleeps, but the system
+    /// does not reach Stop: no STOPF).
+    pub stop_off: bool,
+    pub stop_fails: bool,
+    /// The cable comes in at this time, ms (an edge that ends a Stop, as PC13's EXTI line).
+    pub vbus_at: Option<u64>,
+    /// The wake after a Stop: the clocks and the SDRAM back, work the cycle counter counts, ns.
+    pub wake_ns: u64,
     /// The slice timer: started at, ms.
     timer: Option<(u64, u32)>,
     /// WFI wakes at uneven sub-ms instants (a byte, a key arrive at any time), as on the unit; off: every WFI is 1 ms.
@@ -138,7 +148,7 @@ impl LoopBoard for Sim {
     }
     fn checkpoint(&mut self, _: u32) {}
     fn vbus(&mut self) -> bool {
-        self.main.vbus
+        self.main.vbus || self.main.vbus_at.is_some_and(|t| self.ms >= t)
     }
     fn usb_start(&mut self) -> Option<SimLink> {
         self.main.usb_starts += 1;
@@ -172,6 +182,37 @@ impl LoopBoard for Sim {
             fmc: 200,
             ..StopReport::default()
         }
+    }
+    /// Whole ms of sleep until `ms`, or a key going down, the touch INT falling or the cable coming in (each latched as
+    /// its EXTI flag, left for `key_edge` / `touch_edge`), then the wake's work; timed as the RTC would.
+    fn idle_stop(&mut self, ms: u32) -> (u32, u32) {
+        use crate::stopbench::{PASS_OK, PENDING, STOPF, WUTF};
+        let edge = |s: &mut Sim| {
+            let vbus_in = s.main.vbus_at.is_some_and(|t| s.ms >= t) && !s.main.vbus;
+            (s.touch_int() && !s.main.touch_was) || s.keys_down() & !s.main.keys_was != 0 || vbus_in
+        };
+        if self.main.stop_off || edge(self) {
+            return (0, PENDING);
+        }
+        let t0 = self.wall_ns();
+        let mut woke = false;
+        for _ in 0..ms {
+            self.sleep_ms(1);
+            if edge(self) {
+                woke = true;
+                break;
+            }
+        }
+        if self.main.vbus_at.is_some_and(|t| self.ms >= t) {
+            self.main.vbus = true;
+        }
+        let ns = self.main.wake_ns;
+        self.awake_ns += ns;
+        self.advance_ns(ns);
+        let us = ((self.wall_ns() - t0) / 1000) as u32;
+        self.main.stops.push((ms, us));
+        let flags = if self.main.stop_fails { PASS_OK & !STOPF } else { PASS_OK };
+        (us, if woke { flags } else { flags | WUTF })
     }
     fn nrf_flush(&mut self) {
         self.nordic.out.clear();

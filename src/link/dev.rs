@@ -44,6 +44,9 @@
 //!   `bench stop <ms> usboff`: the same with USB fully off first (its clocks, the PHY, VOS3: how phase 2 stops, on
 //!   battery). `bench stop <ms> keep`: Stop with USB left as it is, no `ok` and no reset: the report line answered, as
 //!   `srefresh`'s, if the link survives (and register 0 written all the same).
+//! - `bench idle-stop <s>` (0 to 3600; no ride open): `ok`, then for `s` seconds the main loop's idle Stop (phase 2a)
+//!   is allowed with the USB link up, for a measurement only ([`Effect::BenchIdleStop`]; `0` ends it). The link is not
+//!   served during a Stop, so it may drop and come back: `info`'s `stops` counts once it answers again.
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
@@ -191,6 +194,10 @@ pub struct Stats {
     /// Since boot, to tell where a clock drift comes from: slices ended early, the ms they slept, slices that ran out,
     /// slices a USB command took over, radio passes.
     pub slices: [u32; 5],
+    /// Since boot, the main loop's idle Stops (docs/power.md "Stop mode", phase 2a): those that slept, those of them
+    /// that failed (the system not in Stop, a clock or the SDRAM not back: [`crate::stopbench::PASS_OK`]), and the ms
+    /// they slept by the RTC.
+    pub stops: [u32; 3],
 }
 
 /// Configured, but no start of frame for this long (and no suspend seen): the computer dropped the device.
@@ -361,6 +368,8 @@ pub enum Effect {
     BenchSrefresh(u32),
     /// Stop for this many ms as the mode says (the main loop's; `ok` already sent but for `keep`).
     BenchStop(u32, stopbench::Mode),
+    /// The idle Stop allowed with the cable in for this many seconds, 0: no longer (the main loop's; `ok` sent).
+    BenchIdleStop(u32),
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
     Drive,
     /// Start a new profiler window ([`crate::prof::Prof::reset`]).
@@ -504,6 +513,11 @@ impl Session {
                 for (i, n) in stats.slices.iter().enumerate() {
                     h.send(if i == 0 { b"" } else { b" " });
                     h.send(decimal(u64::from(*n), &mut [0; 20]));
+                }
+                h.send(b" stops");
+                for n in stats.stops {
+                    h.send(b" ");
+                    h.send(decimal(u64::from(n), &mut [0; 20]));
                 }
                 h.send(b" appup ");
                 h.send(decimal(u64::from(app.up_ms), &mut [0; 20]));
@@ -663,6 +677,13 @@ impl Session {
             Some(b"bench") if line.starts_with(b"bench srefresh") => match words.nth(1).and_then(parse) {
                 Some(ms @ 1..=stopbench::MAX_MS) => return Effect::BenchSrefresh(ms),
                 _ => h.send(b"err usage: bench srefresh <1..30000 ms>\n"),
+            },
+            Some(b"bench") if line.starts_with(b"bench idle-stop") => match words.nth(1).and_then(parse) {
+                Some(secs @ 0..=3600) => {
+                    h.send(b"ok\n");
+                    return Effect::BenchIdleStop(secs);
+                }
+                _ => h.send(b"err usage: bench idle-stop <0..3600 s>\n"),
             },
             Some(b"bench") if line.starts_with(b"bench stop") => {
                 let ms = words.nth(1).and_then(parse);
@@ -834,6 +855,7 @@ impl App {
             | Effect::Run(_)
             | Effect::StackFault
             | Effect::BenchSrefresh(_)
+            | Effect::BenchIdleStop(_)
             | Effect::BenchStop(..) => return false,
             Effect::ProfReset => {
                 self.prof().reset();

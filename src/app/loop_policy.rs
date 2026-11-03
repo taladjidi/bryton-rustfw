@@ -53,12 +53,15 @@ pub struct Woke {
     /// Board work done for the USB link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is
     /// lost, so end it (seen on the unit, 2026-10-24: the uptime stopped, the dev link kept answering).
     pub usb: bool,
+    /// A Stop ended by something else than its timer (a key, the touch INT, the cable, the power key): the step runs
+    /// now, and reads what it was.
+    pub stop: bool,
 }
 
 impl Woke {
     /// The wait ends: anything fired.
     pub fn any(&self) -> bool {
-        self.touch || self.timer || self.io || self.bytes || self.key || self.usb
+        self.touch || self.timer || self.io || self.bytes || self.key || self.usb || self.stop
     }
 
     /// Read the panel after this slice: its INT fell or a finger is down (`App::touching`). Before the early end of
@@ -71,7 +74,70 @@ impl Woke {
     /// The pass's sleep ends after this slice (a gesture ends it too, once read): the input acts after the sleep,
     /// since acting may sleep (delay_ms), which takes over SysTick.
     pub fn ends_pass(&self) -> bool {
-        self.io || self.key || self.usb
+        self.io || self.key || self.usb || self.stop
+    }
+}
+
+/// Failed Stops in a row after which the loop stops trying until the next start (WFI only): a Stop that returns at
+/// once must not turn the idle loop into a spin.
+pub const STOP_FAILS_MAX: u8 = 4;
+
+/// The idle Stop's state (docs/power.md "Stop mode", phase 2a): the dev link's bench that allows it with the cable in,
+/// the failures in a row, and the counts `info` reports.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Stops {
+    /// `bench idle-stop <s>`: Stop allowed with the USB link up until this uptime, ms (0: not).
+    bench_until_ms: u32,
+    /// Failed Stops in a row.
+    fails_in_row: u8,
+    /// [`Stats::stops`].
+    counts: [u32; 3],
+}
+
+impl Stops {
+    /// Stop may be tried: fewer than [`STOP_FAILS_MAX`] failures in a row, and no cable (`cable`: VBUS, or the USB
+    /// link up) unless the bench allows it at `now_ms`.
+    pub fn allowed(&self, cable: bool, now_ms: u32) -> bool {
+        self.fails_in_row < STOP_FAILS_MAX && (!cable || now_ms < self.bench_until_ms)
+    }
+
+    /// The bench allows Stop with the cable in for `secs` from `now_ms` (0: no longer).
+    pub fn bench(&mut self, now_ms: u32, secs: u32) {
+        self.bench_until_ms = if secs == 0 { 0 } else { now_ms.saturating_add(secs.saturating_mul(1000)) };
+    }
+
+    /// What the board's Stop answered (`flags`, stopbench.rs; `us` slept by the RTC) counted: false when it did not
+    /// sleep ([`crate::stopbench::PENDING`]: nothing to count).
+    ///
+    /// ```
+    /// use bryton_rustfw::{STOP_FAILS_MAX, Stops};
+    /// use bryton_rustfw::stopbench::{PASS_OK, PENDING, WUTF};
+    /// let mut s = Stops::default();
+    /// assert!(!s.count(0, PENDING) && s.allowed(false, 0));
+    /// assert!(s.count(250_000, PASS_OK | WUTF));
+    /// for _ in 0..STOP_FAILS_MAX {
+    ///     assert!(s.count(0, 0));
+    /// }
+    /// assert!(!s.allowed(false, 0)); // WFI only from now on
+    /// assert_eq!(s.counts(), [1 + u32::from(STOP_FAILS_MAX), u32::from(STOP_FAILS_MAX), 250]);
+    /// ```
+    pub fn count(&mut self, us: u32, flags: u32) -> bool {
+        use crate::stopbench::{PASS_OK, PENDING};
+        if flags & PENDING != 0 {
+            return false;
+        }
+        let ok = flags & PASS_OK == PASS_OK;
+        self.fails_in_row = if ok { 0 } else { self.fails_in_row.saturating_add(1) };
+        let [n, fails, ms] = &mut self.counts;
+        *n = n.wrapping_add(1);
+        *fails = fails.wrapping_add(u32::from(!ok));
+        *ms = ms.wrapping_add(us / 1000);
+        true
+    }
+
+    /// Stops, failures, ms slept in Stop, since boot.
+    pub fn counts(&self) -> [u32; 3] {
+        self.counts
     }
 }
 
@@ -98,6 +164,8 @@ pub struct LoopPolicy {
     window_ms: u32,
     /// What `info` reports.
     stats: Stats,
+    /// The idle Stop's state.
+    pub stops: Stops,
 }
 
 impl LoopPolicy {
@@ -114,7 +182,8 @@ impl LoopPolicy {
             awake: 0,
             ran: 0,
             window_ms: 0,
-            stats: Stats { uptime_ms: 0, awake_permille: 0, cpu_permille: 0, slices: [0; 5] },
+            stats: Stats { uptime_ms: 0, awake_permille: 0, cpu_permille: 0, slices: [0; 5], stops: [0; 3] },
+            stops: Stops { bench_until_ms: 0, fails_in_row: 0, counts: [0; 3] },
         }
     }
 
@@ -168,12 +237,24 @@ impl LoopPolicy {
     /// A slice ended early after `us` of SysTick: whole ms are slept, the rest waits for the next slice.
     pub fn slept_us(&mut self, us: u32) {
         self.stats.slices[0] = self.stats.slices[0].wrapping_add(1);
+        let ms = self.carry_us(us);
+        self.stats.slices[1] = self.stats.slices[1].wrapping_add(ms); // in ms: us would wrap in 71 minutes
+    }
+
+    /// An idle Stop slept `us` by the RTC: whole ms are slept, the rest waits for the next slice (not a slice:
+    /// [`Stops`] counts it).
+    pub fn slept_stop_us(&mut self, us: u32) {
+        self.carry_us(us);
+    }
+
+    /// `us` more slept, with the rest carried: the whole ms added, returned.
+    fn carry_us(&mut self, us: u32) -> u32 {
         let total = us.saturating_add(self.slept_rest_us);
         self.slept_rest_us = total % 1000;
         let ms = total / 1000;
-        self.stats.slices[1] = self.stats.slices[1].wrapping_add(ms); // in ms: us would wrap in 71 minutes
         self.slept += ms;
         self.since_touch = self.since_touch.saturating_add(ms);
+        ms
     }
 
     /// Counts a slice a USB command took over (`1`) or a radio pass (`2`) in the `info` figures.
@@ -201,7 +282,7 @@ impl LoopPolicy {
 
     /// The running figures for the dev link's `info`.
     pub fn stats(&self) -> Stats {
-        self.stats
+        Stats { stops: self.stops.counts, ..self.stats }
     }
 
     /// Counts the pass that ends: `pass_cycles` from the step's start to now, `sleep_cycles` the sleep loop's (USB
@@ -359,7 +440,7 @@ mod tests {
         }
         assert_eq!(
             p.stats(),
-            Stats { uptime_ms: 1000, awake_permille: 20, cpu_permille: 30, slices: p.stats().slices }
+            Stats { uptime_ms: 1000, awake_permille: 20, cpu_permille: 30, slices: p.stats().slices, stops: [0; 3] }
         );
         // the window starts again: a long pass (an eMMC scan, 1.2 s awake) is a window by itself
         p.begin_sleep(POLL_MS, false);
@@ -367,7 +448,13 @@ mod tests {
         assert_eq!(pass, 1200);
         assert_eq!(
             p.stats(),
-            Stats { uptime_ms: 2200, awake_permille: 1000, cpu_permille: 1000, slices: p.stats().slices }
+            Stats {
+                uptime_ms: 2200,
+                awake_permille: 1000,
+                cpu_permille: 1000,
+                slices: p.stats().slices,
+                stops: [0; 3]
+            }
         );
     }
 
