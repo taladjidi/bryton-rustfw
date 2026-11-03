@@ -101,6 +101,8 @@ pub struct Stops {
     counts: [u32; 6],
     /// The board has the ride's Stop built in ([`Stats::ride_stop`]: main.rs `POWER_STEPS` bit 6).
     pub ride_built: bool,
+    /// The USB link's soft reconnects made by the loop ([`Stats::usb_recoveries`]).
+    pub recoveries: u32,
 }
 
 impl Stops {
@@ -175,6 +177,11 @@ impl Stops {
         self.cable_stop_ms.is_some_and(|t| now_ms.wrapping_sub(t) < BENCH_DROP_MS)
     }
 
+    /// The loop reconnected the USB link on its own.
+    pub fn recovered(&mut self) {
+        self.recoveries = self.recoveries.wrapping_add(1);
+    }
+
     /// Stops, failures, ms slept in Stop, then the ride's Stops, failures and ms, since boot.
     pub fn counts(&self) -> [u32; 6] {
         self.counts
@@ -229,8 +236,16 @@ impl LoopPolicy {
                 slices: [0; 5],
                 stops: [0; 6],
                 ride_stop: false,
+                usb_recoveries: 0,
             },
-            stops: Stops { bench_until_ms: 0, cable_stop_ms: None, fails_in_row: 0, counts: [0; 6], ride_built: false },
+            stops: Stops {
+                bench_until_ms: 0,
+                cable_stop_ms: None,
+                fails_in_row: 0,
+                counts: [0; 6],
+                ride_built: false,
+                recoveries: 0,
+            },
         }
     }
 
@@ -329,7 +344,12 @@ impl LoopPolicy {
 
     /// The running figures for the dev link's `info`.
     pub fn stats(&self) -> Stats {
-        Stats { stops: self.stops.counts, ride_stop: self.stops.ride_built, ..self.stats }
+        Stats {
+            stops: self.stops.counts,
+            ride_stop: self.stops.ride_built,
+            usb_recoveries: self.stops.recoveries,
+            ..self.stats
+        }
     }
 
     /// An idle Stop's entry and wake ran `cycles` (inside the sleep for the time, which the RTC counts): work for the
@@ -499,7 +519,8 @@ mod tests {
                 cpu_permille: 30,
                 slices: p.stats().slices,
                 stops: [0; 6],
-                ride_stop: false
+                ride_stop: false,
+                usb_recoveries: 0
             }
         );
         // the window starts again: a long pass (an eMMC scan, 1.2 s awake) is a window by itself
@@ -515,6 +536,7 @@ mod tests {
                 slices: p.stats().slices,
                 stops: [0; 6],
                 ride_stop: false,
+                usb_recoveries: 0,
             }
         );
     }

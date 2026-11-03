@@ -93,6 +93,13 @@ fn bench_answer<B: LoopBoard>(b: &mut B, l: &mut B::Link, ms: u32, mode: Mode) {
     l.flush();
 }
 
+/// After a Stop with the cable in or a stall, the link must be up this long after (ms), else it is reconnected, up to
+/// `RECOVER_TRIES` times `RECOVER_RETRY_MS` apart. A poll later than `STALL_GAP_MS` after the last is a stall.
+const RECOVER_MS: u32 = 3000;
+const RECOVER_RETRY_MS: u32 = 10_000;
+const RECOVER_TRIES: u8 = 3;
+const STALL_GAP_MS: u32 = 3000;
+
 /// The USB link as the pass serves it (main.rs: usb.rs `Link`).
 pub trait UsbLink: Host {
     /// Services USB: a drive command (through the app), the dev link's bytes through `s`: what the board must do.
@@ -105,6 +112,8 @@ pub trait UsbLink: Host {
     fn watch(&mut self, now_ms: u32, failed: bool) -> UsbWatch;
     /// The first failure's registers since the link came up, once.
     fn snapshot(&mut self) -> Option<UsbSnap>;
+    /// Soft disconnect and connect, so the computer enumerates the device again (a link it forgot while we were away).
+    fn recover(&mut self, now_ms: u32);
     /// Board work done for the link since the last call (it may have slept: the slice's end is lost).
     fn worked(&mut self) -> bool;
 }
@@ -112,6 +121,13 @@ pub trait UsbLink: Host {
 /// The main loop's state between passes: the USB link once started, the dev link's protocol, the loop's rules.
 pub struct MainLoop<L> {
     link: Option<L>,
+    /// When the link must be up again (ms), the reconnects left, and whether a Stop with the cable in armed it (only
+    /// that one may reconnect a suspended link: after a stall, a suspend is a host that sleeps, not one that forgot us).
+    recover: Option<(u32, u8, bool)>,
+    /// The watch saw the link `Up` since the last reconnect (a charger with no data host never does: no stall recovery).
+    seen_up: bool,
+    /// The loop's clock at the last USB poll, ms (0: none yet).
+    last_poll: u32,
     session: Session,
     policy: LoopPolicy,
 }
@@ -119,7 +135,14 @@ pub struct MainLoop<L> {
 impl<L: UsbLink> MainLoop<L> {
     /// A loop for a cycle counter at `cpu_hz` and sleep slices of at most `timer_max_ms` (SysTick's longest).
     pub const fn new(cpu_hz: u32, timer_max_ms: u32) -> Self {
-        MainLoop { link: None, session: Session::new(), policy: LoopPolicy::new(cpu_hz, timer_max_ms) }
+        MainLoop {
+            link: None,
+            recover: None,
+            seen_up: false,
+            last_poll: 0,
+            session: Session::new(),
+            policy: LoopPolicy::new(cpu_hz, timer_max_ms),
+        }
     }
 
     /// The figures `info` reports.
@@ -213,7 +236,13 @@ impl<L: UsbLink> MainLoop<L> {
                         b.reset();
                         return radio_passes;
                     }
-                    o => Some((us, flags, o)),
+                    o => {
+                        // macOS drops a device that is not served for a Stop: it must be back up after the last one
+                        if self.link.is_some() {
+                            self.recover = Some((self.policy.now_ms().wrapping_add(RECOVER_MS), RECOVER_TRIES, true));
+                        }
+                        Some((us, flags, o))
+                    }
                 }
             } else {
                 None
@@ -291,7 +320,37 @@ impl<L: UsbLink> MainLoop<L> {
                             b.reset();
                             return radio_passes;
                         }
-                        let watched = l.watch(self.policy.now_ms(), app.drive_failed());
+                        let now = self.policy.now_ms();
+                        let watched = l.watch(now, app.drive_failed());
+                        // a poll long after the last (a stall, a long job) loses the link the same way, if it was up
+                        if self.last_poll != 0 && now.wrapping_sub(self.last_poll) > STALL_GAP_MS && self.seen_up {
+                            let stop = self.recover.is_some_and(|r| r.2);
+                            self.recover = Some((now.wrapping_add(RECOVER_MS), RECOVER_TRIES, stop));
+                        }
+                        self.last_poll = now.max(1);
+                        self.seen_up = match watched {
+                            UsbWatch::Up => true,
+                            UsbWatch::Drop => false,
+                            _ => self.seen_up,
+                        };
+                        // due and still not up (never enumerated; suspended for good after a Stop): the pull-up off and
+                        // on, the only thing a host that forgot the port notices (inferred; docs/usb.md). A drop did
+                        // that itself; it counts as a try.
+                        if let Some((_, left, stop)) = self.recover.filter(|r| now.wrapping_sub(r.0) < 1 << 31) {
+                            let next = Some((now.wrapping_add(RECOVER_RETRY_MS), left.saturating_sub(1), stop));
+                            self.recover = match watched {
+                                UsbWatch::Up => None,
+                                UsbWatch::Suspended if !stop => None,
+                                _ if left == 0 => None,
+                                UsbWatch::Drop => next,
+                                _ => {
+                                    l.recover(now);
+                                    self.seen_up = false;
+                                    self.policy.stops.recovered();
+                                    next
+                                }
+                            };
+                        }
                         // before usb_dropped, which leaves registers 0 and 31 to a snapshot written for this drop
                         // a drop at the end of `bench idle-stop` is the bench's: not logged
                         let quiet = self.policy.stops.quiet_drop(self.policy.now_ms());
