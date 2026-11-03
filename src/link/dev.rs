@@ -45,8 +45,9 @@
 //!   battery). `bench stop <ms> keep`: Stop with USB left as it is, no `ok` and no reset: the report line answered, as
 //!   `srefresh`'s, if the link survives (and register 0 written all the same).
 //! - `bench idle-stop <s>` (0 to 3600; no ride open): `ok`, then for `s` seconds the main loop's idle Stop (phase 2a)
-//!   is allowed with the USB link up, for a measurement only ([`Effect::BenchIdleStop`]; `0` ends it). The link is not
-//!   served during a Stop, so it may drop and come back: `info`'s `stops` counts once it answers again.
+//!   is allowed with the USB link up, for a measurement only ([`Effect::BenchIdleStop`]). It ends by time-out: the link
+//!   is not served during a Stop, so it may drop and come back (not logged as a drop: `Stops::quiet_drop`), and a
+//!   `0` to end it early may not get through. `info`'s `stops` counts once it answers again.
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read

@@ -5,6 +5,7 @@
 //! they measured, so the rules are tested on the host (docs/review-2026-10-29.md A8).
 
 use crate::dev::Stats;
+use crate::stopbench::{Outcome, outcome};
 use crate::{IDLE_POLL_MS, POLL_MS, TOUCH_MS};
 
 /// What main.rs does with the USB cable this pass.
@@ -82,12 +83,18 @@ impl Woke {
 /// once must not turn the idle loop into a spin.
 pub const STOP_FAILS_MAX: u8 = 4;
 
+/// After a Stop with the cable in (`bench idle-stop`), a USB drop the watch decides within this long is the bench's:
+/// not logged (backup registers, notice). Past the watch's own limits (dev.rs `UNCONFIGURED_MS`, 2 s).
+pub const BENCH_DROP_MS: u32 = 5000;
+
 /// The idle Stop's state (docs/power.md "Stop mode", phase 2a): the dev link's bench that allows it with the cable in,
 /// the failures in a row, and the counts `info` reports.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stops {
     /// `bench idle-stop <s>`: Stop allowed with the USB link up until this uptime, ms (0: not).
     bench_until_ms: u32,
+    /// The uptime of the last Stop taken with the cable in, ms.
+    cable_stop_ms: Option<u32>,
     /// Failed Stops in a row.
     fails_in_row: u8,
     /// [`Stats::stops`].
@@ -106,33 +113,56 @@ impl Stops {
         self.bench_until_ms = if secs == 0 { 0 } else { now_ms.saturating_add(secs.saturating_mul(1000)) };
     }
 
-    /// What the board's Stop answered (`flags`, stopbench.rs; `us` slept by the RTC) counted: false when it did not
-    /// sleep ([`crate::stopbench::PENDING`]: nothing to count).
+    /// What the board's Stop answered (`flags`, stopbench.rs; `us` slept by the RTC; `cable` in, at `now_ms`) counted:
+    /// Stops that slept, failures (a [`Outcome::Broken`] one too: the reset follows), failures in a row.
     ///
     /// ```
+    /// use bryton_rustfw::stopbench::{Outcome, PASS_OK, PENDING, STOPF, WAKE_PENDING, WUTF};
     /// use bryton_rustfw::{STOP_FAILS_MAX, Stops};
-    /// use bryton_rustfw::stopbench::{PASS_OK, PENDING, WUTF};
     /// let mut s = Stops::default();
-    /// assert!(!s.count(0, PENDING) && s.allowed(false, 0));
-    /// assert!(s.count(250_000, PASS_OK | WUTF));
+    /// assert_eq!(s.count(0, PENDING, false, 0), Outcome::NotTried);
+    /// assert_eq!(s.count(250_000, PASS_OK | WUTF, false, 0), Outcome::Ok);
+    /// let run = PASS_OK & !STOPF; // a key between the check and the WFI: no Stop, no failure
+    /// assert_eq!(s.count(1000, run | WAKE_PENDING, false, 0), Outcome::Interrupted);
     /// for _ in 0..STOP_FAILS_MAX {
-    ///     assert!(s.count(0, 0));
+    ///     assert_eq!(s.count(0, run, false, 0), Outcome::Failed);
     /// }
     /// assert!(!s.allowed(false, 0)); // WFI only from now on
-    /// assert_eq!(s.counts(), [1 + u32::from(STOP_FAILS_MAX), u32::from(STOP_FAILS_MAX), 250]);
+    /// assert_eq!(s.counts(), [2 + u32::from(STOP_FAILS_MAX), u32::from(STOP_FAILS_MAX), 251]);
     /// ```
-    pub fn count(&mut self, us: u32, flags: u32) -> bool {
-        use crate::stopbench::{PASS_OK, PENDING};
-        if flags & PENDING != 0 {
-            return false;
+    pub fn count(&mut self, us: u32, flags: u32, cable: bool, now_ms: u32) -> Outcome {
+        let o = outcome(flags);
+        if o == Outcome::NotTried {
+            return o;
         }
-        let ok = flags & PASS_OK == PASS_OK;
-        self.fails_in_row = if ok { 0 } else { self.fails_in_row.saturating_add(1) };
+        let fail = matches!(o, Outcome::Failed | Outcome::Broken);
+        match o {
+            Outcome::Ok => self.fails_in_row = 0,
+            Outcome::Failed => self.fails_in_row = self.fails_in_row.saturating_add(1),
+            _ => {}
+        }
+        if cable {
+            self.cable_stop_ms = Some(now_ms);
+        }
         let [n, fails, ms] = &mut self.counts;
         *n = n.wrapping_add(1);
-        *fails = fails.wrapping_add(u32::from(!ok));
+        *fails = fails.wrapping_add(u32::from(fail));
         *ms = ms.wrapping_add(us / 1000);
-        true
+        o
+    }
+
+    /// A USB drop at `now_ms` is the bench's own (a Stop with the cable in within [`BENCH_DROP_MS`]): not logged.
+    ///
+    /// ```
+    /// use bryton_rustfw::stopbench::{PASS_OK, WUTF};
+    /// use bryton_rustfw::{BENCH_DROP_MS, Stops};
+    /// let mut s = Stops::default();
+    /// assert!(!s.quiet_drop(100));
+    /// s.count(250_000, PASS_OK | WUTF, true, 1000);
+    /// assert!(s.quiet_drop(1000 + BENCH_DROP_MS - 1) && !s.quiet_drop(1000 + BENCH_DROP_MS));
+    /// ```
+    pub fn quiet_drop(&self, now_ms: u32) -> bool {
+        self.cable_stop_ms.is_some_and(|t| now_ms.wrapping_sub(t) < BENCH_DROP_MS)
     }
 
     /// Stops, failures, ms slept in Stop, since boot.
@@ -183,7 +213,7 @@ impl LoopPolicy {
             ran: 0,
             window_ms: 0,
             stats: Stats { uptime_ms: 0, awake_permille: 0, cpu_permille: 0, slices: [0; 5], stops: [0; 3] },
-            stops: Stops { bench_until_ms: 0, fails_in_row: 0, counts: [0; 3] },
+            stops: Stops { bench_until_ms: 0, cable_stop_ms: None, fails_in_row: 0, counts: [0; 3] },
         }
     }
 
@@ -283,6 +313,12 @@ impl LoopPolicy {
     /// The running figures for the dev link's `info`.
     pub fn stats(&self) -> Stats {
         Stats { stops: self.stops.counts, ..self.stats }
+    }
+
+    /// An idle Stop's entry and wake ran `cycles` (inside the sleep for the time, which the RTC counts): work for the
+    /// awake share, as the CPU ran (on the HSI's 64 MHz until SYSCLK is back, counted at `cpu_hz`: up to 3 times short).
+    pub fn woke(&mut self, cycles: u32) {
+        self.awake = self.awake.saturating_add(cycles);
     }
 
     /// Counts the pass that ends: `pass_cycles` from the step's start to now, `sleep_cycles` the sleep loop's (USB

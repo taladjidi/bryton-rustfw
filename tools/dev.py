@@ -32,8 +32,9 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py stop [MS] [--usboff|--keep]  Stop mode step 2 (no ride open; from RAM, `dev.py run`): USB off, Stop for MS ms
                                   (default 1000), clocks and SDRAM back, the report kept, a reset (docs/power.md)
   dev.py stopreport               decode the report `stop` kept in backup registers 0 and 31, after the reset
-  dev.py idlestop S               allow the main loop's idle Stop with the cable in for S seconds (0..3600, 0 ends it;
-                                  no ride open; phase 2a): the link may drop meanwhile, `info` counts the Stops after
+  dev.py idlestop S               allow the main loop's idle Stop with the cable in for S seconds (0..3600; no ride
+                                  open; phase 2a). It ends by time-out only: the link is not served during a Stop, so
+                                  it may drop and `idlestop 0` may not get through; `info` counts the Stops after
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
 import argparse, os, re, struct, sys, time, zlib
@@ -542,8 +543,9 @@ def main():
     g.add_argument('--usboff', action='store_true', help='USB fully off first (clocks, PHY, VOS3): as on battery')
     g.add_argument('--keep', action='store_true', help='USB left on, no reset: the full report line if the link survives')
     sub.add_parser('stopreport', help='decode the report `stop` left in backup registers 0 and 31 (after the reset)')
-    p = sub.add_parser('idlestop', help='allow the idle Stop with the cable in for S seconds (0..3600, 0 ends it; no ride '
-                       'open): the link may drop meanwhile; `info` counts the Stops after (docs/power.md, phase 2a)')
+    p = sub.add_parser('idlestop', help='allow the idle Stop with the cable in for S seconds (0..3600; no ride open); ends '
+                       'by time-out only (the link is not served during a Stop: it may drop, and `idlestop 0` may not '
+                       'get through); `info` counts the Stops after (docs/power.md, phase 2a)')
     p.add_argument('seconds', type=int)
     sub.add_parser('nrfoff', help='switch the radio chip off as the switch-off does, unit kept up: the path taken (seen0 / '
                    'seen1 / held), the time, the chip\'s RTS (our CTS, PD3) 10 ms, 100 ms, 1 s after; then the radio restarts')

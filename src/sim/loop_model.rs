@@ -36,6 +36,8 @@ pub struct LoopModel {
     /// does not reach Stop: no STOPF).
     pub stop_off: bool,
     pub stop_fails: bool,
+    /// The idle Stop's wake fails to put a clock back (PLL1 not locked again): the loop must reset.
+    pub stop_broken: bool,
     /// The cable comes in at this time, ms (an edge that ends a Stop, as PC13's EXTI line).
     pub vbus_at: Option<u64>,
     /// The wake after a Stop: the clocks and the SDRAM back, work the cycle counter counts, ns.
@@ -138,6 +140,19 @@ impl Sim {
     }
 }
 
+/// The RTC's PREDIV_S on the unit (BOARD.md 8): RTC_SSR counts down 1024 steps a second.
+const RTC_PREDIV_S: u32 = 1023;
+
+impl Sim {
+    /// (RTC_TR, RTC_SSR) as main.rs `rtc_ss` reads them: the calendar's seconds and the sub-second count, both from
+    /// the wall clock's 1/1024 s ticks (not the ms: the unit's quantisation, at both ends of a Stop).
+    fn rtc_ss(&mut self) -> (u32, u32) {
+        let tick = self.wall_ns() * u64::from(RTC_PREDIV_S + 1) / 1_000_000_000;
+        let ssr = RTC_PREDIV_S - (tick % u64::from(RTC_PREDIV_S + 1)) as u32;
+        (self.rtc().0, ssr)
+    }
+}
+
 impl LoopBoard for Sim {
     type Link = SimLink;
     fn canary(&mut self) -> u32 {
@@ -183,10 +198,11 @@ impl LoopBoard for Sim {
             ..StopReport::default()
         }
     }
-    /// Whole ms of sleep until `ms`, or a key going down, the touch INT falling or the cable coming in (each latched as
-    /// its EXTI flag, left for `key_edge` / `touch_edge`), then the wake's work; timed as the RTC would.
+    /// A sleep on the wake-up timer's 2048 Hz grid for `ms` (stopbench `wutr`), cut at the first ms a key goes down,
+    /// the touch INT falls or the cable comes in (each latched as its EXTI flag, left for `key_edge` / `touch_edge`),
+    /// then the wake's work; timed as main.rs does, by two readings of the RTC's TR and SSR at its 1/1024 s.
     fn idle_stop(&mut self, ms: u32) -> (u32, u32) {
-        use crate::stopbench::{PASS_OK, PENDING, STOPF, WUTF};
+        use crate::stopbench::{PASS_OK, PENDING, PLL, STOPF, WUTF, elapsed_us, wutr};
         let edge = |s: &mut Sim| {
             let vbus_in = s.main.vbus_at.is_some_and(|t| s.ms >= t) && !s.main.vbus;
             (s.touch_int() && !s.main.touch_was) || s.keys_down() & !s.main.keys_was != 0 || vbus_in
@@ -194,10 +210,17 @@ impl LoopBoard for Sim {
         if self.main.stop_off || edge(self) {
             return (0, PENDING);
         }
-        let t0 = self.wall_ns();
+        let before = self.rtc_ss();
+        let mut left = u64::from(wutr(ms) + 1) * 1_000_000_000 / 2048;
         let mut woke = false;
-        for _ in 0..ms {
-            self.sleep_ms(1);
+        while left > 0 {
+            let step = left.min(1_000_000);
+            if step == 1_000_000 && self.cost_rem == 0 {
+                self.sleep_ms(1);
+            } else {
+                self.advance_ns(step);
+            }
+            left -= step;
             if edge(self) {
                 woke = true;
                 break;
@@ -209,9 +232,15 @@ impl LoopBoard for Sim {
         let ns = self.main.wake_ns;
         self.awake_ns += ns;
         self.advance_ns(ns);
-        let us = ((self.wall_ns() - t0) / 1000) as u32;
+        let us = elapsed_us(before, self.rtc_ss(), RTC_PREDIV_S);
         self.main.stops.push((ms, us));
-        let flags = if self.main.stop_fails { PASS_OK & !STOPF } else { PASS_OK };
+        let flags = if self.main.stop_broken {
+            PASS_OK & !PLL
+        } else if self.main.stop_fails {
+            PASS_OK & !STOPF
+        } else {
+            PASS_OK
+        };
         (us, if woke { flags } else { flags | WUTF })
     }
     fn nrf_flush(&mut self) {

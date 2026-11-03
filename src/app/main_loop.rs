@@ -7,7 +7,7 @@
 
 use crate::dev::{Effect, Host, Session, Stats, UsbWatch};
 use crate::prof::Sec;
-use crate::stopbench::{BKP, Mode, PASS_OK, WUTF, pack};
+use crate::stopbench::{BKP, Mode, Outcome, StopReport, WUTF, pack};
 use crate::ui::UsbDot;
 use crate::usbsnap::UsbSnap;
 use crate::{App, Board, Cable, LoopPolicy, Woke};
@@ -49,7 +49,7 @@ pub trait LoopBoard: Board {
     /// [`crate::Stops::allowed`] said yes): the SDRAM in self-refresh, the system in Stop, ended by the RTC wake-up
     /// timer, a key, the touch INT, the cable or the power key, the clocks and the SDRAM restored; the Nordic chip held
     /// off meanwhile (RTS high). The slice's timer is not running. Returns the us slept by the RTC, from the call to its
-    /// return, and the flags (stopbench.rs: [`crate::stopbench::PENDING`] when it did not try, [`PASS_OK`] when all went
+    /// return, and the flags (stopbench.rs: [`crate::stopbench::PENDING`] when it did not try, [`crate::stopbench::PASS_OK`] when all went
     /// right, [`WUTF`] when its timer ended it). The key and touch EXTI flags stay for [`LoopBoard::key_edge`] and
     /// [`LoopBoard::touch_edge`].
     fn idle_stop(&mut self, ms: u32) -> (u32, u32);
@@ -168,7 +168,7 @@ impl<L: UsbLink> MainLoop<L> {
         // one idle Stop a pass, for the pass's whole sleep (docs/power.md "Stop mode", phase 2a): the app's rules, then
         // the loop's (no USB link but for the bench, not after failures in a row)
         let cable = self.link.is_some() || b.vbus();
-        let mut stop = wake.io && app.stop_ok() && self.policy.stops.allowed(cable, self.policy.now_ms());
+        let mut stop = wake.io && app.stop_ok(b) && self.policy.stops.allowed(cable, self.policy.now_ms());
         if !wake.radio {
             b.nrf_flush();
         }
@@ -184,7 +184,20 @@ impl<L: UsbLink> MainLoop<L> {
             // a Stop that slept is this slice; one that did not try (a wake source pending) leaves it to WFI
             let stopped = if core::mem::take(&mut stop) {
                 let (us, flags) = b.idle_stop(app.pass_ms().saturating_sub(self.policy.slept_ms()));
-                self.policy.stops.count(us, flags).then_some((us, flags))
+                match self.policy.stops.count(us, flags, cable, self.policy.now_ms()) {
+                    Outcome::NotTried => None,
+                    // the clocks or the SDRAM not as before: the report kept as `bench stop` keeps it, then a reset
+                    // (no ride is open: `App::stop_ok`)
+                    Outcome::Broken => {
+                        let r = StopReport { stop: true, flags, slept_ms: us / 1000, ..StopReport::default() };
+                        for (n, w) in BKP.into_iter().zip(pack(&r)) {
+                            b.backup_write(n, w);
+                        }
+                        b.reset();
+                        return radio_passes;
+                    }
+                    o => Some((us, flags, o)),
+                }
             } else {
                 None
             };
@@ -193,10 +206,12 @@ impl<L: UsbLink> MainLoop<L> {
             let mut before_poll = 0;
             let mut before_cycles = slice_at; // the cycles at before_poll
             let mut took_over = false;
-            let w = if let Some((_, flags)) = stopped {
-                app.prof().span(Sec::Wake, slice_at, b.cycles());
+            let w = if let Some((_, flags, o)) = stopped {
+                let now = b.cycles();
+                app.prof().span(Sec::Wake, slice_at, now);
+                self.policy.woke(now.wrapping_sub(slice_at));
                 // its timer, or something to act on now; a failed one sleeps the rest of the pass in WFI
-                let early = flags & WUTF == 0 && flags & PASS_OK == PASS_OK;
+                let early = flags & WUTF == 0 && matches!(o, Outcome::Ok | Outcome::Interrupted);
                 Woke { touch: b.touch_edge(), io: wake.io && b.key_edge(), stop: early, ..Woke::default() }
             } else {
                 b.timer_start(slice);
@@ -261,7 +276,9 @@ impl<L: UsbLink> MainLoop<L> {
                         }
                         let watched = l.watch(self.policy.now_ms(), app.drive_failed());
                         // before usb_dropped, which leaves registers 0 and 31 to a snapshot written for this drop
-                        if let Some(s) = l.snapshot() {
+                        // a drop at the end of `bench idle-stop` is the bench's: not logged
+                        let quiet = self.policy.stops.quiet_drop(self.policy.now_ms());
+                        if let Some(s) = l.snapshot().filter(|_| !quiet) {
                             app.usb_snapshot(b, &s);
                         }
                         let dot = match watched {
@@ -269,7 +286,9 @@ impl<L: UsbLink> MainLoop<L> {
                             UsbWatch::Suspended => UsbDot::Suspended,
                             UsbWatch::Down => UsbDot::Powered,
                             UsbWatch::Drop => {
-                                app.usb_dropped(b);
+                                if !quiet {
+                                    app.usb_dropped(b);
+                                }
                                 UsbDot::Powered
                             }
                         };
@@ -306,7 +325,7 @@ impl<L: UsbLink> MainLoop<L> {
             if took_over {
                 self.policy.count(true);
             }
-            if let Some((us, _)) = stopped {
+            if let Some((us, ..)) = stopped {
                 self.policy.slept_stop_us(us); // by the RTC: SysTick and the cycle counter stop in Stop
             } else if w.timer && !took_over {
                 self.policy.slept(slice);

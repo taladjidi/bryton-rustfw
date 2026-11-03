@@ -84,6 +84,11 @@ pub const IDLE_AFTER_MS: u32 = 30_000;
 /// No Stop in the first minute after the start ([`App::stop_ok`]): the boot's own work (the radio's start, stock's
 /// rides scanned, the receiver's first fix) settles first, and Renode's runs (under 30 s emulated) never reach it.
 pub const STOP_AFTER_BOOT_MS: u32 = 60_000;
+/// [`App::keep_on`]'s first movement bit (AUTO OFF holds 60 s after it).
+const KEEP_MOVING: u32 = 16;
+/// [`App::keep_on`]'s reasons that keep the idle Stop out ([`App::stop_ok`]): all but the charger (bit 15: the main
+/// loop's cable rule, which `bench idle-stop` lifts) and movement (16 on: no ride is open, the radio's bytes wait).
+const KEEP_STOP: u32 = (1 << 15) - 1;
 /// A pass's work counted at most ([`prof::Clock::us`]): the first pass, or a stall, is not a key held for seconds.
 pub const MAX_PASS_MS: u32 = 1000;
 
@@ -242,10 +247,12 @@ impl App {
     /// The sleep after this pass may be Stop (docs/power.md "Stop mode", phase 2a; main loop `MainLoop::pass` adds
     /// the board's rules: no USB link, its kill switch): an idle pass ([`App::pass_ms`]: no ride open nor its card work,
     /// no tone, banner or finger, the card not lent, no key for [`IDLE_AFTER_MS`]) at least [`STOP_AFTER_BOOT_MS`]
-    /// after the start. The card has no operation in flight between passes (every eMMC command ends inside the step)
+    /// after the start, and none of AUTO OFF's reasons to stay on but the cable and movement (`App::keep_on`: the
+    /// recorder holding anything, a resume or the full copy pending, the ride marked open on the card, a file waiting
+    /// to be written, stock's scan, a call). The card has no operation in flight between passes (every eMMC command ends inside the step)
     /// and the panel's DMA is the board's to check. A ride open never stops: phase 2b.
-    pub fn stop_ok(&self) -> bool {
-        self.pass_ms() == IDLE_POLL_MS && self.up_ms >= STOP_AFTER_BOOT_MS
+    pub fn stop_ok(&self, b: &mut impl Board) -> bool {
+        self.pass_ms() == IDLE_POLL_MS && self.up_ms >= STOP_AFTER_BOOT_MS && self.keep_on(b) & KEEP_STOP == 0
     }
 
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.
@@ -424,14 +431,9 @@ impl App {
         self.auto_off.why
     }
 
-    /// AUTO OFF, once a second: counts the time with nothing keeping the unit on (no ride open or on its card, no
-    /// cable, the drive not lent, no key or touch, no call, no write waiting, no movement) and switches off at the
-    /// time-out, with a warning 10 s and 5 s before. True when it switched off.
-    pub(crate) fn step_auto_off(&mut self, b: &mut impl Board) -> bool {
-        if self.auto_off.seen == self.seconds {
-            return false;
-        }
-        self.auto_off.seen = self.seconds;
+    /// What keeps the unit on now, one bit per reason in this order (`tools/dev.py info` prints AUTO OFF's:
+    /// "auto off held"); the idle Stop asks the same, but for the cable and movement ([`KEEP_STOP`]).
+    pub(crate) fn keep_on(&self, b: &mut impl Board) -> u32 {
         // what keeps the unit on, one bit each in this order (`tools/dev.py info` prints it: "auto off held 0x...")
         let held = [
             self.light.idle_ms < 1000, // a key or touch in the last second
@@ -459,9 +461,19 @@ impl App {
             self.live.get(Metric::Cadence).is_some_and(|v| v > 0),
             self.live.get(Metric::Power).is_some_and(|v| v > 0),
         ];
-        const MOVING: u32 = 16; // the first movement bit
-        let why = held.iter().enumerate().fold(0u32, |w, (i, &h)| w | u32::from(h) << i);
-        self.auto_off.hold = if why >> MOVING != 0 { 60 } else { self.auto_off.hold.saturating_sub(1) };
+        held.iter().enumerate().fold(0u32, |w, (i, &h)| w | u32::from(h) << i)
+    }
+
+    /// AUTO OFF, once a second: counts the time with nothing keeping the unit on (no ride open or on its card, no
+    /// cable, the drive not lent, no key or touch, no call, no write waiting, no movement) and switches off at the
+    /// time-out, with a warning 10 s and 5 s before. True when it switched off.
+    pub(crate) fn step_auto_off(&mut self, b: &mut impl Board) -> bool {
+        if self.auto_off.seen == self.seconds {
+            return false;
+        }
+        self.auto_off.seen = self.seconds;
+        let why = self.keep_on(b);
+        self.auto_off.hold = if why >> KEEP_MOVING != 0 { 60 } else { self.auto_off.hold.saturating_sub(1) };
         self.auto_off.why = why;
         let quiet = why == 0 && self.auto_off.hold == 0;
         if !quiet {

@@ -4,7 +4,7 @@
 
 use super::loop_model::SimLink;
 use super::*;
-use crate::dev::Effect;
+use crate::dev::{Effect, UsbWatch};
 use crate::{IDLE_POLL_MS, MainLoop, POLL_MS, STOP_AFTER_BOOT_MS, STOP_FAILS_MAX};
 
 /// A started unit that never switches itself off (AUTO OFF never), its loop, and a Stop's wake of 1.5 ms of work.
@@ -70,30 +70,53 @@ fn each_blocker_keeps_the_pass_out_of_stop() {
     let idle = || {
         let (mut sim, mut app, mut main) = unit();
         until(&mut sim, &mut app, &mut main, 70_000);
-        assert!(app.stop_ok());
+        assert!(app.stop_ok(&mut sim));
         (sim, app, main)
     };
-    let (_, mut app, _) = idle();
-    app.tones.play(&crate::BEEP_ALERT);
-    assert!(!app.stop_ok(), "a tone (TIM1 stops in Stop)");
-    let (_, mut app, _) = idle();
-    app.say("BANNER");
-    assert!(!app.stop_ok(), "a banner timed by the passes");
-    let (_, mut app, _) = idle();
-    app.up_ms = STOP_AFTER_BOOT_MS - 1;
-    assert!(app.pass_ms() == IDLE_POLL_MS && !app.stop_ok(), "the first minute");
-    let (mut sim, mut app, _) = idle();
-    app.set_usb(&mut sim, crate::ui::UsbDot::Ready);
-    assert_eq!(app.drive_on(&mut sim), Ok(()));
-    app.notes.ms = None; // its banner, a blocker of its own
-    assert!(!app.stop_ok(), "the card lent to the computer");
+    type Blocker = (&'static str, fn(&mut Sim, &mut App));
+    let blockers: [Blocker; 10] = [
+        ("a tone (TIM1 stops in Stop)", |_, app| app.tones.play(&crate::BEEP_ALERT)),
+        ("a banner timed by the passes", |_, app| app.say("BANNER")),
+        ("the first minute", |_, app| app.up_ms = STOP_AFTER_BOOT_MS - 1),
+        ("a resume of the ride left open pending", |_, app| app.rec.resume_pending = true),
+        ("the full copy's resume pending", |_, app| app.rec.full_pending = true),
+        ("the ride marked open on the card", |sim, _| sim.backup[crate::RIDE_BKP] = crate::RIDE_OPEN),
+        ("settings.bin to write", |_, app| app.settings_store.file.dirty = true),
+        ("pages.bin to write", |_, app| app.store.file.dirty = true),
+        ("sensors.bin to write", |_, app| app.sensors_store.dirty = true),
+        ("the card lent to the computer", |sim, app| {
+            app.set_usb(sim, crate::ui::UsbDot::Ready);
+            assert_eq!(app.drive_on(sim), Ok(()));
+            app.notes.ms = None; // its banner, a blocker of its own
+        }),
+    ];
+    for (what, block) in blockers {
+        let (mut sim, mut app, _) = idle();
+        block(&mut sim, &mut app);
+        assert!(!app.stop_ok(&mut sim), "{what}");
+    }
     // a ride open: its passes are short and never stop (phase 2b)
     let (mut sim, mut app, mut main) = idle();
     let n = sim.main.stops.len();
     app.press(&mut sim, Press::Short(Key::Start));
     until(&mut sim, &mut app, &mut main, 140_000);
-    assert!(app.busy() && !app.stop_ok());
+    assert!(app.busy() && !app.stop_ok(&mut sim));
     assert_eq!(sim.main.stops.len(), n, "a Stop with a ride open");
+}
+
+#[test]
+fn a_wake_that_does_not_restore_the_clocks_resets() {
+    let (mut sim, mut app, mut main) = unit();
+    sim.main.stop_broken = true;
+    until(&mut sim, &mut app, &mut main, 61_000);
+    assert_eq!(sim.main.resets, 0);
+    while sim.main.stops.is_empty() {
+        main.pass(&mut app, &mut sim);
+    }
+    assert_eq!(sim.main.resets, 1, "the unit may run on the HSI with a dead PLL: reset");
+    let w = sim.backup[crate::stopbench::BKP[0]];
+    assert_eq!(w >> 24, crate::stopbench::TAG_A, "the report kept as `bench stop` keeps it");
+    assert_eq!(w >> 12 & crate::stopbench::PLL, 0, "PLL not locked again, in register 0");
 }
 
 #[test]
@@ -163,12 +186,21 @@ fn the_bench_allows_stop_with_the_cable_in_for_its_seconds() {
     let link = SimLink::default();
     (sim.main.link, sim.main.vbus) = (Some(link.clone()), true);
     until(&mut sim, &mut app, &mut main, 80_000);
-    assert!(app.stop_ok() && sim.main.stops.is_empty(), "the USB link up: no Stop");
+    assert!(app.stop_ok(&mut sim) && sim.main.stops.is_empty(), "the USB link up: no Stop");
     link.0.borrow_mut().effects.push_back(Effect::BenchIdleStop(10));
+    // a Stop takes the pass's whole sleep, so the link is polled only by the passes that do not stop: the drop the
+    // watch decides at the bench's end is the bench's, not logged
+    until(&mut sim, &mut app, &mut main, 85_000);
+    link.0.borrow_mut().watches.push_back(UsbWatch::Drop);
     until(&mut sim, &mut app, &mut main, 100_000);
     let n = sim.main.stops.len();
     assert!((30..=41).contains(&n), "{n} Stops in the bench's 10 s");
-    // a Stop takes the pass's whole sleep, so the link is polled only by the passes that do not stop
+    assert!(link.0.borrow().watches.is_empty(), "the watch ran after the bench");
+    let drops = crate::USB_DROPS_BKP;
+    assert_eq!(sim.backup[drops], 0, "the bench's drop counted");
     until(&mut sim, &mut app, &mut main, 120_000);
     assert_eq!(sim.main.stops.len(), n, "the bench's time ran out");
+    link.0.borrow_mut().watches.push_back(UsbWatch::Drop);
+    until(&mut sim, &mut app, &mut main, 121_000);
+    assert_eq!(sim.backup[drops], 0x0b00_0001, "a drop well after the bench is logged");
 }

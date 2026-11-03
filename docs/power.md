@@ -232,9 +232,17 @@ on the unit (docs/status.md).
 - **When:** an idle pass (`App::pass_ms` is 250 ms: no ride open nor its card work, no tone, banner or finger, the card
   not lent, no key for 30 s) a minute after the start (`STOP_AFTER_BOOT_MS`), no cable (VBUS low, no USB link), the
   build's kill switch on (main.rs `POWER_STEPS` bit 5, default on: `POWER_STEPS=31` builds without), fewer than
-  `STOP_FAILS_MAX` (4) failed Stops in a row (then WFI only until the next start). The board does not try (`PENDING`,
-  not counted) while the panel's DMA runs, a key's or the touch's EXTI flag is up, or a byte from the Nordic chip is
-  coming in.
+  `STOP_FAILS_MAX` (4) failed Stops in a row (then WFI only until the next start), and none of AUTO OFF's reasons to
+  stay on but the cable and movement (`App::keep_on`, one list for both: the recorder holding anything, a resume or the
+  full copy pending, the ride marked open on the card, a file waiting to be written, stock's scan, a call). The board
+  does not try (`PENDING`, not counted) while the panel's DMA runs, a key's or the touch's EXTI flag is up, or a byte
+  from the Nordic chip is coming in.
+- **Outcomes** (stopbench.rs `outcome`): OK; interrupted (no STOPF, but a key, touch or cable EXTI flag or a WKUPF
+  flag up after the wake, `WAKE_PENDING`: a wake source that came between the check and the WFI; not a failure);
+  failed (no timer, no self-refresh, or the system stayed in Run: harmless, counted toward the 4 in a row); broken (the
+  SDRAM's normal mode, the regulator, an oscillator, a PLL or SYSCLK's source not back after a WFI: the unit could be
+  left on the HSI with the FMC on hclk3 and SPI1 / SDMMC1 on a dead PLL1Q), which writes its report to backup
+  registers 0 and 31 as `bench stop` does (`tools/dev.py stopreport` reads it) and resets: no ride is open.
 - **How:** one Stop a pass, for the pass's whole sleep, through phase 1's `hw::stop` at SVOS3. Wake sources: the RTC
   wake-up timer, the keys, the touch INT, VBUS rising (PC13 on EXTI 13: the next pass starts USB as before) and the
   power key (WKUP1); every NVIC line but theirs off meanwhile and all put back after (PRIMASK stays set, no handler).
@@ -243,12 +251,18 @@ on the unit (docs/status.md).
   signals is not known): its bytes wait for the pass's end, 250 ms at most, as stock's 100 ms alarm makes it wait.
 - **Time:** the Stop is timed by the RTC (TR and SSR, 1/1024 s) from the call to its return, in us with the sub-ms
   rest carried (`LoopPolicy::slept_stop_us`), so the app clock, the uptime and the profiler's sleep count it; the
-  cycles of the call (entry and wake) are sleep-loop cycles, not work. `stop_tests.rs` checks the app clock against
-  the RTC over 600 s of Stops (0.02 %).
+  cycles of the call (entry and wake) are sleep-loop cycles for the time (the RTC counts them already), but work for
+  the awake share (`LoopPolicy::woke`). `stop_tests.rs` checks the app clock against the RTC over 600 s of Stops
+  (0.02 %), the simulated Stop slept on the wake-up timer's 2048 Hz grid and timed by two readings of the RTC at its
+  1/1024 s, as on the unit: a bias of one tick a Stop would be 0.4 %. Seen on the unit (RAM run of 361c5fc, cable in,
+  `idlestop 150`): 377 Stops, none failed, mean 250 ms, 94.2 s in Stop; `appup` 178.29 s against the RTC's 179 s
+  (1 s resolution).
 - **Seen from the computer:** `info`'s `stops N F MS` (Stops, failed ones, ms in Stop; `tools/dev.py info` adds the
   mean) and `prof`'s `wake` section (calls/s: Stops a second; its us are up to 3 times short, the wake running on the
   HSI's 64 MHz). With the cable in, `tools/dev.py idlestop S` (`bench idle-stop`) allows Stop for S seconds with USB
-  on, for that measurement only: the link is not served during a Stop, so it may drop and come back.
+  on, for that measurement only: the link is not served during a Stop, so it may drop and come back, and the bench
+  ends by time-out only. A drop the watch decides within 5 s of such a Stop is not logged (no backup register, no
+  USB RECONNECT notice).
 - **Why 931d594's `bench stop` stayed in Run** (the first unit run, docs/status.md): that run followed a switch-off
   and a power-key wake. Its `srefresh` read PWR_CPUCR 0x1a3 (PDDS_D1, PDDS_D2, STOPF, SBF_D1, SBF_D2: `standby`'s D1 /
   D2 DStandby, kept since PWR sits in D3, which only stopped) and PWR_CPU2CR 0x1e7 (the same SBF bits). Two things

@@ -797,7 +797,7 @@ const RTC_WKUP_IRQ: u32 = 1 << 3;
 /// The regulator in Stop (PWR_CR1 SVOS, hw.rs `stop`): SVOS3, the reset value and stock's (its idle hook leaves it),
 /// the one that keeps D3's peripherals able to wake the system (DS12930 3.5.3); SVOS4 / 5 are lower, to try after.
 const STOP_SVOS: u32 = 3;
-use bryton_rustfw::stopbench::{CRC, KEY, Mode, NO_TIMER, PENDING, STOPF, StopReport, WUTF, elapsed_us};
+use bryton_rustfw::stopbench::{CRC, KEY, Mode, NO_TIMER, PENDING, STOPF, StopReport, WAKE_PENDING, WUTF, elapsed_us};
 
 /// Writes RTC_ISR (here RTC_ICSR) clearing the rc_w0 flags in `flags`, every other flag kept (a 1 written leaves it)
 /// and INIT as it is: STM32CubeH7's `__HAL_RTC_WAKEUPTIMER_CLEAR_FLAG`. Called with the write protection off.
@@ -966,7 +966,7 @@ fn idle_stop(ms: u32, dma_busy: bool) -> (u32, u32) {
     timer_stop();
     let iser: [u32; 8] = core::array::from_fn(|k| rd(NVIC_ISER0 + 4 * k as u32));
     let imr = (rd(EXTI_CPUIMR1), rd(EXTI_CPUIMR2), rd(EXTI_CPUIMR3));
-    let (rtsr, wkup) = (rd(EXTI_RTSR1), rd(PWR_WKUPEPR));
+    let (rtsr, wkup, exticr4) = (rd(EXTI_RTSR1), rd(PWR_WKUPEPR), rd(SYSCFG_EXTICR4));
     for k in 0..8 {
         wr(NVIC_ICER0 + 4 * k, u32::MAX);
         wr(NVIC_ICPR0 + 4 * k, u32::MAX);
@@ -999,6 +999,10 @@ fn idle_stop(ms: u32, dma_busy: bool) -> (u32, u32) {
     if rd(RTC_ICSR) & (1 << 10) != 0 {
         r.flags |= WUTF;
     }
+    // a wake source up (one that came between the check and the WFI, if the system stayed in Run)
+    if rd(EXTI_CPUPR1) & (KEY_LINES | TOUCH_LINE | VBUS_LINE) != 0 || rd(PWR_WKUPFR) & 0x3f != 0 {
+        r.flags |= WAKE_PENDING;
+    }
     wakeup_timer(None);
     wr(PWR_WKUPEPR, wkup);
     wr(PWR_WKUPCR, 0x3f);
@@ -1007,6 +1011,7 @@ fn idle_stop(ms: u32, dma_busy: bool) -> (u32, u32) {
     wr(EXTI_CPUIMR1, imr.0);
     wr(EXTI_CPUIMR2, imr.1);
     wr(EXTI_CPUIMR3, imr.2);
+    wr(SYSCFG_EXTICR4, exticr4); // line 13's mux back once the line is masked again: a change there is no edge seen
     for k in 0..8 {
         wr(NVIC_ICER0 + 4 * k, u32::MAX);
         wr(NVIC_ICPR0 + 4 * k, u32::MAX);
