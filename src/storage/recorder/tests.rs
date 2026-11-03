@@ -596,11 +596,11 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool, part: u64) {
     assert!(resumed > 50 / CUT_PARTS as usize);
     // the cuts after the last checkpoint, whose save the boot finishes (found by printing them, as AT_BOOT_CUTS): the
     // part that owns each must meet it, so the whole run asserts what the single test did (`saved_at_boot > 0`)
-    // they are the ride's last three writes, from the uncut run's count: a change of the writes that moves them fails here
-    let owned = (total.saturating_sub(3)..total).filter(|c| c % CUT_PARTS == part).count();
+    // they are the ride's last four writes, from the uncut run's count: a change of the writes that moves them fails here
+    let owned = (total.saturating_sub(4)..total).filter(|c| c % CUT_PARTS == part).count();
     assert_eq!(
         saved_at_boot, owned,
-        "part {part}: {saved_at_boot} cuts saved at boot, the last three of {total} writes expected to ({owned} here): \
+        "part {part}: {saved_at_boot} cuts saved at boot, the last four of {total} writes expected to ({owned} here): \
          did the recorder's write count or its save order change?"
     );
     assert!(mid_lap > 5 / CUT_PARTS as usize, "{mid_lap} resumes in the second lap");
@@ -643,6 +643,117 @@ fn torn_card(img: Vec<u8>, budget: u64, prefix: bool, seed: u64) -> Card {
     let k = prefix.then_some(4 * (1 + (seed % 127) as usize));
     Card { budget: Some(budget), torn: true, prefix: k, ..card(img) }
 }
+
+/// The save's last four writes (step 4's; step 5's two, `Fat::link`'s entries written deleted, then made live; the
+/// record "done"), each torn after every byte of its sector (a card without reliable write that programs a sector in
+/// order), then booted: saved once under its name, every second there, the volume clean (no orphan long name), FSInfo
+/// right, a second boot with nothing to do. Step 4's write marks the long name's pieces deleted below the 8.3 entry:
+/// a tear between left the 8.3 entry live under its alias alone, which the save looked up by name and so linked a
+/// second time into `\Activities` (found 2026-11-03: cluster 120 cross-linked). Step 5 written live in one write
+/// could leave orphan long name pieces, an empty file of the ride's name, a link 0 bytes long, or one on its
+/// cluster's high word alone (another file's chain past 0xffff clusters). `give_up`: a data sector damaged before the
+/// boot, so its read-back fails and the save keeps the ride where it is (`keep_in_rides`). The volumes of each case
+/// go to target/fat for fsck_msdos.
+fn torn_save(back: u64, give_up: bool) {
+    let img = crate::fat::tests::image();
+    let mut full = card(img.clone());
+    ride(&mut Recorder::new(), &mut full, 0).unwrap();
+    let (total, at) = (full.written, full.written - back);
+    let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
+    let (first, size) = {
+        let mut ram = crate::fat::tests::Ram(full.img.clone(), 0);
+        let f = Fat::mount(&mut ram).unwrap().open(&mut ram, SAVED).unwrap();
+        (f.cluster, f.size)
+    };
+    let data = first_lba(&full.img, SAVED) * SECTOR + 2 * SECTOR; // its sector 2: neither sector 0 nor a record's
+    let mut alias_alone = 0;
+    for keep in 1..SECTOR {
+        let what = std::format!("the save's write {at} of {total} torn after {keep} bytes, given up {give_up}");
+        let mut d = Card { budget: Some(at), torn: true, prefix: Some(keep), ..card(img.clone()) };
+        assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}");
+        let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+        let mut fat = Fat::mount(&mut ram).unwrap();
+        let rides = fat.open(&mut ram, "Rustfw/Rides").unwrap();
+        let by_name = fat.find(&mut ram, rides, "261023100000.fit").is_ok();
+        let alone = !by_name && fat.locate_chain(&mut ram, rides, first).is_ok();
+        let mut img2 = d.img;
+        if give_up {
+            img2[data..data + 16].fill(0x42);
+        }
+        let mut d = card(img2);
+        let o = Recorder::new().recover(&mut d, local(SECS + 5));
+        let (folder, other) = match o {
+            Outcome::Saved(NAME) => ("Activities", "Rustfw/Rides"),
+            Outcome::Kept(NAME) if give_up => ("Rustfw/Rides", "Activities"),
+            o => panic!("{what}: {o:?}"),
+        };
+        let path = std::format!("{folder}/261023100000.fit");
+        let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+        let mut fat = Fat::mount(&mut ram).unwrap();
+        assert_eq!(fat.open(&mut ram, &path).map(|f| (f.cluster, f.size)), Ok((first, size)), "{what}");
+        if !give_up {
+            assert_eq!(saved(&d.img, &path).map(|s| s.0 == all), Ok(true), "{what}");
+        }
+        // one live entry on the chain in the volume (fsck: never cross-linked), the other folder's gone
+        let other = fat.open(&mut ram, other).unwrap();
+        assert!(fat.locate_chain(&mut ram, other, first).is_err(), "{what}: named twice");
+        assert_eq!(fsck(&d.img), Ok(0), "{what}");
+        assert_eq!(free_counts(&d.img).0, free_counts(&d.img).1, "{what}: FSInfo's free count");
+        stock_same(&d.img, &[], &what);
+        assert_eq!(Recorder::new().recover(&mut d, local(SECS + 6)), Outcome::Nothing, "{what}: twice");
+        let tag = if give_up { "_given_up" } else { "" };
+        if alone {
+            alias_alone += 1;
+            crate::fat::tests::dump(&std::format!("save_torn_after_its_long_name{tag}"), &d.img);
+        }
+        // inside step 5's 8.3 entry (at 160 of the sector: its cluster's words at 180 and 186, its size at 188)
+        if back < 4 && keep == 187 {
+            crate::fat::tests::dump(&std::format!("save_write_{back}_from_the_end_torn{tag}"), &d.img);
+        }
+    }
+    // the long name's two pieces at bytes 64 and 96 of the sector, the 8.3 entry's first byte at 128
+    assert!(back != 4 || alias_alone >= 60, "{alias_alone} tears left the 8.3 entry alone");
+}
+
+#[test]
+fn power_cut_tearing_the_save_at_every_byte_of_step_4() {
+    torn_save(4, false);
+}
+
+#[test]
+fn power_cut_tearing_the_save_at_every_byte_of_its_link() {
+    torn_save(3, false);
+}
+
+#[test]
+fn power_cut_tearing_the_save_at_every_byte_of_its_link_made_live() {
+    torn_save(2, false);
+}
+
+#[test]
+fn power_cut_tearing_the_save_at_every_byte_of_its_record() {
+    torn_save(1, false);
+}
+
+#[test]
+fn power_cut_tearing_the_save_at_every_byte_of_step_4_given_up() {
+    torn_save(4, true);
+}
+
+#[test]
+fn power_cut_tearing_the_save_at_every_byte_of_its_link_given_up() {
+    torn_save(3, true);
+}
+
+#[test]
+fn power_cut_tearing_the_save_at_every_byte_of_its_link_made_live_given_up() {
+    torn_save(2, true);
+}
+
+/// The last writes of a resumed ride each cut by [`torn_cuts`]: its save (about 10: the end's checkpoint, about 7
+/// with its data, then steps 4 to 6) and a few before. Cost (2026-11-03): the 16 tests' second cuts from about 190
+/// to 450 each, 25 to 48 s on one thread, 5.6 to 7.1 s of wall time on the gate's.
+const LAST_WRITES: u64 = 12;
 
 fn torn_cuts(prefix: bool, part: u64) {
     let img = crate::fat::tests::image();
@@ -733,12 +844,15 @@ fn torn_cuts(prefix: bool, part: u64) {
             o => panic!("{what}: {o:?}"),
         }
         promised |= check(&d.img, had, &what);
-        // the resumed ride cut again, torn, once in each of its checkpoints (the phase in it moving with the cut)
+        // the resumed ride cut again, torn, once in each of its checkpoints (the phase in it moving with the cut),
+        // and at every one of its last [`LAST_WRITES`] (its last checkpoint and its save, whose torn step 4 once
+        // left two entries on the chain: 2026-11-03, `power_cut_tearing_the_save_at_every_byte_of_step_4`)
         if let Outcome::Resumed(w, _) = outcome {
             let n = d.written - booted;
             let checkpoints = u64::from((SECS - from_of(w)) / CHECKPOINT_S + 1);
             let step = (n / checkpoints).max(1);
-            for at in (cut * 7 % step..n).step_by(step as usize) {
+            let last = n.saturating_sub(LAST_WRITES);
+            for at in (cut * 7 % step..last).step_by(step as usize).chain(last..n) {
                 let what = std::format!("{what}, resumed and torn again at {at} of {n}");
                 let mut d2 = card(cut_img.clone());
                 let mut r2 = Recorder::new();
@@ -1502,7 +1616,7 @@ cut_part!(a_discard_cut_at_every_sector_part_6, a_discard_cut(6));
 cut_part!(a_discard_cut_at_every_sector_part_7, a_discard_cut(7));
 
 /// The cuts of the discard's ride at which the next start finds it already discarded (both torn modes).
-const AT_BOOT_CUTS: [u64; 3] = [945, 946, 947];
+const AT_BOOT_CUTS: [u64; 4] = [958, 959, 960, 961];
 
 fn a_discard_cut(part: u64) {
     for torn in [false, true] {
@@ -3295,7 +3409,7 @@ fn a_stopped_rides_save_cut_at_every_sector() {
         io_all(r, d, 3000);
     };
     let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.0, act, SAVED);
-    assert_eq!((total, s7), (6, 0), "a write added or dropped");
+    assert_eq!((total, s7), (7, 0), "a write added or dropped");
     assert!(lost <= 1, "{lost} lost");
 }
 
@@ -3314,7 +3428,7 @@ fn give_up_saves_rescue_cut_at_every_sector() {
     };
     let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.card, act, "Rustfw/Rescue/261023100000.fit");
     // the rescue folder's entry in \Rustfw: one sector, its tear S7's
-    assert_eq!((total, s7), (39, 1), "a write added or dropped");
+    assert_eq!((total, s7), (40, 1), "a write added or dropped");
     assert!(lost <= 1, "{lost} lost");
 }
 
@@ -3337,7 +3451,7 @@ fn a_start_after_an_unfinished_ride_cut_at_every_sector() {
         })
         .find(|i| best_rec(i).phase == Phase::Saving)
         .unwrap();
-    let cases = [("left open", open.img, 2 * 86_400, false, 27), ("save cut", save_cut, 5000, true, 12)];
+    let cases = [("left open", open.img, 2 * 86_400, false, 28), ("save cut", save_cut, 5000, true, 12)];
     for (what, old, later, marker, cuts) in cases {
         let setup = || {
             let mut r = Recorder::new();
@@ -4028,4 +4142,84 @@ fn totals_go_on_across_one_restart_and_an_older_record_starts_them_again() {
     // 30 s at 600 W from the resume (its 5 min effort), 350 W over CP: from full
     let from_resume = (p2.kj(), p2.max(), p2.wbal_j(), back.max_alt_m());
     assert_eq!(from_resume, (18, Some(600), Some(20_000 - 30 * 350), Some(299)), "from the resume");
+}
+
+/// The second review of 2026-11-03, 1: a save whose link (`Fat::link`) a cut left whole and deleted between its two
+/// writes, then its chain freed by a computer (or given to another file); and a save done but for its record, then
+/// the saved ride deleted by the rider (on a computer or in stock: its entry marked deleted, its chain freed). The
+/// boot's save finds the chain no longer the ride's: nothing revived onto it (a cross-link, or a ride the rider
+/// deleted brought back), the record done, `Nothing`; a second boot does nothing; the next ride is saved.
+#[test]
+fn a_link_cut_or_deleted_then_freed_is_never_revived() {
+    let img = crate::fat::tests::image();
+    let mut full = card(img.clone());
+    ride(&mut Recorder::new(), &mut full, 0).unwrap();
+    let total = full.written;
+    let first = {
+        let mut ram = crate::fat::tests::Ram(full.img.clone(), 0);
+        Fat::mount(&mut ram).unwrap().open(&mut ram, SAVED).unwrap().cluster
+    };
+    for (case, cut) in [("cut inside the link", total - 2), ("deleted by the rider", total - 1)] {
+        for reuse in [false, true] {
+            let what = std::format!("{case}, {}", if reuse { "reused" } else { "freed" });
+            let mut d = Card { budget: Some(cut), ..card(img.clone()) };
+            assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}");
+            let mut img = d.img;
+            let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+            let mut fat = Fat::mount(&mut ram).unwrap();
+            let acts = fat.open(&mut ram, "Activities").unwrap();
+            match fat.locate(&mut ram, acts, "261023100000.fit") {
+                Ok(h) => {
+                    assert_eq!(case, "deleted by the rider", "{what}: linked");
+                    fat.remove(&mut ram, &h).unwrap();
+                    img = ram.0;
+                }
+                Err(e) => assert_eq!((case, e), ("cut inside the link", Error::NotFound), "{what}"),
+            }
+            let len = free_chain(&mut img, first);
+            let other = reuse.then(|| other_file(&mut img, first, len));
+            let mut d = card(img);
+            assert_eq!(Recorder::new().recover(&mut d, local(SECS + 5)), Outcome::Nothing, "{what}");
+            let_go(&d.img, &other, &what);
+            assert_eq!(Recorder::new().recover(&mut d, local(SECS + 6)), Outcome::Nothing, "{what}: twice");
+            assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "{what}: next ride");
+            assert_eq!(check_clean(&d.img, &what), 0);
+        }
+    }
+}
+
+/// The second review of 2026-11-03, 3: a save given up whose ride's entry in `\Rustfw\Rides` a torn step 4 left
+/// under its alias alone, its deleted long name pieces then damaged (not its name any more): never relinked as a
+/// name they do not spell, the ride kept under the name its entry has (its alias), and said so (`Kept`).
+#[test]
+fn a_ride_kept_under_its_alias_says_that_name() {
+    let img = crate::fat::tests::image();
+    let mut full = card(img.clone());
+    ride(&mut Recorder::new(), &mut full, 0).unwrap();
+    let first = {
+        let mut ram = crate::fat::tests::Ram(full.img.clone(), 0);
+        Fat::mount(&mut ram).unwrap().open(&mut ram, SAVED).unwrap().cluster
+    };
+    // step 4's write (the fourth from the end) torn after the pieces (bytes 64 and 96), before the 8.3 entry (128)
+    let mut d = Card { budget: Some(full.written - 4), torn: true, prefix: Some(100), ..card(img) };
+    assert!(ride(&mut Recorder::new(), &mut d, 0).is_none());
+    let mut ram = crate::fat::tests::Ram(d.img, 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let rides = fat.open(&mut ram, "Rustfw/Rides").unwrap();
+    let h = fat.locate_chain(&mut ram, rides, first).unwrap();
+    assert!(fat.find(&mut ram, rides, "261023100000.fit").is_err(), "the alias alone");
+    let mut img = ram.0;
+    let piece = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32 - 32;
+    img[piece + 1] ^= 1; // the first piece's first character: not the ride's name
+    let data = first_lba(&full.img, SAVED) * SECTOR + 2 * SECTOR;
+    img[data..data + 16].fill(0x42); // its read-back fails: kept where it is
+    let mut d = card(img);
+    let Outcome::Kept(n) = Recorder::new().recover(&mut d, local(SECS + 5)) else { panic!("not kept") };
+    assert_ne!(n, NAME);
+    let path = std::format!("Rustfw/Rides/{}", core::str::from_utf8(&n).unwrap());
+    let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    assert_eq!(fat.open(&mut ram, &path).map(|f| f.cluster), Ok(first), "{path}");
+    assert_eq!(check_clean(&d.img, "kept under its alias"), 0);
+    assert_eq!(Recorder::new().recover(&mut d, local(SECS + 6)), Outcome::Nothing);
 }

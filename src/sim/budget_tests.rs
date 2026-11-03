@@ -155,9 +155,9 @@ const EXEMPT: &[Exempt] = &[
         row: "screenshot",
         setting: "2 ms/sector",
         key: Some(1036),
-        gnss: None,
+        gnss: Some(1203),
         lost: None,
-        why: "the screenshot writes its BMP (about 300 sectors) in the pass. Follow-up: write it in slices over passes (storage/screenshot.rs)",
+        why: "the screenshot writes its BMP (about 300 sectors) in the pass; its link takes one write more since 2026-11-03 (fat::write `Fat::link`: its entries written deleted, then made live, so a torn write never leaves half an entry), 3 ms past the bound, inside the receiver's 300 ms margin. Follow-up: write it in slices over passes (storage/screenshot.rs)",
     },
 ];
 
