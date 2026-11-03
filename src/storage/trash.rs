@@ -32,7 +32,10 @@
 //! linked back under its old name (`put_back`), the record then done, so a pending record never keeps the card
 //! from a computer for good. The app finishes a pending move at the scan's start and before lending the card to a
 //! computer (app/drive.rs), which would see the ride in neither folder. Tested by cutting the power after every
-//! sector written (below).
+//! sector written (below). A remove torn after the long name's first bytes (a card without reliable write: its
+//! 8.3 entry live under its alias alone) is found by its chain: `unlink_old` gives it its long name back and removes
+//! it, `put_back` takes the moved copy's alias out of `\Rustfw\Deleted`; a link a cut left inside `Fat::link`
+//! (written deleted, then made live) is made live (`Fat::revive`) before any new one (2026-11-03).
 //!
 //! **The FAT sync** (`Fat::sync_fats`, both FATs read whole: 3 to 4 s on the owner's 15 MB, estimated) runs in one
 //! call, as the recorder's (storage/recorder/mod.rs, "After a cut"): only at the first delete on a card (the
@@ -343,7 +346,13 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
         let moved = match fat.open(d, to) {
             Ok(dst) => match fat.locate(d, dst, file_name(&r.name, r.suffix, &mut buf)?) {
                 Ok(h) if h.first == first => Some(h),
-                Ok(_) | Err(Error::NotFound | Error::Refused) => None,
+                // its remove below torn after the long name's first bytes: the 8.3 entry alone, found by its chain
+                // (on this firmware's own folder: any entry on the ride's chain is the copy moved)
+                Ok(_) | Err(Error::NotFound | Error::Refused) => match fat.locate_chain(d, dst, first) {
+                    Ok(h) => Some(h),
+                    Err(Error::NotFound | Error::Corrupt | Error::Refused) => None,
+                    Err(e) => return Err(e),
+                },
                 Err(e) => return Err(e),
             },
             Err(Error::NotFound) => None,
@@ -384,7 +393,11 @@ fn put_back(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, t: (u16, u16)) -> Re
             // a copy moved: linked back first, its name in \Rustfw\Deleted removed after, so it has a name at every
             // cut (two for a moment, the record pending: the next start removes the second)
             let size = moved.map_or(size, |h| h.size); // a copy a computer made longer: all of it
-            fat.link(d, src, name, &Handle { first, size, ..Handle::default() }, t)?;
+            // its old entry, or a link back a cut left inside `Fat::link` (deleted, or its pieces live alone): made
+            // live, else linked
+            if !fat.revive(d, src, name, first, size)? {
+                fat.link(d, src, name, &Handle { first, size, ..Handle::default() }, t)?;
+            }
             if let Some(h) = moved {
                 fat.remove(d, &h)?;
             }
@@ -437,9 +450,18 @@ fn unlink_old(fat: &mut Fat, d: &mut impl DiskWrite, from: &str, name: &[u8; 12]
         Err(Error::NotFound | Error::Corrupt | Error::Refused) => return Ok(false),
         Err(e) => return Err(e),
     };
-    let mut any = false;
+    let (mut any, mut relinked) = (false, false);
     for _ in 0..=SUFFIXES {
-        let Some(e) = named_in(fat, d, src, name, first)? else { break };
+        let Some(e) = named_in(fat, d, src, name, first)? else {
+            // a remove a cut tore after the long name's first bytes (a card that keeps the new bytes up to a point):
+            // the 8.3 entry live under its alias alone, which the name does not find. Its long name given back (only
+            // if its deleted pieces spell the ride's: a computer's rename keeps its own), then removed as any.
+            if relinked || !relink(fat, d, src, name, first)? {
+                break;
+            }
+            relinked = true;
+            continue;
+        };
         // a name the listing cannot give back as it is ('?' for what is not ASCII) is not looked up: left
         let Ok(n) = core::str::from_utf8(e.name()) else { break };
         match fat.locate(d, src, n) {
@@ -450,6 +472,31 @@ fn unlink_old(fat: &mut Fat, d: &mut impl DiskWrite, from: &str, name: &[u8; 12]
         any = true;
     }
     Ok(any)
+}
+
+/// The entry of folder `src` on the chain `first` given its long name back ([`Fat::relink_long_name`]), `<name>.fit`
+/// or a suffixed `<name>-j.fit` (an older build's put back gave those): true if it was (a torn remove's), false if
+/// there is none or its long name is none of them.
+fn relink(fat: &mut Fat, d: &mut impl DiskWrite, src: File, name: &[u8; 12], first: u32) -> Result<bool, Error> {
+    let h = match fat.locate_chain(d, src, first) {
+        Ok(h) => h,
+        Err(Error::NotFound | Error::Corrupt) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let mut buf = [0u8; 20];
+    for j in 0..=SUFFIXES {
+        let candidate = file_name(name, j, &mut buf)?;
+        // a name a live entry already has (a computer's) is never given to this one: two live entries, one name
+        match fat.find(d, src, candidate) {
+            Ok(_) => continue,
+            Err(Error::Io) => return Err(Error::Io),
+            Err(_) => {}
+        }
+        if fat.relink_long_name(d, src, &h, candidate)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The first entry of folder `dir` on the chain `first` whose name starts with `name` (the ride's, or empty: any):
@@ -571,7 +618,11 @@ fn moves(
             left = Some(Left::Elsewhere);
         }
         if first == 0 || still_ours(fat, d, first, size, crc, gone)? && !named {
-            fat.link(d, dst, file_name(&r.name, r.suffix, &mut buf)?, &Handle { first, size, ..Handle::default() }, t)?;
+            // a link a cut left inside `Fat::link` (deleted, or its pieces live alone): made live, else made
+            let n = file_name(&r.name, r.suffix, &mut buf)?;
+            if !fat.revive(d, dst, n, first, size)? {
+                fat.link(d, dst, n, &Handle { first, size, ..Handle::default() }, t)?;
+            }
         }
     }
     Ok(left)
@@ -744,6 +795,80 @@ pub(crate) mod tests {
             assert!(lost == 0 || (!finished || grows) && lost == 1, "cut after {budget}: {lost} lost");
             kept(&d.0.0, &std::format!("cut after {budget}, then the start"));
         }
+    }
+
+    /// A delete whose removes (the clean copy's entry in `\Activities`, the full copy's in `\Rustfw\Activities`) or
+    /// links (in `\Rustfw\Deleted` and its `Full`) a cut tore after every byte of its sector (a card that programs a
+    /// sector in order): a remove's long name pieces may go and its 8.3 entry stay, under its alias alone, which the
+    /// name does not find (`unlink_old`): the delete was undone then, the ride left in `\Activities` under its alias,
+    /// stock's name lost. The next start moves both copies whole, one name each, the volume clean (no orphan piece).
+    #[test]
+    fn a_torn_remove_still_moves_the_ride() {
+        use crate::fat::write::tests::Torn;
+        const FULL: &str = "Rustfw/Activities/261020080000.fit";
+        let img = volume();
+        let (clean, full, ride) = (file(&img, RIDE).unwrap(), file(&img, FULL).unwrap(), cluster(&img, RIDE));
+        let st = stock(&img);
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let entry = |fat: &mut Fat, d: &mut Ram, path: &str| {
+            let (dir, name) = path.rsplit_once('/').unwrap();
+            let dir = fat.open(d, dir).unwrap();
+            fat.locate(d, dir, name).unwrap()
+        };
+        let removes = [entry(&mut fat, &mut d, RIDE), entry(&mut fat, &mut d, FULL)];
+        let mut whole = Cut(Ram(img.clone(), 0), u32::MAX);
+        delete(&mut whole, &ride, T).unwrap();
+        // the folders the links go to, as the delete made them
+        let mut done = whole.0;
+        let mut fat2 = Fat::mount(&mut done).unwrap();
+        let spc = fat2.cluster_bytes() / SECTOR as u32;
+        let deleted: Vec<u32> = TO
+            .iter()
+            .map(|p| {
+                let c = fat2.open(&mut done, p).unwrap().cluster;
+                fat2.lba(c)
+            })
+            .collect();
+        let (mut swept, mut links, mut alone, mut removed) = (0, 0, 0, false);
+        for budget in 0..u32::MAX - whole.1 {
+            let mut probe = Torn { ram: Ram(img.clone(), 0), budget, keep: 1, cut_at: 0 };
+            let _ = delete(&mut probe, &ride, T);
+            let remove = removes.iter().find(|h| h.entry_lba == probe.cut_at);
+            // a write into those folders after the first remove: a link (before: the folders being made)
+            removed |= remove.is_some();
+            let link = removed && remove.is_none() && deleted.iter().any(|&l| (l..l + spc).contains(&probe.cut_at));
+            if remove.is_none() && !link {
+                continue;
+            }
+            links += usize::from(link);
+            for keep in 1..SECTOR {
+                let at = std::format!("write {budget} torn after {keep} bytes");
+                let mut t = Torn { ram: Ram(img.clone(), 0), budget, keep, cut_at: 0 };
+                assert_eq!(delete(&mut t, &ride, T), Err(Error::Io), "{at}");
+                let mut d = t.ram;
+                let mut fat = Fat::mount(&mut d).unwrap();
+                if let Some(h) = remove {
+                    let dir = File { cluster: h.dir, size: 0, dir: true };
+                    let by_name = fat.find(&mut d, dir, "261020080000.fit").is_ok();
+                    alone += usize::from(!by_name && fat.locate_chain(&mut d, dir, h.first).is_ok());
+                }
+                assert!(finish(&mut d, T).unwrap(), "{at}: finished");
+                assert_eq!(file(&d.0, RIDE), None, "{at}");
+                assert_eq!(file(&d.0, "Rustfw/Deleted/261020080000.fit"), Some(clean.clone()), "{at}");
+                assert_eq!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit"), Some(full.clone()), "{at}");
+                for h in &removes {
+                    let dir = File { cluster: h.dir, size: 0, dir: true };
+                    assert!(fat.locate_chain(&mut d, dir, h.first).is_err(), "{at}: still named where it was");
+                }
+                assert_eq!(fsck(&d.0), Ok(0), "{at}");
+                stock_kept(&st, &d.0, &[], &[RIDE]).unwrap_or_else(|e| panic!("{at}: {e}"));
+                assert_eq!(finish(&mut d, T), Ok(false), "{at}: nothing pending");
+                swept += 1;
+            }
+        }
+        assert!(swept >= 2 * (SECTOR - 1) && links >= 2, "{swept} tears, {links} links swept");
+        assert!(alone >= 64, "{alone} tears left the 8.3 entry alone");
     }
 
     /// A chain the cut left named by no entry that a computer's fsck reconnected (FILE0000.CHK) and something then
@@ -993,11 +1118,12 @@ pub(crate) mod tests {
     /// the plain name then taken), the cut leaving the copy in `\Rustfw\Deleted` too, and the file in the way
     /// deleted from outside meanwhile (stock's USB): the next start finds the chain's name whatever its suffix and
     /// never links a second (it looked name by name and stopped at the free plain one). Through the put back (the
-    /// card full) and through the move (room).
+    /// card full) and through the move (room); and (`torn`) that name's remove torn by a cut after its pieces (its
+    /// 8.3 entry live under its alias alone: `unlink_old` gives it its suffixed long name back, then removes it).
     #[test]
     fn a_suffixed_name_left_behind_is_found() {
         let ride = cluster(&volume(), RIDE);
-        for full in [true, false] {
+        for (full, torn) in [(true, false), (false, false), (false, true)] {
             let mut d = Ram(moved_then_taken(), 0);
             let mut fat = Fat::mount(&mut d).unwrap();
             let acts = fat.open(&mut d, ACTIVITIES).unwrap();
@@ -1009,6 +1135,14 @@ pub(crate) mod tests {
                 let full = fat.open(&mut d, TO[1]).unwrap();
                 let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
                 fat.remove(&mut d, &other).unwrap(); // the move can finish (an empty file: no cluster lost)
+            }
+            if torn {
+                let h = fat.locate(&mut d, acts, "261020080000-1.fit").unwrap();
+                let at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32;
+                let short0 = d.0[at];
+                fat.remove(&mut d, &h).unwrap();
+                d.0[at] = short0;
+                assert!(fat.find(&mut d, acts, "261020080000-1.fit").is_err(), "the alias alone");
             }
             assert_eq!(finish(&mut d, T), Ok(!full), "full {full}");
             assert_eq!(fsck(&d.0), Ok(0), "full {full}: one name on the chain");
@@ -1173,9 +1307,11 @@ pub(crate) mod tests {
 
     /// The review of 2026-11-01: a put back cut at every sector it writes (a link back, a moved copy taken out
     /// first, an entry made live again), then the next start: each copy in exactly one place, the volume whole,
-    /// the record done.
+    /// the record done. A moved copy's removal also torn after every byte (2026-11-03: its 8.3 entry left live
+    /// under its alias was not found by its name, and stayed on the chain linked back into `\Activities`).
     #[test]
     fn a_put_back_survives_a_cut_at_every_sector() {
+        use crate::fat::write::tests::Torn;
         let full_card = |mut img: Vec<u8>, crowded: bool| {
             no_room(&mut img, true);
             if crowded {
@@ -1191,25 +1327,45 @@ pub(crate) mod tests {
         let count = |img: &[u8], paths: &[&str]| paths.iter().filter(|p| file(img, p).is_some()).count();
         let clean = [RIDE, "Rustfw/Deleted/261020080000.fit", "Rustfw/Deleted/261020080000-1.fit"];
         let full = ["Rustfw/Activities/261020080000.fit", "Rustfw/Deleted/Full/261020080000-1.fit"];
+        let mut torn = 0;
         for (what, img) in states {
             let st = stock(&img); // stock's files but the ride put back
             let mut whole = Cut(Ram(img.clone(), 0), u32::MAX);
             assert_eq!(finish(&mut whole, T), Ok(false), "{what}");
             let writes = u32::MAX - whole.1;
             assert!(writes >= 2, "{what}: {writes} writes");
+            // the moved copies' folders: a name there taken out after the link back is also torn after every byte
+            // of its sector (a card that programs a sector in order: the 8.3 entry left alone, found by its chain)
+            let mut ram = Ram(img.clone(), 0);
+            let mut fat = Fat::mount(&mut ram).unwrap();
+            let spc = fat.cluster_bytes() / SECTOR as u32;
+            let deleted: Vec<u32> = TO
+                .iter()
+                .map(|p| {
+                    let c = fat.open(&mut ram, p).unwrap().cluster;
+                    fat.lba(c)
+                })
+                .collect();
             for budget in 0..writes {
-                let mut d = Cut(Ram(img.clone(), 0), budget);
-                assert_eq!(finish(&mut d, T), Err(Error::Io), "{what}, cut after {budget}");
-                d.1 = u32::MAX;
-                assert_eq!(finish(&mut d, T), Ok(false), "{what}, cut after {budget}, then the start");
-                let at = std::format!("{what}, cut after {budget} of {writes}");
-                assert_eq!(fsck(&d.0.0).map_err(|e| std::format!("{at}: {e}")), Ok(0));
-                assert_eq!((count(&d.0.0, &clean), count(&d.0.0, &full)), (1, 1), "{at}");
-                assert!(file(&d.0.0, RIDE).is_some(), "{at}: put back");
-                stock_kept(&st, &d.0.0, &[], &[RIDE]).unwrap_or_else(|e| panic!("{at}: {e}"));
-                assert_eq!(finish(&mut d, T), Ok(false), "{at}: nothing pending");
+                let mut probe = Torn { ram: Ram(img.clone(), 0), budget, keep: 1, cut_at: 0 };
+                let _ = finish(&mut probe, T);
+                let there = deleted.iter().any(|&l| (l..l + spc).contains(&probe.cut_at));
+                for keep in 0..if there { SECTOR } else { 1 } {
+                    let at = std::format!("{what}, cut after {budget} of {writes}, {keep} bytes of it");
+                    let mut d = Torn { ram: Ram(img.clone(), 0), budget, keep, cut_at: 0 };
+                    assert_eq!(finish(&mut d, T), Err(Error::Io), "{at}");
+                    let mut d = d.ram;
+                    assert_eq!(finish(&mut d, T), Ok(false), "{at}, then the start");
+                    assert_eq!(fsck(&d.0).map_err(|e| std::format!("{at}: {e}")), Ok(0));
+                    assert_eq!((count(&d.0, &clean), count(&d.0, &full)), (1, 1), "{at}");
+                    assert!(file(&d.0, RIDE).is_some(), "{at}: put back");
+                    stock_kept(&st, &d.0, &[], &[RIDE]).unwrap_or_else(|e| panic!("{at}: {e}"));
+                    assert_eq!(finish(&mut d, T), Ok(false), "{at}: nothing pending");
+                    torn += usize::from(keep > 0);
+                }
             }
         }
+        assert!(torn >= SECTOR - 1, "{torn} torn removes of a moved copy");
     }
 
     /// The review of 2026-10-31 (storage, 1): a delete on a full card whose `\Rustfw\Deleted` needs a cluster for
@@ -1457,6 +1613,20 @@ pub(crate) mod tests {
 
     /// A move that cannot finish (the card full) whose put back finds every name of the ride's taken in
     /// `\Activities` (the plain one and `-1` to `-99`): a card error, the move left pending, no 100th name made up.
+    /// A torn remove whose ride's name a computer has since given to a live `<name>-1.fit`: the put back never names
+    /// the torn entry that name (two live entries, one name), and the computer's entry keeps its own chain.
+    #[test]
+    fn a_relink_skips_a_name_already_live() {
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let acts = fat.open(&mut d, ACTIVITIES).unwrap();
+        fat.create(&mut d, acts, "261020080000-1.fit", T).unwrap();
+        let mine = file(&d.0, "Activities/261020080000-1.fit");
+        assert!(finish(&mut d, T).is_ok(), "finished or put back");
+        assert_eq!(file(&d.0, "Activities/261020080000-1.fit"), mine, "the computer's entry untouched");
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
     #[test]
     fn a_put_back_with_every_suffix_taken_stays_pending() {
         let mut d = Ram(cut_midway(), 0);

@@ -28,7 +28,7 @@ pub const SECTOR: usize = 512;
 pub const SECTOR_U32: u32 = 512;
 const _: () = assert!(SECTOR_U32 as usize == SECTOR);
 /// Directory entries a FAT directory may hold at most.
-const DIR_ENTRIES: u32 = 65_536;
+pub(crate) const DIR_ENTRIES: u32 = 65_536;
 /// Characters of a long name (20 entries of 13).
 const LFN: usize = 260;
 

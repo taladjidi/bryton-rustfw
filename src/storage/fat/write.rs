@@ -28,6 +28,13 @@
 //! - **a delete** only marks the entry (and its long name pieces) 0xe5: the rest of the entry, its first cluster
 //!   included, stays, so a lost file can be found by hand. Only the recorder's own entries are ever deleted, and the
 //!   old entry of a ride HISTORY's DELETE moves into `\Rustfw\Deleted` (`trash`, the second half of a move).
+//!   "All of it or none" holds for a sector that a cut leaves old or new (reliable write) or garbage; a card that
+//!   keeps the new bytes up to a point can leave a delete's long name deleted and its 8.3 entry live (its alias
+//!   alone), or a new entry's long name without its 8.3 entry, or that entry without its cluster's low word or its
+//!   size. A move done again after a cut looks for the old entry by its chain ([`Fat::locate_chain`]), never only by
+//!   its name, and may give an alias its long name back ([`Fat::relink_long_name`]); its new entry ([`Fat::link`]) is
+//!   written deleted, then made live by its first bytes alone, so no tear leaves half of it (recorder/mod.rs, "Steps
+//!   4 and 5"). A create or a folder's entry is still one write: on such a card its tear can leave orphan pieces.
 //! - **a revive** ([`Fat::revive`], the undo of a move a full card cannot finish): the first bytes a delete marked
 //!   written back, the long name's pieces in the sector before first; no cluster taken.
 //! - **FSInfo** (free count, next free hint) is written after the FAT sectors it counts; a cut between leaves the
@@ -55,8 +62,8 @@
 #![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
 use super::{
-    DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, SECTOR_U32, fold, lfn_eq, short_eq, short_sum,
-    u16_at, u32_at,
+    Cursor, DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, SECTOR_U32, fold, lfn_eq, short_eq,
+    short_sum, u16_at, u32_at,
 };
 
 /// End of chain, as written.
@@ -508,14 +515,37 @@ impl Fat {
                 if f.dir {
                     return Err(Error::Refused);
                 }
-                let (last, clusters) = self.chain_end(d, f.cluster)?;
-                let slot = u8::try_from(c.entry.checked_sub(1).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)?;
-                let entry_lba = self.lba(c.cluster) + c.sector;
-                let (first, size) = (f.cluster, f.size);
-                return Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster });
+                return self.handle_at(d, &c, dir, f);
             }
         }
         Err(Error::NotFound)
+    }
+
+    /// The first file in `dir` on the chain from `first`, whatever its name: [`Fat::locate`] by cluster. A move that
+    /// must never leave two entries on one chain asks this, not the name: a cut that tears [`Fat::remove`]'s write
+    /// after its first bytes (a card without reliable write) leaves the long name's pieces deleted and the 8.3 entry
+    /// after them live, named by its alias alone. [`Error::NotFound`] for an empty file's cluster 0 (any would match).
+    pub fn locate_chain(&mut self, d: &mut impl Disk, dir: File, first: u32) -> Result<Handle, Error> {
+        if !self.valid(first) {
+            return Err(Error::NotFound);
+        }
+        let mut c = self.cursor(dir)?;
+        while let Some((e, _)) = self.next_raw(d, &mut c)? {
+            match self.file_of(&e) {
+                Ok(f) if !f.dir && f.cluster == first => return self.handle_at(d, &c, dir, f),
+                _ => {} // another file, a folder, or an entry a torn sector made out of the volume
+            }
+        }
+        Err(Error::NotFound)
+    }
+
+    /// The handle of file `f`, the entry `c` just read in `dir`.
+    fn handle_at(&mut self, d: &mut impl Disk, c: &Cursor, dir: File, f: File) -> Result<Handle, Error> {
+        let (last, clusters) = self.chain_end(d, f.cluster)?;
+        let slot = u8::try_from(c.entry.checked_sub(1).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)?;
+        let entry_lba = self.lba(c.cluster) + c.sector;
+        let (first, size) = (f.cluster, f.size);
+        Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster })
     }
 
     /// Fails unless `name` is one this writer gives and nothing in `dir` has it.
@@ -797,7 +827,14 @@ impl Fat {
         Ok(None)
     }
 
-    /// A new entry `name` in `dir` for the chain of `h` (the second half of a move: [`Fat::remove`] first).
+    /// A new entry `name` in `dir` for the chain of `h` (the second half of a move: [`Fat::remove`] first), in two
+    /// writes: its entries whole but each marked deleted (0xe5 in its first byte), then made live by their first bytes
+    /// alone ([`Fat::revive`]'s). A cut anywhere in the first, even one that keeps the new bytes of the sector up to a
+    /// point (a card without reliable write), leaves only deleted entries: never a live 8.3 entry without its size,
+    /// or on its cluster's high word alone (another file's chain on a volume past 0xffff clusters), nor orphan long
+    /// name pieces. A cut between the two leaves the link whole and deleted, which [`Fat::revive`] makes live; one
+    /// that tears the second after some pieces' first bytes leaves those pieces live without their 8.3 entry, which
+    /// `revive` completes too (the recorder's save does it first: recorder/mod.rs, "Steps 4 and 5").
     pub fn link(
         &mut self,
         d: &mut impl DiskWrite,
@@ -806,7 +843,21 @@ impl Fat {
         h: &Handle,
         time: (u16, u16),
     ) -> Result<Handle, Error> {
-        self.add_named(d, dir, name, ARCHIVE, (h.first, h.size), time)
+        self.check_new(d, dir, name)?;
+        let short = self.alias(d, dir, name)?;
+        let (mut entries, n) = dir_entries(name, short, ARCHIVE, h.first, h.size, time);
+        let entries = entries.get_mut(..n).ok_or(Error::Corrupt)?;
+        for e in entries.iter_mut() {
+            e[0] = 0xe5;
+        }
+        let (entry_lba, slot) = self.add_entries(d, dir, entries)?;
+        let mut s = [0u8; SECTOR];
+        self.read(d, entry_lba, &mut s)?;
+        if !self.revive_at(d, dir, entry_lba, &s, usize::from(slot), name, false)? {
+            return Err(Error::Corrupt); // never: its own entries, just written
+        }
+        let (last, clusters) = self.chain_end(d, h.first)?;
+        Ok(Handle { entry_lba, slot, first: h.first, last, clusters, size: h.size, dir: dir.cluster })
     }
 
     /// Marks `h`'s entry, and the long name pieces just before it in its sector, deleted (0xe5); nothing else
@@ -868,7 +919,12 @@ impl Fat {
                     }
                     let on = u32::from(u16_at(e, 20)) << 16 | u32::from(u16_at(e, 26));
                     let gone = e[0] == 0xe5 && e[11] != 0x0f && e[11] & DIR == 0;
-                    if gone && on == first && u32_at(e, 28) == size && self.revive_at(d, dir, lba, &s, i, name)? {
+                    if gone
+                        && on == first
+                        && u32_at(e, 28) == size
+                        && self.taken_for(d, first, size)?
+                        && self.revive_at(d, dir, lba, &s, i, name, true)?
+                    {
                         return Ok(true);
                     }
                 }
@@ -881,8 +937,31 @@ impl Fat {
         Err(Error::Corrupt)
     }
 
+    /// Gives the live 8.3 entry `h` in `dir` its long name `name` back: the undo of a [`Fat::remove`] a cut tore
+    /// after the long name's first bytes (a card that keeps the new bytes up to a point), which left the pieces
+    /// deleted and the entry live under its alias alone. Only if the deleted pieces before it carry its checksum and
+    /// spell `name` (never another name); their ordinals written back, the sector before first when the name starts
+    /// there. A cut in that write leaves some pieces back, the entry still live: done again by the next call. False,
+    /// nothing written, if they are not `name`'s.
+    pub fn relink_long_name(
+        &mut self,
+        d: &mut impl DiskWrite,
+        dir: File,
+        h: &Handle,
+        name: &str,
+    ) -> Result<bool, Error> {
+        let mut s = [0u8; SECTOR];
+        self.read(d, h.entry_lba, &mut s)?;
+        if s.as_chunks::<32>().0.get(usize::from(h.slot)).is_none_or(|e| e[0] == 0xe5 || e[0] == 0) {
+            return Ok(false);
+        }
+        self.revive_at(d, dir, h.entry_lba, &s, usize::from(h.slot), name, false)
+    }
+
     /// [`Fat::revive`] of the 8.3 entry `slot` of sector `lba` (read: `s`), if the deleted pieces before it are
-    /// `name`'s long name and no live entry has its 8.3 name (a computer or stock may have given it to a new file).
+    /// `name`'s long name and (`stale`: written by an earlier run) no live entry has its 8.3 name (a computer or
+    /// stock may have given it to a new file since). [`Fat::link`]'s own, just written, skips that folder read.
+    #[allow(clippy::too_many_arguments)]
     fn revive_at(
         &mut self,
         d: &mut impl DiskWrite,
@@ -891,6 +970,7 @@ impl Fat {
         s: &[u8; SECTOR],
         slot: usize,
         name: &str,
+        stale: bool,
     ) -> Result<bool, Error> {
         let pieces = name.len().div_ceil(13).min(5);
         // the sector before (when the long name starts there) and this one, as one run of 32 entries
@@ -909,17 +989,24 @@ impl Fat {
         let short = ents.get_mut(at).ok_or(Error::Corrupt)?;
         let mut alias = [0u8; 11];
         alias.copy_from_slice(short.get(..11).ok_or(Error::Corrupt)?);
-        let Some(b0) = (1..=0xffu8).filter(|&b| b != 0xe5).find(|&b| {
-            alias[0] = b;
-            short_sum(&alias) == sum
-        }) else {
-            return Ok(false);
-        };
-        alias[0] = b0;
-        if self.alias_taken(d, dir, &alias)? {
-            return Ok(false);
+        if short[0] != 0xe5 {
+            // live ([`Fat::relink_long_name`]): its own checksum
+            if short_sum(&alias) != sum {
+                return Ok(false);
+            }
+        } else {
+            let Some(b0) = (1..=0xffu8).filter(|&b| b != 0xe5).find(|&b| {
+                alias[0] = b;
+                short_sum(&alias) == sum
+            }) else {
+                return Ok(false);
+            };
+            alias[0] = b0;
+            if stale && self.alias_taken(d, dir, &alias)? {
+                return Ok(false);
+            }
+            short[0] = b0;
         }
-        short[0] = b0;
         for k in 1..=pieces {
             let e = ents.get_mut(at - k).ok_or(Error::Corrupt)?;
             let ord = u8::try_from(k).map_err(|_| Error::Corrupt)? | if k == pieces { 0x40 } else { 0 };
@@ -944,6 +1031,20 @@ impl Fat {
         }
         self.write(d, lba, two.get(SECTOR..).ok_or(Error::Corrupt)?)?;
         Ok(true)
+    }
+
+    /// Whether the chain from `first` is taken and holds `size` bytes (cluster 0 for an empty file): a revive never
+    /// names free clusters (a computer may have freed the chain since the delete). Whether it is still that file's
+    /// is the caller's to know (the recorder's `still_ours`, trash.rs's).
+    fn taken_for(&mut self, d: &mut impl Disk, first: u32, size: u32) -> Result<bool, Error> {
+        if first == 0 {
+            return Ok(size == 0);
+        }
+        match self.chain_end(d, first) {
+            Ok((_, n)) => Ok(n >= self.clusters_for(size)),
+            Err(Error::Corrupt) => Ok(false), // free, or out of the volume
+            Err(e) => Err(e),
+        }
     }
 
     /// A live entry of `dir` has the 8.3 name `alias` (its 11 bytes as stored).
@@ -1669,6 +1770,115 @@ pub(crate) mod tests {
             }
             Ok(())
         }
+    }
+
+    /// A card without reliable write that programs a sector in order: cut after `budget` sectors written, the cut
+    /// sector's first `keep` bytes new and the rest old; nothing written after the cut.
+    pub struct Torn {
+        /// The volume.
+        pub ram: Ram,
+        /// Sectors written before the cut.
+        pub budget: u32,
+        /// Bytes of the cut sector that land.
+        pub keep: usize,
+        /// The sector the cut fell in.
+        pub cut_at: u32,
+    }
+
+    impl Disk for Torn {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.ram.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Torn {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            for (i, s) in buf.chunks(SECTOR).enumerate() {
+                let at = (lba as usize + i) * SECTOR;
+                if self.budget == 0 {
+                    if self.keep > 0 {
+                        self.cut_at = lba + i as u32;
+                    }
+                    let k = core::mem::take(&mut self.keep).min(s.len());
+                    if self.ram.0.len() < at + k {
+                        self.ram.0.resize(at + SECTOR, 0);
+                    }
+                    self.ram.0[at..at + k].copy_from_slice(&s[..k]);
+                    return Err(Error::Io);
+                }
+                self.budget -= 1;
+                self.ram.write(lba + i as u32, s)?;
+            }
+            Ok(())
+        }
+    }
+
+    /// [`Fat::remove`] torn after every byte of its sector: the entry whole (the long name too), its 8.3 entry alone
+    /// (the long name's pieces deleted: [`Fat::locate_chain`] finds it, [`Fat::relink_long_name`] gives the name
+    /// back, never as another name), or deleted. `locate_chain` never matches a deleted entry, a folder, an empty
+    /// file's cluster 0, another file, nor long name pieces without their 8.3 entry.
+    #[test]
+    fn a_torn_remove_is_found_by_its_chain_and_named_again() {
+        const NAME: &str = "261020080000.fit";
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.mkdir(&mut d, fat.root(), "Torn", T).unwrap();
+        let mut other = fat.create(&mut d, dir, "another ride.fit", T).unwrap();
+        fat.write_sectors(&mut d, &mut other, 0, &[2; SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut other, SECTOR_U32, T).unwrap();
+        let mut h = fat.create(&mut d, dir, NAME, T).unwrap();
+        fat.write_sectors(&mut d, &mut h, 0, &[1; SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut h, SECTOR_U32, T).unwrap();
+        fat.create(&mut d, dir, "empty.fit", T).unwrap();
+        let sub = fat.mkdir(&mut d, dir, "Sub", T).unwrap();
+        let base = d.0.clone();
+        // a folder, cluster 0, nothing on a free cluster: never matched
+        assert_eq!(fat.locate_chain(&mut d, dir, sub.cluster).err(), Some(Error::NotFound));
+        assert_eq!(fat.locate_chain(&mut d, dir, 0).err(), Some(Error::NotFound));
+        assert_eq!(fat.locate_chain(&mut d, dir, h.first + 40).err(), Some(Error::NotFound));
+        assert_eq!(fat.locate_chain(&mut d, dir, other.first).map(|o| o.entry_lba), Ok(other.entry_lba));
+        let h = fat.locate(&mut d, dir, NAME).unwrap();
+        assert_eq!(fat.locate_chain(&mut d, dir, h.first), Ok(h));
+        let (mut whole, mut alone, mut gone) = (0, 0, 0);
+        for keep in 0..SECTOR {
+            let mut t = Torn { ram: Ram(base.clone(), 0), budget: 0, keep, cut_at: 0 };
+            let mut fat = Fat::mount(&mut t).unwrap();
+            assert_eq!(fat.remove(&mut t, &h), Err(Error::Io));
+            let mut d = t.ram;
+            let by_name = fat.locate(&mut d, dir, NAME).is_ok();
+            let named = match fat.locate_chain(&mut d, dir, h.first) {
+                Ok(_) if by_name => {
+                    whole += 1;
+                    true
+                }
+                Ok(on) => {
+                    alone += 1;
+                    assert_eq!(on.entry_lba, h.entry_lba, "keep {keep}");
+                    assert_eq!(fat.relink_long_name(&mut d, dir, &on, "261020080001.fit"), Ok(false), "keep {keep}");
+                    assert_eq!(fat.relink_long_name(&mut d, dir, &on, NAME), Ok(true), "keep {keep}");
+                    assert_eq!(fat.locate(&mut d, dir, NAME), Ok(h), "keep {keep}: named again");
+                    true
+                }
+                Err(e) => {
+                    assert_eq!(e, Error::NotFound, "keep {keep}");
+                    assert!(!by_name, "keep {keep}");
+                    gone += 1;
+                    // the deleted entry (its pieces and its 8.3 entry): never relinked, never matched
+                    let on = Handle { first: h.first, ..h };
+                    assert_eq!(fat.relink_long_name(&mut d, dir, &on, NAME), Ok(false), "keep {keep}");
+                    false
+                }
+            };
+            // deleted, its chain stays taken (a move's first half): lost
+            assert_eq!(fsck(&d.0), Ok(u32::from(!named)), "keep {keep}");
+            assert_eq!(fat.locate(&mut d, dir, "another ride.fit").map(|o| o.first), Ok(other.first));
+        }
+        assert!(whole > 0 && alone >= 32 && gone > 0, "{whole} whole, {alone} alone, {gone} gone");
+        // long name pieces whose 8.3 entry is gone (a torn create's): never matched
+        let mut d = Ram(base, 0);
+        let lba = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32;
+        d.0[lba] = 0xe5;
+        assert_eq!(fat.locate_chain(&mut d, dir, h.first).err(), Some(Error::NotFound));
     }
 
     /// A disk whose write number `.1` (counted down) lands and is still answered as failed, once: a card busy past
