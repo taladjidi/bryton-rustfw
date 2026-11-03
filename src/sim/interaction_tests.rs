@@ -169,7 +169,8 @@ fn tap(app: &mut App, sim: &mut Sim, (x, y, w, h): (u32, u32, u32, u32)) {
 /// The POWER line of the quick panel, as a rectangle to tap.
 fn power_line(app: &App) -> (u32, u32, u32, u32) {
     use crate::ui::quick as q;
-    (0, q::SENSORS_Y + app.quick_power().unwrap() as u32 * q::ROW, crate::ui::W, q::ROW)
+    let (top, h) = q::line(app.quick_power().unwrap(), app.quick_shape() as usize, app.quick_power());
+    (0, top, crate::ui::W, h)
 }
 
 fn media_button(b: crate::ui::media::Button) -> (u32, u32, u32, u32) {

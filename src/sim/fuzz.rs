@@ -2104,10 +2104,11 @@ fn menu_touch_and_keys() {
                 app.settings.touch = !app.settings.touch; // TOUCH off and on
             }
             let power_line = (app.screen() == Screen::Quick).then(|| app.quick_power()).flatten();
+            let lines = app.quick_shape() as usize;
             let i = match a % 14 {
                 _ if a % 19 == 4 && power_line.is_some() => {
-                    let y = ui::quick::SENSORS_Y + power_line.unwrap_or(0) as u32 * ui::quick::ROW + 8;
-                    Input::Touch(Gesture::Tap(120, y as u16))
+                    let (top, h) = ui::quick::line(power_line.unwrap_or(0), lines, power_line);
+                    Input::Touch(Gesture::Tap(120, (top + h / 2) as u16))
                 }
                 _ if a % 23 == 3 => Input::TouchLock,
                 0 | 1 => Input::Next,
@@ -2141,7 +2142,8 @@ fn menu_touch_and_keys() {
                     reach[0] += 1;
                     arms[0] += usize::from(app.screen() != Screen::Quick);
                     if let (Some(k), Input::Touch(Gesture::Tap(x, y))) = (power_line, i) {
-                        let r = ui::Rect(0, ui::quick::SENSORS_Y + k as u32 * ui::quick::ROW, ui::W, ui::quick::ROW);
+                        let (top, h) = ui::quick::line(k, lines, power_line);
+                        let r = ui::Rect(0, top, ui::W, h);
                         if r.contains(x, y) {
                             reach[5] += 1;
                             arms[5] += usize::from(app.quick.zero.0.is_some() || app.powercal.asking());
