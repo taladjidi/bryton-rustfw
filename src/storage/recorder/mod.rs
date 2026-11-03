@@ -72,7 +72,9 @@
 //!   size. Now `Fat::link` writes the entries whole but marked deleted, then makes them live by their first bytes
 //!   alone (`Fat::revive`'s write): a cut in the first leaves only deleted entries; one between, or one that tears
 //!   the second after some pieces, leaves the link whole, deleted or its pieces live alone, which the save done
-//!   again (or given up: `keep_in_rides`) makes live first (`Fat::revive`), before any room is made. Every tear then
+//!   again (or given up: `keep_in_rides`) makes live first (`Fat::revive`), before any room is made, and only onto a
+//!   chain still the ride's (`Recorder::still_ours`: a computer may have freed it and written over it, or the rider
+//!   deleted the saved ride before its record said "done"; `Fat::revive` itself never names free clusters). Every tear then
 //!   leaves the volume clean: no orphan piece, no half entry, one live entry on the chain.
 //!
 //! The unit's card has enhanced reliable write (BOARD.md: each sector old or new after a cut), so none of these
@@ -1329,10 +1331,13 @@ impl Recorder {
                 for _ in 0..10 {
                     let found = match fat.find(d, acts, file_name(&name, &mut buf)?) {
                         Ok(f) => Some(f.cluster == first),
-                        // the save's link cut inside `Fat::link` (deleted, or its pieces live alone): made live
-                        Err(Error::NotFound) => {
+                        // the save's link cut inside `Fat::link` (deleted, or its pieces live alone): made live, only
+                        // onto a chain still the ride's (a computer may have freed it and written over it since, or the
+                        // rider deleted the saved ride before the record said "done": never brought back)
+                        Err(Error::NotFound) if self.still_ours(fat, d, first, size, None)?.is_some() => {
                             fat.revive(d, acts, file_name(&name, &mut buf)?, first, size)?.then_some(true)
                         }
+                        Err(Error::NotFound) => None,
                         Err(e) => return Err(e),
                     };
                     match found {
@@ -1361,7 +1366,19 @@ impl Recorder {
                 // named by its 8.3 entry alone (step 4's write torn after the long name's pieces): its long name
                 // given back if they are still there, never a second entry
                 if let Some(h) = Self::on_chain(fat, d, dir, first)? {
-                    fat.relink_long_name(d, dir, &h, n)?;
+                    if !fat.relink_long_name(d, dir, &h, n)? {
+                        // not its long name's pieces (written over, or a computer's 8.3 name): kept under the name
+                        // it has, as `rescued` does
+                        let mut c = fat.cursor(dir)?;
+                        while let Some(e) = fat.list(d, &mut c)? {
+                            if !e.file.dir && e.file.cluster == first {
+                                if let Some(n) = e.name().get(..12).and_then(|n| <[u8; 12]>::try_from(n).ok()) {
+                                    self.name = n;
+                                }
+                                break;
+                            }
+                        }
+                    }
                     self.write_record(fat, d, Phase::Done, first)?;
                     (self.phase, self.stuck) = (Phase::Done, false);
                     return Ok(Outcome::Kept(self.name));

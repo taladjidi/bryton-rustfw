@@ -456,7 +456,6 @@ fn unlink_old(fat: &mut Fat, d: &mut impl DiskWrite, from: &str, name: &[u8; 12]
             // a remove a cut tore after the long name's first bytes (a card that keeps the new bytes up to a point):
             // the 8.3 entry live under its alias alone, which the name does not find. Its long name given back (only
             // if its deleted pieces spell the ride's: a computer's rename keeps its own), then removed as any.
-            // shortcut: the plain name only, not a suffixed one an older build's put back gave; extend if one is seen
             if relinked || !relink(fat, d, src, name, first)? {
                 break;
             }
@@ -475,15 +474,22 @@ fn unlink_old(fat: &mut Fat, d: &mut impl DiskWrite, from: &str, name: &[u8; 12]
     Ok(any)
 }
 
-/// The entry of folder `src` on the chain `first` given its long name `<name>.fit` back ([`Fat::relink_long_name`]):
-/// true if it was (a torn remove's), false if there is none or its long name is another's.
+/// The entry of folder `src` on the chain `first` given its long name back ([`Fat::relink_long_name`]), `<name>.fit`
+/// or a suffixed `<name>-j.fit` (an older build's put back gave those): true if it was (a torn remove's), false if
+/// there is none or its long name is none of them.
 fn relink(fat: &mut Fat, d: &mut impl DiskWrite, src: File, name: &[u8; 12], first: u32) -> Result<bool, Error> {
+    let h = match fat.locate_chain(d, src, first) {
+        Ok(h) => h,
+        Err(Error::NotFound | Error::Corrupt) => return Ok(false),
+        Err(e) => return Err(e),
+    };
     let mut buf = [0u8; 20];
-    match fat.locate_chain(d, src, first) {
-        Ok(h) => fat.relink_long_name(d, src, &h, file_name(name, 0, &mut buf)?),
-        Err(Error::NotFound | Error::Corrupt) => Ok(false),
-        Err(e) => Err(e),
+    for j in 0..=SUFFIXES {
+        if fat.relink_long_name(d, src, &h, file_name(name, j, &mut buf)?)? {
+            return Ok(true);
+        }
     }
+    Ok(false)
 }
 
 /// The first entry of folder `dir` on the chain `first` whose name starts with `name` (the ride's, or empty: any):
@@ -1105,11 +1111,12 @@ pub(crate) mod tests {
     /// the plain name then taken), the cut leaving the copy in `\Rustfw\Deleted` too, and the file in the way
     /// deleted from outside meanwhile (stock's USB): the next start finds the chain's name whatever its suffix and
     /// never links a second (it looked name by name and stopped at the free plain one). Through the put back (the
-    /// card full) and through the move (room).
+    /// card full) and through the move (room); and (`torn`) that name's remove torn by a cut after its pieces (its
+    /// 8.3 entry live under its alias alone: `unlink_old` gives it its suffixed long name back, then removes it).
     #[test]
     fn a_suffixed_name_left_behind_is_found() {
         let ride = cluster(&volume(), RIDE);
-        for full in [true, false] {
+        for (full, torn) in [(true, false), (false, false), (false, true)] {
             let mut d = Ram(moved_then_taken(), 0);
             let mut fat = Fat::mount(&mut d).unwrap();
             let acts = fat.open(&mut d, ACTIVITIES).unwrap();
@@ -1121,6 +1128,14 @@ pub(crate) mod tests {
                 let full = fat.open(&mut d, TO[1]).unwrap();
                 let other = fat.locate(&mut d, full, "261020080000.fit").unwrap();
                 fat.remove(&mut d, &other).unwrap(); // the move can finish (an empty file: no cluster lost)
+            }
+            if torn {
+                let h = fat.locate(&mut d, acts, "261020080000-1.fit").unwrap();
+                let at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32;
+                let short0 = d.0[at];
+                fat.remove(&mut d, &h).unwrap();
+                d.0[at] = short0;
+                assert!(fat.find(&mut d, acts, "261020080000-1.fit").is_err(), "the alias alone");
             }
             assert_eq!(finish(&mut d, T), Ok(!full), "full {full}");
             assert_eq!(fsck(&d.0), Ok(0), "full {full}: one name on the chain");

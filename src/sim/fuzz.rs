@@ -7719,3 +7719,121 @@ fn rtc_steps_during_a_ride() {
     }
     assert!(kinds.iter().all(|&k| k >= thr(10)), "stalls, steps forward, steps back, card failures: {kinds:?}");
 }
+
+/// On-card long names through a move's undo paths (fat/write.rs `Fat::revive`, `Fat::relink_long_name`,
+/// `Fat::locate_chain`; the recorder's save and trash.rs call them after a cut): a folder of files, the first one's
+/// long name crossing into the next sector (as stock's and computers' do), whose entries each seed deletes, tears
+/// (the pieces deleted, the 8.3 entry live), damages (a first byte 0xe5, 0x05 or another ordinal, a checksum, any
+/// byte) and whose chains it frees. Nothing panics; a revive or a relink only names the name asked, on the chain
+/// asked, never free clusters; and each reaches a true result in some seeds, the crossing set's revive too.
+#[test]
+fn long_names_revived_and_relinked() {
+    use crate::fat::tests::Ram;
+    use crate::fat::{Fat, SECTOR};
+    const NAMES: [&str; 5] = [
+        "261023100000.fit",
+        "261023100001.fit",
+        "a much longer name of a ride in four pieces.fit",
+        "x.fit",
+        "261020-1.fit",
+    ];
+    let t = (0x5b58, 0x6000);
+    let base = {
+        let mut d = Ram(crate::fat::tests::image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.mkdir(&mut d, fat.root(), "Fz", t).unwrap();
+        for (i, name) in NAMES.iter().enumerate() {
+            let mut h = fat.create(&mut d, dir, name, t).unwrap();
+            if i != 3 {
+                fat.write_sectors(&mut d, &mut h, 0, &[i as u8 + 1; SECTOR]).unwrap(); // "x.fit" stays empty
+                fat.set_size(&mut d, &mut h, 100 + i as u32, t).unwrap();
+            }
+            if i == 0 {
+                // its three entries (slots 2 to 4) moved to slots 14 and 15 and the next sector's 0, the slots
+                // between deleted
+                let lba = fat.lba(dir.cluster) as usize * SECTOR;
+                let e: Vec<u8> = d.0[lba + 64..lba + 160].to_vec();
+                for k in 2..14 {
+                    d.0[lba + k * 32..lba + k * 32 + 32].fill(0);
+                    d.0[lba + k * 32] = 0xe5;
+                }
+                d.0[lba + 14 * 32..lba + 16 * 32].copy_from_slice(&e[..64]);
+                d.0[lba + SECTOR..lba + SECTOR + 32].copy_from_slice(&e[64..]);
+            }
+        }
+        d.0
+    };
+    let u =
+        |img: &[u8], at: usize, n: usize| img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b));
+    let (fat0, fat_len) = (u(&base, 14, 2) * SECTOR, u(&base, 36, 4) * SECTOR);
+    let (mut revived, mut crossing, mut relinked, mut located, mut runs) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let seeds = scaled(240);
+    for seed in 1..=seeds {
+        let mut r = xorshift(seed.wrapping_mul(0x9e37_79b9));
+        let mut d = Ram(base.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Fz").unwrap();
+        let files: Vec<_> = NAMES.iter().map(|n| fat.locate(&mut d, dir, n).unwrap()).collect();
+        for h in &files {
+            let at = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32;
+            let pieces = 1 + (r() % 6) as usize; // the set and a few entries before it
+            let op = r() % 8;
+            if matches!(op, 1..=3 | 5..=7) {
+                let short0 = d.0[at];
+                fat.remove(&mut d, h).unwrap();
+                if matches!(op, 2 | 6) {
+                    d.0[at] = short0; // torn after the pieces: the 8.3 entry live
+                }
+            }
+            if matches!(op, 3 | 7) && h.first != 0 {
+                for k in [0, fat_len] {
+                    d.0[fat0 + k + 4 * h.first as usize..][..4].fill(0); // its chain freed (one cluster)
+                }
+            }
+            if matches!(op, 4..=7) {
+                // a byte of the set damaged: a first byte, the attribute, the checksum, or any; the crossing set's
+                // pieces are in the sector before
+                let back = (r() as usize % pieces) * 32;
+                let Some(e) = at.checked_sub(back) else { continue };
+                let k = [0, 0, 0, 11, 13, (r() % 32) as usize][(r() % 6) as usize];
+                d.0[e + k] = [0xe5, 0x05, 0x41, 0x42, 0x01, r() as u8][(r() % 6) as usize];
+            }
+        }
+        if r().is_multiple_of(4) {
+            let lba = fat.lba(dir.cluster) as usize * SECTOR;
+            let at = lba + (r() as usize % (2 * SECTOR));
+            d.0[at] = r() as u8;
+        }
+        fat.forget();
+        runs += 1;
+        for (i, h) in files.iter().enumerate() {
+            let (first, size) = (h.first, h.size);
+            for asked in [NAMES[i], NAMES[(i + 1) % NAMES.len()]] {
+                let own = asked == NAMES[i];
+                if fat.revive(&mut d, dir, asked, first, size) == Ok(true) {
+                    let f = fat.find(&mut d, dir, asked);
+                    assert!(
+                        f.is_ok_and(|f| f.cluster == first && f.size == size),
+                        "seed {seed}: {asked} revived: {f:?}"
+                    );
+                    assert!(first == 0 || fat.chain(&mut d, first).is_ok(), "seed {seed}: {asked} on free clusters");
+                    revived += u32::from(own);
+                    crossing += u32::from(own && i == 0);
+                }
+                let Ok(on) = fat.locate_chain(&mut d, dir, first) else { continue };
+                assert_eq!(on.first, first, "seed {seed}: {asked}");
+                located += u32::from(own);
+                if fat.relink_long_name(&mut d, dir, &on, asked) == Ok(true) {
+                    let l = fat.locate(&mut d, dir, asked).map(|l| l.first);
+                    assert_eq!(l, Ok(first), "seed {seed}: {asked} relinked");
+                    relinked += u32::from(own);
+                }
+            }
+        }
+    }
+    std::println!(
+        "long names: {runs} folders, {revived} revived ({crossing} crossing sectors), {relinked} relinked, {located} \
+         located by their chain"
+    );
+    assert!(revived >= thr(20) && crossing >= thr(2) && relinked >= thr(10) && located >= thr(50), "reached");
+}

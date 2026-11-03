@@ -919,7 +919,12 @@ impl Fat {
                     }
                     let on = u32::from(u16_at(e, 20)) << 16 | u32::from(u16_at(e, 26));
                     let gone = e[0] == 0xe5 && e[11] != 0x0f && e[11] & DIR == 0;
-                    if gone && on == first && u32_at(e, 28) == size && self.revive_at(d, dir, lba, &s, i, name, true)? {
+                    if gone
+                        && on == first
+                        && u32_at(e, 28) == size
+                        && self.taken_for(d, first, size)?
+                        && self.revive_at(d, dir, lba, &s, i, name, true)?
+                    {
                         return Ok(true);
                     }
                 }
@@ -1026,6 +1031,20 @@ impl Fat {
         }
         self.write(d, lba, two.get(SECTOR..).ok_or(Error::Corrupt)?)?;
         Ok(true)
+    }
+
+    /// Whether the chain from `first` is taken and holds `size` bytes (cluster 0 for an empty file): a revive never
+    /// names free clusters (a computer may have freed the chain since the delete). Whether it is still that file's
+    /// is the caller's to know (the recorder's `still_ours`, trash.rs's).
+    fn taken_for(&mut self, d: &mut impl Disk, first: u32, size: u32) -> Result<bool, Error> {
+        if first == 0 {
+            return Ok(size == 0);
+        }
+        match self.chain_end(d, first) {
+            Ok((_, n)) => Ok(n >= self.clusters_for(size)),
+            Err(Error::Corrupt) => Ok(false), // free, or out of the volume
+            Err(e) => Err(e),
+        }
     }
 
     /// A live entry of `dir` has the 8.3 name `alias` (its 11 bytes as stored).

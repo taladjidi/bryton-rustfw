@@ -4143,3 +4143,83 @@ fn totals_go_on_across_one_restart_and_an_older_record_starts_them_again() {
     let from_resume = (p2.kj(), p2.max(), p2.wbal_j(), back.max_alt_m());
     assert_eq!(from_resume, (18, Some(600), Some(20_000 - 30 * 350), Some(299)), "from the resume");
 }
+
+/// The second review of 2026-11-03, 1: a save whose link (`Fat::link`) a cut left whole and deleted between its two
+/// writes, then its chain freed by a computer (or given to another file); and a save done but for its record, then
+/// the saved ride deleted by the rider (on a computer or in stock: its entry marked deleted, its chain freed). The
+/// boot's save finds the chain no longer the ride's: nothing revived onto it (a cross-link, or a ride the rider
+/// deleted brought back), the record done, `Nothing`; a second boot does nothing; the next ride is saved.
+#[test]
+fn a_link_cut_or_deleted_then_freed_is_never_revived() {
+    let img = crate::fat::tests::image();
+    let mut full = card(img.clone());
+    ride(&mut Recorder::new(), &mut full, 0).unwrap();
+    let total = full.written;
+    let first = {
+        let mut ram = crate::fat::tests::Ram(full.img.clone(), 0);
+        Fat::mount(&mut ram).unwrap().open(&mut ram, SAVED).unwrap().cluster
+    };
+    for (case, cut) in [("cut inside the link", total - 2), ("deleted by the rider", total - 1)] {
+        for reuse in [false, true] {
+            let what = std::format!("{case}, {}", if reuse { "reused" } else { "freed" });
+            let mut d = Card { budget: Some(cut), ..card(img.clone()) };
+            assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}");
+            let mut img = d.img;
+            let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+            let mut fat = Fat::mount(&mut ram).unwrap();
+            let acts = fat.open(&mut ram, "Activities").unwrap();
+            match fat.locate(&mut ram, acts, "261023100000.fit") {
+                Ok(h) => {
+                    assert_eq!(case, "deleted by the rider", "{what}: linked");
+                    fat.remove(&mut ram, &h).unwrap();
+                    img = ram.0;
+                }
+                Err(e) => assert_eq!((case, e), ("cut inside the link", Error::NotFound), "{what}"),
+            }
+            let len = free_chain(&mut img, first);
+            let other = reuse.then(|| other_file(&mut img, first, len));
+            let mut d = card(img);
+            assert_eq!(Recorder::new().recover(&mut d, local(SECS + 5)), Outcome::Nothing, "{what}");
+            let_go(&d.img, &other, &what);
+            assert_eq!(Recorder::new().recover(&mut d, local(SECS + 6)), Outcome::Nothing, "{what}: twice");
+            assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "{what}: next ride");
+            assert_eq!(check_clean(&d.img, &what), 0);
+        }
+    }
+}
+
+/// The second review of 2026-11-03, 3: a save given up whose ride's entry in `\Rustfw\Rides` a torn step 4 left
+/// under its alias alone, its deleted long name pieces then damaged (not its name any more): never relinked as a
+/// name they do not spell, the ride kept under the name its entry has (its alias), and said so (`Kept`).
+#[test]
+fn a_ride_kept_under_its_alias_says_that_name() {
+    let img = crate::fat::tests::image();
+    let mut full = card(img.clone());
+    ride(&mut Recorder::new(), &mut full, 0).unwrap();
+    let first = {
+        let mut ram = crate::fat::tests::Ram(full.img.clone(), 0);
+        Fat::mount(&mut ram).unwrap().open(&mut ram, SAVED).unwrap().cluster
+    };
+    // step 4's write (the fourth from the end) torn after the pieces (bytes 64 and 96), before the 8.3 entry (128)
+    let mut d = Card { budget: Some(full.written - 4), torn: true, prefix: Some(100), ..card(img) };
+    assert!(ride(&mut Recorder::new(), &mut d, 0).is_none());
+    let mut ram = crate::fat::tests::Ram(d.img, 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let rides = fat.open(&mut ram, "Rustfw/Rides").unwrap();
+    let h = fat.locate_chain(&mut ram, rides, first).unwrap();
+    assert!(fat.find(&mut ram, rides, "261023100000.fit").is_err(), "the alias alone");
+    let mut img = ram.0;
+    let piece = h.entry_lba as usize * SECTOR + usize::from(h.slot) * 32 - 32;
+    img[piece + 1] ^= 1; // the first piece's first character: not the ride's name
+    let data = first_lba(&full.img, SAVED) * SECTOR + 2 * SECTOR;
+    img[data..data + 16].fill(0x42); // its read-back fails: kept where it is
+    let mut d = card(img);
+    let Outcome::Kept(n) = Recorder::new().recover(&mut d, local(SECS + 5)) else { panic!("not kept") };
+    assert_ne!(n, NAME);
+    let path = std::format!("Rustfw/Rides/{}", core::str::from_utf8(&n).unwrap());
+    let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    assert_eq!(fat.open(&mut ram, &path).map(|f| f.cluster), Ok(first), "{path}");
+    assert_eq!(check_clean(&d.img, "kept under its alias"), 0);
+    assert_eq!(Recorder::new().recover(&mut d, local(SECS + 6)), Outcome::Nothing);
+}
