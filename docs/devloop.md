@@ -26,6 +26,13 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
                                   # its RTS 10 ms / 100 ms / 1 s after; the radio then restarts (resets +1)
     ./dev.py where                # the screen and the cursor row's label (read-only)
     ./dev.py stall S              # the loop sleeps S s (1..600) in one go, a ride may be open: the timer must take the gap
+    ./dev.py srefresh [MS]        # Stop step 1 (docs/power.md): the SDRAM in self-refresh around one CSleep WFI of MS ms
+                                  # (default 100), woken by the RTC wake-up timer; pass = `srefresh ok flags 000000c3 ...`
+    ./dev.py stop [MS]            # Stop step 2, from RAM: USB off, Stop for MS ms (default 1000), clocks and SDRAM back,
+                                  # the report in backup registers 0 / 31, a reset; then ./dev.py stopreport: pass =
+                                  # `Stop OK` (a hang: the four-button restart; nothing is written to the eMMC)
+                                  # --usboff: USB fully off first (as on battery); --keep: USB left on, no reset, the
+                                  # registers before / after the WFI printed (docs/status.md, Stop mode)
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
                                   # reset / load / find / bench / sector / poke answer `err ride open` while a ride or its save is
                                   # open; a wedged recorder needs the four-button restart (Engineer Mode gesture, AGENTS.md)

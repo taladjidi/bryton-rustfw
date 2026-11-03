@@ -603,6 +603,31 @@ fn dev_link_input() {
         pc.got.clear();
     }
     assert!(maps > 0, "bench map reached");
+    // `bench srefresh` / `bench stop` with sleeps at and past their bounds (stopbench::MAX_MS), broken and hex
+    let sleeps: [&str; 8] = ["0", "1", "30000", "30001", "0x10", "-1", "x", "4294967296"];
+    let (mut srefresh, mut stops) = (0, 0);
+    for c in bytes(10, 2 << 10).collect::<std::vec::Vec<_>>().chunks_exact(2) {
+        let kind = if c[0] % 2 == 0 { "srefresh" } else { "stop" };
+        let tail = ["", " keep", " usboff", " keep usboff", " x"][usize::from(c[0] / 2) % 5];
+        let line = std::format!("bench {kind} {}{tail}\n", sleeps[usize::from(c[1]) % sleeps.len()]);
+        match session.feed(line.as_bytes(), &app, Stats::default(), &mut pc) {
+            crate::dev::Effect::BenchSrefresh(ms) => {
+                assert!((1..=crate::stopbench::MAX_MS).contains(&ms) && kind == "srefresh", "{line:?}");
+                assert!(tail.is_empty() || kind == "srefresh", "{line:?}");
+                srefresh += 1;
+            }
+            crate::dev::Effect::BenchStop(ms, mode) => {
+                assert!((1..=crate::stopbench::MAX_MS).contains(&ms) && kind == "stop", "{line:?}");
+                let keep = mode == crate::stopbench::Mode::Keep;
+                assert!(keep == (tail == " keep") && (tail == " usboff") == (mode == crate::stopbench::Mode::UsbOff));
+                assert_eq!(pc.got, if keep { &b""[..] } else { b"ok\n" }, "the answer goes before the reset");
+                stops += 1;
+            }
+            e => assert!(e == crate::dev::Effect::None && pc.got.starts_with(b"err usage: bench"), "{line:?}: {e:?}"),
+        }
+        pc.got.clear();
+    }
+    assert!(srefresh > 50 && stops > 50, "bench srefresh reached {srefresh} times, bench stop {stops}");
     dev_link_lines(&app);
     dev_link_ride_open();
 }
@@ -630,6 +655,8 @@ fn dev_link_ride_open() {
             4 => "bench nrfoff\n".into(),
             5 if c[1] % 2 == 0 => std::format!("bench step {}\n", c[2] % 20),
             5 => std::format!("bench map {} 0 0\n", c[2] % 61),
+            6 if c[1] % 3 == 0 => std::format!("bench srefresh {}\n", 1 + u32::from(c[2]) * 100),
+            6 if c[1] % 3 == 1 => std::format!("bench stop {}\n", 1 + u32::from(c[2]) * 100),
             6 => std::format!("sector {}\n", c[2]),
             7 => std::format!("poke {a} {}\n", c[3]),
             8 => std::format!("peek {a}\n"),
@@ -652,6 +679,8 @@ fn dev_link_ride_open() {
                     | Effect::BenchMap(..)
                     | Effect::BenchStep(_)
                     | Effect::BenchNrfOff
+                    | Effect::BenchSrefresh(_)
+                    | Effect::BenchStop(..)
             ),
             "{line:?} got out with a ride open"
         );
@@ -671,10 +700,23 @@ fn dev_link_ride_open() {
 /// the size bounds. Every address the computer saw peeked or poked is aligned and inside the ranges, and each command
 /// is reached over the seeds (a regression of a bound, or of a parser, would pass word soup).
 fn dev_link_lines(app: &crate::App) {
-    use crate::dev::{Effect, IO, MEMORY, Session, Stats};
-    let addrs = ["0xfffffffc", "0x5ffffffc", "0x60000000", "0x40000000", "0x40000002", "0x1fffffff", "0x2001fffc"];
-    let addrs =
-        [addrs.as_slice(), &["0xd3fffffc", "0xe000e100", "0xe000e340", "0xe000ed04", "0x5ffffff8", "-4"]].concat();
+    use crate::dev::{Effect, MEMORY, Session, Stats, io};
+    let addrs = ["0xfffffffc", "0x5ffffffc", "0x584244a8", "0x40000000", "0x40000002", "0x1fffffff", "0x2001fffc"];
+    let addrs = [
+        addrs.as_slice(),
+        &[
+            "0xd3fffffc",
+            "0xe000e100",
+            "0xe000e340",
+            "0xe000ed04",
+            "0x5ffffff8",
+            "-4",
+            "0x580244a8",
+            "0x5c001004",
+            "0x40002800",
+        ],
+    ]
+    .concat();
     let counts = ["0", "1", "2", "63", "64", "65", "4294967295", "x"];
     let (mut session, mut pc) = (Session::new(), super::Pc::default());
     let (mut peeks, mut pokes, mut loads, mut lss, mut gets, mut finds, mut wtests, mut sectors) =
@@ -708,9 +750,9 @@ fn dev_link_lines(app: &crate::App) {
         sectors += usize::from(matches!(e, Effect::Sector(_)));
     }
     for &a in pc.peeked.iter().chain(pc.regs.keys()) {
-        assert!(a % 4 == 0 && (IO.contains(&a) || MEMORY.iter().any(|r| r.contains(&a))), "{a:#x} reached the board");
+        assert!(a % 4 == 0 && (io(a) || MEMORY.iter().any(|r| r.contains(&a))), "{a:#x} reached the board");
     }
-    assert!(pc.regs.keys().all(|a| IO.contains(a)), "a poke outside IO");
+    assert!(pc.regs.keys().all(|&a| io(a)), "a poke outside IO");
     // uploads: sizes at the bounds, a good image (tag, size word, SP, reset vector) and a short one
     for size in [155u32, 156, 157, 4096, 1 << 20, (1 << 20) + 1, 0, u32::MAX] {
         let mut img = std::vec![0u8; size.min(1 << 20) as usize];

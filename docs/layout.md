@@ -316,6 +316,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   (`src/sim/walk_tests.rs`) replayed on the unit, unit and sim shots side by side in contact sheets under `target/walk/`.
 - `src/link/usbsnap.rs`: the USB core and ULPI PHY registers taken at a link's first failure (`Keeper`), packed into
   backup-register words (`pack`) that `tools/dev.py usbdrop` decodes.
+- `src/link/stopbench.rs`: the Stop mode benches' report (`StopReport`, from main.rs `low_power` and hw.rs `stop`), its
+  answer line for `bench srefresh`, the two backup words `bench stop` keeps (`pack`, `tools/dev.py stopreport`), the
+  RTC wake-up timer's count and the RTC's elapsed time; pure logic.
 - `src/link/packets.rs`: which packets a bulk IN reply goes in and when a zero-length packet ends it (`Tx`), pure logic.
 - `src/link/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
@@ -370,11 +373,11 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
   counted while riding, a system that goes silent.
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,
-  RTC read and set, standby, SysTick sleep. No app logic.
+  RTC read and set, standby, SysTick sleep, the Stop benches' wake (`low_power`: the RTC wake-up timer). No app logic.
 - `src/board/usb.rs`: OTG_HS and the ULPI PHY brought up as stock does it, and a composite device: the CDC serial
   port (it implements `Host`) and the mass storage interface (its class requests, and `msc::Pipe` over its bulk
   endpoints, each wait 1 s at most).
-- `src/board/hw.rs`: the unsafe primitives (above).
+- `src/board/hw.rs`: the unsafe primitives (above), Stop mode's `stop` among them (its body in ITCM, `stop_itcm`).
 - `tools/dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks (`run.py`, `s510.repl`, `s510.resc`), and the radio spike: `nrf_run.py` (not in check.sh) boots the firmware with `NrfUsart.cs`, a C# USART2 for Renode that bridges to `tools/nrf_emu.py --serve`; and the GNSS one: `gnss_run.py` (not in check.sh, `--selftest` needs no Renode) boots it with `GnssSpi.cs`, a C# SPI4 for Renode that bridges to the ignored test `src/sim/gnss_serve.rs`, which serves `gnss_model.rs` over a pipe.
 - `tools/assist.py`: downloads u-blox's AssistNow Offline data with the rider's own token (environment or
   `~/.config/bryton-rustfw/assist.json`, never in the repository), keeps today's and later messages, and copies them to
@@ -405,7 +408,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   the variables from the gitignored `tools/real.env`; each panics when its variable is unset (docs/devloop.md).
 - `tools/stack_check.py [ELF]`: the firmware's stack frames against their budgets, the stack's size (from the canary
   to the top), and the longest static call chain (a longest path over the `bl` graph condensed into its strongly connected components,
-  calls through a register named) against the stack minus 8 KB (check.sh, after the build, on the default and the ride build).
+  calls through a register named) against the stack minus 8 KB, and the ITCM code (hw.rs `stop_itcm`) for any call, branch
+  or literal reaching outside ITCM (check.sh, after the build, on the default and the ride build).
 - `tools/panics.py` (`--max N`: exit 1 above N sites; check.sh runs `--max 0`): every panic site of the release ELF (any branch to a panic / `_fail` / unwrap / expect entry; bounds, unwrap, overflow, explicit, other) with its source line (src/ or a
   patched crate's vendor/), per file and folder, and the bounds sites in files that deny `clippy::indexing_slicing`; the
   panic handler's own reset loop (hw.rs, a branch to itself) is left out and counted on their own line (a report, exit 0; `selftest`).

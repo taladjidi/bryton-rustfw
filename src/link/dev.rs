@@ -35,6 +35,15 @@
 //! - `bench stall <seconds>` (1 to 120; test only, never on a real ride): sleeps that long in one go, WFI, with nothing else run ([`Effect::BenchStall`],
 //!   `bench_stall`), and answers `stall <ms>` (the sleep as the board timed it). Allowed while a ride is open: the
 //!   recorder must take the gap on its RTC seconds (the stall path of `catch_up_seconds`, docs/status.md).
+//! - `bench srefresh <ms>` (1 to 30000; no ride open): the SDRAM in self-refresh around one CSleep WFI of `ms`, ended by
+//!   the RTC wake-up timer, the image's CRC compared before and after ([`Effect::BenchSrefresh`], main.rs `low_power`,
+//!   docs/power.md "Stop mode" step 1); answers [`stopbench::send`]'s line, `srefresh ok ...` when all went right.
+//! - `bench stop <ms>` (1 to 30000; no ride open): `ok`, then USB disconnected, the system in Stop for `ms` (the RTC
+//!   wake-up timer), the clocks and the SDRAM restored, the report in backup registers 0 and 31 ([`stopbench::pack`])
+//!   and a system reset ([`Effect::BenchStop`], step 2); `tools/dev.py stopreport` decodes it once the unit is back.
+//!   `bench stop <ms> usboff`: the same with USB fully off first (its clocks, the PHY, VOS3: how phase 2 stops, on
+//!   battery). `bench stop <ms> keep`: Stop with USB left as it is, no `ok` and no reset: the report line answered, as
+//!   `srefresh`'s, if the link survives (and register 0 written all the same).
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
@@ -63,11 +72,11 @@
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
 //!   <value>`: writes the word, `ok`. Numbers in decimal or `0x` hex; `addr` must be word aligned and in the
-//!   peripheral space ([`IO`]), so a peek can't read through a Rust reference. A reserved address there can still
-//!   fault, which parks the CPU (four-button restart).
+//!   peripheral blocks ([`IO`]: the reserved holes between them bus-fault), so a peek can't read through a Rust
+//!   reference. An address inside a block the peripheral leaves reserved could still fault: a reset.
 
 use crate::ui::{H, W};
-use crate::{App, emmc, nrf};
+use crate::{App, emmc, nrf, stopbench};
 
 /// The other end of the link, as the protocol needs it.
 pub trait Host {
@@ -87,8 +96,75 @@ pub trait Host {
     }
 }
 
-/// The peripheral space (RM0399 memory map) that `peek` and `poke` may reach.
-pub const IO: core::ops::RangeInclusive<u32> = 0x4000_0000..=0x5fff_fffc;
+/// The peripheral blocks `peek` and `poke` may reach: every 1 KB page of 0x40000000..0x5fffffff that holds a peripheral
+/// in stm32h747xx.h (STM32CubeH7 cmsis_device_h7, its `*_BASE` addresses; 256 KB each for the two OTG cores), adjacent
+/// pages merged, each named by its first. A reserved hole bus-faults (2026-11-03: `peek 0x584244a8`, a typo, reset the
+/// unit and its USB did not come back), so only these.
+pub const IO: [core::ops::RangeInclusive<u32>; 52] = [
+    0x4000_0000..=0x4000_27fc, // LPTIM1
+    0x4000_2c00..=0x4000_2ffc, // WWDG2
+    0x4000_3800..=0x4000_5ffc, // I2C1
+    0x4000_6c00..=0x4000_6ffc, // CEC
+    0x4000_7400..=0x4000_7ffc, // DAC1
+    0x4000_8400..=0x4000_8bfc, // CRS
+    0x4000_9000..=0x4000_97fc, // MDIOS
+    0x4000_a000..=0x4000_affc, // FDCAN1
+    0x4001_0000..=0x4001_07fc, // TIM1
+    0x4001_1000..=0x4001_17fc, // USART1
+    0x4001_3000..=0x4001_37fc, // SPI1
+    0x4001_4000..=0x4001_4bfc, // TIM15
+    0x4001_5000..=0x4001_53fc, // SPI5
+    0x4001_5800..=0x4001_63fc, // SAI1
+    0x4001_7000..=0x4001_77fc, // DFSDM1
+    0x4002_0000..=0x4002_0bfc, // DMA1
+    0x4002_2000..=0x4002_23fc, // ADC12_COMMON
+    0x4002_4400..=0x4002_47fc, // ART
+    0x4002_8000..=0x4002_83fc, // ETH
+    0x4004_0000..=0x400b_fffc, // USB1_OTG_HS_PERIPH
+    0x4802_0000..=0x4802_03fc, // DCMI
+    0x4802_1800..=0x4802_1bfc, // RNG
+    0x4802_2400..=0x4802_2bfc, // DLYB_SDMMC2
+    0x4802_3000..=0x4802_33fc, // RAMECC2
+    0x5000_0000..=0x5000_03fc, // DSI
+    0x5000_1000..=0x5000_13fc, // LTDC
+    0x5000_3000..=0x5000_33fc, // WWDG1
+    0x5100_0000..=0x5100_03fc, // GPV
+    0x5200_0000..=0x5200_07fc, // MDMA
+    0x5200_1000..=0x5200_13fc, // DMA2D
+    0x5200_2000..=0x5200_23fc, // FLASH_R
+    0x5200_3000..=0x5200_33fc, // JPGDEC
+    0x5200_4000..=0x5200_43fc, // FMC_Bank1E_R
+    0x5200_5000..=0x5200_53fc, // QSPI_R
+    0x5200_6000..=0x5200_63fc, // DLYB_QSPI
+    0x5200_7000..=0x5200_73fc, // SDMMC1
+    0x5200_8000..=0x5200_83fc, // DLYB_SDMMC1
+    0x5200_9000..=0x5200_93fc, // RAMECC1
+    0x5800_0000..=0x5800_07fc, // EXTI
+    0x5800_0c00..=0x5800_0ffc, // LPUART1
+    0x5800_1400..=0x5800_17fc, // SPI6
+    0x5800_1c00..=0x5800_1ffc, // I2C4
+    0x5800_2400..=0x5800_33fc, // LPTIM2
+    0x5800_3800..=0x5800_43fc, // COMP12
+    0x5800_4800..=0x5800_4ffc, // IWDG1
+    0x5800_5400..=0x5800_57fc, // SAI4
+    0x5802_0000..=0x5802_2bfc, // GPIOA
+    0x5802_4400..=0x5802_4ffc, // CRC
+    0x5802_5400..=0x5802_5bfc, // BDMA
+    0x5802_6000..=0x5802_67fc, // ADC3
+    0x5802_7000..=0x5802_73fc, // RAMECC3
+    0x5c00_1000..=0x5c00_13fc, // DBGMCU
+];
+
+/// `a` is in one of the [`IO`] blocks.
+///
+/// ```
+/// use bryton_rustfw::dev::io;
+/// assert!(io(0x5802_44a8) && io(0x5c00_1004) && io(0x4001_3014));
+/// assert!(!io(0x5842_44a8) && !io(0x4000_2800) && !io(0x6000_0000));
+/// ```
+pub fn io(a: u32) -> bool {
+    IO.iter().any(|r| r.contains(&a))
+}
 
 /// Memory `peek` may read too (never `poke`: that could change running code or the app's state): the DTCM (data
 /// and stack, 128 KB) and the SDRAM (BOARD.md 2: 64 MB from 0xd0000000, set up by the bootloader, where the image
@@ -281,6 +357,10 @@ pub enum Effect {
     BenchNrfOff,
     /// Sleep this many seconds in one go with nothing else run (`bench_stall`); answer `stall <ms>`.
     BenchStall(u32),
+    /// The SDRAM in self-refresh around a CSleep WFI of this many ms; answer [`stopbench::send`] (the main loop's).
+    BenchSrefresh(u32),
+    /// Stop for this many ms as the mode says (the main loop's; `ok` already sent but for `keep`).
+    BenchStop(u32, stopbench::Mode),
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
     Drive,
     /// Start a new profiler window ([`crate::prof::Prof::reset`]).
@@ -492,9 +572,7 @@ impl Session {
             Some(b"peek") => match (words.next().and_then(parse), words.next().map_or(Some(1), parse)) {
                 (Some(a), Some(n @ 1..=64))
                     if a % 4 == 0
-                        && core::iter::once(&IO)
-                            .chain(&MEMORY)
-                            .any(|r| r.contains(&a) && r.contains(&(a + 4 * (n - 1)))) =>
+                        && IO.iter().chain(&MEMORY).any(|r| r.contains(&a) && r.contains(&(a + 4 * (n - 1)))) =>
                 {
                     for i in 0..n {
                         let v = h.peek(a + 4 * i);
@@ -504,11 +582,11 @@ impl Session {
                 _ => h.send(b"err usage: peek <addr: IO, DTCM, SDRAM, NVIC, ICSR; aligned> [n 1..64]\n"),
             },
             Some(b"poke") => match (words.next().and_then(parse), words.next().and_then(parse)) {
-                (Some(a), Some(v)) if a % 4 == 0 && IO.contains(&a) => {
+                (Some(a), Some(v)) if a % 4 == 0 && io(a) => {
                     h.poke(a, v);
                     h.send(b"ok\n");
                 }
-                _ => h.send(b"err usage: poke <addr 0x40000000..0x5ffffffc, aligned> <value>\n"),
+                _ => h.send(b"err usage: poke <addr: a peripheral block (dev.rs IO), aligned> <value>\n"),
             },
             Some(b"key") => match (words.next().and_then(crate::Key::from_name), words.next()) {
                 (Some(k), None) => {
@@ -582,6 +660,29 @@ impl Session {
                 }
             }
             Some(b"bench") if line == b"bench nrfoff" => return Effect::BenchNrfOff,
+            Some(b"bench") if line.starts_with(b"bench srefresh") => match words.nth(1).and_then(parse) {
+                Some(ms @ 1..=stopbench::MAX_MS) => return Effect::BenchSrefresh(ms),
+                _ => h.send(b"err usage: bench srefresh <1..30000 ms>\n"),
+            },
+            Some(b"bench") if line.starts_with(b"bench stop") => {
+                let ms = words.nth(1).and_then(parse);
+                let mode = match (words.next(), words.next()) {
+                    (None, _) => Some(stopbench::Mode::Stop),
+                    (Some(b"keep"), None) => Some(stopbench::Mode::Keep),
+                    (Some(b"usboff"), None) => Some(stopbench::Mode::UsbOff),
+                    _ => None,
+                };
+                match (ms, mode) {
+                    (Some(ms @ 1..=stopbench::MAX_MS), Some(mode)) => {
+                        // `keep` answers with its report line; the others reset before any answer could go
+                        if mode != stopbench::Mode::Keep {
+                            h.send(b"ok\n");
+                        }
+                        return Effect::BenchStop(ms, mode);
+                    }
+                    _ => h.send(b"err usage: bench stop <1..30000 ms> [keep | usboff]\n"),
+                }
+            }
             Some(b"bench") if line.starts_with(b"bench step") => match words.nth(1).and_then(parse) {
                 Some(n @ 2..=16) => return Effect::BenchStep(n),
                 _ => h.send(b"err usage: bench step <2..16>\n"),
@@ -727,7 +828,13 @@ impl App {
     /// caller's (main.rs): false for them.
     pub fn serve(&mut self, b: &mut impl crate::Board, h: &mut impl Host, session: &Session, effect: Effect) -> bool {
         match effect {
-            Effect::None | Effect::Key(_) | Effect::Reset | Effect::Run(_) | Effect::StackFault => return false,
+            Effect::None
+            | Effect::Key(_)
+            | Effect::Reset
+            | Effect::Run(_)
+            | Effect::StackFault
+            | Effect::BenchSrefresh(_)
+            | Effect::BenchStop(..) => return false,
             Effect::ProfReset => {
                 self.prof().reset();
                 return false;
@@ -1033,7 +1140,7 @@ fn parse(w: &[u8]) -> Option<u32> {
 }
 
 /// `v` as 8 hex digits and a newline.
-fn hex(v: u32) -> [u8; 9] {
+pub(crate) fn hex(v: u32) -> [u8; 9] {
     let mut out = [b'\n'; 9];
     for (i, d) in out.iter_mut().take(8).enumerate() {
         *d = digit((v >> (28 - 4 * i)) as u8);
@@ -1046,7 +1153,7 @@ fn digit(n: u8) -> u8 {
     b"0123456789abcdef".get(usize::from(n & 15)).copied().unwrap_or(b'0')
 }
 
-fn decimal(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
+pub(crate) fn decimal(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
     let mut i = buf.len();
     loop {
         i -= 1;

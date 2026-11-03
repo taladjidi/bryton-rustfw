@@ -27,6 +27,11 @@ plugged in: the dot at the top right turns green when the link is ready.
                                   with the fault marker (peek 0x580040c4 reads 0xfa0000nn within a minute)
   dev.py stall S                  sleep the loop S seconds (1..120) in one go (test only, never on a real ride): the recorder sees a gap
                                   in RTC seconds (src/link/dev.rs `bench stall`)
+  dev.py srefresh [MS]            Stop mode step 1 (no ride open): the SDRAM in self-refresh around one CSleep WFI of
+                                  MS ms (default 100), the image CRC compared; `srefresh ok ...` when all went right
+  dev.py stop [MS] [--usboff|--keep]  Stop mode step 2 (no ride open; from RAM, `dev.py run`): USB off, Stop for MS ms
+                                  (default 1000), clocks and SDRAM back, the report kept, a reset (docs/power.md)
+  dev.py stopreport               decode the report `stop` kept in backup registers 0 and 31, after the reset
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
 import argparse, os, re, struct, sys, time, zlib
@@ -315,6 +320,46 @@ def usbdrop_decode(words):
     return out
 
 
+STOP_BKP = [0, 31]                   # src/link/stopbench.rs BKP: register 0 tag 0x57, register 31 tag 0x58
+STOP_FLAGS = ('self-refresh entered', 'SDRAM back to normal', 'regulator ready', 'HSE ready', 'PLLs locked',
+              'SYSCLK back', 'woken by the RTC timer', 'image CRC unchanged', 'STOPF (the system was in Stop)',
+              'clocks stopped (SYSCLK not on its source at the wake)')
+STOP_INFO = ('the wake-up timer did not arm (no sleep)', 'woken by the power key')   # flags 10, 11
+STOP_REGS = ('PWR_CPUCR', 'PWR_CPU2CR', 'PWR_D3CR', 'RCC_D3AMR', 'RCC_CR', 'RCC_CFGR', 'EXTI_CPUPR1', 'EXTI_CPUPR2',
+             'EXTI_CPUPR3')                                 # stopbench.rs Regs, in the line's order
+
+
+def stop_decode(words):
+    """`bench stop`'s report (src/link/stopbench.rs `pack`) as text lines; the first says whether all went right."""
+    a, b = (words + [0, 0])[:2]
+    if a >> 24 != 0x57:
+        return ['no Stop report kept (register 0 holds something else: the bench did not get to its end, or a USB '
+                'drop or the standby wrote it since)']
+    flags = a >> 12 & 0xfff
+    bad = [n for k, n in enumerate(STOP_FLAGS) if not flags >> k & 1]
+    names = STOP_FLAGS + STOP_INFO
+    out = ['Stop OK' if not bad else 'Stop FAILED: not ' + ', not '.join(bad),
+           f'flags {flags:03x}: ' + (', '.join(n for k, n in enumerate(names) if flags >> k & 1) or 'none'),
+           f'slept {a & 0xfff} ms (RTC)']
+    if b >> 24 == 0x58:
+        d3 = b >> 20 & 15
+        out.append(f'PWR_CPU2CR: PDDS_D1 {d3 & 1}, PDDS_D2 {d3 >> 1 & 1}, PDDS_D3 {d3 >> 2 & 1}, RUN_D3 {d3 >> 3 & 1}')
+        out.append(f'regulator ready after {b >> 12 & 0xff} us, the whole wake {b & 0xfff} us (to the SDRAM in normal mode)')
+    else:
+        out.append('register 31: not the Stop report (overwritten since)')
+    return out
+
+
+def stop_line(line):
+    """The registers of a `srefresh` / `stop keep` answer (stopbench.rs `send`) beside each other, before and after
+    the WFI, as text lines."""
+    w = line.split()
+    if 'pre' not in w or 'post' not in w:
+        return []
+    pre, post = w[w.index('pre') + 1:][:9], w[w.index('post') + 1:][:9]
+    return [f'  {n:12} {p:>8} -> {q}' for n, p, q in zip(STOP_REGS, pre, post)]
+
+
 def selftest():
     p = png(bytes(range(256)) * 600)                    # 2 * 240 * 320 bytes
     assert p.startswith(b'\x89PNG') and p[12:16] == b'IHDR'
@@ -411,6 +456,19 @@ def selftest():
     assert 'PHY 0x13 USB Interrupt Status: not stored' in mid, mid
     assert usbdrop_decode([0x1234])[0].startswith('no USB snapshot')
     assert usbdrop_decode([0xd2 << 24 | 0xf1, 0xd100_0000, 0x0b00_0003])[0].startswith('event')   # old words: untagged, skipped
+    # the Stop report, as the doc test of stopbench.rs `pack` builds it (all flags, 1000 ms, D3 bits 0b1100, 5 / 2005 us)
+    ok = stop_decode([0x57 << 24 | 0x3ff << 12 | 1000, 0x58 << 24 | 0b1100 << 20 | 5 << 12 | 2005])
+    assert ok[0] == 'Stop OK' and ok[2] == 'slept 1000 ms (RTC)', ok
+    assert 'PDDS_D3 1, RUN_D3 1' in ok[3] and 'after 5 us, the whole wake 2005 us' in ok[4], ok
+    # the 2026-11-03 unit run: flags 0xff, no STOPF, the clocks never stopped
+    bad = stop_decode([0x57 << 24 | 0xff << 12 | 1000, 0x0b00_0001])
+    assert bad[0] == 'Stop FAILED: not STOPF (the system was in Stop), not clocks stopped (SYSCLK not on its source at ' \
+        'the wake)' and 'overwritten' in bad[3], bad
+    assert 'woken by the power key' in stop_decode([0x57 << 24 | 0x800 << 12, 0])[1]
+    rows = stop_line('stop fail flags 000000ff slept 1 wake 0 cycles 0 0 0 0 0 pre ' + ' '.join(['00000001'] * 9)
+                     + ' post ' + ' '.join(['000001a3'] + ['00000000'] * 8))
+    assert len(rows) == 9 and rows[0].split() == ['PWR_CPUCR', '00000001', '->', '000001a3'], rows
+    assert stop_decode([0xd100_0000, 0])[0].startswith('no Stop report')
     print('dev.py selftest ok')
 
 
@@ -459,6 +517,16 @@ def main():
     p = sub.add_parser('stall', help='sleep the unit\'s main loop S seconds (1..120) in one go (test only, never on a real ride): '
                        'the recorder must take the gap on its RTC seconds')
     p.add_argument('seconds', type=int)
+    p = sub.add_parser('srefresh', help='Stop step 1 (no ride open): the SDRAM in self-refresh around one CSleep WFI of MS '
+                       '(1..30000, default 100), the image CRC compared; prints the board\'s line (docs/power.md)')
+    p.add_argument('ms', nargs='?', type=int, default=100)
+    p = sub.add_parser('stop', help='Stop step 2 (no ride open, from RAM): USB off, Stop for MS (1..30000, default 1000), '
+                       'clocks and SDRAM restored, the report to backup registers 0 and 31, a reset; then run stopreport')
+    p.add_argument('ms', nargs='?', type=int, default=1000)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument('--usboff', action='store_true', help='USB fully off first (clocks, PHY, VOS3): as on battery')
+    g.add_argument('--keep', action='store_true', help='USB left on, no reset: the full report line if the link survives')
+    sub.add_parser('stopreport', help='decode the report `stop` left in backup registers 0 and 31 (after the reset)')
     sub.add_parser('nrfoff', help='switch the radio chip off as the switch-off does, unit kept up: the path taken (seen0 / '
                    'seen1 / held), the time, the chip\'s RTS (our CTS, PD3) 10 ms, 100 ms, 1 s after; then the radio restarts')
     p = sub.add_parser('mapbench', help='time the basemap of the full-page map at the unit\'s position: mapbench LEVEL '
@@ -566,6 +634,26 @@ def main():
                 if not r.startswith('stall '):
                     sys.exit(r)
                 print(f'stalled {int(r.split()[1]) / 1000:.2f} s (asked {a.seconds} s)')
+            elif a.cmd in ('srefresh', 'stop'):
+                if not 1 <= a.ms <= 30000:
+                    sys.exit(f'dev.py: {a.cmd} MS: MS is 1..30000')
+                s.timeout = a.ms / 1000 + 10  # the answer comes after the sleep (and two CRCs of the image)
+                mode = ' keep' if a.cmd == 'stop' and a.keep else ' usboff' if a.cmd == 'stop' and a.usboff else ''
+                try:
+                    r = command(s, f'bench {a.cmd} {a.ms}{mode}')
+                except Exception as e:   # `keep`: the link may not survive the Stop
+                    sys.exit(f'dev.py: no answer ({e}); register 0 still holds the verdict: `dev.py stopreport`')
+                if a.cmd == 'stop' and r == 'ok':
+                    r = (f'ok: Stop for {a.ms} ms, then a reset; once the unit is back (the installed firmware), '
+                         'run `tools/dev.py stopreport`')
+                print('\n'.join([r] + stop_line(r)))
+                if not r.startswith(('srefresh ok', 'stop ok', 'ok:')):
+                    sys.exit(1)
+            elif a.cmd == 'stopreport':
+                got = [command(s, f'peek {BKP0 + 4 * r:#x} 1') for r in STOP_BKP]
+                if any(g.startswith('err') for g in got):
+                    sys.exit(next(g for g in got if g.startswith('err')))
+                print('\n'.join(stop_decode([int(g, 16) for g in got])))
             elif a.cmd == 'nrfoff':
                 r = command(s, 'bench nrfoff').split()
                 if r[0] != 'nrfoff':

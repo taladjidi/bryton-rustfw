@@ -302,6 +302,20 @@ fn power_up() {
 
 /// The core soft reset the crate does, but with timeouts (the crate's waits have none): it completes only with
 /// the PHY's 60 MHz clock, so a dead PHY costs a red dot instead of a hung bike computer.
+/// USB fully off, for the `bench stop usboff` (docs/power.md "Stop mode"): [`power_up`] undone, the core in reset
+/// and its and the ULPI's clocks off (RCC_AHB1ENR bits 25, 26), the PHY's enable (PA7) and PA2 low (BOARD.md 4: PA2
+/// low drops the link, inferred to be the PHY's supply), HSI48 off, the regulator back to VOS3 (PWR_D3CR VOS 01, as
+/// stock's SystemClock_Config, VOSRDY awaited). Only before a reset: nothing brings it back but [`start`].
+pub fn power_down() {
+    modify(RCC_AHB1RSTR, 0, 1 << 25);
+    modify(RCC_AHB1ENR, (1 << 25) | (1 << 26), 0);
+    pin_set(PHY_ENABLE.0, PHY_ENABLE.1, false);
+    pin_set(Port::A, 2, false);
+    modify(RCC_CR, 1 << 12, 0);
+    modify(PWR_D3CR, 3 << 14, 1 << 14);
+    wait(|| rd(PWR_D3CR) & (1 << 13) != 0, 10);
+}
+
 fn core_resets() -> bool {
     if !wait(|| rd(GRSTCTL) & (1 << 31) != 0, 10) {
         return false; // AHBIDL
@@ -540,17 +554,17 @@ impl Host for Link {
     }
 
     // The computer's addresses reach rd / wr only here, checked again whatever the caller (dev.rs checks them too):
-    // aligned, poke in the peripheral space only (RM0399's memory map: 0x40000000 to 0x5fffffff), so the poke itself
+    // aligned, poke in the peripheral blocks only (dev.rs `IO`: the holes between them bus-fault), so the poke itself
     // never writes RAM; peek there or in the DTCM or the SDRAM ([`dev::MEMORY`]), always mapped. A poke can still
     // make the hardware write RAM (a DMA, MDMA or FMC register, the RCC or the MPU's peers): the dev link is a
     // debugging tool, and that is its operator's to avoid, not something this check can promise.
     fn peek(&mut self, addr: u32) -> u32 {
-        let ok = addr.is_multiple_of(4) && (dev::IO.contains(&addr) || dev::MEMORY.iter().any(|r| r.contains(&addr)));
+        let ok = addr.is_multiple_of(4) && (dev::io(addr) || dev::MEMORY.iter().any(|r| r.contains(&addr)));
         if ok { rd(addr) } else { 0 }
     }
 
     fn poke(&mut self, addr: u32, value: u32) {
-        if addr.is_multiple_of(4) && dev::IO.contains(&addr) {
+        if addr.is_multiple_of(4) && dev::io(addr) {
             wr(addr, value);
         }
     }

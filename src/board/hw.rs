@@ -1,6 +1,6 @@
 //! The only module with `unsafe`: the vector table, the reset entry, register access, three CPU instructions,
-//! the staging area for images loaded over USB and the jump into them, the map's memory in SDRAM, and the
-//! critical-section implementation the USB crates need. Everything else in the firmware is safe Rust built on these (AGENTS.md, "Safe Rust only").
+//! the staging area for images loaded over USB and the jump into them, the map's memory in SDRAM, the Stop mode
+//! entry and wake that run from ITCM while the SDRAM is in self-refresh (`stop`), and the critical-section implementation the USB crates need. Everything else in the firmware is safe Rust built on these (AGENTS.md, "Safe Rust only").
 
 #![allow(unsafe_code)]
 
@@ -161,7 +161,8 @@ pub fn rd(a: u32) -> u32 {
     // SAFETY: rd and wr are safe functions over any address, which the compiler cannot check: their soundness rests
     // on every caller, and these are all of them. Register addresses (constants, each naming RM0399 or BOARD.md);
     // in this module, the link.x section bounds and the fault marker; main.rs's stack canary (link.x _stack_canary,
-    // a DTCM word no Rust object holds: an overflow may write it, which is what the check looks for); and usb.rs's peek / poke, the dev link's
+    // a DTCM word no Rust object holds: an overflow may write it, which is what the check looks for); main.rs's
+    // `image_crc` (aligned words of the image in SDRAM below its size word, read-only code and constants); and usb.rs's peek / poke, the dev link's
     // computer-given addresses, which they check first (aligned; poke in the peripheral space only, peek there or in
     // the DTCM or the SDRAM: all mapped). A peek of RAM may read a value a Rust object holds (it writes nothing,
     // and the value may be stale). A reserved address inside the peripheral space can still bus-fault: a reset
@@ -300,6 +301,175 @@ pub fn run_staged(size: u32) -> ! {
     // SAFETY: the trampoline runs from ITCM (copied there in reset), outside the region it overwrites, with
     // interrupts masked; nothing returns into the old image, since the new one starts with a fresh stack.
     unsafe { ram_trampoline(STAGE, len) }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Stop mode with the image in SDRAM (docs/power.md "Stop mode", phase 1: the dev link's benches; main.rs
+// `low_power`). In Stop the FMC has no clock, so the SDRAM must keep its data on its own (self-refresh) and nothing
+// may fetch from it until the clocks and the FMC's normal mode are back: the entry, the WFI and the wake run from
+// ITCM (`stop_itcm`, in link.x .itcm with the RAM-run trampoline, copied there at reset), the stack is the DTCM, and
+// interrupts stay masked (a pending enabled IRQ still ends WFI: ARMv7-M ARM B1.5.19). Its body is register accesses
+// (rd / wr / barrier / wfi, all #[inline(always)]), counted loops and stores to the caller's report: no call, no
+// table, no literal pointing into the SDRAM, which tools/stack_check.py checks in the release ELF (`itcm_calls`).
+// Registers (stm32h747xx.h, STM32CubeH7 cmsis_device_h7, for the addresses and bit positions; RM0399 for what they do):
+// FMC_SDCMR 0x52004150 (MODE 0..2, CTB2 bit 3, NRFS 5..8), FMC_SDSR 0x52004158 (MODES2 bits 3..4: 00 normal,
+// 01 self-refresh; stm32h7xx_ll_fmc.c `FMC_SDRAM_GetModeStatus`; there is no busy flag on the H7); RCC_CR (HSEON 16 /
+// HSERDY 17, PLL1ON 24 / RDY 25, PLL2 26 / 27, PLL3 28 / 29: each ready flag the bit above its enable), RCC_CFGR (SW
+// 0..2, SWS 3..5, STOPWUCK 6, STOPKERWUCK 7); PWR_CR1 (LPDS 0, SVOS 14..15: 11 SVOS3, 10 SVOS4, 01 SVOS5,
+// stm32h7xx_hal_pwr_ex.h), PWR_CSR1 ACTVOSRDY 13, PWR_CPUCR (PDDS_D1..D3 0..2, STOPF 5, CSSF 9, RUN_D3 11), PWR_CPU2CR
+// at +0x14, PWR_D3CR VOSRDY 13; SCB_SCR SLEEPDEEP bit 2 (ARMv7-M ARM B3.2.7); DWT_CYCCNT 0xe0001004.
+// The sequence follows STM32CubeH7's HAL_PWREx_EnterSTOPMode (LPDS, PDDS_Dx cleared, SLEEPDEEP, DSB, ISB, WFI,
+// SLEEPDEEP cleared) and stock's idle hook (bryton repo ghidra/HARDWARE.md 13: SDRAM self-refresh on bank 2 before, its
+// SystemClock_Config after every wake: VOSRDY first, then HSE, PLL1, SYSCLK).
+// ---------------------------------------------------------------------------------------------------------------
+
+const FMC_SDCMR: u32 = 0x5200_4150;
+const FMC_SDSR: u32 = 0x5200_4158;
+/// SDCMR's MODE, CTB1 / CTB2, NRFS and MRD fields (bits 0..22); the rest is reserved and kept.
+const SDCMR_FIELDS: u32 = 0x007f_ffff;
+/// MODE 101 self-refresh, CTB2: bank 2 (0xd0000000, BOARD.md 2), NRFS 0 (one refresh), as stock's command.
+const SDCMR_SELF_REFRESH: u32 = 0b101 | 1 << 3;
+/// MODE 000 normal, bank 2.
+const SDCMR_NORMAL: u32 = 1 << 3;
+const SDSR_MODES2: u32 = 0b11 << 3;
+const SDSR_SELF_REFRESH: u32 = 0b01 << 3;
+const RCC_CR: u32 = 0x5802_4400;
+const RCC_CFGR: u32 = 0x5802_4410;
+const PWR_CR1: u32 = 0x5802_4800;
+const PWR_CSR1: u32 = 0x5802_4804;
+const PWR_CPUCR: u32 = 0x5802_4810;
+const PWR_CPU2CR: u32 = 0x5802_4814;
+const PWR_D3CR: u32 = 0x5802_4818;
+const SCB_SCR: u32 = 0xe000_ed10;
+const DWT_CYCCNT: u32 = 0xe000_1004;
+/// The oscillators (HSE; HSI48 12 / 13, CSI 7 / 8 too, if the bootloader left them on) and the PLLs a Stop turns off
+/// (inferred, RM0399 not re-read: HSE and the PLLs stop, the wake runs on HSI or CSI; stock turns them on at every wake).
+const OSC_ON: u32 = 1 << 16 | 1 << 12 | 1 << 7;
+const PLL_ON: u32 = 1 << 24 | 1 << 26 | 1 << 28;
+/// Iterations of a wait at most: each one is at least a register read (several cycles), so a missing flag costs at
+/// most a fraction of a second, never a hang.
+const WAIT: u32 = 1_000_000;
+
+/// Waits (at most [`WAIT`] reads) for `rd(a) & mask == want`; true if it came.
+#[inline(always)]
+fn wait_for(a: u32, mask: u32, want: u32) -> bool {
+    let mut n = 0;
+    while rd(a) & mask != want && n < WAIT {
+        n += 1;
+    }
+    rd(a) & mask == want
+}
+
+/// RCC_D3AMR (stm32h747xx.h `RCC_TypeDef` D3AMR at 0xa8): the D3 peripherals in autonomous mode, which keep D3 running.
+const RCC_D3AMR: u32 = 0x5802_44a8;
+/// RCC_D1CCIPR (stm32h747xx.h, offset 0x4c): FMCSEL in bits 0..1, 00 hclk3, 01 pll1_q, 10 pll2_r, 11 per_ck.
+const RCC_D1CCIPR: u32 = 0x5802_444c;
+/// EXTI_CPUPR1..3: this core's pending lines (EXTI_D1 at 0x58000080, PR1 / 2 / 3 at + 0x08 / 0x18 / 0x28).
+const EXTI_CPUPR1: u32 = 0x5800_0088;
+/// The DTCM, where the report must be (the caller's stack): the only RAM sure to answer while the SDRAM sleeps.
+const DTCM: core::ops::Range<u32> = 0x2000_0000..0x2002_0000;
+
+/// The registers that say why the system did or did not stop (lib stopbench.rs `Regs`).
+#[inline(always)]
+fn snap(g: &mut bryton_rustfw::stopbench::Regs) {
+    g.cpucr = rd(PWR_CPUCR);
+    g.cpu2cr = rd(PWR_CPU2CR);
+    g.d3cr = rd(PWR_D3CR);
+    g.d3amr = rd(RCC_D3AMR);
+    g.rcc_cr = rd(RCC_CR);
+    g.cfgr = rd(RCC_CFGR);
+    g.pr = [rd(EXTI_CPUPR1), rd(EXTI_CPUPR1 + 0x10), rd(EXTI_CPUPR1 + 0x20)];
+}
+
+/// The SDRAM in self-refresh around one WFI, in Stop (`deep`, the regulator at `svos`: 3 for SVOS3, 2 SVOS4, 1 SVOS5)
+/// or in CSleep (the clocks kept), then the clocks as they were (HSE, PLLs, SYSCLK's source, read before) and the
+/// SDRAM in normal mode. Flags, cycles and the registers just before and after the WFI go into `r` (lib
+/// link/stopbench.rs). If the self-refresh is not confirmed, no WFI: the normal-mode command is sent and it returns.
+/// Whatever failed on the wake, the SDRAM is put back in normal mode before returning: on a PLL that did not lock
+/// again, the FMC's kernel clock is moved to hclk3 first (the HSI's 64 MHz then, which the SDRAM allows: its refresh
+/// only comes more often). Nothing is done (no flag set) unless `r` is in the DTCM.
+/// The caller (main.rs `low_power`) arms the wake-up first: the RTC wake-up timer's EXTI line and IRQ, every other
+/// NVIC line off, SysTick off, no DMA running, USB off the bus for a Stop.
+pub fn stop(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport) {
+    if !DTCM.contains(&address(r)) {
+        return;
+    }
+    barrier(); // every write to the SDRAM done before the command
+    stop_itcm(deep, svos, r);
+    barrier();
+}
+
+// SAFETY: `link_section` places this function in .itcm (link.x: ITCM, copied there by `reset` before main runs, as
+// `ram_trampoline`); nothing else is in a section of that name but the trampoline. It must stay free of any fetch from
+// the SDRAM between the self-refresh command and the normal-mode one: its body only inlines rd / wr / barrier / wfi
+// and stores into `r` (in the DTCM: `stop` checks), no call, no constant table (the literals LLVM puts beside the
+// code are in .itcm too), checked in the ELF by tools/stack_check.py. No exception can fetch a vector from the SDRAM
+// meanwhile: PRIMASK is set (reset's `cpsid i`), so a pending IRQ only ends WFI, and no fault can occur (the
+// accesses are to fixed registers; `r` is a valid reference).
+#[unsafe(link_section = ".itcm")]
+#[inline(never)]
+fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport) {
+    use bryton_rustfw::stopbench as sb;
+    let (cr, sw) = (rd(RCC_CR), rd(RCC_CFGR) & 7);
+    wr(FMC_SDCMR, (rd(FMC_SDCMR) & !SDCMR_FIELDS) | SDCMR_SELF_REFRESH);
+    let mut flags = 0;
+    if wait_for(FMC_SDSR, SDSR_MODES2, SDSR_SELF_REFRESH) {
+        flags |= sb::REFRESH_IN;
+        if deep {
+            // main regulator (LPDS 0) at SVOS; Stop, not Standby, in D1, D2 and D3 (PDDS_Dx 0), D3 not held running
+            // (RUN_D3 0), STOPF / SBF cleared (CSSF); the wake on the HSI (STOPWUCK, STOPKERWUCK 0)
+            wr(PWR_CR1, (rd(PWR_CR1) & !(0b11 << 14 | 1)) | (svos & 0b11) << 14);
+            wr(PWR_CPUCR, (rd(PWR_CPUCR) & !(0b111 | 1 << 11)) | 1 << 9);
+            wr(RCC_CFGR, rd(RCC_CFGR) & !(0b11 << 6));
+            wr(SCB_SCR, rd(SCB_SCR) | 1 << 2);
+        }
+        snap(&mut r.pre);
+        barrier();
+        wfi();
+        snap(&mut r.post);
+        wr(SCB_SCR, rd(SCB_SCR) & !(1 << 2));
+        if r.post.cfgr & (7 << 3) != sw << 3 {
+            flags |= sb::CLOCKS;
+        }
+        // the regulator at its Run voltage before any faster clock (stock waits VOSRDY first; ACTVOSRDY too: inferred)
+        let t = rd(DWT_CYCCNT);
+        if wait_for(PWR_D3CR, 1 << 13, 1 << 13) && wait_for(PWR_CSR1, 1 << 13, 1 << 13) {
+            flags |= sb::VOS;
+        }
+        let t1 = rd(DWT_CYCCNT);
+        r.vos = t1.wrapping_sub(t);
+        // the oscillators on before, then the PLLs (their input), then SYSCLK's source: each one's ready flag is the
+        // bit above its enable
+        let osc = cr & OSC_ON;
+        wr(RCC_CR, rd(RCC_CR) | osc);
+        if wait_for(RCC_CR, osc << 1, osc << 1) {
+            flags |= sb::HSE;
+        }
+        let t2 = rd(DWT_CYCCNT);
+        r.hse = t2.wrapping_sub(t1);
+        let pll = cr & PLL_ON;
+        wr(RCC_CR, rd(RCC_CR) | pll);
+        if wait_for(RCC_CR, pll << 1, pll << 1) {
+            flags |= sb::PLL;
+        } else if matches!(rd(RCC_D1CCIPR) & 0b11, 1 | 2) {
+            // the FMC's kernel clock is a PLL output that did not come back: hclk3 instead, so it has a clock
+            wr(RCC_D1CCIPR, rd(RCC_D1CCIPR) & !0b11);
+        }
+        let t3 = rd(DWT_CYCCNT);
+        r.pll = t3.wrapping_sub(t2);
+        wr(RCC_CFGR, (rd(RCC_CFGR) & !7) | sw);
+        if wait_for(RCC_CFGR, 7 << 3, sw << 3) {
+            flags |= sb::SW;
+        }
+        r.sw = rd(DWT_CYCCNT).wrapping_sub(t3);
+    }
+    let t = rd(DWT_CYCCNT);
+    wr(FMC_SDCMR, (rd(FMC_SDCMR) & !SDCMR_FIELDS) | SDCMR_NORMAL);
+    if wait_for(FMC_SDSR, SDSR_MODES2, 0) {
+        flags |= sb::REFRESH_OUT;
+    }
+    r.fmc = rd(DWT_CYCCNT).wrapping_sub(t);
+    r.flags |= flags;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

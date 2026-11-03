@@ -113,7 +113,8 @@ pub const CLIMB: usize = PAGES + 3;
 // here, each word behind a tag so an empty or foreign one reads as unset:
 //
 //   reg      owner                                                  name
-//   0        diagnostics: USB drive at a drop (0xd1), standby (0x5b) USB_LAST_BKP = STANDBY_BKP
+//   0        diagnostics: USB drive at a drop (0xd1), standby (0x5b), USB_LAST_BKP = STANDBY_BKP
+//            the Stop bench's verdict (0x57, stopbench::BKP)
 //            (after a USB snapshot of the boot, its word 1, tag 0xd2; 31 holds word 2)
 //   1..4     stock (clock set, clock, USB mode)                     -
 //   5..8, 10 paired ANT+ sensors (tag 0xa5)                         sensors::Kind::backup
@@ -128,7 +129,8 @@ pub const CLIMB: usize = PAGES + 3;
 //   28       alerts and the keys' actions (0x9; also settings.bin)  ALERTS_BKP
 //   29       fault marker (0xfa)                                    FAULT_BKP
 //   30       a ride open on the card                                RIDE_BKP
-//   31       diagnostics: USB drops (0x0b), reset flags (0x5c)      USB_DROPS_BKP = STANDBY_FLAGS_BKP
+//   31       diagnostics: USB drops (0x0b), reset flags (0x5c),     USB_DROPS_BKP = STANDBY_FLAGS_BKP
+//            the Stop bench's wake times (0x58, stopbench::BKP)
 //
 // None is free, so the two diagnostics share 0 and 31: the last writer wins and its tag says whose word it is.
 

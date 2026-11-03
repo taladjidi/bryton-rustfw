@@ -93,6 +93,8 @@ The point of this project is a firmware in safe Rust.
   - `PanelDma` (DMA1 stream 0 into SPI1, the panel's pixels): the only code that sets a DMA's memory address, to its
     own two buffers in AXI SRAM (link.x PANELDMA), handed out (`buf`) only while the stream does not read them;
   - `map_memory` (`from_raw_parts_mut`: link.x MAP in SDRAM handed out once as a slice);
+  - `stop` (Stop mode: its body `stop_itcm` placed in ITCM by `#[unsafe(link_section)]`, since it runs while the
+    SDRAM is in self-refresh; tools/stack_check.py fails if it reaches outside ITCM);
   - the empty critical-section implementation the USB crates need. It is sound only because interrupts are
     never unmasked: keep it that way, or replace it.
 - One other `unsafe` line: `unsafe impl UsbPeripheral` in `usb.rs`. It is the crate's marker trait, which
