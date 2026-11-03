@@ -644,6 +644,71 @@ fn torn_card(img: Vec<u8>, budget: u64, prefix: bool, seed: u64) -> Card {
     Card { budget: Some(budget), torn: true, prefix: k, ..card(img) }
 }
 
+/// The save's last three writes (step 4's, step 5's, the record "done") each torn at every prefix, 4 to 508 bytes,
+/// then booted: saved once, every second there, the volume clean (no orphan long name either), FSInfo right. Step 4's
+/// write marks the long name's pieces deleted below the 8.3 entry in the sector: a prefix between leaves the 8.3 entry
+/// live under its alias alone, which the save looked up by name and linked a second time into `\Activities` (found
+/// 2026-11-03: cluster 120 cross-linked). Step 5's write torn after the 8.3 entry's cluster, before its size: the
+/// save took the link for done, the ride 0 bytes long. Those volumes go to target/fat for fsck_msdos.
+#[test]
+fn power_cut_tearing_the_save_at_every_prefix() {
+    let img = crate::fat::tests::image();
+    let mut full = card(img.clone());
+    ride(&mut Recorder::new(), &mut full, 0).unwrap();
+    let total = full.written;
+    let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
+    let first = {
+        let mut ram = crate::fat::tests::Ram(full.img.clone(), 0);
+        Fat::mount(&mut ram).unwrap().open(&mut ram, SAVED).unwrap().cluster
+    };
+    let (mut alias_alone, mut no_size) = (0, 0);
+    for at in total - 3..total {
+        for seed in 0..127 {
+            let what = std::format!("the save's write {at} of {total} torn after {} bytes", 4 * (1 + seed));
+            let mut d = torn_card(img.clone(), at, true, seed);
+            assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}");
+            let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+            let mut fat = Fat::mount(&mut ram).unwrap();
+            let rides = fat.open(&mut ram, "Rustfw/Rides").unwrap();
+            let by_name = fat.find(&mut ram, rides, "261023100000.fit").is_ok();
+            let alone = !by_name && fat.locate_chain(&mut ram, rides, first).is_ok();
+            let acts = fat.open(&mut ram, "Activities").unwrap();
+            let sizeless =
+                fat.find(&mut ram, acts, "261023100000.fit").is_ok_and(|f| f.cluster == first && f.size == 0);
+            let mut d = card(d.img);
+            let o = Recorder::new().recover(&mut d, local(SECS + 5));
+            let Outcome::Saved(n) = o else { panic!("{what}: {o:?}") };
+            // step 5's write torn inside its 8.3 entry (name new, cluster not): an empty file of the ride's name,
+            // the ride a second later beside it
+            assert!(n == NAME || at == total - 2 && n == next_name(&NAME), "{what}: {n:?}");
+            let path = std::format!("Activities/{}.fit", core::str::from_utf8(&n).unwrap());
+            assert_eq!(saved(&d.img, &path).map(|s| s.0 == all), Ok(true), "{what}");
+            // step 5's write torn inside its long name: orphan pieces in `\Activities` (fsck_msdos asks to remove
+            // them); else clean
+            let lost = if at == total - 2 { fsck_torn(&d.img) } else { fsck(&d.img) };
+            assert_eq!(lost, Ok(0), "{what}");
+            assert_eq!(free_counts(&d.img).0, free_counts(&d.img).1, "{what}: FSInfo's free count");
+            assert_eq!(Recorder::new().recover(&mut d, local(SECS + 6)), Outcome::Nothing, "{what}: twice");
+            if alone {
+                alias_alone += 1;
+                crate::fat::tests::dump("save_torn_after_its_long_name", &d.img);
+            }
+            if sizeless {
+                no_size += 1;
+                crate::fat::tests::dump("save_link_torn_before_its_size", &d.img);
+            }
+        }
+    }
+    // the long name's two pieces at bytes 64 and 96 of the sector, the 8.3 entry at 128: prefixes 68 to 128
+    assert!(alias_alone >= 10, "{alias_alone} tears left the 8.3 entry alone");
+    assert!(no_size > 0, "no tear left the link without its size");
+}
+
+/// The last writes of a resumed ride each cut by [`torn_cuts`]: its save (about 10: the end's checkpoint, about 7
+/// with its data, then steps 4 to 6) and a few before. Cost (2026-11-03): the 16 tests' second cuts from about 190
+/// to 450 each, 25 to 48 s on one thread, 5.6 to 7.1 s of wall time on the gate's.
+const LAST_WRITES: u64 = 12;
+
 fn torn_cuts(prefix: bool, part: u64) {
     let img = crate::fat::tests::image();
     let mut full = card(img.clone());
@@ -733,12 +798,15 @@ fn torn_cuts(prefix: bool, part: u64) {
             o => panic!("{what}: {o:?}"),
         }
         promised |= check(&d.img, had, &what);
-        // the resumed ride cut again, torn, once in each of its checkpoints (the phase in it moving with the cut)
+        // the resumed ride cut again, torn, once in each of its checkpoints (the phase in it moving with the cut),
+        // and at every one of its last [`LAST_WRITES`] (its last checkpoint and its save, whose torn step 4 once
+        // left two entries on the chain: 2026-11-03, `power_cut_tearing_the_save_at_every_prefix`)
         if let Outcome::Resumed(w, _) = outcome {
             let n = d.written - booted;
             let checkpoints = u64::from((SECS - from_of(w)) / CHECKPOINT_S + 1);
             let step = (n / checkpoints).max(1);
-            for at in (cut * 7 % step..n).step_by(step as usize) {
+            let last = n.saturating_sub(LAST_WRITES);
+            for at in (cut * 7 % step..last).step_by(step as usize).chain(last..n) {
                 let what = std::format!("{what}, resumed and torn again at {at} of {n}");
                 let mut d2 = card(cut_img.clone());
                 let mut r2 = Recorder::new();

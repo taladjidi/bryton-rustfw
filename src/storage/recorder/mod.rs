@@ -51,6 +51,23 @@
 //! Between 4 and 5 the chain is named by no entry for a moment (a lost chain, never a cross-link); the record
 //! names it, and 5 is done again at the next start. So the ride in progress exists until the saved one does.
 //!
+//! **Steps 4 and 5 done again find the ride by its chain, not its name** (2026-11-03). Step 4's one write marks
+//! the long name's pieces and then, further on in the sector, the 8.3 entry deleted. A cut that tears it after its
+//! first bytes (a card without reliable write keeps the new bytes up to a point: `power_cut_tearing_a_prefix_*`)
+//! can leave the long name deleted and the 8.3 entry live, named by its alias alone (`74QA7VSV.FIT`). Looked up by
+//! its long name, that entry was not found, so the next boot took step 4 for done and linked the chain into
+//! `\Activities` too: two entries on one chain, cross-linked, which a computer's fsck "repairs" by cutting one, and
+//! a delete of either frees the other's clusters. Now steps 3 to 5 and the give-up ask `Fat::locate_chain` (the
+//! folder's entry on the chain, whatever its name): at every cut point of step 4's write the entry is either whole
+//! (the long name too), alias only, or deleted, and the first two are both found and marked deleted before 5
+//! links; so the chain has at most one live entry at every write. The same tear in step 5's write can stop after
+//! the 8.3 entry's cluster, before its size: the link found on the chain but 0 bytes long, which the save took for
+//! done (an empty ride to every reader, its clusters freed by the next fsck). Its size is written then (`mend_size`).
+//! Step 5 torn inside its long name or its 8.3 name leaves orphan long name pieces, or an empty file of the ride's
+//! name and the ride a second later beside it: never a cross-link nor a lost second (the tests
+//! `power_cut_tearing_the_save_at_every_prefix`). The unit's card has enhanced reliable write (BOARD.md: each
+//! sector old or new after a cut), so none of these tears happens there.
+//!
 //! **A save given up** ([`GIVE_UP`] card errors, or at once for one no retry mends) never writes "done" over the
 //! only record that may name the ride: the ride is first named where it was recorded (`Recorder::keep_in_rides`:
 //! its entry there as it is, or, gone (step 4 done, by this run or before a cut), linked again under its name in the
@@ -1279,6 +1296,7 @@ impl Recorder {
                 for _ in 0..10 {
                     match fat.find(d, acts, file_name(&name, &mut buf)?) {
                         Ok(f) if f.cluster == first => {
+                            Self::mend_size(fat, d, acts, file_name(&name, &mut buf)?, f, size, t)?;
                             (self.saved, self.name) = (Some((self.name, name)), name);
                             self.write_record(fat, d, Phase::Done, first)?;
                             (self.phase, self.stuck) = (Phase::Done, false);
@@ -1300,6 +1318,8 @@ impl Recorder {
         match fat.locate(d, dir, n) {
             Ok(h) if h.first == first => {}
             Ok(_) => return Err(Error::Refused), // its name another file's: never a second entry, tried again
+            // named by its 8.3 entry alone (step 4's write torn after the long name's pieces): named, never twice
+            Err(Error::NotFound) if Self::on_chain(fat, d, dir, first)?.is_some() => {}
             Err(Error::NotFound) => {
                 if let Some(o) = self.rescued(fat, d, first)? {
                     return Ok(o);
@@ -1317,6 +1337,36 @@ impl Recorder {
         self.write_record(fat, d, Phase::Done, first)?;
         (self.phase, self.stuck) = (Phase::Done, false);
         Ok(Outcome::Kept(self.name))
+    }
+
+    /// The save's link (step 5) `f`, called `name` in `dir`, found on the ride's chain: its size written if a cut
+    /// tore its write before its last bytes (a card without reliable write: the 8.3 entry's first 28 bytes new, its
+    /// size the free slot's zeros), else a reader, and a computer's fsck that frees the chain past the size, would
+    /// see an empty ride.
+    fn mend_size(
+        fat: &mut Fat,
+        d: &mut impl DiskWrite,
+        dir: File,
+        name: &str,
+        f: File,
+        size: u32,
+        t: (u16, u16),
+    ) -> Result<(), Error> {
+        if f.size == size {
+            return Ok(());
+        }
+        let mut h = fat.locate(d, dir, name)?;
+        fat.set_size(d, &mut h, size, t)
+    }
+
+    /// The entry in `dir` on the chain at `first`, whatever its name ([`Fat::locate_chain`]); None if there is none,
+    /// or the folder is torn (its sector garbage: the record is the name).
+    fn on_chain(fat: &mut Fat, d: &mut impl DiskWrite, dir: File, first: u32) -> Result<Option<Handle>, Error> {
+        match fat.locate_chain(d, dir, first) {
+            Ok(h) => Ok(Some(h)),
+            Err(Error::NotFound | Error::Corrupt) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// The state a save is tried again from by [`Recorder::io`] (a boot's or a Start's recovery calls the save
@@ -1627,8 +1677,12 @@ impl Recorder {
         let (mut name, mut linked) = (self.save_as.unwrap_or(self.name), None);
         for _ in 0..10 {
             match fat.find(d, acts, file_name(&name, &mut buf)?) {
-                Ok(f) if f.cluster == first => linked = Some(true), // a cut after 5: done already
-                Ok(_) => name = next_name(&name),                   // a name another file has: a second later
+                Ok(f) if f.cluster == first => {
+                    // a cut after 5: done already
+                    Self::mend_size(fat, d, acts, file_name(&name, &mut buf)?, f, size, t)?;
+                    linked = Some(true);
+                }
+                Ok(_) => name = next_name(&name), // a name another file has: a second later
                 Err(Error::NotFound) => linked = Some(false),
                 Err(e) => return Err(e),
             }
@@ -1641,14 +1695,10 @@ impl Recorder {
         if !linked {
             // its rides entry gone: a GIVE UP SAVE's rescue whose record a cut left "saving" is done now, before a
             // `make_room` that could grow a folder on the card that failed
-            match fat.locate(d, dir, file_name(&self.name, &mut buf)?) {
-                Ok(h) if h.first == first => {}
-                Ok(_) | Err(Error::NotFound | Error::Corrupt) => {
-                    if let Some(o) = self.rescued(fat, d, first)? {
-                        return Ok(o);
-                    }
-                }
-                Err(e) => return Err(e),
+            if Self::on_chain(fat, d, dir, first)?.is_none()
+                && let Some(o) = self.rescued(fat, d, first)?
+            {
+                return Ok(o);
             }
             // the entry's room before 4, in the folder it goes to and in the one it leaves (to be named there again if
             // 5 cannot be done: [`Recorder::keep_in_rides`]): a folder that must grow (a cluster) on a full card fails
@@ -1656,11 +1706,10 @@ impl Recorder {
             fat.make_room(d, acts, file_name(&name, &mut buf)?)?;
             fat.make_room(d, dir, file_name(&self.name, &mut buf)?)?;
         }
-        // 4: the entry in the folder, if still there and still this chain
-        match fat.locate(d, dir, file_name(&self.name, &mut buf)?) {
-            Ok(h) if h.first == first => fat.remove(d, &h)?,
-            Ok(_) | Err(Error::NotFound | Error::Corrupt) => {} // gone, or its sector torn (the record is the name)
-            Err(e) => return Err(e),
+        // 4: the entry in the folder on this chain, if still there, found by its cluster, not its name: a cut that
+        // tore this write after its first bytes leaves the long name deleted and the 8.3 entry live (module doc)
+        if let Some(h) = Self::on_chain(fat, d, dir, first)? {
+            fat.remove(d, &h)?;
         }
         // 5: the new entry
         if !linked {

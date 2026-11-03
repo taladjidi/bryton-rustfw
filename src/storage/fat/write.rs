@@ -28,6 +28,10 @@
 //! - **a delete** only marks the entry (and its long name pieces) 0xe5: the rest of the entry, its first cluster
 //!   included, stays, so a lost file can be found by hand. Only the recorder's own entries are ever deleted, and the
 //!   old entry of a ride HISTORY's DELETE moves into `\Rustfw\Deleted` (`trash`, the second half of a move).
+//!   "All of it or none" holds for a sector that a cut leaves old or new (reliable write) or garbage; a card that
+//!   keeps the new bytes up to a point can leave a delete's long name deleted and its 8.3 entry live (its alias
+//!   alone), or a new entry's long name without its 8.3 entry, or that entry without its size. A move done again
+//!   after a cut looks for the old entry by its chain ([`Fat::locate_chain`]), never only by its name.
 //! - **a revive** ([`Fat::revive`], the undo of a move a full card cannot finish): the first bytes a delete marked
 //!   written back, the long name's pieces in the sector before first; no cluster taken.
 //! - **FSInfo** (free count, next free hint) is written after the FAT sectors it counts; a cut between leaves the
@@ -55,8 +59,8 @@
 #![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
 use super::{
-    DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, SECTOR_U32, fold, lfn_eq, short_eq, short_sum,
-    u16_at, u32_at,
+    Cursor, DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, SECTOR_U32, fold, lfn_eq, short_eq,
+    short_sum, u16_at, u32_at,
 };
 
 /// End of chain, as written.
@@ -508,14 +512,37 @@ impl Fat {
                 if f.dir {
                     return Err(Error::Refused);
                 }
-                let (last, clusters) = self.chain_end(d, f.cluster)?;
-                let slot = u8::try_from(c.entry.checked_sub(1).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)?;
-                let entry_lba = self.lba(c.cluster) + c.sector;
-                let (first, size) = (f.cluster, f.size);
-                return Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster });
+                return self.handle_at(d, &c, dir, f);
             }
         }
         Err(Error::NotFound)
+    }
+
+    /// The first file in `dir` on the chain from `first`, whatever its name: [`Fat::locate`] by cluster. A move that
+    /// must never leave two entries on one chain asks this, not the name: a cut that tears [`Fat::remove`]'s write
+    /// after its first bytes (a card without reliable write) leaves the long name's pieces deleted and the 8.3 entry
+    /// after them live, named by its alias alone. [`Error::NotFound`] for an empty file's cluster 0 (any would match).
+    pub fn locate_chain(&mut self, d: &mut impl Disk, dir: File, first: u32) -> Result<Handle, Error> {
+        if !self.valid(first) {
+            return Err(Error::NotFound);
+        }
+        let mut c = self.cursor(dir)?;
+        while let Some((e, _)) = self.next_raw(d, &mut c)? {
+            match self.file_of(&e) {
+                Ok(f) if !f.dir && f.cluster == first => return self.handle_at(d, &c, dir, f),
+                _ => {} // another file, a folder, or an entry a torn sector made out of the volume
+            }
+        }
+        Err(Error::NotFound)
+    }
+
+    /// The handle of file `f`, the entry `c` just read in `dir`.
+    fn handle_at(&mut self, d: &mut impl Disk, c: &Cursor, dir: File, f: File) -> Result<Handle, Error> {
+        let (last, clusters) = self.chain_end(d, f.cluster)?;
+        let slot = u8::try_from(c.entry.checked_sub(1).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)?;
+        let entry_lba = self.lba(c.cluster) + c.sector;
+        let (first, size) = (f.cluster, f.size);
+        Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster })
     }
 
     /// Fails unless `name` is one this writer gives and nothing in `dir` has it.
