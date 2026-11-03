@@ -121,8 +121,11 @@ pub trait UsbLink: Host {
 /// The main loop's state between passes: the USB link once started, the dev link's protocol, the loop's rules.
 pub struct MainLoop<L> {
     link: Option<L>,
-    /// When the link must be up again, ms, and the reconnects left: armed by a Stop with the cable in or a poll gap.
-    recover: Option<(u32, u8)>,
+    /// When the link must be up again (ms), the reconnects left, and whether a Stop with the cable in armed it (only
+    /// that one may reconnect a suspended link: after a stall, a suspend is a host that sleeps, not one that forgot us).
+    recover: Option<(u32, u8, bool)>,
+    /// The watch saw the link `Up` since the last reconnect (a charger with no data host never does: no stall recovery).
+    seen_up: bool,
     /// The loop's clock at the last USB poll, ms (0: none yet).
     last_poll: u32,
     session: Session,
@@ -135,6 +138,7 @@ impl<L: UsbLink> MainLoop<L> {
         MainLoop {
             link: None,
             recover: None,
+            seen_up: false,
             last_poll: 0,
             session: Session::new(),
             policy: LoopPolicy::new(cpu_hz, timer_max_ms),
@@ -235,7 +239,7 @@ impl<L: UsbLink> MainLoop<L> {
                     o => {
                         // macOS drops a device that is not served for a Stop: it must be back up after the last one
                         if self.link.is_some() {
-                            self.recover = Some((self.policy.now_ms().wrapping_add(RECOVER_MS), RECOVER_TRIES));
+                            self.recover = Some((self.policy.now_ms().wrapping_add(RECOVER_MS), RECOVER_TRIES, true));
                         }
                         Some((us, flags, o))
                     }
@@ -318,23 +322,33 @@ impl<L: UsbLink> MainLoop<L> {
                         }
                         let now = self.policy.now_ms();
                         let watched = l.watch(now, app.drive_failed());
-                        // a poll long after the last (a stall, a long job) loses the link the same way
-                        if self.last_poll != 0 && now.wrapping_sub(self.last_poll) > STALL_GAP_MS {
-                            self.recover = Some((now.wrapping_add(RECOVER_MS), RECOVER_TRIES));
+                        // a poll long after the last (a stall, a long job) loses the link the same way, if it was up
+                        if self.last_poll != 0 && now.wrapping_sub(self.last_poll) > STALL_GAP_MS && self.seen_up {
+                            let stop = self.recover.is_some_and(|r| r.2);
+                            self.recover = Some((now.wrapping_add(RECOVER_MS), RECOVER_TRIES, stop));
                         }
                         self.last_poll = now.max(1);
-                        // due and still not up (suspended for good, never enumerated): the pull-up off and on, the only
-                        // thing a host that forgot the port notices (inferred; docs/usb.md). A drop did that itself.
-                        if let Some((_, left)) = self.recover.filter(|(d, _)| now.wrapping_sub(*d) < 1 << 31) {
+                        self.seen_up = match watched {
+                            UsbWatch::Up => true,
+                            UsbWatch::Drop => false,
+                            _ => self.seen_up,
+                        };
+                        // due and still not up (never enumerated; suspended for good after a Stop): the pull-up off and
+                        // on, the only thing a host that forgot the port notices (inferred; docs/usb.md). A drop did
+                        // that itself; it counts as a try.
+                        if let Some((_, left, stop)) = self.recover.filter(|r| now.wrapping_sub(r.0) < 1 << 31) {
+                            let next = Some((now.wrapping_add(RECOVER_RETRY_MS), left.saturating_sub(1), stop));
                             self.recover = match watched {
                                 UsbWatch::Up => None,
-                                UsbWatch::Drop => Some((now.wrapping_add(RECOVER_RETRY_MS), left)),
-                                _ if left > 0 => {
+                                UsbWatch::Suspended if !stop => None,
+                                _ if left == 0 => None,
+                                UsbWatch::Drop => next,
+                                _ => {
                                     l.recover(now);
+                                    self.seen_up = false;
                                     self.policy.stops.recovered();
-                                    Some((now.wrapping_add(RECOVER_RETRY_MS), left - 1))
+                                    next
                                 }
-                                _ => None,
                             };
                         }
                         // before usb_dropped, which leaves registers 0 and 31 to a snapshot written for this drop

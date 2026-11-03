@@ -207,22 +207,97 @@ fn the_bench_allows_stop_with_the_cable_in_for_its_seconds() {
     assert_eq!(sim.backup[drops], 0x0b00_0001, "a drop well after the bench is logged");
 }
 
-#[test]
-fn a_link_left_suspended_after_the_bench_is_reconnected() {
-    let (mut sim, mut app, mut main) = unit();
+/// A unit with the cable in and the link up from the start of the run.
+fn linked() -> (Sim, App, MainLoop<SimLink>, SimLink) {
+    let (mut sim, app, main) = unit();
     let link = SimLink::default();
+    sim.gnss.expect = Some("stream time-out"); // the stall is on purpose
     (sim.main.link, sim.main.vbus) = (Some(link.clone()), true);
+    (sim, app, main, link)
+}
+
+fn recovers(link: &SimLink) -> usize {
+    link.0.borrow().log.iter().filter(|l| **l == "recover").count()
+}
+
+fn bench_and_stall(link: &SimLink, bench: bool) {
+    if bench {
+        link.0.borrow_mut().effects.push_back(Effect::BenchIdleStop(10));
+    } else {
+        link.0.borrow_mut().stall_ms = 5000; // `bench stall` is not counted by the loop's clock, a long job is
+    }
+}
+
+#[test]
+fn a_link_up_after_the_bench_or_a_stall_is_left_alone() {
+    let (mut sim, mut app, mut main, link) = linked();
     until(&mut sim, &mut app, &mut main, 80_000);
-    link.0.borrow_mut().effects.push_back(Effect::BenchIdleStop(10));
-    // macOS forgot the port: the device sees a suspend that never ends (the unit, 2026-11-03)
-    link.0.borrow_mut().watches.extend([UsbWatch::Suspended; 400_000]);
-    until(&mut sim, &mut app, &mut main, 112_000);
-    let n = link.0.borrow().log.iter().filter(|l| **l == "recover").count();
-    let l = link.0.borrow();
-    let polls = l.log.iter().filter(|x| **x == "poll").count();
-    assert!((1..=3).contains(&n), "reconnected {n} times, {} watches left, {polls} polls", l.watches.len());
-    drop(l);
-    assert_eq!(main.stats().usb_recoveries as usize, n);
+    bench_and_stall(&link, true);
+    until(&mut sim, &mut app, &mut main, 110_000);
+    bench_and_stall(&link, false);
+    until(&mut sim, &mut app, &mut main, 140_000);
+    assert_eq!((recovers(&link), main.stats().usb_recoveries), (0, 0));
+}
+
+#[test]
+fn a_link_stuck_down_after_a_stall_is_reconnected_three_times_only() {
+    let (mut sim, mut app, mut main, link) = linked();
+    until(&mut sim, &mut app, &mut main, 80_000);
+    link.0.borrow_mut().rest = Some(UsbWatch::Down);
+    bench_and_stall(&link, false);
+    until(&mut sim, &mut app, &mut main, 200_000);
+    assert_eq!((recovers(&link), main.stats().usb_recoveries), (3, 3));
+}
+
+#[test]
+fn a_link_suspended_after_the_bench_is_reconnected_but_not_after_a_stall() {
+    let (mut sim, mut app, mut main, link) = linked();
+    until(&mut sim, &mut app, &mut main, 80_000);
+    link.0.borrow_mut().rest = Some(UsbWatch::Suspended);
+    bench_and_stall(&link, false);
+    until(&mut sim, &mut app, &mut main, 120_000);
+    assert_eq!(recovers(&link), 0, "a host that sleeps is left alone");
+    bench_and_stall(&link, true);
+    until(&mut sim, &mut app, &mut main, 200_000);
+    assert_eq!(recovers(&link), 3, "the port the Mac forgot (the unit, 2026-11-03)");
+    assert_eq!(main.stats().usb_recoveries, 3);
+}
+
+#[test]
+fn a_drop_is_not_a_recovery() {
+    let (mut sim, mut app, mut main, link) = linked();
+    until(&mut sim, &mut app, &mut main, 80_000);
+    link.0.borrow_mut().rest = Some(UsbWatch::Drop);
+    bench_and_stall(&link, true);
+    until(&mut sim, &mut app, &mut main, 200_000);
+    assert_eq!((recovers(&link), main.stats().usb_recoveries), (0, 0));
+}
+
+#[test]
+fn a_new_bench_resets_the_tries() {
+    let (mut sim, mut app, mut main, link) = linked();
+    until(&mut sim, &mut app, &mut main, 80_000);
+    link.0.borrow_mut().rest = Some(UsbWatch::Down);
+    bench_and_stall(&link, true);
+    until(&mut sim, &mut app, &mut main, 106_000);
+    let first = recovers(&link);
+    assert!((1..=2).contains(&first), "{first} tries so far");
+    bench_and_stall(&link, true);
+    until(&mut sim, &mut app, &mut main, 250_000);
+    assert_eq!(recovers(&link), first + 3);
+}
+
+#[test]
+fn a_charger_with_no_host_is_never_reconnected_after_a_stall() {
+    let (mut sim, mut app, mut main, link) = linked();
+    link.0.borrow_mut().rest = Some(UsbWatch::Down);
+    until(&mut sim, &mut app, &mut main, 80_000);
+    for _ in 0..3 {
+        bench_and_stall(&link, false);
+        let to = sim.ms + 20_000;
+        until(&mut sim, &mut app, &mut main, to);
+    }
+    assert_eq!(recovers(&link), 0);
 }
 
 /// A heart-rate strap at 72 bpm: page 0 with the last beat's time (1/1024 s) and count moving on with the clock, so the
