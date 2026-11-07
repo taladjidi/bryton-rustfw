@@ -18,7 +18,11 @@
 //! fills the queue and refills it when the stack reports the slots free (`HVN_TX_COMPLETE`), and while a READ runs the
 //! loop passes every [`FAST_POLL_MS`]. **Only during a READ** the unit also asks for data length 251, the 2M PHY and
 //! 15 to 30 ms without latency ([`FAST_PARAMS`]; Apple's Accessory Design Guidelines, QA1931), and gives them back
-//! (`PPCP` of app/phone.rs and PHY auto) when the answer ends, stalls, is cancelled or the link drops. The
+//! (`PPCP` of app/phone.rs and PHY auto) when the answer ends, stalls, is cancelled or the link drops. The unit
+//! measured 3 KB/s on 2026-11-07 (docs/status.md), so what the link really has is kept in [`LinkInfo`] (the interval,
+//! PHY and data length from the stack's events, the boost calls' result codes, the last READ's bytes, time, frames and
+//! confirmations) and shown by `dev.py info`; the connection event length extension (`nrf::OPT_CONN_EVT_EXT`) keeps an
+//! event going while data is queued. The
 //! UART (1 Mbaud, about 100 KB/s raw, 2.6 ms for a full notification) is then the cap.
 
 use crate::ble::{self, Char};
@@ -43,6 +47,77 @@ const RESTORE_TRIES: u8 = 20;
 const FAST_DLE: u16 = 251;
 /// A transfer whose frame the stack takes for this long is dropped.
 const STALL_MS: u32 = 5000;
+
+/// What the phone link really has, for `dev.py info` (src/link/dev.rs): the values the stack reported by events and the
+/// result codes of the boost calls, and the last READ's size, time and the stack's confirmations. Zero: not seen.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct LinkInfo {
+    /// The connection interval in force, 1.25 ms units (the connect and update events).
+    pub interval: u16,
+    /// The PHY the link transmits on (1 or 2; PHY update event).
+    pub phy: u8,
+    /// The data length in force, octets we send (data length update event).
+    pub dle: u16,
+    /// Result codes of the last boost's calls (parameters, data length, PHY): 0 accepted, else the error code (cut to
+    /// 254; 255 the chip did not answer).
+    pub boost: [u8; 3],
+    /// The last READ: file bytes the stack took, ms from its command to its last frame, notifications taken and
+    /// HVN_TX_COMPLETE confirmations counted (since its command).
+    pub bytes: u32,
+    /// See `bytes`.
+    pub ms: u32,
+    /// See `bytes`.
+    pub sent: u32,
+    /// See `bytes`. Confirmations the unit saw: an event the pass drops while a command waits is not counted, so this
+    /// can fall short of `sent` (the simulator: 433 of 488).
+    pub hvn: u32,
+    /// The time of the READ's command, [`App`]'s `up_ms`.
+    t0: u32,
+}
+
+impl LinkInfo {
+    /// A READ begins at `now`.
+    fn begin(&mut self, now: u32) {
+        (self.bytes, self.ms, self.sent, self.hvn, self.t0) = (0, 0, 0, 0, now);
+    }
+
+    /// The stack took a READ frame of `bytes` file bytes at `now`.
+    fn frame(&mut self, now: u32, bytes: u32) {
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.sent = self.sent.saturating_add(1);
+        self.ms = now.saturating_sub(self.t0);
+    }
+
+    /// The stack confirmed `n` notifications.
+    pub(crate) fn confirmed(&mut self, n: u8) {
+        self.hvn = self.hvn.saturating_add(u32::from(n));
+    }
+
+    /// A boost call's result as one byte.
+    fn code(r: Result<(), nrf::Error>) -> u8 {
+        match r {
+            Ok(()) => 0,
+            Err(nrf::Error::Code(c)) => c.clamp(1, 254) as u8,
+            Err(nrf::Error::Timeout) => 255,
+        }
+    }
+
+    /// The link is gone: what it had is not true any more (the last READ stays).
+    fn link_down(&mut self) {
+        (self.interval, self.phy, self.dle, self.boost) = (0, 0, 0, [0; 3]);
+    }
+
+    /// An event of the phone's link that tells what it has.
+    pub(crate) fn seen(&mut self, e: &ble::Event) {
+        match *e {
+            ble::Event::ConnParamUpdate { params, .. } => self.interval = params.0,
+            ble::Event::Connected { params: Some(p), .. } => self.interval = p.0,
+            ble::Event::PhyUpdate { status: 0, tx, .. } => self.phy = tx,
+            ble::Event::DataLengthUpdate { octets, .. } => self.dle = octets.0,
+            _ => {}
+        }
+    }
+}
 
 /// What is being answered. The listing's cursor holds a sector: no heap, so the enum is as large as it (the state
 /// lives once, in the app's static cell).
@@ -95,6 +170,8 @@ pub(crate) struct FileSvc {
     restore_tries: u8,
     /// The longest value Data holds (the characteristic's max): the frame never passes it.
     pub(crate) max_frame: usize,
+    /// What the link really has (`dev.py info`).
+    pub(crate) info: LinkInfo,
 }
 
 impl FileSvc {
@@ -114,6 +191,7 @@ impl FileSvc {
             link: None,
             restore_tries: 0,
             max_frame: fs::FRAME_MAX,
+            info: LinkInfo { interval: 0, phy: 0, dle: 0, boost: [0; 3], bytes: 0, ms: 0, sent: 0, hvn: 0, t0: 0 },
         }
     }
 
@@ -125,6 +203,7 @@ impl FileSvc {
     /// The link is gone (or reset): back to the defaults, nothing to give back.
     pub(crate) fn link_down(&mut self) {
         self.reset();
+        self.info.link_down();
         (self.mtu, self.boosted, self.link, self.restore_tries) = (ble::ATT_MTU, false, None, 0);
     }
 
@@ -162,9 +241,12 @@ impl FileSvc {
     }
 
     /// The stack took the frame in `out`: what it carried counts.
-    fn taken(&mut self) {
+    fn taken(&mut self, now: u32) {
         if let Job::List { count, .. } | Job::Read { count, .. } = &mut self.job {
             *count = count.saturating_add(self.pending);
+        }
+        if matches!(self.job, Job::Read { .. }) {
+            self.info.frame(now, self.pending);
         }
         (self.out_len, self.pending) = (0, 0);
     }
@@ -324,7 +406,7 @@ impl App {
         if !self.phone.secure || self.phone.stored.bond.is_none() {
             return;
         }
-        let busy = !self.ride_settled() || self.emmc.lent();
+        let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
         let svc = &mut self.phone.files;
         svc.stall_ms = 0;
         match fs::Command::parse(written) {
@@ -336,10 +418,17 @@ impl App {
             Ok(fs::Command::Read { seq, offset, name }) if !busy => {
                 svc.reset();
                 svc.job = Job::Read { seq, name, offset, file: None, seek: Seek::new(), count: 0 };
+                svc.info.begin(now);
             }
             Ok(fs::Command::List { seq } | fs::Command::Read { seq, .. }) => svc.finish(seq, Status::Busy, 0),
             Err((seq, status)) => svc.finish(seq, status, 0),
         }
+    }
+
+    /// What the phone link has, for `info`: the ATT MTU, whether the chip took the event length extension, and the
+    /// link's `LinkInfo`.
+    pub fn phone_link(&self) -> (u16, bool, LinkInfo) {
+        (self.phone.files.mtu, self.ble.is_some_and(|v| v.ext), self.phone.files.info)
     }
 
     /// The fast link is on: the chip has the larger MTU and the PHONE menu's FAST LINK row is on.
@@ -361,9 +450,12 @@ impl App {
     /// speed, nothing else: the errors are dropped).
     fn boost(&mut self, b: &mut impl Board, conn: u16) {
         let rx = &mut self.rx;
-        let _ = ble::conn_param_update(b, rx, conn, FAST_PARAMS);
-        let _ = ble::data_length_set(b, rx, conn, FAST_DLE);
-        let _ = ble::phy_set(b, rx, conn, 2);
+        let boost = [
+            LinkInfo::code(ble::conn_param_update(b, rx, conn, FAST_PARAMS)),
+            LinkInfo::code(ble::data_length_set(b, rx, conn, FAST_DLE)),
+            LinkInfo::code(ble::phy_set(b, rx, conn, 2)),
+        ];
+        self.phone.files.info.boost = boost;
         self.phone.files.boosted = true;
     }
 
@@ -411,7 +503,7 @@ impl App {
             if ble::notify(b, &mut self.rx, conn, data, frame).is_err() {
                 break; // the queue is full (or Data is not subscribed): the same frame next pass
             }
-            svc.taken();
+            svc.taken(self.up_ms);
             (svc.stall_ms, sent) = (0, true);
         }
         let svc = &mut self.phone.files;

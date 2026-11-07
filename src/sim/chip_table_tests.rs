@@ -93,6 +93,7 @@ fn every_command_rustfw_builds_decodes_on_the_chip() {
     }
     let _ = ble::descriptor_add(b, rx, 2, 0x2908, &[0, 1], ble::ENCRYPTED);
     let _ = ble::value_set(b, rx, 3, &[7; 100]);
+    let _ = nrf::call(b, rx, nrf::OPT_CONN_EVT_EXT, &mut []);
     nrf::system_off(b, &mut nrf::Rx::new(), true);
     // every modelled row was exercised
     let sent: Vec<(u8, u8)> = b.nordic.got.iter().map(|p| (p[0], p[1])).collect();
@@ -164,7 +165,7 @@ fn a_long_app_identifier_is_not_sent_to_the_chip() {
 /// The commands stock never sends (`Stock::Never` rows), proven on Bryton's real app by `tools/nrf_emu.py selftest`:
 /// its NEVER list replays the bytes of [`NEVER_BYTES`], and the app answers each with `01 <op> <result>`, no hang.
 /// Keep the two lists in step.
-const EMULATED: &[u8] = &[0x74, 0x78, 0x8d, 0x9d, 0xa3, 0xa4];
+const EMULATED: &[u8] = &[0x67, 0x74, 0x78, 0x8d, 0x9d, 0xa3, 0xa4];
 
 /// The `Stock::Never` commands as rustfw's builders send them, in hex (what the selftest replays).
 const NEVER_BYTES: &[&str] = &[
@@ -174,6 +175,7 @@ const NEVER_BYTES: &[&str] = &[
     "009d00000d00",
     "00a3020001010829010121000200000200020001000101",
     "00a4ffff0300010000030001070707",
+    "0067020000000101",
 ];
 
 #[test]
@@ -203,6 +205,7 @@ fn the_never_commands_go_out_as_the_selftest_replays_them() {
     let _ = ble::hv_confirm(b, rx, 0, 0x000d);
     let _ = ble::descriptor_add(b, rx, 2, 0x2908, &[0, 1], ble::ENCRYPTED);
     let _ = ble::value_set(b, rx, 3, &[7; 3]);
+    let _ = nrf::call(b, rx, nrf::OPT_CONN_EVT_EXT, &mut []);
     let hex: Vec<std::string::String> =
         b.nordic.got.iter().map(|p| p.iter().map(|x| format!("{x:02x}")).collect()).collect();
     let want: Vec<std::string::String> = NEVER_BYTES.iter().map(|s| (*s).into()).collect();

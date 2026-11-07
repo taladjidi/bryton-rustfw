@@ -510,6 +510,8 @@ pub struct Version {
     pub central: bool,
     /// The ATT MTU the chip was configured for ([`FAST_MTU`]), 23 when the fast link is off or the chip refused it.
     pub mtu: u16,
+    /// The connection event length extension was accepted ([`OPT_CONN_EVT_EXT`]); false off the fast link.
+    pub ext: bool,
 }
 
 /// `sd_ble_cfg_set`.
@@ -534,11 +536,21 @@ pub const FAST_MTU: u16 = 247;
 /// full packets with one to spare. Each queued value holds an MTU-sized buffer in the chip's RAM, which Bryton's app
 /// fixes; when the chip refuses, [`start`] falls back.
 pub const FAST_QUEUE: u8 = 4;
-/// The connection event length of the fast link, 1.25 ms units: 3 (3.75 ms), as the two-link configuration has had it
-/// since the start, so nothing in the chip's radio schedule changes outside a download beyond the MTU. A 251-byte
-/// packet at the 2M PHY takes about 1 ms, so an event still holds two or three during a READ; at 1M it holds one
-/// (a longer event, 6, was the first design and is a later step if the unit's rate needs it).
-pub const FAST_EVENT_LEN: u8 = 3;
+/// The connection event length of the fast link, 1.25 ms units: 6 (7.5 ms), twice the default 3 (3.75 ms moved 3 KB/s
+/// on the unit, 2026-11-07: at the 1M PHY and data length 27 one 244-byte notification needs ten packets, 6.7 ms).
+/// Not longer: two links share the radio (the trainer's interval is 30 to 60 ms, [`crate::ble::CENTRAL_PARAMS`]), and no
+/// source says the SoftDevice grants 24 to both; the real throughput comes from [`OPT_CONN_EVT_EXT`], which keeps an
+/// event going while data is queued and the radio is free (Nordic's throughput recipe, ble_app_att_mtu_throughput).
+pub const FAST_EVENT_LEN: u8 = 6;
+
+/// `sd_ble_opt_set` (BLE_SVC_BASE 0x60 + 7: ENABLE, EVT_GET, UUID_VS_ADD, UUID_DECODE, UUID_ENCODE, VERSION_GET,
+/// USER_MEM_REPLY, OPT_SET; pc-ble-driver `include/sd_api_v5/ble.h`).
+pub const SD_BLE_OPT_SET: u8 = 0x67;
+/// Connection event length extension on (`BLE_COMMON_OPT_CONN_EVT_EXT`: the second of `BLE_COMMON_OPTS`, from
+/// `BLE_OPT_BASE` 0x01 in ble_ranges.h, so id 2; `ble_common_opt_conn_evt_ext_t` is one bit, `enable`): the id as a u32,
+/// a presence byte, the option's byte. Sent after `sd_ble_enable` on the fast link only; the layout follows the cfg_set
+/// one (inferred), and the real app's decoding is checked in nrf_session_tests.rs.
+pub const OPT_CONN_EVT_EXT: &[u8] = &[CMD, SD_BLE_OPT_SET, 2, 0, 0, 0, 1, 1];
 
 /// The fast link's configuration, in place of [`CFG`]: the same two links, and
 /// - `BLE_CONN_CFG_GATT` (0x23, `ble_gatt_conn_cfg_t`: `att_mtu` u16);
@@ -612,6 +624,8 @@ pub fn configure(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     }
     let (central, mtu) = (level > 0, if level > 1 { FAST_MTU } else { 23 });
     call(b, &mut rx, &[CMD, SD_BLE_ENABLE], &mut out)?;
+    // optional: a refusal costs speed only
+    let ext = level > 1 && call(b, &mut rx, OPT_CONN_EVT_EXT, &mut []).is_ok();
     let n = call(b, &mut rx, &[CMD, SD_BLE_VERSION_GET, 1], &mut out)?;
     match out.get(..n) {
         Some(&[image, b0, b1, s0, s1, ..]) => Ok(Version {
@@ -620,6 +634,7 @@ pub fn configure(b: &mut impl Board, level: u8) -> Result<Version, Error> {
             sd: u16::from_le_bytes([s0, s1]),
             central,
             mtu,
+            ext,
         }),
         _ => Err(Error::Code(u32::MAX)),
     }

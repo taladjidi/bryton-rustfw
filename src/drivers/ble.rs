@@ -491,7 +491,7 @@ pub fn exchange_mtu_reply(b: &mut impl Board, rx: &mut Rx, conn: u16, mtu: u16) 
 }
 
 /// Asks for the PHYs `phys` both ways (`BLE_GAP_PHY_*` bits: 0 auto, 1 1 Mbit, 2 2 Mbit); the answer is
-/// BLE_GAP_EVT_PHY_UPDATE (0x22, not decoded here). Whether the nRF52832 and its SoftDevice do 2M is inferred: an error
+/// BLE_GAP_EVT_PHY_UPDATE ([`Event::PhyUpdate`]). Whether the nRF52832 and its SoftDevice do 2M is inferred: an error
 /// code, or a PHY that stays 1M, costs speed and nothing else.
 pub fn phy_set(b: &mut impl Board, rx: &mut Rx, conn: u16, phys: u8) -> Result<(), Error> {
     Cmd::new(GAP_PHY_UPDATE).u16(conn).u8(1).u8(phys).u8(phys).run(b, rx)
@@ -610,6 +610,26 @@ pub enum Event<'a> {
         conn: u16,
         /// Interval (min = max in force), latency, supervision time-out.
         params: ConnParams,
+    },
+    /// The PHY in force (BLE_GAP_EVT_PHY_UPDATE 0x22): 1 is 1 Mbit, 2 is 2 Mbit, 4 coded.
+    PhyUpdate {
+        /// Connection handle.
+        conn: u16,
+        /// 0 when the procedure worked.
+        status: u8,
+        /// The PHY each way.
+        tx: u8,
+        /// The receiving PHY.
+        rx: u8,
+    },
+    /// The data length in force (BLE_GAP_EVT_DATA_LENGTH_UPDATE 0x24, `ble_gap_data_length_params_t`).
+    DataLengthUpdate {
+        /// Connection handle.
+        conn: u16,
+        /// Largest payload octets we send, then we receive.
+        octets: (u16, u16),
+        /// Longest packet time we send, then receive, us.
+        time: (u16, u16),
     },
     /// The link is gone.
     Disconnected {
@@ -785,6 +805,8 @@ impl Event<'_> {
             | ConnSecUpdate { conn, .. }
             | ConnParamRequest { conn, .. }
             | ConnParamUpdate { conn, .. }
+            | PhyUpdate { conn, .. }
+            | DataLengthUpdate { conn, .. }
             | ParamRequest { conn, .. }
             | UserMemRequest { conn }
             | Write { conn, .. }
@@ -826,6 +848,11 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
         0x12 => {
             let w = |i| crate::storage::bytes::le16(f, i);
             Event::ConnParamUpdate { conn: conn?, params: (w(2)?, w(4)?, w(6)?, w(8)?) }
+        }
+        0x22 => Event::PhyUpdate { conn: conn?, status: *f.get(2)?, tx: *f.get(3)?, rx: *f.get(4)? },
+        0x24 => {
+            let w = |i| crate::storage::bytes::le16(f, i);
+            Event::DataLengthUpdate { conn: conn?, octets: (w(2)?, w(4)?), time: (w(6)?, w(8)?) }
         }
         0x11 => Event::Disconnected { conn: conn?, reason: *f.get(2)? },
         0x13 => Event::SecParamsRequest { conn: conn? },

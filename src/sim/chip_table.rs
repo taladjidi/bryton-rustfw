@@ -161,6 +161,15 @@ pub const CMDS: &[Cmd] = &[
         Stock::Sends,
         "ble_conn.c: ble_user_mem_reply_req_dec"
     ),
+    cmd!(
+        0,
+        0x67,
+        "sd_ble_opt_set",
+        &[L::U32, L::Cond(&[L::U8])],
+        Fixed(0),
+        Stock::Never,
+        "ble_conn.c: ble_opt_set_req_dec (BLE_COMMON_OPT_CONN_EVT_EXT, one byte)"
+    ),
     cmd!(0, 0x69, "sd_ble_cfg_set", &[L::Cfg], Fixed(0), Stock::Sends, "ble_conn.c: ble_cfg_set_req_dec"),
     cmd!(
         0,
