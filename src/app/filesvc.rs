@@ -1,4 +1,4 @@
-//! The file service on the phone bond, reads only (roadmap 9, A1; the workouts folder, 2026-11-07): the GATT table
+//! The file service on the phone bond (roadmap 9, A1; the workouts folder and its writes, 2026-11-07): the GATT table
 //! (a vendor service, Control to write, Data to notify, both needing the encrypted bond), the commands arriving from
 //! the phone, and the answer streamed a few notifications a pass. The frames and the protocol are in link/filesvc.rs.
 //!
@@ -10,6 +10,14 @@
 //! READ_IN gives it back: a day folder that changed between the two answers NOT FOUND, never another file. Finding a
 //! workout walks at most [`LOCATE_MAX`] entries of its day. Two cursors, so
 //! `Job` holds two sectors while a workout listing runs.
+//!
+//! **Writes** (WRITE_BEGIN / WRITE_DATA / WRITE_END / DELETE, folder 1 only): done as the command arrives, in
+//! [`App::files_command`], since each is small: a WRITE_DATA buffers its bytes in the read block and writes the
+//! sectors it fills (two at most for the largest frame), WRITE_END reads the file back (8 KB at most) and moves it
+//! into the calendar (storage/workout_write.rs has the order and why a cut leaves the calendar whole). WRITE_BEGIN is
+//! answered once the temporary file is ready, a WRITE_DATA only when refused (out of order, past the size, a card
+//! error: the write is dropped). Only in a build that may write the card (READ ONLY otherwise), and a write the phone
+//! leaves for [`STALL_MS`] is dropped. A failed card write makes the FAT copies suspect, as a screenshot's does.
 //!
 //! **Never under the recorder:** a command while a ride runs, is paused or is being saved ([`App::ride_settled`]), or
 //! while the card is lent to a computer, is answered BUSY; a transfer under way when one of those begins ends with
@@ -46,9 +54,10 @@
 //! hold it falls back to no fast link at all) or the phone; `full` near 0 and a low rate, the loop or the UART.
 
 use crate::ble::{self, Char};
+use crate::fat::write::Handle;
 use crate::fat::{self, Cursor, File, Seek};
 use crate::filesvc::{self as fs, Frame, Status};
-use crate::storage::workout_file;
+use crate::storage::{workout_file, workout_write};
 use crate::*;
 
 /// Frames tried in one pass.
@@ -56,7 +65,7 @@ const PER_PASS: usize = 8;
 /// Directory entries examined for the next ride in one pass.
 const SCAN: usize = 8;
 /// Entries of a day folder [`locate`] walks at most (the listing issues numbers below 100).
-const LOCATE_MAX: usize = 200;
+const LOCATE_MAX: usize = workout_write::WALK;
 /// File bytes read from the card at once: a few chunks, so the card is read once per [`PER_PASS`] frames.
 const BLOCK: usize = 1024;
 /// The loop's pass while a READ runs on the fast link, ms (the stack takes a few notifications per connection event).
@@ -177,6 +186,15 @@ enum Job {
         /// Bytes sent.
         count: u32,
     },
+    /// A workout being received: its day, CRC-32 and the bytes received so far into the temporary file `h` (its size
+    /// the file's). The bytes of the sector being filled wait in `blk`.
+    Write {
+        seq: u8,
+        day: [u8; 8],
+        crc: u32,
+        got: u32,
+        h: Handle,
+    },
 }
 
 impl Job {
@@ -294,9 +312,15 @@ impl FileSvc {
 
     /// Replaces whatever is pending with an END frame.
     fn finish(&mut self, seq: u8, status: Status, count: u32) {
+        self.reply(seq, status, count);
+        (self.job, self.blk_len, self.blk_pos) = (Job::Idle, 0, 0);
+    }
+
+    /// Replaces whatever is pending with an END frame, the job kept (WRITE_BEGIN's answer).
+    fn reply(&mut self, seq: u8, status: Status, count: u32) {
         let mut f = [0; fs::FRAME_BIG];
         let n = Frame::End { seq, status, count }.encode(&mut f);
-        (self.out, self.out_len, self.pending, self.job, self.blk_len, self.blk_pos) = (f, n, 0, Job::Idle, 0, 0);
+        (self.out, self.out_len, self.pending) = (f, n, 0);
     }
 
     /// The stack took the frame in `out`: what it carried counts.
@@ -314,7 +338,9 @@ impl FileSvc {
     /// phone got is what the END's count says.
     pub(crate) fn abort(&mut self, status: Status) {
         let (seq, count) = match self.job {
-            Job::List { seq, count, .. } | Job::Read { seq, count, .. } => (seq, count),
+            Job::List { seq, count, .. } | Job::Read { seq, count, .. } | Job::Write { seq, got: count, .. } => {
+                (seq, count)
+            }
             Job::Idle => return,
         };
         self.finish(seq, status, count);
@@ -325,7 +351,7 @@ impl FileSvc {
     /// its status and what was sent.
     fn fill(&mut self, d: &mut impl fat::Disk) -> bool {
         let (seq, count) = match self.job {
-            Job::Idle => return false,
+            Job::Idle | Job::Write { .. } => return false, // a write answers as its commands arrive
             Job::List { seq, count, .. } | Job::Read { seq, count, .. } => (seq, count),
         };
         match self.build(d, seq) {
@@ -344,7 +370,7 @@ impl FileSvc {
         let mut f = [0; fs::FRAME_BIG];
         let io = |_| Status::Io;
         match job {
-            Job::Idle => Ok(false),
+            Job::Idle | Job::Write { .. } => Ok(false),
             Job::List { folder, legacy, cur, files, day, ord, .. } => {
                 let mut fat = fat::Fat::mount(d).map_err(io)?;
                 if cur.is_none() {
@@ -363,7 +389,7 @@ impl FileSvc {
                             *files = None;
                             continue;
                         };
-                        if e.file.dir || !is_fit(e.name()) {
+                        if e.file.dir || !workout_write::is_fit(e.name()) {
                             continue;
                         }
                         let n = *ord;
@@ -435,43 +461,17 @@ fn entry(seq: u8, legacy: bool, folder: fs::Folder, key: &[u8], check: u16, size
     })
 }
 
-/// A file name ending in `.fit`, any case, with something before it.
-fn is_fit(name: &[u8]) -> bool {
-    name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(b".fit"))
-}
-
 /// The file `key` of `folder` on the card (a directory is not one). A workout's key is a day folder's name and the
 /// number of the `.fit` among that folder's files, counted as the listing counts them; the file now at that place
 /// must have the name and size the key's check was made of, else NOT FOUND.
 fn locate(fat: &mut fat::Fat, d: &mut impl fat::Disk, folder: fs::Folder, k: fs::Key) -> Result<fat::File, Status> {
-    let key = k.bytes();
-    let find = |e| if e == fat::Error::NotFound { Status::NotFound } else { Status::Io };
     let x = if folder == fs::Folder::Activities {
         let mut buf = [0; fs::FILE_NAME_LEN];
-        let n = fs::file_name(key, &mut buf).ok_or(Status::NotFound)?;
-        let dir = fat.find(d, fat.root(), "Activities").map_err(find)?;
-        fat.find(d, dir, n).map_err(find)?
+        let n = fs::file_name(k.bytes(), &mut buf).ok_or(Status::NotFound)?;
+        let dir = fat.find(d, fat.root(), "Activities").map_err(found)?;
+        fat.find(d, dir, n).map_err(found)?
     } else {
-        let (day, num) = key.split_at_checked(8).ok_or(Status::NotFound)?;
-        let day = core::str::from_utf8(day).map_err(|_| Status::NotFound)?;
-        let num = num.iter().fold(0usize, |v, &c| v * 10 + usize::from(c.wrapping_sub(b'0')));
-        let dir = fat.open(d, "Workout/calendar").map_err(find)?;
-        let dir = fat.find(d, dir, day).map_err(find)?;
-        let mut c = fat.cursor(dir).map_err(find)?;
-        let mut n = 0;
-        let mut found = None;
-        for _ in 0..LOCATE_MAX {
-            let Some(e) = fat.list(d, &mut c).map_err(find)? else { break };
-            if e.file.dir || !is_fit(e.name()) {
-                continue;
-            }
-            if n == num {
-                found = Some(e).filter(|e| fs::name_check(e.name(), e.file.size) == k.check()).map(|e| e.file);
-                break;
-            }
-            n += 1;
-        }
-        found.ok_or(Status::NotFound)?
+        locate_workout(fat, d, k)?.1.file
     };
     if x.dir || (folder == fs::Folder::Workout && x.size as usize > workout_file::FILE_MAX) {
         return Err(Status::NotFound);
@@ -479,10 +479,39 @@ fn locate(fat: &mut fat::Fat, d: &mut impl fat::Disk, folder: fs::Folder, k: fs:
     Ok(x)
 }
 
+/// A FAT error as a lookup answers it.
+fn found(e: fat::Error) -> Status {
+    if e == fat::Error::NotFound { Status::NotFound } else { Status::Io }
+}
+
+/// The workout of key `k` ([`locate`]): its day folder and its entry (a `.fit` file, never a folder), else NOT FOUND.
+fn locate_workout(fat: &mut fat::Fat, d: &mut impl fat::Disk, k: fs::Key) -> Result<(File, fat::Entry), Status> {
+    let (day, num) = k.bytes().split_at_checked(8).ok_or(Status::NotFound)?;
+    let day = core::str::from_utf8(day).map_err(|_| Status::NotFound)?;
+    let num = num.iter().fold(0usize, |v, &c| v * 10 + usize::from(c.wrapping_sub(b'0')));
+    let dir = fat.open(d, workout_write::CALENDAR).map_err(found)?;
+    let dir = fat.find(d, dir, day).map_err(found)?;
+    let mut c = fat.cursor(dir).map_err(found)?;
+    let mut n = 0;
+    for _ in 0..LOCATE_MAX {
+        let Some(e) = fat.list(d, &mut c).map_err(found)? else { break };
+        if e.file.dir || !workout_write::is_fit(e.name()) {
+            continue;
+        }
+        if n == num {
+            return Some((dir, e))
+                .filter(|_| fs::name_check(e.name(), e.file.size) == k.check())
+                .ok_or(Status::NotFound);
+        }
+        n += 1;
+    }
+    Err(Status::NotFound)
+}
+
 /// The count a job has sent (`or` for none).
 fn count_of(job: &Job, or: u32) -> u32 {
     match job {
-        Job::List { count, .. } | Job::Read { count, .. } => *count,
+        Job::List { count, .. } | Job::Read { count, .. } | Job::Write { got: count, .. } => *count,
         Job::Idle => or,
     }
 }
@@ -498,11 +527,12 @@ impl Default for FileSvc {
 pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx, frame: usize) -> Option<(u16, u16, usize)> {
     let ty = ble::uuid_vs_add(b, rx, &fs::BASE).ok()?;
     let svc = ble::service_add_vs(b, rx, (fs::SERVICE, ty)).ok()?;
+    // Control as large as Data: a WRITE_DATA fills the fast link's frame (a table that cannot hold it: 20 bytes, below)
     let control = Char {
         uuid: fs::CONTROL,
         props: ble::WRITE,
         value: &[0],
-        max: fs::FRAME_MAX as u16,
+        max: frame as u16,
         read: ble::NO_ACCESS,
         write: ble::ENCRYPTED,
     };
@@ -514,7 +544,13 @@ pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx, frame: usize) ->
         read: ble::ENCRYPTED,
         write: ble::NO_ACCESS,
     };
-    let c = ble::characteristic_add_vs(b, rx, svc, &control, ty).ok()?;
+    let c = match ble::characteristic_add_vs(b, rx, svc, &control, ty) {
+        Ok(c) => c,
+        Err(_) if frame > fs::FRAME_MAX => {
+            ble::characteristic_add_vs(b, rx, svc, &Char { max: fs::FRAME_MAX as u16, ..control }, ty).ok()?
+        }
+        Err(_) => return None,
+    };
     // a table that cannot hold the big value gets the 20 bytes of the default MTU (the frame follows the max)
     match ble::characteristic_add_vs(b, rx, svc, &data, ty) {
         Ok(d) => Some((c.0, d.0, frame)),
@@ -536,7 +572,7 @@ impl Phone {
 
 impl App {
     /// The phone wrote Control: a command to answer. Only on the encrypted link (the stack enforces it too).
-    pub(crate) fn files_command(&mut self, written: &[u8]) {
+    pub(crate) fn files_command(&mut self, b: &mut impl Board, written: &[u8]) {
         // rides are GPS tracks: the bond, not just an encrypted link (Just Works pairing during the PAIR window)
         if !self.phone.secure || self.phone.stored.bond.is_none() {
             return;
@@ -544,7 +580,17 @@ impl App {
         let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
         let svc = &mut self.phone.files;
         svc.stall_ms = 0;
-        match fs::Command::parse(written) {
+        let cmd = fs::Command::parse(written);
+        if let Ok(
+            c @ (fs::Command::WriteBegin { .. }
+            | fs::Command::WriteData { .. }
+            | fs::Command::WriteEnd { .. }
+            | fs::Command::Delete { .. }),
+        ) = cmd
+        {
+            return self.files_write(b, c, busy);
+        }
+        match cmd {
             Ok(fs::Command::Cancel) => svc.reset(),
             Ok(fs::Command::List { seq }) if !busy => {
                 svc.reset();
@@ -575,7 +621,125 @@ impl App {
                 | fs::Command::ListIn { seq, .. }
                 | fs::Command::ReadIn { seq, .. },
             ) => svc.finish(seq, Status::Busy, 0),
+            Ok(_) => {} // the writes: files_write
             Err((seq, status)) => svc.finish(seq, status, 0),
+        }
+    }
+
+    /// A write command ([`App::files_command`]): refused (and the write under way dropped) unless the card may be
+    /// written now; else done on the card at once, bounded (module doc).
+    #[inline(never)]
+    fn files_write(&mut self, b: &mut impl Board, c: fs::Command, busy: bool) {
+        let (seq, writes) = match c {
+            fs::Command::WriteBegin { seq, .. } | fs::Command::Delete { seq, .. } => (seq, true),
+            fs::Command::WriteData { seq, .. } | fs::Command::WriteEnd { seq } => (seq, false),
+            _ => return,
+        };
+        if matches!(self.phone.files.job, Job::List { .. } | Job::Read { .. }) {
+            // the LIST or READ under way ends with its END (BUSY, what it sent) before this command's answer, refusal
+            // or not: notified now, since the answer takes its place (a full queue loses it: the phone then sees the
+            // new answer only)
+            self.phone.files.abort(Status::Busy);
+            let svc = &mut self.phone.files;
+            if let (Some(conn), Some((_, data))) = (self.phone.conn, svc.handles) {
+                let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
+                if ble::notify(b, &mut self.rx, conn, data, frame).is_ok() {
+                    svc.taken(self.up_ms);
+                }
+            }
+        }
+        let writing = matches!(self.phone.files.job, Job::Write { .. });
+        let why = if busy {
+            Some(Status::Busy)
+        } else if !self.card_writable {
+            Some(Status::ReadOnly)
+        } else if writes == writing {
+            Some(Status::BadRequest) // a WRITE_BEGIN or DELETE mid-write, or data with no write begun
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return self.phone.files.finish(seq, why, count_of(&self.phone.files.job, 0));
+        }
+        let t = fat::write::dos_time(self.rec_time().0);
+        let r = self.write_step(b, c, t);
+        let svc = &mut self.phone.files;
+        match (r, c) {
+            (Ok(()), fs::Command::WriteBegin { .. }) => svc.reply(seq, Status::Ok, 0),
+            (Ok(()), fs::Command::WriteData { .. }) => {}
+            (Ok(()), fs::Command::WriteEnd { .. }) => {
+                let got = count_of(&svc.job, 0);
+                svc.finish(seq, Status::Ok, got);
+            }
+            (Ok(()), _) => svc.finish(seq, Status::Ok, 1),
+            (Err(e), _) => {
+                let got = count_of(&svc.job, 0);
+                svc.finish(seq, e, got);
+                if e == Status::Io {
+                    self.fats_unsure(); // the next writes compare the FAT copies first
+                }
+            }
+        }
+    }
+
+    /// The card work of a write command `c`; Err: its answer.
+    fn write_step(&mut self, b: &mut impl Board, c: fs::Command, t: (u16, u16)) -> Result<(), Status> {
+        if !matches!(c, fs::Command::WriteData { .. }) && self.fats_suspect {
+            // a failed write before: the FAT copies (and FSInfo's count, which the room check reads) made right before
+            // a step that takes or frees clusters (as storage/screenshot.rs's write)
+            let mut d = emmc::Volume(&mut self.emmc, b);
+            fat::Fat::mount(&mut d).and_then(|mut fat| fat.sync_fats(&mut d)).map_err(|_| Status::Io)?;
+            self.fats_equal();
+        }
+        let mut d = emmc::Volume(&mut self.emmc, b);
+        let mount = |d: &mut emmc::Volume<_>| fat::Fat::mount(d).map_err(|_| Status::Io);
+        let svc = &mut self.phone.files;
+        match c {
+            fs::Command::WriteBegin { seq, day, size, crc, .. } => {
+                workout_file::folder_day(&day).ok_or(Status::BadRequest)?;
+                svc.reset();
+                let mut fat = mount(&mut d)?;
+                let h = workout_write::begin(&mut fat, &mut d, size, t)?;
+                (svc.job, svc.blk) = (Job::Write { seq, day, crc, got: 0, h }, [0; BLOCK]);
+                Ok(())
+            }
+            fs::Command::WriteData { offset, data, .. } => {
+                let FileSvc { job: Job::Write { got, h, .. }, blk, blk_len, .. } = svc else {
+                    return Err(Status::BadRequest);
+                };
+                let end = got.checked_add(data.len() as u32).filter(|&e| *got == offset && e <= h.size);
+                let Some(end) = end else { return Err(Status::BadRequest) };
+                let mut rest = data;
+                while !rest.is_empty() {
+                    let room = fat::SECTOR - *blk_len;
+                    let (now, later) = rest.split_at(room.min(rest.len()));
+                    blk.get_mut(*blk_len..*blk_len + now.len()).ok_or(Status::Io)?.copy_from_slice(now);
+                    (*blk_len, *got, rest) = (*blk_len + now.len(), *got + now.len() as u32, later);
+                    if *blk_len == fat::SECTOR || *got == end && end == h.size {
+                        // mounted only when a sector fills: most frames only buffer
+                        let s: &[u8; fat::SECTOR] = blk.first_chunk().ok_or(Status::Io)?;
+                        let mut fat = mount(&mut d)?;
+                        workout_write::put(&mut fat, &mut d, h, (*got - 1) / fat::SECTOR as u32, s)?;
+                        (*blk, *blk_len) = ([0; BLOCK], 0);
+                    }
+                }
+                Ok(())
+            }
+            fs::Command::WriteEnd { .. } => {
+                let Job::Write { day, crc, got, h, .. } = svc.job else { return Err(Status::BadRequest) };
+                if got != h.size {
+                    return Err(Status::Mismatch);
+                }
+                let mut fat = mount(&mut d)?;
+                workout_write::commit(&mut fat, &mut d, &h, &day, crc, t)
+            }
+            fs::Command::Delete { key, .. } => {
+                svc.reset();
+                let mut fat = mount(&mut d)?;
+                let (dir, e) = locate_workout(&mut fat, &mut d, key)?;
+                workout_write::delete(&mut fat, &mut d, dir, &e)
+            }
+            _ => Err(Status::BadRequest),
         }
     }
 
@@ -667,7 +831,8 @@ impl App {
         if sent && matches!(svc.job, Job::Read { .. }) {
             svc.info.turns = svc.info.turns.saturating_add(1);
         }
-        if svc.out_len > 0 && !sent {
+        // a write the phone stopped feeding is dropped as a frame it stopped taking (the temporary file stays, unseen)
+        if (svc.out_len > 0 && !sent) || (svc.out_len == 0 && matches!(svc.job, Job::Write { .. })) {
             svc.stall_ms = svc.stall_ms.saturating_add(self.dt_ms);
             if svc.stall_ms >= STALL_MS {
                 svc.reset();

@@ -63,7 +63,7 @@ pub(super) fn drain(sim: &mut Sim, data: u16) -> Vec<Vec<u8>> {
 }
 
 /// The phone's link drops (the chip's DISCONNECTED too) and it connects again at `back_at` (never: `u64::MAX`).
-fn drop_link(sim: &mut Sim, back_at: u64) {
+pub(super) fn drop_link(sim: &mut Sim, back_at: u64) {
     let ph = sim.nordic.phone.as_mut().unwrap();
     ph.hang_up();
     ph.connect_at = back_at;
@@ -71,7 +71,7 @@ fn drop_link(sim: &mut Sim, back_at: u64) {
 }
 
 /// The phone enables Data again on a new link and the frames of the wait are dropped.
-fn resubscribe(sim: &mut Sim, app: &mut App, data: u16) {
+pub(super) fn resubscribe(sim: &mut Sim, app: &mut App, data: u16) {
     sim.nordic.phone_subscribe(data + 1, true);
     run(sim, app, 200);
     drain(sim, data);
@@ -236,7 +236,7 @@ fn nothing_is_served_without_the_encrypted_bond() {
     assert!(!sim.nordic.phone_write(control, &[1, 1]), "the stack refuses the write");
     // and the app itself ignores one that reaches it on a link it does not hold secure
     app.phone.secure = false;
-    app.files_command(&[1, 1]);
+    app.files_command(&mut sim, &[1, 1]);
     stays_silent(&mut sim, &mut app, data);
 }
 
@@ -687,10 +687,10 @@ fn during_a_fast_read_the_keys_stay_off_and_the_chips_bytes_wake_the_loop() {
     assert!(radio > 0, "no radio pass woken by a byte during the READ");
 }
 
-type End = Option<(Status, u32)>;
+pub(super) type End = Option<(Status, u32)>;
 
 /// LIST_IN of the workout folder: (key, size) of every file, and the answer's END.
-fn list_workouts(sim: &mut Sim, app: &mut App, control: u16, data: u16, seq: u8) -> (Vec<(Key, u32)>, End) {
+pub(super) fn list_workouts(sim: &mut Sim, app: &mut App, control: u16, data: u16, seq: u8) -> (Vec<(Key, u32)>, End) {
     let mut f = [0; 20];
     let n = Command::ListIn { seq, folder: Folder::Workout }.encode(&mut f);
     sim.nordic.phone_write(control, &f[..n]);
@@ -842,4 +842,271 @@ fn a_folder_changed_between_list_and_read_never_serves_another_file() {
     let (k2, s2) = relisted.into_iter().find(|e| e.0.bytes() == key.bytes()).expect("listed again");
     assert_ne!(k2.check(), key.check());
     assert_eq!(read(&mut sim, &mut app, k2).end, Some((Status::Ok, s2)));
+}
+
+/// The day the workouts are sent for.
+pub(super) const DAY: [u8; 8] = *b"20261108";
+
+/// A workout of 40 steps, over 1 KB: its data crosses sectors.
+pub(super) fn long_workout() -> Vec<u8> {
+    let steps: Vec<_> = (0..40u32).map(|i| (0, 60_000 + i, 4, 0, 100 + i, 110 + i, (i % 2) as u8)).collect();
+    crate::storage::workout_file::tests::file(5, "Long one", &steps)
+}
+
+/// The END of a command whose answer is one frame.
+fn answer(sim: &mut Sim, app: &mut App, control: u16, data: u16, raw: &[u8]) -> End {
+    ask_raw(sim, app, control, data, raw, 2000).end
+}
+
+/// Sends `file` for [`DAY`] with `crc`, in WRITE_DATA frames of `chunk` bytes: WRITE_BEGIN's END, then the first
+/// refusal of a WRITE_DATA or WRITE_END's END.
+fn send_workout(sim: &mut Sim, app: &mut App, ends: (u16, u16), file: &[u8], crc: u32, chunk: usize) -> (End, End) {
+    let (control, data) = ends;
+    let mut f = [0; crate::filesvc::FRAME_BIG];
+    let size = file.len() as u32;
+    let n = Command::WriteBegin { seq: 1, folder: Folder::Workout, day: DAY, size, crc }.encode(&mut f);
+    let begun = answer(sim, app, control, data, &f[..n]);
+    if begun != Some((Status::Ok, 0)) {
+        return (begun, None);
+    }
+    for (k, c) in file.chunks(chunk).enumerate() {
+        let n = Command::WriteData { seq: 2, offset: (k * chunk) as u32, data: c }.encode(&mut f);
+        assert_eq!(n, 6 + c.len());
+        sim.nordic.phone_write(control, &f[..n]);
+        pass(sim, app, 20);
+        if let Some(Frame::End { status, count, .. }) = drain(sim, data).iter().find_map(|p| Frame::parse(p)) {
+            return (begun, Some((status, count)));
+        }
+    }
+    (begun, answer(sim, app, control, data, &[8, 3]))
+}
+
+/// The workouts of [`DAY`] on the card: their bytes.
+pub(super) fn day_files(sim: &Sim) -> Vec<Vec<u8>> {
+    crate::storage::workout_write::tests::day_files(&sim.emmc.image, "20261108").into_iter().map(|f| f.1).collect()
+}
+
+fn crc(b: &[u8]) -> u32 {
+    crate::inflate::crc32(b.iter().copied())
+}
+
+#[test]
+fn a_workout_sent_at_either_mtu_is_listed_read_back_whole_and_deleted() {
+    let (mut sim, mut app, control, data) = paired();
+    let lost0 = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    let file = long_workout();
+    assert!(file.len() > 1024, "{} bytes", file.len());
+    for (chunk, seq) in [(14, 20), (crate::filesvc::FRAME_BIG - 6, 30)] {
+        let (begun, ended) = send_workout(&mut sim, &mut app, (control, data), &file, crc(&file), chunk);
+        assert_eq!((begun, ended), (Some((Status::Ok, 0)), Some((Status::Ok, file.len() as u32))), "{chunk}");
+        assert_eq!(day_files(&sim), core::slice::from_ref(&file), "{chunk}: once, the second the same file sent again");
+        let (listed, end) = list_workouts(&mut sim, &mut app, control, data, seq);
+        assert_eq!(end.map(|e| e.0), Some(Status::Ok));
+        let (key, size) = *listed.iter().find(|e| e.0.bytes().starts_with(b"20261108")).expect("listed");
+        assert_eq!(size, file.len() as u32);
+        let read = Command::ReadIn { seq: seq + 1, folder: Folder::Workout, offset: 0, key };
+        let a = ask(&mut sim, &mut app, control, data, read, 20_000);
+        assert_eq!(a.bytes, file, "byte-identical");
+        assert_eq!(crate::storage::workout_file::parse(&a.bytes).unwrap().name(), "LONG ONE");
+    }
+    assert_eq!(
+        crate::fat::write::tests::fsck(&sim.emmc.image),
+        Ok(lost0),
+        "as before: put_file over stock tmp.fit left one"
+    );
+    let (listed, _) = list_workouts(&mut sim, &mut app, control, data, 40);
+    let key = listed.iter().find(|e| e.0.bytes().starts_with(b"20261108")).unwrap().0;
+    // a stale check (another file there now) is NOT FOUND; the listed one deletes it
+    let stale = Key::new(Folder::Workout, key.bytes()).unwrap().with_check(key.check() ^ 1);
+    let mut f = [0; 20];
+    let n = Command::Delete { seq: 41, folder: Folder::Workout, key: stale }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::NotFound, 0)));
+    assert_eq!(day_files(&sim).len(), 1);
+    let n = Command::Delete { seq: 42, folder: Folder::Workout, key }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 1)));
+    assert!(day_files(&sim).is_empty());
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0), "its clusters freed");
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::NotFound, 0)), "gone");
+}
+
+#[test]
+fn every_risky_write_is_refused_and_the_calendar_stays_as_it_was() {
+    let (mut sim, mut app, control, data) = paired();
+    let lost0 = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    let file = long_workout();
+    let send = |sim: &mut Sim, app: &mut App, f: &[u8], c: u32| send_workout(sim, app, (control, data), f, c, 14);
+    let before = sim.emmc.image.clone();
+    // a build that may not write the card: READ ONLY, nothing written
+    app.card_writable = false;
+    assert_eq!(send(&mut sim, &mut app, &file, crc(&file)).0, Some((Status::ReadOnly, 0)));
+    app.card_writable = true;
+    assert!(sim.emmc.image == before, "nothing written");
+    app.emmc.lend(true);
+    assert_eq!(send(&mut sim, &mut app, &file, crc(&file)).0, Some((Status::Busy, 0)), "lent over USB");
+    app.emmc.lend(false);
+    // a CRC that is not the file's, a file that is no workout, one too big
+    assert_eq!(send(&mut sim, &mut app, &file, crc(&file) ^ 1).1, Some((Status::Mismatch, file.len() as u32)));
+    let junk = std::vec![0x55u8; 700];
+    assert_eq!(send(&mut sim, &mut app, &junk, crc(&junk)).1, Some((Status::BadRequest, 700)));
+    let big = std::vec![0u8; crate::storage::workout_file::FILE_MAX + 1];
+    assert_eq!(send(&mut sim, &mut app, &big, crc(&big)).0, Some((Status::BadRequest, 0)));
+    // the rides' folder, a day that is no date, data with no write begun, WRITE_END with none
+    let raw: [&[u8]; 4] = [
+        b"\x06\x05\x0020261108\x10\0\0\0\0\0\0\0",
+        b"\x06\x05\x0120261399\x10\0\0\0\0\0\0\0",
+        b"\x07\x05\0\0\0\0\x01",
+        b"\x08\x05",
+    ];
+    for r in raw {
+        assert_eq!(answer(&mut sim, &mut app, control, data, r), Some((Status::BadRequest, 0)), "{r:?}");
+    }
+    // after 10 bytes: out of order, past the size, a second WRITE_BEGIN: refused, the write dropped
+    let mut f = [0; 64];
+    let n = Command::WriteBegin { seq: 1, folder: Folder::Workout, day: DAY, size: 40, crc: 0 }.encode(&mut f);
+    let begin = f[..n].to_vec();
+    for bad in [
+        Command::WriteData { seq: 6, offset: 11, data: &[1; 10] },
+        Command::WriteData { seq: 6, offset: 10, data: &[1; 31] },
+        Command::WriteBegin { seq: 6, folder: Folder::Workout, day: DAY, size: 40, crc: 0 },
+    ] {
+        assert_eq!(answer(&mut sim, &mut app, control, data, &begin), Some((Status::Ok, 0)));
+        let n = Command::WriteData { seq: 6, offset: 0, data: &[1; 10] }.encode(&mut f);
+        sim.nordic.phone_write(control, &f[..n]);
+        let n = bad.encode(&mut f);
+        assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::BadRequest, 10)), "{bad:?}");
+        assert_eq!(answer(&mut sim, &mut app, control, data, b"\x08\x07"), Some((Status::BadRequest, 0)), "dropped");
+    }
+    // a write the phone stops feeding is dropped
+    assert_eq!(answer(&mut sim, &mut app, control, data, &begin), Some((Status::Ok, 0)));
+    run(&mut sim, &mut app, 6000);
+    assert!(!app.phone.files.active(), "dropped after the stall");
+    assert!(day_files(&sim).is_empty());
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0));
+}
+
+/// After a failed write (the FAT copies suspect), a DELETE makes the copies equal before it frees anything.
+#[test]
+fn a_delete_after_a_failed_write_syncs_the_fat_copies_first() {
+    let (mut sim, mut app, control, data) = paired();
+    let file = long_workout();
+    let sent = send_workout(&mut sim, &mut app, (control, data), &file, crc(&file), 238);
+    assert_eq!(sent.1, Some((Status::Ok, file.len() as u32)));
+    let (listed, _) = list_workouts(&mut sim, &mut app, control, data, 7);
+    let key = listed.iter().find(|e| e.0.bytes().starts_with(b"20261108")).unwrap().0;
+    // the second FAT's last sector differs (a write cut between the copies), and the app knows a write failed
+    let img = &mut sim.emmc.image;
+    let u16_at = |i: usize| u32::from(u16::from_le_bytes([img[i], img[i + 1]]));
+    let (reserved, size) = (u16_at(14), u32::from_le_bytes(img[36..40].try_into().unwrap()));
+    let end = ((reserved + 2 * size) * 512) as usize;
+    img[end - 1] ^= 0x01;
+    assert_eq!(crate::fat::write::tests::fsck_cut(img).unwrap().apart, 1);
+    app.fats_unsure();
+    let mut f = [0; 20];
+    let n = Command::Delete { seq: 8, folder: Folder::Workout, key }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 1)));
+    assert_eq!(crate::fat::write::tests::fsck_cut(&sim.emmc.image).unwrap().apart, 0);
+    assert!(day_files(&sim).is_empty());
+}
+
+/// A WRITE_BEGIN during a READ ends the READ with its END (BUSY, the bytes sent) before its own answer.
+#[test]
+fn a_write_begun_during_a_read_ends_the_read_first() {
+    let (mut sim, mut app, control, data) = paired();
+    let [(name, _), _] = rides();
+    start_read(&mut sim, control, 5, name);
+    pass(&mut sim, &mut app, 60);
+    drain(&mut sim, data);
+    let mut f = [0; 40];
+    let n = Command::WriteBegin { seq: 6, folder: Folder::Workout, day: DAY, size: 40, crc: 0 }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    pass(&mut sim, &mut app, 200);
+    let ends: Vec<_> = drain(&mut sim, data)
+        .iter()
+        .filter_map(|p| match Frame::parse(p) {
+            Some(Frame::End { seq, status, .. }) => Some((seq, status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, [(5, Status::Busy), (6, Status::Ok)]);
+}
+
+/// A refused write command during a LIST (a build without card writes) ends the LIST first too, and the refusal's
+/// count is its own (0), never the list's.
+#[test]
+fn a_refused_write_during_a_list_ends_the_list_first() {
+    let (mut sim, mut app, control, data) = paired();
+    app.card_writable = false;
+    sim.nordic.phone_write(control, &[1, 5]); // LIST
+    let mut f = [0; 40];
+    let n = Command::WriteBegin { seq: 6, folder: Folder::Workout, day: DAY, size: 40, crc: 0 }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    pass(&mut sim, &mut app, 200);
+    let ends: Vec<_> = drain(&mut sim, data)
+        .iter()
+        .filter_map(|p| match Frame::parse(p) {
+            Some(Frame::End { seq, status, count }) => Some((seq, status, count)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    assert_eq!((ends[0].0, ends[0].1), (5, Status::Busy));
+    assert_eq!(ends[1], (6, Status::ReadOnly, 0));
+}
+
+#[test]
+fn a_ride_starting_mid_write_drops_it_and_nothing_shows() {
+    let (mut sim, mut app, control, data) = paired();
+    let file = long_workout();
+    let mut f = [0; 40];
+    let (size, c) = (file.len() as u32, crc(&file));
+    let n = Command::WriteBegin { seq: 1, folder: Folder::Workout, day: DAY, size, crc: c }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 0)));
+    let n = Command::WriteData { seq: 2, offset: 0, data: &file[..14] }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    run(&mut sim, &mut app, 100);
+    app.leave_menus();
+    app.input(&mut sim, Input::Select); // Start
+    let (_, end) = collect(&mut sim, &mut app, data, 10);
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert_eq!(end, Some((Status::Busy, 14)), "dropped, the bytes received said");
+    assert_eq!(answer(&mut sim, &mut app, control, data, b"\x08\x03"), Some((Status::Busy, 0)));
+    let n = Command::WriteBegin { seq: 1, folder: Folder::Workout, day: DAY, size: 9, crc: 0 }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Busy, 0)), "during the ride");
+    assert!(day_files(&sim).is_empty());
+}
+
+/// The power cut after every sector a sent workout writes, on the simulated card: the calendar as it was or the whole
+/// workout, fsck passes (a lost chain at most), and with the power back the phone sends it again, nothing more lost.
+#[test]
+fn a_power_cut_at_every_write_of_a_sent_workout_leaves_the_calendar_whole() {
+    let file = long_workout();
+    let (mut sim, mut app, control, data) = paired();
+    let lost0 = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    let w0 = sim.emmc.sectors_written;
+    let sent = send_workout(&mut sim, &mut app, (control, data), &file, crc(&file), 238);
+    assert_eq!(sent.1, Some((Status::Ok, file.len() as u32)));
+    let writes = sim.emmc.sectors_written - w0;
+    let mut none = 0;
+    for cut in 0..writes {
+        let (mut sim, mut app, ..) = paired();
+        sim.emmc.cut_after = Some(sim.emmc.sectors_written + cut);
+        let _ = send_workout(&mut sim, &mut app, (control, data), &file, crc(&file), 238);
+        let scan = crate::fat::write::tests::fsck_cut(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+        assert!(scan.lost <= lost0 + 1 && scan.past.is_empty(), "cut {cut}: {} lost {:?}", scan.lost, scan.past);
+        match day_files(&sim).as_slice() {
+            [] => none += 1,
+            [f] => assert!(*f == file, "cut {cut}: a part of it"),
+            other => panic!("cut {cut}: {} files", other.len()),
+        }
+        // the unit started again on that card, the phone sends it again
+        let image = core::mem::take(&mut sim.emmc.image);
+        let (mut sim, mut app, ..) = paired();
+        sim.emmc.image = image;
+        let again = send_workout(&mut sim, &mut app, (control, data), &file, crc(&file), 238);
+        assert_eq!(again.1, Some((Status::Ok, file.len() as u32)), "cut {cut}: {again:?}");
+        assert_eq!(day_files(&sim), core::slice::from_ref(&file), "cut {cut}");
+        assert_eq!(crate::fat::write::tests::fsck_cut(&sim.emmc.image).map(|s| s.lost), Ok(scan.lost), "cut {cut}");
+    }
+    std::println!("{writes} sectors: {none} cuts left the calendar as it was");
+    assert!(none > 0 && writes > 10);
 }

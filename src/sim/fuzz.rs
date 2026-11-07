@@ -7844,6 +7844,137 @@ fn long_names_revived_and_relinked() {
     assert!(revived >= thr(20) && crossing >= thr(2) && relinked >= thr(10) && located >= thr(50), "reached");
 }
 
+/// The file service's writes (app/filesvc.rs, storage/workout_write.rs): workouts sent as the phone sends them
+/// (WRITE_BEGIN, WRITE_DATA in chunks of 1 to 238 bytes, WRITE_END) and their mutations (a CRC or size that lies, a
+/// chunk skipped, sent twice or out of order, a byte flipped, a file that is no workout, a second WRITE_BEGIN, noise
+/// starting with a write command's byte, the link dropped mid-write), DELETEs of listed and made-up keys, the card lent
+/// or a ride started under
+/// them. No panic, every notification parses, the day folder only ever holds whole workouts the phone sent, fsck finds
+/// nothing new, and over the seeds a commit, a delete and each refusal are reached.
+#[test]
+fn file_service_writes() {
+    use super::filesvc_tests::{
+        DAY, End, ask_raw, day_files, drain, drop_link, list_workouts, long_workout, paired, resubscribe,
+    };
+    use super::run;
+    use crate::filesvc::{Command, FRAME_BIG, Folder, Frame, Key, Status};
+    let files = [long_workout(), crate::storage::workout_file::tests::intervals(), std::vec![0x5a; 300]];
+    // commits, deletes, mismatches, bad requests, busy, not found
+    let mut reached = [0u32; 8]; // commits, deletes, mismatches, bad requests, busy, not found, noise, links dropped
+    for seed in 1..=scaled(24) {
+        let mut next = xorshift(seed);
+        let (mut sim, mut app, control, data) = paired();
+        let lost0 = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+        let mut ends: Vec<End> = Vec::new();
+        for round in 0..6 {
+            let mut f = [0u8; FRAME_BIG];
+            let write = |sim: &mut Sim, f: &[u8]| {
+                sim.nordic.phone_write(control, f);
+            };
+            if next().is_multiple_of(9) {
+                app.emmc.lend(true);
+            }
+            if round == 4 && seed % 5 == 0 {
+                app.leave_menus();
+                app.input(&mut sim, crate::Input::Select); // a ride starts under the writes
+            }
+            if next().is_multiple_of(4) {
+                // a DELETE: of a listed key, or one made up, or its check stale
+                let (listed, _) = list_workouts(&mut sim, &mut app, control, data, 200);
+                let key = match (listed.is_empty(), next() % 3) {
+                    (false, 0 | 1) => listed[next() as usize % listed.len()].0,
+                    (false, _) => {
+                        let k = listed[next() as usize % listed.len()].0;
+                        Key::new(Folder::Workout, k.bytes()).unwrap().with_check(next() as u16)
+                    }
+                    (true, _) => Key::new(Folder::Workout, b"2026110800").unwrap().with_check(next() as u16),
+                };
+                let n = Command::Delete { seq: 9, folder: Folder::Workout, key }.encode(&mut f);
+                write(&mut sim, &f[..n]);
+            } else {
+                let file = &files[next() as usize % files.len()];
+                let crc = crate::inflate::crc32(file.iter().copied()) ^ u32::from(next().is_multiple_of(7));
+                let size = (file.len() as u32).wrapping_add([0, 0, 0, 0, 1, u32::MAX][next() as usize % 6]);
+                let n = Command::WriteBegin { seq: 1, folder: Folder::Workout, day: DAY, size, crc }.encode(&mut f);
+                write(&mut sim, &f[..n]);
+                run(&mut sim, &mut app, 60);
+                let chunk = 1 + next() as usize % 238;
+                let mut at = 0;
+                while at < file.len() {
+                    let mut c = file[at..(at + chunk).min(file.len())].to_vec();
+                    let mut off = at as u32;
+                    match next() % 40 {
+                        0 => off = off.wrapping_add(1),                // out of order
+                        1 => at += c.len(),                            // a chunk skipped
+                        2 => c[0] ^= 1,                                // a byte flipped
+                        3 => write(&mut sim, b"\x06\x01\x0120261108"), // noise of a WRITE_BEGIN
+                        4 | 5 => {
+                            // noise starting with a write command's byte, 1 to 30 bytes
+                            let (lead, k) = ([6, 7, 8, 9][next() as usize % 4], next() as usize % 30 + 1);
+                            let noise: Vec<u8> = (0..k).map(|i| if i == 0 { lead } else { next() as u8 }).collect();
+                            write(&mut sim, &noise);
+                            reached[6] += 1;
+                        }
+                        6 if seed % 3 == 0 && round < 4 && !app.emmc.lent() => {
+                            // the link drops and comes back: the write is gone, the next data refused
+                            let back = sim.ms + 500;
+                            drop_link(&mut sim, back);
+                            run(&mut sim, &mut app, 4500);
+                            resubscribe(&mut sim, &mut app, data);
+                            let n = Command::WriteData { seq: 4, offset: off, data: &c }.encode(&mut f);
+                            let a = ask_raw(&mut sim, &mut app, control, data, &f[..n], 2000);
+                            assert_eq!(
+                                a.end,
+                                Some((Status::BadRequest, 0)),
+                                "seed {seed}: data after the link dropped"
+                            );
+                            reached[7] += 1;
+                            break;
+                        }
+                        _ => {}
+                    }
+                    let n = Command::WriteData { seq: 2, offset: off, data: &c }.encode(&mut f);
+                    write(&mut sim, &f[..n]);
+                    if next().is_multiple_of(30) {
+                        write(&mut sim, &f[..n]); // sent twice
+                    }
+                    at += c.len();
+                    run(&mut sim, &mut app, 20);
+                }
+                write(&mut sim, &[8, 3]);
+            }
+            run(&mut sim, &mut app, 200);
+            app.emmc.lend(false);
+            for p in drain(&mut sim, data) {
+                match Frame::parse(&p).unwrap_or_else(|| panic!("seed {seed}: {p:?} does not parse")) {
+                    Frame::End { status, count, seq } => {
+                        ends.push(Some((status, count)));
+                        match (status, seq) {
+                            (Status::Ok, 3) => reached[0] += 1,
+                            (Status::Ok, 9) => reached[1] += 1,
+                            (Status::Mismatch, _) => reached[2] += 1,
+                            (Status::BadRequest, _) => reached[3] += 1,
+                            (Status::Busy, _) => reached[4] += 1,
+                            (Status::NotFound, _) => reached[5] += 1,
+                            _ => {}
+                        }
+                    }
+                    other => panic!("seed {seed}: {other:?} for a write"),
+                }
+            }
+            for got in day_files(&sim) {
+                assert!(files.contains(&got), "seed {seed}: a file in the calendar that was not sent whole");
+                assert!(crate::storage::workout_file::parse(&got).is_ok(), "seed {seed}");
+            }
+            let lost = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            assert_eq!(lost, lost0, "seed {seed}");
+        }
+        assert!(!ends.is_empty(), "seed {seed}: no answer");
+    }
+    std::println!("file service writes: {reached:?}");
+    assert!(reached.iter().all(|&n| n > 0), "{reached:?}");
+}
+
 /// The file service's Control (app/filesvc.rs): commands of real shapes (LIST, READ of a ride at an offset inside, at
 /// and past its end, READ of a name that is not there, CANCEL) and their mutations (bytes flipped, cut, lengthened,
 /// pure noise, and names with separators) written to Control of a bonded unit, between passes that stream the

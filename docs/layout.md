@@ -38,8 +38,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     a quiet link that does not answer a probe), drain and resync, else reset the chip and start ANT and the phone
     link again, with backoff; the count is in the dev link's `info`. Tests: `src/sim/link_tests.rs`.
   - `radio.rs`: the ANT+ channels (`Sensor`), `poll_nrf`, pairing. `gps.rs`: `poll_gnss`, the aiding.
-  - `src/app/filesvc.rs`: the file service on the phone bond (roadmap 9, A1, reads only): its GATT table, the commands
-    from Control, the answer streamed a few notifications a pass, BUSY under a ride or a lent card.
+  - `src/app/filesvc.rs`: the file service on the phone bond (roadmap 9, A1): its GATT table, the commands
+    from Control, the answer streamed a few notifications a pass, a workout received or deleted (the only writes), BUSY
+    under a ride or a lent card, READ ONLY in a build that may not write the card.
   - `src/app/phone.rs`: the phone link over BLE: the GATT server set up (HID, battery, device information), advertising,
     bonding and the bond in `\Rustfw\ble.bin`, the BLE events, the GATT client of the phone (ANCS, AMS, CTS
     discovered one procedure at a time, then its operations queued), media keys, the call and media screens.
@@ -202,8 +203,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   central's (connect, cancel, scan stop) and their events, each with its connection, serialized as the nRF5 SDK's
   codecs do (sources in the module doc); `nrf::start` configures two links (`sd_ble_cfg_set`) and falls back to the
   defaults when refused; `sim/ble_sim.rs` models the chip's side, a scripted phone and a trainer (FTMS or FE-C over BLE).
-- `src/link/filesvc.rs`: the file service's frames, pure `no_std` (the phone app's core reuses it): LIST, READ, CANCEL
-  and their answers, the protocol written down in its module doc.
+- `src/link/filesvc.rs`: the file service's frames, pure `no_std` (the phone app's core reuses it): LIST, READ, CANCEL,
+  LIST_IN, READ_IN, WRITE_BEGIN / WRITE_DATA / WRITE_END, DELETE and their answers, the protocol written down in its
+  module doc.
 - `src/link/phone.rs`: the phone link's formats, pure logic: the HID report map, ANCS, AMS, CTS, the bond's sector.
 - `src/storage/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
@@ -256,6 +258,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/storage/workout_file.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
   whole (name, steps, targets, repeats written out), the calendar from today on. `src/training/workout.rs`: the player, pure
   logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
+- `src/storage/workout_write.rs`: a workout the phone sends, written into stock's calendar (through `\Rustfw\Inbox\WORKOUT.TMP`,
+  read back and checked, then moved: the order and what a cut leaves in its module doc), and a listed one deleted.
 - `src/storage/course_file.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
   memory (about <!-- n:courses -->75 KB<!-- /n -->, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course/mod.rs`: the course model,
@@ -340,7 +344,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone),
-  `filesvc_tests.rs` (the file service: LIST, READ whole and from an offset, BUSY, the bond, a dropped link).
+  `filesvc_tests.rs` (the file service: LIST, READ whole and from an offset, BUSY, the bond, a dropped link; a workout
+  sent at both MTUs, every refusal, a power cut after every sector it writes).
   `chip_table.rs` (the Nordic chip's command and event table as data, with the SDK decoder behind each row, and the
   check the simulated chip runs on every command it receives: what it cannot decode hangs it, and a test that did not
   expect that panics with the reason) and `chip_table_tests.rs` (every command rustfw builds, with boundary arguments,

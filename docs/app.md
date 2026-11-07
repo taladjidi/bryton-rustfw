@@ -144,9 +144,10 @@ There is no Service Changed indication, which is the standard way to tell iOS. T
 BLE_GATTS_EVT_SC_CONFIRM (0x54) after every indication, and Bryton's chip app hangs on it
 (`nrf_emu_hangs_on_the_service_changed_confirm`, `tools/nrf_emu.py`). So the table stays stable instead.
 
-## Workouts (read only)
+## Workouts
 
-The planned workouts on the unit, seen from the phone (roadmap 9; editing, which writes to the card, is a later step).
+The planned workouts on the unit, seen from the phone (roadmap 9), and since 2026-11-07 sent and deleted from it
+(the firmware's side; the app's editor is the next step).
 Stock keeps them in `\Workout\calendar\<YYYYMMDD>\<name>.fit`, long names and one folder a day, so the file service
 gained folder commands: LIST_IN `04 seq folder` and READ_IN `05 seq folder off[4] len key (check[2])` name one of a small table
 (0 `\Activities\`, 1 the workout calendar), never a path, with the same BUSY, bond and pacing rules (src/link/filesvc.rs,
@@ -166,6 +167,22 @@ or cadence step would leave it covering part of the workout). One workout that h
 skipped; the others still load. The detail page draws a step chart (a bar a step at its target's middle, coloured by zone)
 and lists the steps; the FTP and max heart rate are the profile sheet's (the same `ftp` and `maxHR` as the ride viewer; the detail page opens it).
 `-demo-workout` opens the first workout in the Simulator.
+
+**Writes** (firmware side, src/link/filesvc.rs, src/app/filesvc.rs, src/storage/workout_write.rs): the phone sends a
+workout as WRITE_BEGIN `06 seq 01 day[8] size[4] crc[4]` (the day `YYYYMMDD`, the file's CRC-32 as gzip computes it),
+WRITE_DATA `07 seq off[4] data` in order (14 bytes a frame at the default MTU, up to 238 on the fast link: Control
+takes up to 244), then WRITE_END `08 seq`; DELETE `09 seq 01 len key check[2]` removes a workout LIST_IN gave. Every
+answer is an END: WRITE_BEGIN's once the unit is ready, WRITE_DATA's only when refused, WRITE_END's with the size,
+DELETE's with count 1. New statuses: 5 READ ONLY (a build without card writes, the RAM run's), 6 MISMATCH (the bytes
+received are not the size or CRC given), 7 FULL. Only folder 1 and only a FIT workout file of 8 KB at most, which the
+unit reads back from the card and parses before it shows; the unit names it `<CRC-32 in hex>.fit` in
+`\Workout\calendar\<day>\` (the day folder made if missing; `\Workout\calendar` itself must exist), so sending the same
+file twice writes it once. The bytes go to `\Rustfw\Inbox\WORKOUT.TMP` first and move into the calendar only once checked: a
+power cut at any point leaves the calendar as it was or with the whole workout (at most one lost chain, the workout's clusters, which a
+computer's fsck reports). BUSY during a ride or while the card is lent, and a ride that starts drops a write under way;
+a write the phone stops feeding for 5 s is dropped. DELETE needs the key's check, so a folder changed since the list
+answers NOT FOUND, never another file; it frees the file's clusters (a workout, not a ride: nothing is kept) and leaves
+stock's `.json` beside it.
 
 | | |
 |:-:|:-:|

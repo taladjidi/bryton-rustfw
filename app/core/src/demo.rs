@@ -192,6 +192,11 @@ impl FakeUnit {
                 let data = data.clone();
                 self.serve(seq, offset, &data)
             }
+            // the demo unit is read only (the writes are the unit's, src/storage/workout_write.rs)
+            Command::WriteBegin { seq, .. }
+            | Command::WriteData { seq, .. }
+            | Command::WriteEnd { seq }
+            | Command::Delete { seq, .. } => end(seq, Status::ReadOnly, 0),
         }
     }
 
