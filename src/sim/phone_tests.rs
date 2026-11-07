@@ -699,3 +699,47 @@ fn a_long_ancs_answer_at_mtu_247_arrives_whole() {
     assert!(n.message.as_str().starts_with(&msg[..100]), "{:?}", n.message.as_str());
     assert_eq!(n.title.as_str(), "Bob");
 }
+
+/// The phone's GATT table as the chip holds it after `phone_setup`: (16-bit UUID, handle) of every row, in order
+/// (a vendor service's or characteristic's row shows its 16-bit part). Changing it means every bonded iPhone must
+/// forget S510 and pair again, once: there is no Service Changed indication (BLE_GATTS_EVT_SC_CONFIRM hangs Bryton's
+/// app, tools/nrf_emu.py and `nrf_emu_hangs_on_the_service_changed_confirm`). Update it only on purpose, and say so in
+/// docs/status.md and the commit message.
+const FROZEN_TABLE: &[(u16, u16)] = &[
+    (0x1812, 0x0001),
+    (0x2803, 0x0002),
+    (0x2a4a, 0x0003),
+    (0x2803, 0x0004),
+    (0x2a4b, 0x0005),
+    (0x2803, 0x0006),
+    (0x2a4d, 0x0007),
+    (0x2902, 0x0008),
+    (0x2908, 0x0009),
+    (0x2803, 0x000a),
+    (0x2a4c, 0x000b),
+    (0x2803, 0x000c),
+    (0x2a4e, 0x000d),
+    (0x180f, 0x000e),
+    (0x2803, 0x000f),
+    (0x2a19, 0x0010),
+    (0x2902, 0x0011),
+    (0x180a, 0x0012),
+    (0x2803, 0x0013),
+    (0x2a29, 0x0014),
+    (0x2803, 0x0015),
+    (0x2a50, 0x0016),
+    (0x0001, 0x0017),
+    (0x2803, 0x0018),
+    (0x0002, 0x0019),
+    (0x2803, 0x001a),
+    (0x0003, 0x001b),
+    (0x2902, 0x001c),
+];
+
+#[test]
+fn the_phone_gatt_table_is_frozen() {
+    let (sim, _app) = unit(iphone(Vec::new()));
+    let table: Vec<(u16, u16)> = sim.nordic.server.attrs.iter().map(|a| (a.1, a.0)).collect();
+    std::println!("TABLE {} rows: {table:04x?}", table.len());
+    assert_eq!(table, FROZEN_TABLE);
+}

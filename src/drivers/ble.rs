@@ -35,6 +35,8 @@
 //! above 23) or 23. The ride build leaves the fast link off until the owner's ride test (main.rs `FAST_LINK`).
 //! Data length 251, the 2M PHY and short connection parameters are asked for only while a file READ runs
 //! ([`data_length_set`], [`phy_set`], app/filesvc.rs), and the 2M PHY is inferred to exist on this chip. The chip app's layer (it knows these commands, makes the SoftDevice calls meant, encodes the events 0x55, 0x57, 0x12, 0x21 to 0x24 and a 244-byte hvx) is tested in nrf_session_tests.rs; only the SoftDevice itself needs the unit.
+//! No Service Changed indication: the SoftDevice's 0x54 (SC_CONFIRM) hangs Bryton's chip app (tested in
+//! nrf_session_tests.rs), so the GATT table is kept stable and a bonded iPhone forgets and pairs again after a change.
 //! Apple's limits for the parameters: Accessory Design Guidelines for Apple Devices (BLE connection parameters:
 //! interval minimum 15 ms, maximum at least 15 ms above it, latency, supervision time) and QA1931
 //! (developer.apple.com/library/archive/qa/qa1931); Silicon Labs' summary of the same rules,

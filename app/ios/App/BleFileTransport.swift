@@ -18,6 +18,9 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
     private static let dataChar = CBUUID(string: "AA3C0003-98D8-4772-99ED-DFB117C6746F")
     private static let battery = CBUUID(string: "180F")
     private static let info = CBUUID(string: "180A")
+    /// A missing service means iOS holds an old copy of the unit's table (no Service Changed: docs/app.md).
+    private static let staleTable =
+        "The iPhone has an old copy of the unit's services. In Settings > Bluetooth, tap (i) next to S510, Forget This Device, then on the unit open PHONE > PAIR and connect again."
     private static let unitName = "S510"
 
     private var central: CBCentralManager!
@@ -74,7 +77,7 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
 
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard let s = p.services?.first(where: { $0.uuid == Self.service }) else {
-            onError?(error?.localizedDescription ?? "The unit has no file service (update its firmware).")
+            onError?(Self.staleTable)
             return
         }
         p.discoverCharacteristics([Self.controlChar, Self.dataChar], for: s)
@@ -85,7 +88,7 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
         guard let c = chars.first(where: { $0.uuid == Self.controlChar }),
             let d = chars.first(where: { $0.uuid == Self.dataChar })
         else {
-            onError?(error?.localizedDescription ?? "The file service is incomplete.")
+            onError?(Self.staleTable)
             return
         }
         control = c

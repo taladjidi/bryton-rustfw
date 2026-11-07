@@ -57,7 +57,9 @@ nothing (the real SoftDevice costs microseconds), the UART moves a byte every 10
 
 Behaviour facts of the app (source: Bryton's nRF app, reversed): the event queue holds 96 slots (96 events in one
 SoftDevice pass are fine, 97 hang it); a command opcode the app does not know hangs it; an ANT event code outside
-ant_parameters.h's list hangs it. The inter-frame gap is measured in this emulator (selftest prints it).
+ant_parameters.h's list hangs it. The inter-frame gap is measured in this emulator (selftest prints it). BLE_GATTS_EVT_SC_CONFIRM (0x54, the SoftDevice's
+confirmation after every indication) hangs it, so the phone's GATT table stays stable instead of a Service Changed
+indication (`nrf_emu_hangs_on_the_service_changed_confirm`; the 0x52 and 0x56 events around it pass).
 
 Hang detector: the app is dead when it reaches a `B .` exception handler of its vector table, the private error
 handler address if given, or runs more than MASKED_LIMIT instructions in a row with the UART interrupt unable to be

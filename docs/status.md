@@ -50,6 +50,8 @@ Details:
 
 Seen: simulator, and on the unit the fast-link READ above.
 
+The GATT table is frozen (`the_phone_gatt_table_is_frozen`, 28 rows): a change costs every bonded iPhone one forget and re-pair, and there is no Service Changed (Bryton's app hangs on 0x54). The rule and the app's message: docs/app.md. Still owed on the unit: the message seen on the phone after a stale bond.
+
 On the unit (phone bonded, no ride running, in nRF Connect or any BLE tool that is the bonded phone: the attributes need encryption):
 1. The service `aa3c0001-98d8-4772-99ed-dfb117c6746f` is listed.
 2. Enable notifications on Data (`...0003`), write `01 01` to Control (`...0002`): one `81 01 <12 digits> <size>` per ride, then `83 01 00 <count>`.

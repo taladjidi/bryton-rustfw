@@ -132,6 +132,18 @@ Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had 
 Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
 itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
 
+## The iPhone app against the unit
+
+iOS keeps a copy of the unit's GATT table for each bond. Our builds keep one table: the phone's services and
+characteristics, in order, are frozen (`app/phone.rs`; the test `the_phone_gatt_table_is_frozen` in
+`src/sim/phone_tests.rs` holds the 28 rows). After a switch to stock or to a build with a different table, the iPhone
+forgets S510 and pairs again once: Settings > Bluetooth, tap (i) next to S510, Forget This Device; then on the unit,
+PHONE > PAIR. The app says so when the file service is missing.
+
+There is no Service Changed indication, which is the standard way to tell iOS. The SoftDevice raises
+BLE_GATTS_EVT_SC_CONFIRM (0x54) after every indication, and Bryton's chip app hangs on it
+(`nrf_emu_hangs_on_the_service_changed_confirm`, `tools/nrf_emu.py`). So the table stays stable instead.
+
 ## Seen on the unit, 2026-11-07
 
 On the owner's iPhone 16 Pro (iOS 27):

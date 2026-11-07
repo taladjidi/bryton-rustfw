@@ -166,6 +166,28 @@ fn nrf_emu_takes_a_command_of_384_bytes_and_hangs_on_385() {
     assert!(pipe.0.borrow().hung.is_some(), "385 bytes hang the app");
 }
 
+/// Why there is no Service Changed indication (2026-11-07): the SoftDevice raises BLE_GATTS_EVT_SC_CONFIRM (0x54) after
+/// every indication, and Bryton's app hangs on it (the UART interrupt is masked for too long). The events around it
+/// (0x52, 0x56) pass. So a unit whose GATT table changes cannot tell iOS; the table is kept stable instead
+/// (`app/phone.rs`'s frozen table, sim `phone_tests.rs`), and a bonded iPhone forgets and pairs again once.
+#[test]
+#[ignore = "needs python3 + unicorn + Bryton's nordic.bin; cargo test-host -- --ignored nrf_emu"]
+fn nrf_emu_hangs_on_the_service_changed_confirm() {
+    let Some((pipe, mut sim)) = fast_start() else { return };
+    pipe.0.borrow_mut().calls();
+    // the neighbours of 0x54 are taken: each one is handed to the host, the app stays alive
+    for raw in [gatts_evt(0x52, &[]), gatts_evt(0x56, &[1])] {
+        pipe.0.borrow_mut().inject(&raw);
+        assert_eq!(packets(&mut sim, 20).len(), 1, "{}: one packet", hex(&raw));
+        assert_eq!(pipe.0.borrow().flags & 4, 0, "{}: the app is alive", hex(&raw));
+    }
+    // the SoftDevice's confirmation after an indication: the app hangs (Service Changed is never sent)
+    pipe.0.borrow_mut().soft = true;
+    pipe.0.borrow_mut().inject(&gatts_evt(0x54, &[]));
+    packets(&mut sim, 100);
+    assert!(pipe.0.borrow().hung.is_some(), "BLE_GATTS_EVT_SC_CONFIRM hangs the app: keep the GATT table stable");
+}
+
 #[test]
 #[ignore = "needs python3 + unicorn + Bryton's nordic.bin; cargo test-host -- --ignored nrf_emu"]
 fn nrf_emu_encodes_the_events_the_fast_link_relies_on() {
