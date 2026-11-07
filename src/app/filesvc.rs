@@ -37,6 +37,8 @@ pub const FAST_POLL_MS: u32 = 10;
 /// The connection parameters of a READ on the fast link: 15 to 30 ms (iOS accepts an interval minimum of 15 ms with a
 /// maximum 15 ms above it), no slave latency, supervision 4 s.
 pub const FAST_PARAMS: ble::ConnParams = (12, 24, 0, 400);
+/// Passes a failed restore of the link parameters is tried again (a BUSY or a time-out), then dropped.
+const RESTORE_TRIES: u8 = 20;
 /// The data length asked for during a READ, octets (the largest, 251).
 const FAST_DLE: u16 = 251;
 /// A transfer whose frame the stack takes for this long is dropped.
@@ -86,6 +88,13 @@ pub(crate) struct FileSvc {
     pub(crate) mtu: u16,
     /// The link parameters of a READ are in force (to be given back).
     pub(crate) boosted: bool,
+    /// The link's parameters as the phone last set them (the connect event, the last update outside a READ): what a
+    /// READ gives back. None: not known, nothing is sent back (the link keeps whatever the phone chose).
+    pub(crate) link: Option<ble::ConnParams>,
+    /// Passes the restore has been tried ([`RESTORE_TRIES`]).
+    restore_tries: u8,
+    /// The longest value Data holds (the characteristic's max): the frame never passes it.
+    pub(crate) max_frame: usize,
 }
 
 impl FileSvc {
@@ -102,18 +111,21 @@ impl FileSvc {
             stall_ms: 0,
             mtu: ble::ATT_MTU,
             boosted: false,
+            link: None,
+            restore_tries: 0,
+            max_frame: fs::FRAME_MAX,
         }
     }
 
     /// The notification's longest value on this link: the MTU less the ATT header.
     fn frame_len(&self) -> usize {
-        usize::from(self.mtu.saturating_sub(3)).clamp(fs::FRAME_MAX, fs::FRAME_BIG)
+        usize::from(self.mtu.saturating_sub(3)).clamp(fs::FRAME_MAX, self.max_frame.clamp(fs::FRAME_MAX, fs::FRAME_BIG))
     }
 
     /// The link is gone (or reset): back to the defaults, nothing to give back.
     pub(crate) fn link_down(&mut self) {
         self.reset();
-        (self.mtu, self.boosted) = (ble::ATT_MTU, false);
+        (self.mtu, self.boosted, self.link, self.restore_tries) = (ble::ATT_MTU, false, None, 0);
     }
 
     /// A READ runs on a link with a larger MTU: the loop passes quickly.
@@ -266,7 +278,7 @@ impl Default for FileSvc {
 
 /// Adds the service: its vendor base, then Control and Data. None when the chip refuses any of it (the phone link
 /// works without the file service).
-pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx, frame: usize) -> Option<(u16, u16)> {
+pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx, frame: usize) -> Option<(u16, u16, usize)> {
     let ty = ble::uuid_vs_add(b, rx, &fs::BASE).ok()?;
     let svc = ble::service_add_vs(b, rx, (fs::SERVICE, ty)).ok()?;
     let control = Char {
@@ -286,8 +298,16 @@ pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx, frame: usize) ->
         write: ble::NO_ACCESS,
     };
     let c = ble::characteristic_add_vs(b, rx, svc, &control, ty).ok()?;
-    let d = ble::characteristic_add_vs(b, rx, svc, &data, ty).ok()?;
-    Some((c.0, d.0))
+    // a table that cannot hold the big value gets the 20 bytes of the default MTU (the frame follows the max)
+    match ble::characteristic_add_vs(b, rx, svc, &data, ty) {
+        Ok(d) => Some((c.0, d.0, frame)),
+        Err(_) if frame > fs::FRAME_MAX => {
+            let small = Char { max: fs::FRAME_MAX as u16, ..data };
+            let d = ble::characteristic_add_vs(b, rx, svc, &small, ty).ok()?;
+            Some((c.0, d.0, fs::FRAME_MAX))
+        }
+        Err(_) => None,
+    }
 }
 
 impl Phone {
@@ -347,13 +367,19 @@ impl App {
         self.phone.files.boosted = true;
     }
 
-    /// Gives the normal parameters back (`PPCP` of app/phone.rs, PHY auto); the data length stays (it
-    /// costs nothing idle).
+    /// Gives back what the phone had: its last connection parameters (none known: no update is sent, the link keeps
+    /// what the phone set) and the 1M PHY; the data length stays (it costs nothing idle). A restore that fails (BUSY,
+    /// a time-out) is tried again next pass, [`RESTORE_TRIES`] times.
     fn unboost(&mut self, b: &mut impl Board, conn: u16) {
         let rx = &mut self.rx;
-        let _ = ble::conn_param_update(b, rx, conn, super::phone::PPCP);
-        let _ = ble::phy_set(b, rx, conn, 0);
-        self.phone.files.boosted = false;
+        let link = self.phone.files.link;
+        let param = link.map_or(Ok(()), |p| ble::conn_param_update(b, rx, conn, p));
+        let phy = ble::phy_set(b, rx, conn, 1);
+        let svc = &mut self.phone.files;
+        svc.restore_tries = svc.restore_tries.saturating_add(1);
+        if (param.is_ok() && phy.is_ok()) || svc.restore_tries >= RESTORE_TRIES {
+            (svc.boosted, svc.restore_tries) = (false, 0);
+        }
     }
 
     /// The answer's next frames, [`PER_PASS`] at most.

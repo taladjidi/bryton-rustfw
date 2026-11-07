@@ -477,6 +477,16 @@ impl Nordic {
                 self.server.attrs.push((h, u16_at(2), false, vec![]));
                 ok(self, &[1, h as u8, (h >> 8) as u8]);
             }
+            0xa2 if self.max_value > 0 && {
+                // the file service's Data (vendor 16-bit part 3, notify) only: the others fit
+                let at = if args[3] & 0x30 != 0 { 17 } else { 14 };
+                args[3] & 0x10 != 0
+                    && u16::from_le_bytes([args[at + 2], args[at + 3]]) == 3
+                    && usize::from(u16::from_le_bytes([args[at + 11], args[at + 12]])) > self.max_value
+            } =>
+            {
+                self.queue(&[1, 0xa2, 4, 0, 0, 0]); // NRF_ERROR_NO_MEM: the attribute table cannot hold the value
+            }
             0xa2 => {
                 // service, then the metadata: properties at 3; the value's UUID and data after the CCCD's metadata
                 let props = args[3];
@@ -709,7 +719,7 @@ impl Nordic {
                     (0x15, [0, u0, u1, u2, u3, ..]) => {
                         let uid = u32::from_le_bytes([*u0, *u1, *u2, *u3]);
                         if let Some(&(_, title, msg)) = ph.posted.iter().find(|p| p.0 == uid) {
-                            // the answer, in notifications of 20 bytes (MTU 23)
+                            // the answer, in notifications of the link's MTU less 3 (20 bytes at 23)
                             let mut a = vec![0];
                             a.extend(uid.to_le_bytes());
                             a.push(0);
@@ -721,7 +731,7 @@ impl Nordic {
                             a.push(3);
                             a.extend((msg.len() as u16).to_le_bytes());
                             a.extend(msg.as_bytes());
-                            for c in a.chunks(20) {
+                            for c in a.chunks(usize::from(self.server.radio.mtu) - 3) {
                                 self.hvx(0x17, c);
                             }
                         }
@@ -738,7 +748,7 @@ impl Nordic {
                         a.extend(name.as_bytes());
                         ph.app_asks.push(id);
                         if !ph.mute_apps {
-                            for c in a.chunks(20) {
+                            for c in a.chunks(usize::from(self.server.radio.mtu) - 3) {
                                 self.hvx(0x17, c);
                             }
                         }
@@ -790,6 +800,10 @@ impl Nordic {
                     let (min, lat) = (u64::from(u16_at(3)), u16_at(7));
                     let r = &mut self.server.radio;
                     (r.interval_ms, r.latency) = (if lat == 0 { (min * 5).div_ceil(4) } else { HVN_MS }, lat);
+                    let iv = (r.interval_ms * 4 / 5) as u16; // 1.25 ms units, the interval in force
+                    let (sup, lat) = (u16_at(9).to_le_bytes(), lat.to_le_bytes());
+                    let iv = iv.to_le_bytes();
+                    self.evt(0x12, &[0, 0, iv[0], iv[1], iv[0], iv[1], lat[0], lat[1], sup[0], sup[1]]);
                 }
                 ok(self, &[]);
             }

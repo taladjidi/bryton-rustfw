@@ -165,7 +165,7 @@ pub trait Board {
     fn emmc_writable(&self) -> bool {
         true
     }
-    /// The Nordic chip is configured for the fast phone link (ATT MTU 247, a queue of notifications, a longer event:
+    /// The Nordic chip is configured for the fast phone link (ATT MTU 247, a queue of notifications:
     /// `nrf::CFG_FAST`) in this build. Off in the card-writing ride build until the owner's ride test passes
     /// (main.rs `FAST_LINK`); the chip then keeps the configuration of the 2026-11-01 ride.
     fn fast_link(&self) -> bool {

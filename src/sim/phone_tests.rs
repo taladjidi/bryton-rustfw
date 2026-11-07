@@ -677,3 +677,25 @@ fn an_app_that_is_never_answered_is_asked_once() {
     assert_eq!(app.phone.inbox.get(1).unwrap().app.as_str(), "PHONE");
     assert_eq!(sim.nordic.phone.as_ref().unwrap().app_asks, ["com.phone"], "asked once");
 }
+
+/// An ANCS answer of about 190 bytes in one notification, as an iPhone sends it at ATT MTU 247 (the unit answers the
+/// exchange with 247 on the fast link): the event is 204 bytes and must reach the phone code whole, where the 160-byte
+/// ring and buffers dropped it.
+#[test]
+fn a_long_ancs_answer_at_mtu_247_arrives_whole() {
+    let msg: &'static str =
+        Box::leak((0..150).map(|i| (b'a' + (i % 26) as u8) as char).collect::<std::string::String>().into_boxed_str());
+    let mut p = iphone(std::vec![(4000, Act::Notify(4, 7, "Bob", msg))]);
+    p.client_mtu = 247;
+    let (mut sim, mut app) = super::tests::unit_with(None, |s| {
+        s.fast_link = true;
+        s.nordic.phone = Some(p);
+    });
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(app.phone.files.mtu, 247);
+    assert!(sim.nordic.server.sent.iter().all(|s| s.1.len() <= 244));
+    let n = app.phone.inbox.get(0).expect("the notification was kept");
+    assert!(n.message.as_str().starts_with(&msg[..100]), "{:?}", n.message.as_str());
+    assert_eq!(n.title.as_str(), "Bob");
+}

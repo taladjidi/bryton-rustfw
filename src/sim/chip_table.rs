@@ -747,6 +747,7 @@ pub const EVENTS: &[Ev] = &[
     ev!(0x01, "BLE_EVT_USER_MEM_REQUEST", 2, Plain, "ble_evt_conn.c: ble_evt_user_mem_request_enc"),
     ev!(0x10, "BLE_GAP_EVT_CONNECTED", 10, Plain, "ble_gap_evt_conn.c: ble_gap_evt_connected_enc"),
     ev!(0x11, "BLE_GAP_EVT_DISCONNECTED", 3, Plain, "ble_gap_evt_conn.c: ble_gap_evt_disconnected_enc"),
+    ev!(0x12, "BLE_GAP_EVT_CONN_PARAM_UPDATE", 10, Plain, "ble_gap_evt_conn.c: ble_gap_evt_conn_param_update_enc"),
     ev!(0x13, "BLE_GAP_EVT_SEC_PARAMS_REQUEST", 2, Plain, "ble_gap_evt_conn.c: ble_gap_evt_sec_params_request_enc"),
     ev!(0x14, "BLE_GAP_EVT_SEC_INFO_REQUEST", 11, Plain, "ble_gap_evt_conn.c: ble_gap_evt_sec_info_request_enc"),
     ev!(0x19, "BLE_GAP_EVT_AUTH_STATUS", 8, Auth, "ble_gap_evt_conn.c: ble_gap_evt_auth_status_enc"),

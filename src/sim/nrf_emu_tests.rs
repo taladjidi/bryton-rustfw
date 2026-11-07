@@ -156,7 +156,7 @@ fn nrf_emu_ant_broadcasts_through_the_real_parser() {
     assert_eq!(pipe.0.borrow().flags & 4, 0, "the app is alive");
 }
 
-/// The fast link's four `sd_ble_cfg_set` commands (nrf::CFG_FAST: the two links with a 7.5 ms event, the ATT MTU 247,
+/// The fast link's four `sd_ble_cfg_set` commands (nrf::CFG_FAST: the two links, the ATT MTU 247,
 /// the notification queue) against Bryton's real app: its serialization decoder (`ble_cfg_set_req_dec`) takes them, the
 /// start succeeds at MTU 247 and the app lives. The emulated SoftDevice answers 0 to any configuration, so this
 /// proves the layout and the ids are decoded, **not** that the real chip's RAM holds them (docs/status.md).

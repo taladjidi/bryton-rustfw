@@ -741,7 +741,9 @@ pub enum PhoneRow {
     Notify,
     /// Media keys, on or off.
     Keys,
-    /// The fast link (larger MTU and quick parameters during a file transfer), on or off.
+    /// FAST LINK, on or off. Off: the unit answers the phone's MTU exchange with 23 on the next connection and, during a
+    /// file READ, asks for no data length, 2M PHY or quick connection parameters. The chip's configuration (the
+    /// build's, `nrf::CFG_FAST`) stays.
     Fast,
     /// Select opens the media remote.
     Media,

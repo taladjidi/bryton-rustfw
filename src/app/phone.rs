@@ -459,11 +459,11 @@ impl App {
                 self.ftms.vs = ble::uuid_vs_add(b, rx, &crate::fecble::BASE).unwrap_or(0);
             }
             // last, and on its own: a chip that refuses the file service still serves the phone link
-            p.files.handles = super::filesvc::add_service(
-                b,
-                rx,
-                usize::from(mtu.saturating_sub(3)).clamp(20, crate::filesvc::FRAME_BIG),
-            );
+            let frame = usize::from(mtu.saturating_sub(3)).clamp(20, crate::filesvc::FRAME_BIG);
+            p.files.handles = super::filesvc::add_service(b, rx, frame).map(|(c, d, max)| {
+                p.files.max_frame = max;
+                (c, d)
+            });
         }
     }
 
@@ -738,8 +738,9 @@ impl App {
             {
                 self.files_command(data);
             }
-            Event::Connected { conn, role: 1, peer } => {
+            Event::Connected { conn, role: 1, peer, params } => {
                 self.phone.unlink();
+                self.phone.files.link = params; // what a READ gives back
                 (self.phone.conn, self.phone.adv) = (Some(conn), Adv::Off); // the stack stopped advertising
                 self.phone.peer = peer;
                 if !self.phone.bonded() || self.phone.pairing {
@@ -804,6 +805,11 @@ impl App {
                         (d.attrs, d.attrs_len) = (attrs, n as u8);
                         self.phone.save = true;
                     }
+                }
+            }
+            Event::ConnParamUpdate { conn, params } if Some(conn) == self.phone.conn => {
+                if !self.phone.files.boosted {
+                    self.phone.files.link = Some(params); // not our own request's answer
                 }
             }
             Event::MtuRequest { conn, client } => self.mtu_reply(b, conn, client),

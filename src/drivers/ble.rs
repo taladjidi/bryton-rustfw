@@ -28,7 +28,7 @@
 //! added on 2026-10-31 and taken out on 2026-11-01 (18bd3828), suspected, never shown, of the radio chip's silences on
 //! that day's ride; the owner closed it on 2026-11-02. **Reopened on 2026-11-07 for ride downloads: 247**, since the
 //! file service moved 360 B/s at 23 (a 400 KB ride in 19 minutes) and a notification carries MTU - 3 bytes. Three
-//! levels in `nrf::start`: the fast link (`nrf::CFG_FAST`: the two links with a 7.5 ms event, MTU 247 through 0x23, a
+//! levels in `nrf::start`: the fast link (`nrf::CFG_FAST`: the two links, MTU 247 through 0x23, a
 //! queue of 4 notifications through 0x22), the two links, the defaults; a chip that refuses one (an error code, or
 //! NO_MEM from `sd_ble_enable`) is reset and started on the next, never left without a radio. We never send an
 //! Exchange MTU Request (the 2026-11-01 suspect): we answer the phone's with 247 (the fast link on, `Version::mtu`
@@ -601,6 +601,15 @@ pub enum Event<'a> {
         peer: [u8; 7],
         /// 1 peripheral, 2 central.
         role: u8,
+        /// The connection parameters it starts with (None: the event was cut short there).
+        params: Option<ConnParams>,
+    },
+    /// The central changed the link's parameters (BLE_GAP_EVT_CONN_PARAM_UPDATE): the ones now in force.
+    ConnParamUpdate {
+        /// Connection handle.
+        conn: u16,
+        /// Interval (min = max in force), latency, supervision time-out.
+        params: ConnParams,
     },
     /// The link is gone.
     Disconnected {
@@ -775,6 +784,7 @@ impl Event<'_> {
             | AuthStatus { conn, .. }
             | ConnSecUpdate { conn, .. }
             | ConnParamRequest { conn, .. }
+            | ConnParamUpdate { conn, .. }
             | ParamRequest { conn, .. }
             | UserMemRequest { conn }
             | Write { conn, .. }
@@ -809,7 +819,13 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
         0x10 => {
             let mut peer = [0; 7];
             peer.copy_from_slice(f.get(2..9)?);
-            Event::Connected { conn: conn?, peer, role: *f.get(9)? }
+            let w = |i| crate::storage::bytes::le16(f, i);
+            let params = (|| Some((w(10)?, w(12)?, w(14)?, w(16)?)))();
+            Event::Connected { conn: conn?, peer, role: *f.get(9)?, params }
+        }
+        0x12 => {
+            let w = |i| crate::storage::bytes::le16(f, i);
+            Event::ConnParamUpdate { conn: conn?, params: (w(2)?, w(4)?, w(6)?, w(8)?) }
         }
         0x11 => Event::Disconnected { conn: conn?, reason: *f.get(2)? },
         0x13 => Event::SecParamsRequest { conn: conn? },
@@ -940,7 +956,10 @@ mod tests {
     fn events_decode_and_short_ones_do_not() {
         let mut p = std::vec![2, 0x10, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6, 1];
         p.extend([0; 8]);
-        assert_eq!(event(&p), Some(Event::Connected { conn: 0, peer: [1, 1, 2, 3, 4, 5, 6], role: 1 }));
+        assert_eq!(
+            event(&p),
+            Some(Event::Connected { conn: 0, peer: [1, 1, 2, 3, 4, 5, 6], role: 1, params: Some((0, 0, 0, 0)) })
+        );
         for n in 0..p.len() - 8 {
             assert!(!matches!(event(&p[..n]), Some(Event::Connected { .. })), "cut at {n}");
         }

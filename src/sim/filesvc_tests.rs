@@ -365,7 +365,7 @@ pub(super) fn fast_unit(client_mtu: u16, size: usize, tweak: impl FnOnce(&mut Si
 /// The radio as the phone link left it: back to the normal parameters, 1M PHY.
 fn radio_normal(sim: &Sim) -> bool {
     let r = &sim.nordic.server.radio;
-    !r.phy2 && r.interval_ms == super::ble_sim::HVN_MS && r.latency == 6
+    !r.phy2 && r.interval_ms == super::ble_sim::HVN_MS && r.latency == 0
 }
 
 #[test]
@@ -380,7 +380,7 @@ fn a_400_kb_ride_downloads_in_seconds_on_the_fast_link() {
     assert_eq!(a.stray, 0);
     let rate = ride.len() as u64 * 1000 / a.ms;
     std::println!("fast link: {} B in {} ms = {} B/s ({} s)", ride.len(), a.ms, rate, a.ms / 1000);
-    assert!(a.ms < 10_000 && rate >= 40_000, "{rate} B/s");
+    assert!(a.ms < 15_000 && rate >= 30_000, "{rate} B/s");
     run(&mut sim, &mut app, 300);
     assert!(radio_normal(&sim) && !app.phone.files.boosted, "the parameters came back with the END");
 }
@@ -522,4 +522,61 @@ fn a_fuzz_of_the_new_events_leaves_the_link_whole() {
         assert!(ride.starts_with(&got) || got.len() > ride.len(), "seed {seed}: bytes in order, {} got", got.len());
     }
     assert!(reached > 1000, "the fuzz reached the events: {reached}");
+}
+
+#[test]
+fn a_restore_the_chip_refuses_is_tried_again_and_the_phones_own_parameters_come_back() {
+    let (mut sim, mut app, control, _, _) = fast_unit(247, 400_000, |_| {});
+    // the phone changed its parameters before the READ (to 50 ms): those are what comes back
+    sim.nordic.evt(0x12, &[0, 0, 40, 0, 40, 0, 0, 0, 0x90, 1]);
+    run(&mut sim, &mut app, 100);
+    start_read(&mut sim, control, 1, BIG);
+    pass(&mut sim, &mut app, 400);
+    assert!(app.phone.files.boosted && sim.nordic.server.radio.interval_ms == 15);
+    sim.nordic.refuse = Some(0x75); // the restore meets a BUSY
+    sim.nordic.phone_write(control, &[3, 9]);
+    run(&mut sim, &mut app, 400);
+    assert!(app.phone.files.boosted && sim.nordic.server.radio.interval_ms == 15, "kept trying");
+    sim.nordic.refuse = None;
+    run(&mut sim, &mut app, 200);
+    assert!(!app.phone.files.boosted, "done once the chip took it");
+    let r = &sim.nordic.server.radio;
+    assert!(
+        !r.phy2 && r.interval_ms == 50 && r.latency == 0,
+        "the phone's 50 ms, 1M PHY: {r:?}",
+        r = (r.phy2, r.interval_ms)
+    );
+}
+
+#[test]
+fn a_restore_that_never_works_is_dropped_after_a_bounded_number_of_passes() {
+    let (mut sim, mut app, control, _, _) = fast_unit(247, 400_000, |_| {});
+    start_read(&mut sim, control, 1, BIG);
+    pass(&mut sim, &mut app, 400);
+    sim.nordic.refuse = Some(0x8f); // the PHY update is always refused
+    sim.nordic.phone_write(control, &[3, 9]);
+    run(&mut sim, &mut app, 3000);
+    assert!(!app.phone.files.boosted, "20 tries, then given up");
+}
+
+#[test]
+fn with_no_known_parameters_no_update_is_sent_back() {
+    let (mut sim, mut app, control, _, _) = fast_unit(247, 400_000, |_| {});
+    app.phone.files.link = None; // the connect event was lost
+    start_read(&mut sim, control, 1, BIG);
+    pass(&mut sim, &mut app, 400);
+    let before = sim.nordic.param_updates.len();
+    sim.nordic.phone_write(control, &[3, 9]);
+    run(&mut sim, &mut app, 400);
+    assert!(!app.phone.files.boosted && !sim.nordic.server.radio.phy2);
+    assert_eq!(sim.nordic.param_updates.len(), before, "the link keeps whatever the phone set");
+}
+
+#[test]
+fn a_table_that_refuses_the_big_data_value_gets_the_small_one_and_small_frames() {
+    let (mut sim, mut app, control, data, ride) = fast_unit(247, 3000, |s| s.nordic.max_value = 20);
+    assert_eq!(app.phone.files.max_frame, 20);
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
+    assert!(a.bytes == ride && a.end == Some((Status::Ok, 3000)));
+    assert!(sim.nordic.server.sent.iter().all(|s| s.1.len() <= 20));
 }

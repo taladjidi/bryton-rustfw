@@ -638,7 +638,7 @@ fn a_ride_downloads_on_the_fast_link_while_the_trainer_is_connected() {
     assert!(trainer(&sim).connected && trainer(&sim).control, "the trainer kept its link and its control");
     let r = &sim.nordic.server.radio;
     assert!(
-        !r.phy2 && r.interval_ms == super::ble_sim::HVN_MS && r.latency == 6,
+        !r.phy2 && r.interval_ms == super::ble_sim::HVN_MS && r.latency == 0,
         "the phone link's parameters came back"
     );
 }

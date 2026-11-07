@@ -1914,6 +1914,9 @@ impl Board for S510 {
     fn nrf_tx_wait(&mut self) {
         // A bounded poll of TC (the FIFO and the shifter empty): 16 bytes leave in 160 us, and a 1 ms sleep per
         // 16 bytes capped the uplink at 16 KB/s. The CPU is awake for the transfer either way.
+        if !FAST_LINK {
+            return; // the ride build keeps today's pacing exactly (a 1 ms sleep when the FIFO is full)
+        }
         let t0 = cycles();
         while rd(U_ISR) & U_ISR_TC == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 4000 {}
     }

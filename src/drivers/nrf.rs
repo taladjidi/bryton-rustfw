@@ -36,7 +36,7 @@ pub const EVT_TIMEOUT: u16 = 0x1b;
 pub const EVT_HVX: u16 = 0x39;
 
 /// Largest payload kept; a longer one is read through and dropped.
-pub const MAX: usize = 256;
+pub const MAX: usize = 264;
 
 /// How long a command may take before it is given up (stock waits 5 s; replies take a few ms). Not shorter: a slow
 /// but alive chip must not be reset. The GNSS bound does not come from here but from [`Rx::stalled`] (one time-out
@@ -48,8 +48,11 @@ pub const TIMEOUT_MS: u32 = 500;
 pub const GARBAGE: usize = 512;
 
 /// Longest BLE event kept while a command waits ([`Rx::pop`]): a Chars discovery answer of 14 characteristics at
-/// 11 + 14 x 9 = 137 bytes (review 2026-11-01), so 160.
-pub const KEPT: usize = 160;
+/// 11 + 14 x 9 = 137 bytes (review 2026-11-01); on the fast link (ATT MTU 247) an HVX is a 14-byte header and up to
+/// 244 bytes of value (an ANCS attribute answer of about 194), so 264, [`MAX`].
+pub const KEPT: usize = 264;
+/// BLE event id: notifications left the queue (BLE_GATTS_EVT_HVN_TX_COMPLETE).
+pub const EVT_HVN_TX_COMPLETE: u16 = 0x57;
 /// Events kept at most: an ANCS answer of the longest message the inbox keeps (120 bytes) and a long title is about
 /// 180 bytes, ten notifications of 20 at the 23-byte ATT MTU, read in one pass (eight lost it).
 pub const KEPT_N: usize = 16;
@@ -64,7 +67,7 @@ pub struct Rx {
     /// The last packet's length (in `buf`).
     last: usize,
     kept: [[u8; KEPT]; KEPT_N],
-    kept_len: [u8; KEPT_N],
+    kept_len: [u16; KEPT_N],
     /// The oldest event kept is `kept[head]`: a ring, so a pop moves nothing.
     head: usize,
     kept_n: usize,
@@ -184,6 +187,10 @@ impl Rx {
         if p.len() > KEPT {
             return;
         }
+        // one TX-complete is enough (they only say "refill"): a stream of them must not push the phone's HVX out
+        if id == Some(EVT_HVN_TX_COMPLETE) && (0..self.kept_n).any(|i| self.kept_id(i) == Some(EVT_HVN_TX_COMPLETE)) {
+            return;
+        }
         if self.kept_n == self.kept.len() {
             let is = |me: &Self, i: usize, f: fn(&[u8]) -> bool| {
                 let at = me.slot(i);
@@ -215,9 +222,16 @@ impl Rx {
             && let Some(dst) = slot.get_mut(..p.len())
         {
             dst.copy_from_slice(p);
-            *len = p.len() as u8;
+            *len = p.len() as u16;
             self.kept_n += 1;
         }
+    }
+
+    /// The BLE event id of the `i`th event kept.
+    fn kept_id(&self, i: usize) -> Option<u16> {
+        let at = self.slot(i);
+        let n = usize::from(self.kept_len.get(at).copied()?);
+        event_id(self.kept.get(at)?.get(..n)?)
     }
 
     /// The ring slot of the `i`th event kept (always in range: the modulo is the array's length).
@@ -520,12 +534,13 @@ pub const FAST_MTU: u16 = 247;
 /// full packets with one to spare. Each queued value holds an MTU-sized buffer in the chip's RAM, which Bryton's app
 /// fixes; when the chip refuses, [`start`] falls back.
 pub const FAST_QUEUE: u8 = 4;
-/// The connection event length of the fast link, 1.25 ms units: 6 is 7.5 ms, room for three 251-byte packets at 1 Mbit
-/// (about 2.2 ms each) where 3 (3.75 ms) held one. Two links share the radio: with the trainer's central link at
-/// 30 to 60 ms its events fit between the phone's at 15 ms, as the scheduler must (inferred, not seen).
-pub const FAST_EVENT_LEN: u8 = 6;
+/// The connection event length of the fast link, 1.25 ms units: 3 (3.75 ms), as the two-link configuration has had it
+/// since the start, so nothing in the chip's radio schedule changes outside a download beyond the MTU. A 251-byte
+/// packet at the 2M PHY takes about 1 ms, so an event still holds two or three during a READ; at 1M it holds one
+/// (a longer event, 6, was the first design and is a later step if the unit's rate needs it).
+pub const FAST_EVENT_LEN: u8 = 3;
 
-/// The fast link's configuration, in place of [`CFG`]: the same two links with a longer event length, and
+/// The fast link's configuration, in place of [`CFG`]: the same two links, and
 /// - `BLE_CONN_CFG_GATT` (0x23, `ble_gatt_conn_cfg_t`: `att_mtu` u16);
 /// - `BLE_CONN_CFG_GATTS` (0x22, `ble_gatts_conn_cfg_t`: `hvn_tx_queue_size` u8).
 ///
@@ -1135,6 +1150,27 @@ mod tests {
         }
         assert_eq!(ids.len(), KEPT_N);
         assert_eq!(ids.last(), Some(&Some(0x11)), "the disconnection kept, an old notification dropped");
+    }
+
+    #[test]
+    fn a_fast_link_hvx_is_kept_whole_and_tx_completes_do_not_crowd_it_out() {
+        let mut rx = Rx::new();
+        // an HVX at ATT MTU 247: 14 bytes of header and 244 of value (258; a u8 length wrapped it to 2)
+        let mut hvx = [0x5a; 258];
+        hvx[..3].copy_from_slice(&[BLE_EVT, 0x39, 0]);
+        keep(&mut rx, &hvx);
+        for _ in 0..KEPT_N * 2 {
+            keep(&mut rx, &[BLE_EVT, 0x57, 0, 0, 0, 1]); // a stream of TX-completes
+        }
+        keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]);
+        let mut out = [0; KEPT];
+        assert_eq!(rx.pop(&mut out), Some(258));
+        assert_eq!(&out[..258], &hvx[..]);
+        let mut ids = std::vec::Vec::new();
+        while let Some(n) = rx.pop(&mut out) {
+            ids.push(event_id(&out[..n]));
+        }
+        assert_eq!(ids, [Some(0x57), Some(0x11)], "one TX-complete is kept, the disconnection too");
     }
 
     #[test]

@@ -273,6 +273,9 @@ pub struct Nordic {
     /// The configurations of the fast link (ids 0x22, 0x23) are refused (NRF_ERROR_NO_MEM): a chip whose RAM, fixed by
     /// Bryton's app, cannot hold them. Kept over a reset.
     pub refuse_fast_cfg: bool,
+    /// The longest characteristic value the attribute table takes (0: any): a longer one is refused (NO_MEM). Kept over
+    /// a reset.
+    pub max_value: usize,
     /// An ANT command the chip refuses on a channel (op, channel), with an error code.
     pub ant_refuse: Option<[u8; 2]>,
     /// Reset since power-up: before that, commands would go nowhere.
@@ -1232,7 +1235,8 @@ impl Sim {
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
         let (limits, hangs, high_water) = (self.nordic.limits, self.nordic.hangs, self.nordic.high_water);
         let (expect_hang, table_only) = (self.nordic.expect_hang, self.nordic.table_only);
-        let (vs_max, refuse_fast_cfg) = (self.nordic.vs_max, self.nordic.refuse_fast_cfg);
+        let (vs_max, refuse_fast_cfg, max_value) =
+            (self.nordic.vs_max, self.nordic.refuse_fast_cfg, self.nordic.max_value);
         resets.push(self.ms);
         self.nordic = Nordic {
             die_at_ant,
@@ -1258,6 +1262,7 @@ impl Sim {
             table_only,
             vs_max,
             refuse_fast_cfg,
+            max_value,
             ..Nordic::default()
         };
     }

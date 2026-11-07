@@ -333,7 +333,7 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
   - the clock and the time zone from the phone's Current Time Service.
   - Next: LE Secure Connections (pairing is legacy Just Works now), a whitelist of the bonded phone (its IRK is
     distributed but not kept). Done in the simulator (2026-10-31): the notification's app shown (ANCS Get App Attributes, cached). A larger ATT MTU (103) was tried and
-    removed on 2026-11-01, suspected of the radio chip's silences on that day's ride; closed on 2026-11-02, **reopened 2026-11-07** for the file service's downloads: the fast link (ATT MTU 247, 4 queued notifications, a 7.5 ms event, then data length 251, 2M PHY and 15 to 30 ms without latency only during a READ), on in RAM-run builds, off in the `EMMC_WRITE=1` ride build until the owner's ride test passes.
+    removed on 2026-11-01, suspected of the radio chip's silences on that day's ride; closed on 2026-11-02, **reopened 2026-11-07** for the file service's downloads: the fast link (ATT MTU 247, 4 queued notifications, then data length 251, 2M PHY and 15 to 30 ms without latency only during a READ), on in RAM-run builds, off in the `EMMC_WRITE=1` ride build until the owner's ride test passes.
 - With a companion app only: Android notifications and track info, find my phone, live tracking, automatic upload; a
   computer tool over USB can upload rides.
 - The phone app: section 9.
