@@ -39,14 +39,27 @@ Details, build and what the unit showed on a phone: [docs/app.md](docs/app.md). 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*
 
-**Status (2026-11-02):** runs on the unit (installed, and newer builds from RAM). An overview and ride pages in several
-layouts, a page editor, touch and keys, menus, ANT+ sensors, a power meter's calibration and a smart trainer (ERG, SIM,
-an FTP ramp test), derived power metrics (NP, TSS, W' balance...), heart rate variability (DFA a1, thresholds from
-recent rides) and the beats recorded raw, graphs, GPS with fast aided starts, a track map with a basemap (IGN Plan v2
-packs, else stock's cached tiles), the workouts stock's app synced, courses with climbs, a climb pacer and the climbs
-on the road ahead without a course, with a CLIMB page that opens at a climb's start, the phone as a Bluetooth accessory, a PIXEL or SMOOTH font, and a USB dev link. A settings file and colour themes (DARK, OUTDOOR, LIGHT, or a theme file) on the card, the trainer's ERG target corrected by the power meter (power match), and a profiler over the dev link. Auto power-off after 5 min idle, an MTB profile, and sync to Intervals.icu (docs/sync.md).
-Rides are saved to `\Activities` as stock does (seen on the unit), in two copies, and survive a reset or a power cut. Rides need an `EMMC_WRITE=1` build (docs/install.md).
-Since 2026-11-01 the radio, GNSS, touch, keys, panel and card each have a strict model in the simulator, and the radio chip's own app runs in an emulator (docs/devloop.md), so a link bug shows on the Mac first. The newest features are seen in the simulator only so far (docs/status.md). It shares the storage with Bryton's firmware, so the two can be swapped.
+## Status (2026-11-07)
+
+Runs on the unit: installed, and newer builds from RAM. What is on the unit's list still: [docs/status.md](docs/status.md).
+
+- **Riding:** an overview and ride pages in several layouts, a page editor, graphs, touch and keys, menus, a PIXEL or
+  SMOOTH font, colour themes (DARK, OUTDOOR, LIGHT, or a theme file), an MTB profile, auto power-off after 5 min idle.
+- **Sensors and training:** ANT+ sensors, a power meter's calibration, a smart trainer (ERG, SIM, an FTP ramp test,
+  the ERG target corrected by the power meter), derived power metrics (NP, TSS, W' balance...), heart rate
+  variability (DFA a1, thresholds from recent rides) with the beats recorded raw, the workouts stock's app synced.
+- **Navigation:** GPS with fast aided starts, a track map with a basemap (IGN Plan v2 packs, else stock's cached
+  tiles), courses with climbs, a climb pacer, the climbs on the road ahead without a course, a CLIMB page that opens at
+  a climb's start.
+- **Rides:** saved to `\Activities` as stock does (seen on the unit), in two copies, and they survive a reset or a power
+  cut; they need an `EMMC_WRITE=1` build (docs/install.md). Sync to Intervals.icu from the computer (docs/sync.md). The
+  storage is shared with Bryton's firmware, so the two can be swapped.
+- **Phone:** the phone as a Bluetooth accessory (notifications, media), and since 2026-11-07 the iPhone app: on the
+  owner's iPhone it shows the unit and its battery, lists the rides and downloads them, byte for byte identical to the
+  USB copy. The fast link (larger packets) works on the unit; its speed is being tuned (3 KB/s, then 16.6 KB/s seen; the next build aims for 40 to 50 KB/s).
+- **Tools:** a USB dev link, a profiler over it, and a settings file on the card.
+- **Testing:** since 2026-11-01 the radio, GNSS, touch, keys, panel and card each have a strict model in the simulator,
+  and the radio chip's own app runs in an emulator (docs/devloop.md), so a link bug shows on the Mac first.
 
 ## Key figures
 
@@ -61,9 +74,9 @@ Measured on the unit (2026-10-29 evening, build 13fec4c, `tools/profile.py` from
 | Panel traffic, a ride page | about 740 pixels a second (only what changed, in the smallest box) |
 | Climb pacer, one plan | about 75 us (estimated from operation counts) |
 | A map tile for climbs ahead | at most about 3 ms a slice (estimated; one tile took 238 ms in one go before) |
-| Image | <!-- n:image -->799 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
+| Image | <!-- n:image -->800 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
 | Code | about <!-- n:rust_lines -->144,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
-| Tests | <!-- n:tests -->1,859<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->28<!-- /n --> need files outside the repo), <!-- n:doctests -->229<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
+| Tests | <!-- n:tests -->1,863<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->28<!-- /n --> need files outside the repo), <!-- n:doctests -->229<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
 
 
 | Read | For |

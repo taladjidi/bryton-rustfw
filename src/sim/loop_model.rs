@@ -20,6 +20,8 @@ use std::vec::Vec;
 pub struct LoopModel {
     /// The cable is in.
     pub vbus: bool,
+    /// Every `wake_on_io` call (keys, bytes), in order.
+    pub wakes: Vec<(bool, bool)>,
     /// What starting USB hands out (taken by the first start).
     pub link: Option<SimLink>,
     /// USB starts asked.
@@ -291,7 +293,9 @@ impl LoopBoard for Sim {
         self.nordic.out.clear();
         self.nordic.fifo.clear();
     }
-    fn wake_on_io(&mut self, _: bool, _: bool) {}
+    fn wake_on_io(&mut self, keys: bool, bytes: bool) {
+        self.main.wakes.push((keys, bytes));
+    }
     fn timer_start(&mut self, ms: u32) {
         self.main.timer = Some((self.wall_ns(), ms));
     }

@@ -202,8 +202,8 @@ impl<L: UsbLink> MainLoop<L> {
         if !wake.radio {
             b.nrf_flush();
         }
-        if wake.io {
-            b.wake_on_io(true, wake.bytes);
+        if wake.io || wake.bytes {
+            b.wake_on_io(wake.io, wake.bytes); // a short pass keeps the key lines off (a held key would end every WFI)
         }
         'sleep: loop {
             // a finger down makes the pass POLL_MS again
@@ -445,10 +445,10 @@ impl<L: UsbLink> MainLoop<L> {
                 if radio_passes >= MAX_RADIO_PASSES {
                     break; // a chip that never stops sending: the step runs all the same, the pass is bounded
                 }
-                b.wake_on_io(true, wake.bytes);
+                b.wake_on_io(wake.io, wake.bytes);
             }
         }
-        if wake.io {
+        if wake.io || wake.bytes {
             b.wake_on_io(false, false);
         }
         let sleep_cycles = slice_cycles;

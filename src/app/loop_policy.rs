@@ -32,8 +32,9 @@ pub struct Wake {
     /// reads neither ends every WFI nor waits stale for the next start.
     pub radio: bool,
     /// The chip's bytes wake the sleep for a radio pass (`App::radio_pass`: read at once, the rest of the step at the
-    /// sleep's end): read, and an idle sleep ([`IDLE_POLL_MS`]); a ride's pass is the short one, like
-    /// any other pass that is not idle (a 100 ms ride pass without the wake was taken out on 2026-11-01).
+    /// sleep's end): read, and an idle sleep ([`IDLE_POLL_MS`]) or a READ's pass (`FAST_POLL_MS`, without the key
+    /// lines: `io` stays off); a ride's pass is the short one, like any other pass that is not idle (a 100 ms ride
+    /// pass without the wake was taken out on 2026-11-01).
     pub bytes: bool,
 }
 
@@ -275,7 +276,10 @@ impl LoopPolicy {
     /// [`POLL_MS`].
     pub fn begin_sleep(&mut self, pass_ms: u32, radio_up: bool) -> Wake {
         self.slept = 0;
-        Wake { io: pass_ms > POLL_MS, radio: radio_up, bytes: radio_up && pass_ms >= IDLE_POLL_MS }
+        // the READ's pass ([`FAST_POLL_MS`]) is woken by the chip's bytes too: its
+        // HVN_TX_COMPLETE refills the stack's queue at once instead of at the pass's end (2026-11-07, 16.6 KB/s)
+        let fast = pass_ms == super::filesvc::FAST_POLL_MS;
+        Wake { io: pass_ms > POLL_MS, radio: radio_up, bytes: radio_up && (pass_ms >= IDLE_POLL_MS || fast) }
     }
 
     /// The next slice of the pass's sleep, ms, or `None` when the pass has slept `pass_ms` (read again each slice: a
@@ -456,6 +460,14 @@ mod tests {
         assert_eq!(p.begin_sleep(IDLE, false), Wake { io: true, radio: false, bytes: false });
         assert_eq!(p.begin_sleep(POLL_MS, true), Wake { io: false, radio: true, bytes: false });
         assert_eq!(p.begin_sleep(TOUCH_MS, false), Wake { io: false, radio: false, bytes: false });
+        assert_eq!(
+            p.begin_sleep(crate::app::filesvc::FAST_POLL_MS, true),
+            Wake { io: false, radio: true, bytes: true }
+        );
+        assert_eq!(
+            p.begin_sleep(crate::app::filesvc::FAST_POLL_MS, false),
+            Wake { io: false, radio: false, bytes: false }
+        );
     }
 
     #[test]

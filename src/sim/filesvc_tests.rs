@@ -79,10 +79,25 @@ fn resubscribe(sim: &mut Sim, app: &mut App, data: u16) {
 
 /// [`run`] with the loop's real pass: the short one while a READ runs on the fast link ([`App::pass_ms`]).
 fn pass(sim: &mut Sim, app: &mut App, ms: u64) {
+    pass_with(sim, app, ms, true);
+}
+
+/// [`pass`]; `wake`: the chip's bytes end the sleep for a radio pass (`LoopPolicy::begin_sleep`, since 2026-11-07),
+/// else the events wait for the next step (the loop of 20989f2a, which measured 16.6 KB/s on the unit).
+fn pass_with(sim: &mut Sim, app: &mut App, ms: u64, wake: bool) {
     let end = sim.ms + ms;
     while sim.ms < end {
         app.step(sim);
-        sim.sleep_ms(if app.phone.files.fast() { app.pass_ms() } else { super::POLL_MS });
+        if !app.phone.files.fast() {
+            sim.sleep_ms(super::POLL_MS);
+            continue;
+        }
+        for slept in 1..=app.pass_ms() {
+            sim.sleep_ms(1);
+            if wake && crate::LoopBoard::byte_waiting(sim) {
+                app.radio_pass(sim, slept);
+            }
+        }
     }
 }
 
@@ -494,6 +509,46 @@ fn the_media_keys_behave_on_the_fast_link_and_ask_nothing_of_the_radio() {
     assert!(r.dle == 27 && r.interval_ms == super::ble_sim::HVN_MS && !r.phy2, "no parameters outside a transfer");
 }
 
+/// `dev.py info`'s phone link numbers after a READ: what the stack reported and what the READ moved.
+#[test]
+fn the_link_info_says_what_the_link_has_and_what_the_last_read_moved() {
+    let (mut sim, mut app, control, data, ride) = fast_unit(247, 100_000, |_| {});
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 5, offset: 0, name: BIG }, 60_000);
+    assert_eq!(a.end, Some((Status::Ok, ride.len() as u32)));
+    let (mtu, ext, l) = app.phone_link();
+    assert!(ext && mtu == 247, "the extension was accepted, the MTU is the phone's");
+    assert_eq!((l.dle, l.boost), (251, [0, 0, 0]), "data length in force, the three boost calls accepted");
+    assert_eq!(l.bytes, ride.len() as u32, "the READ's file bytes");
+    assert!(l.ms * 2 > a.ms as u32 && l.ms < a.ms as u32 * 2, "{} ms against {}", l.ms, a.ms);
+    assert!(
+        l.sent > 0 && l.hvn > 0 && l.hvn <= l.sent,
+        "{} frames, {} confirmed, sim completed {}",
+        l.sent,
+        l.hvn,
+        sim.nordic.server.radio.completed
+    );
+    assert!(l.interval > 0, "the interval came from the stack's update event");
+    // a lost link clears what the link had, not the last READ
+    app.phone.files.link_down();
+    let (_, _, l2) = app.phone_link();
+    assert_eq!((l2.interval, l2.phy, l2.dle, l2.bytes), (0, 0, 0, l.bytes));
+}
+
+/// The simulator's radio is no longer optimistic: at data length 27 a 244-byte notification is ten packets (over 6 ms
+/// at 1M); at 251 on the 2M PHY it is one packet of about 1.4 ms.
+#[test]
+fn the_radio_model_counts_packets() {
+    use super::ble_sim::Radio;
+    let mut r = Radio { mtu: 247, ..Radio::default() };
+    let (us, n) = r.pdu_us(244);
+    assert_eq!(n, 27);
+    assert!(251u64.div_ceil(27) * us > 6_000, "ten packets: {us} us each");
+    (r.dle, r.phy2) = (251, true);
+    let (us, n) = r.pdu_us(244);
+    assert_eq!(n, 251);
+    assert!((1_300..1_500).contains(&us), "{us} us");
+}
+
 #[test]
 fn a_fuzz_of_the_new_events_leaves_the_link_whole() {
     let mut reached = 0;
@@ -510,8 +565,8 @@ fn a_fuzz_of_the_new_events_leaves_the_link_whole() {
         let mut got = Vec::new();
         for _ in 0..200 {
             // MTU requests (any size, cut short), TX completes (any count), PHY and data length results, junk
-            let id = [0x55, 0x57, 0x21, 0x23][(next() % 4) as usize];
-            let mut junk: Vec<u8> = (0..4 + next() % 8).map(|_| next() as u8).collect();
+            let id = [0x55, 0x57, 0x21, 0x23, 0x22, 0x24][(next() % 6) as usize];
+            let mut junk: Vec<u8> = (0..10 + next() % 6).map(|_| next() as u8).collect();
             junk.splice(0..0, [u8::from(next() % 4 == 0), 0]);
             if next() % 3 > 0 {
                 sim.nordic.evt(id, &junk);
@@ -586,4 +641,48 @@ fn a_table_that_refuses_the_big_data_value_gets_the_small_one_and_small_frames()
     let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
     assert!(a.bytes == ride && a.end == Some((Status::Ok, 3000)));
     assert!(sim.nordic.server.sent.iter().all(|s| s.1.len() <= 20));
+}
+
+/// The READ's rate with the chip's bytes waking the sleep and without (the pacing before 2026-11-07). The simulator's
+/// chip sends up to the queue's depth each event, so it cannot show the unit's 16.6 KB/s (1.6 notifications an event);
+/// what it checks is that the refill at once never costs rate and keeps the stack's queue fuller.
+#[test]
+fn a_byte_from_the_chip_ends_the_sleep_so_the_queue_is_refilled_at_once() {
+    let rate = |wake: bool| {
+        let (mut sim, mut app, control, data, _) = fast_unit(247, 400_000, |_| {});
+        start_read(&mut sim, control, 5, BIG);
+        let (t0, mut done) = (sim.ms, false);
+        while !done && sim.ms < t0 + 60_000 {
+            pass_with(&mut sim, &mut app, 50, wake);
+            done = drain(&mut sim, data).iter().any(|p| matches!(Frame::parse(p), Some(Frame::End { .. })));
+        }
+        assert!(done, "the READ ended");
+        let l = app.phone_link().2;
+        (u64::from(l.bytes) * 1000 / (sim.ms - t0), l)
+    };
+    let ((old, lo), (new, ln)) = (rate(false), rate(true));
+    std::println!(
+        "READ, events read at the pass: {old} B/s (full {}, turns {}); woken by the chip: {new} B/s (full {}, turns {})",
+        lo.full,
+        lo.turns,
+        ln.full,
+        ln.turns
+    );
+    assert!(new >= old && new >= 30_000, "{new} against {old} B/s");
+}
+
+#[test]
+fn during_a_fast_read_the_keys_stay_off_and_the_chips_bytes_wake_the_loop() {
+    let (mut sim, mut app, control, _data, _) = fast_unit(247, 400_000, |_| {});
+    start_read(&mut sim, control, 5, BIG);
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    let (end, mut radio) = (sim.ms + 3_000, 0);
+    while sim.ms < end && !sim.standby && sim.main.resets == 0 {
+        radio += main.pass(&mut app, &mut sim);
+    }
+    let wakes = &sim.main.wakes;
+    assert!(!wakes.is_empty(), "the loop ran");
+    assert!(wakes.iter().all(|&(keys, _)| !keys), "a key line armed during a READ");
+    assert!(wakes.iter().any(|&(_, bytes)| bytes), "the READ's sleep never armed the chip's bytes");
+    assert!(radio > 0, "no radio pass woken by a byte during the READ");
 }

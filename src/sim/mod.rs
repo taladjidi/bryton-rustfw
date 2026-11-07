@@ -273,6 +273,8 @@ pub struct Nordic {
     /// The configurations of the fast link (ids 0x22, 0x23) are refused (NRF_ERROR_NO_MEM): a chip whose RAM, fixed by
     /// Bryton's app, cannot hold them. Kept over a reset.
     pub refuse_fast_cfg: bool,
+    /// The `sd_ble_opt_set` calls received (their bytes after the opcode).
+    pub opt_sets: Vec<Vec<u8>>,
     /// The longest characteristic value the attribute table takes (0: any): a longer one is refused (NO_MEM). Kept over
     /// a reset.
     pub max_value: usize,

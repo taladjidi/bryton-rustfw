@@ -732,6 +732,9 @@ impl App {
             self.ftms_lost(); // the trainer's DISCONNECTED was lost: its handle is the phone's now
         }
         let rx = &mut self.rx;
+        if e.conn().is_some_and(|c| Some(c) == self.phone.conn) {
+            self.phone.files.info.seen(&e);
+        }
         match e {
             Event::Write { conn, handle, data, .. }
                 if Some(conn) == self.phone.conn && self.phone.is_control(handle) =>
@@ -741,6 +744,7 @@ impl App {
             Event::Connected { conn, role: 1, peer, params } => {
                 self.phone.unlink();
                 self.phone.files.link = params; // what a READ gives back
+                self.phone.files.info.seen(&e);
                 (self.phone.conn, self.phone.adv) = (Some(conn), Adv::Off); // the stack stopped advertising
                 self.phone.peer = peer;
                 if !self.phone.bonded() || self.phone.pairing {
@@ -813,7 +817,10 @@ impl App {
                 }
             }
             Event::MtuRequest { conn, client } => self.mtu_reply(b, conn, client),
-            Event::TxComplete { conn, .. } if Some(conn) == self.phone.conn => self.step_files(b, conn),
+            Event::TxComplete { conn, count } if Some(conn) == self.phone.conn => {
+                self.phone.files.info.confirmed(count);
+                self.step_files(b, conn);
+            }
             Event::ParamRequest { conn, id } => {
                 let _ = match id {
                     0x21 => ble::phy_update(b, rx, conn),

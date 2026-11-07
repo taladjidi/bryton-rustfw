@@ -556,6 +556,31 @@ impl Session {
                 h.send(if stats.ride_stop { b", ride stop built yes" } else { b", ride stop built no" });
                 h.send(b", usb recoveries ");
                 h.send(decimal(u64::from(stats.usb_recoveries), &mut [0; 20]));
+                let (mtu, ext, l) = app.phone_link();
+                h.send(b", phone link mtu ");
+                let nums = [
+                    (b"" as &[u8], u32::from(mtu)),
+                    (b" int", l.interval.into()),
+                    (b" phy", l.phy.into()),
+                    (b" dle", l.dle.into()),
+                    (b" ext", ext.into()),
+                    (b" boost", l.boost[0].into()),
+                    (b"", l.boost[1].into()),
+                    (b"", l.boost[2].into()),
+                    (b" last read", l.bytes),
+                    (b" B", l.ms),
+                    (b" ms hvn", l.hvn),
+                    (b" sent", l.sent),
+                    (b" full", l.full),
+                    (b" turns", l.turns),
+                ];
+                for (i, (k, v)) in nums.into_iter().enumerate() {
+                    h.send(k);
+                    if i > 0 {
+                        h.send(b" ");
+                    }
+                    h.send(decimal(u64::from(v), &mut [0; 20]));
+                }
                 h.send(b"\n");
             }
             Some(b"where") => {
