@@ -776,9 +776,25 @@ From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt
      ADRDY       _____________________________________/~~~~~~~~~~~~~~~~~~
      reading     every 10 s: channel 19 (VREFINT), then channel 1 (battery), ~205 us each
 
-- **Charge estimate:** a typical lithium-ion curve, 3.3 V = 0 % to 4.2 V = 100 % (inferred; stock's table is
-  not traced). Below 3.3 V three readings in a row (10 s apart) on battery, the firmware switches off, as stock
-  does at 0 %.
+- **Charge estimate:** stock's own table (Bryton's characterisation of the cell): the millivolts at each percent
+  0 to 99, a u16 table at 0xd01fb1ec in stock R039, read by Batt_VoltageToPercent (0xd01faeee; bryton's
+  ghidra/notes/agent_d01e8000.md, line ~403). Stock shows 100 from 4141 mV, 0 below 3450 mV, and otherwise the
+  smallest percent whose entry reaches the reading (a binary search from the middle, 8 rounds at most). Stock
+  averages 32 readings. The table, the first percent of each row, then ten entries (mV):
+```
+   0: 3450 3485 3510 3527 3540 3560 3580 3602 3626 3642
+  10: 3652 3660 3666 3669 3673 3678 3684 3688 3694 3697
+  20: 3702 3707 3711 3715 3719 3722 3725 3728 3731 3734
+  30: 3736 3738 3741 3743 3746 3748 3751 3753 3755 3758
+  40: 3760 3763 3765 3769 3771 3775 3778 3781 3784 3787
+  50: 3791 3795 3799 3803 3806 3811 3815 3820 3825 3829
+  60: 3834 3839 3845 3850 3856 3862 3868 3875 3882 3889
+  70: 3895 3902 3909 3915 3921 3928 3935 3941 3948 3954
+  80: 3962 3970 3979 3989 4001 4012 4025 4035 4045 4053
+  90: 4060 4067 4074 4084 4092 4101 4111 4120 4130 4140
+```
+  This firmware's percent is this table's (drivers/battery.rs `percent`; `tenths` interpolates between the steps).
+  Below 3.3 V three readings in a row (10 s apart) on battery, the firmware switches off, as stock does at 0 %.
 - **Charging:** PG14 is the charge enable, active low. The bootloader leaves it an output, low: **charging is on
   whenever USB power is present** (seen: MODER output, ODR bit 14 = 0). Stock switches it with a temperature
   window from the barometer: charge only if 0 < T < 50 C (5 < T after "too cold", T < 45 after "too hot"). This

@@ -103,7 +103,7 @@ pub(super) fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: b
             gps: app.strip.gps,
             blink: app.strip.blink,
             usb: UsbDot::Off,
-            battery: Some(63),
+            battery: Some(71),
             charging: false,
             rec: app.strip.rec,
             lost: app.strip.lost,
@@ -149,7 +149,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
             gps: app.strip.gps,
             blink: app.strip.blink,
             usb,
-            battery: Some(63),
+            battery: Some(71),
             charging: false,
             rec: app.strip.rec,
             lost: app.strip.lost,
@@ -537,7 +537,7 @@ fn every_layout_draws() {
 fn battery_in_the_strip_and_off_when_empty() {
     let (mut sim, mut app) = started();
     app.step(&mut sim);
-    assert_eq!(app.strip.battery, Some(63), "3.9 V");
+    assert_eq!(app.strip.battery, Some(71), "3.9 V");
     sim.charger = true;
     sim.battery_mv = Some(3100);
     run(&mut sim, &mut app, 3 * u64::from(BATTERY_MS) + 1000);
@@ -636,7 +636,7 @@ fn gps_fix_and_speed() {
         gps: Some(3),
         blink: true,
         usb: UsbDot::Off,
-        battery: Some(63),
+        battery: Some(71),
         charging: false,
         rec: Rec::Idle,
         lost: false,

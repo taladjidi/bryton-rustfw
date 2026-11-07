@@ -16,51 +16,55 @@ pub fn millivolts(raw: u16, vref: u16, cal: u16) -> Option<u16> {
     u16::try_from(u64::from(raw) * vdda * 3 / (2 * 65535)).ok()
 }
 
-/// Charge in percent for a voltage at rest, from a typical lithium-ion curve (inferred: stock's own table is not
-/// traced). Reads high while charging.
+/// Stock's voltage table (BOARD.md 12): the cell's millivolts at each percent 0..=99, as Bryton characterised it.
+/// The u16 table at 0xd01fb1ec in stock R039, read by Batt_VoltageToPercent (0xd01faeee; ghidra/notes/agent_d01e8000.md).
+const STOCK: [u16; 100] = [
+    3450, 3485, 3510, 3527, 3540, 3560, 3580, 3602, 3626, 3642, 3652, 3660, 3666, 3669, 3673, 3678, 3684, 3688, 3694,
+    3697, 3702, 3707, 3711, 3715, 3719, 3722, 3725, 3728, 3731, 3734, 3736, 3738, 3741, 3743, 3746, 3748, 3751, 3753,
+    3755, 3758, 3760, 3763, 3765, 3769, 3771, 3775, 3778, 3781, 3784, 3787, 3791, 3795, 3799, 3803, 3806, 3811, 3815,
+    3820, 3825, 3829, 3834, 3839, 3845, 3850, 3856, 3862, 3868, 3875, 3882, 3889, 3895, 3902, 3909, 3915, 3921, 3928,
+    3935, 3941, 3948, 3954, 3962, 3970, 3979, 3989, 4001, 4012, 4025, 4035, 4045, 4053, 4060, 4067, 4074, 4084, 4092,
+    4101, 4111, 4120, 4130, 4140,
+];
+
+/// Charge in percent for a voltage at rest, as stock shows it: 100 from 4141 mV, 0 below 3450 mV, else the smallest
+/// percent whose table entry reaches the reading (stock's binary search over its table, BOARD.md 12). Reads high
+/// while charging.
 ///
 /// ```
 /// use bryton_rustfw::battery::percent;
-/// assert_eq!((percent(4250), percent(3800), percent(3200)), (100, 45, 0));
+/// assert_eq!((percent(4250), percent(3800), percent(3200)), (100, 53, 0));
 /// ```
 pub fn percent(mv: u16) -> u8 {
-    (tenths(mv) / 10) as u8
+    if mv >= 4141 {
+        100
+    } else if mv < STOCK[0] {
+        0
+    } else {
+        STOCK.partition_point(|&v| v < mv).max(1) as u8
+    }
 }
 
-/// The charge curve: (mV, percent), linear between the points.
-const CURVE: [(u16, u8); 10] = [
-    (3300, 0),
-    (3600, 5),
-    (3700, 15),
-    (3750, 30),
-    (3800, 45),
-    (3850, 55),
-    (3900, 63),
-    (4000, 78),
-    (4100, 90),
-    (4200, 100),
-];
-
-/// [`percent`] in tenths of a percent, on the same curve: a drain of a few minutes shows where the whole percent
-/// would stand still. The integer part of this is what [`percent`] returns.
+/// [`percent`] in tenths of a percent, on the same table: a drain of a few minutes shows where the whole percent
+/// would stand still, interpolated between the table's steps. The integer part of this is what [`percent`] returns.
 ///
 /// ```
 /// use bryton_rustfw::battery::tenths;
-/// assert_eq!((tenths(3800), tenths(3825), tenths(4300)), (450, 500, 1000));
+/// assert_eq!((tenths(3800), tenths(3825), tenths(4300)), (530, 587, 1000));
 /// ```
 pub fn tenths(mv: u16) -> u32 {
-    let mut prev = CURVE[0];
-    for (v, p) in CURVE {
-        if mv <= v {
-            if v == prev.0 {
-                return u32::from(p) * 10;
-            }
-            let t = u32::from(mv.saturating_sub(prev.0)) * u32::from(p - prev.1) * 10 / u32::from(v - prev.0);
-            return u32::from(prev.1) * 10 + t;
-        }
-        prev = (v, p);
+    if mv >= 4141 {
+        return 1000;
     }
-    1000
+    if mv < STOCK[0] {
+        return 0;
+    }
+    // the percent i with STOCK[i - 1] < mv <= STOCK[i], i in 1..=99
+    // clamped so no arithmetic below can overflow (the firmware has no panic site)
+    let i = STOCK.partition_point(|&v| v < mv).clamp(1, 99);
+    let (Some(&lo), Some(&hi)) = (STOCK.get(i - 1), STOCK.get(i)) else { return 1000 };
+    // at STOCK[0] itself (the first percent) the offset saturates to 0
+    i as u32 * 10 + 9 * u32::from(mv.saturating_sub(lo.saturating_add(1))) / u32::from(hi.saturating_sub(lo).max(1))
 }
 
 /// Fewest minutes on the battery before a drain is shown: the first minutes after a start are not (the reading
@@ -237,23 +241,24 @@ mod tests {
 
     #[test]
     fn steady_drain_gives_the_time_left() {
-        // 4000 to 3970 mV in an hour: 4.5 % an hour on this stretch, 73 % left at the end, about 16 h
+        // 4000 to 3941 mV in an hour: 9 % an hour on this stretch (3.1 % an hour at half that drain, under MODEL_RATE),
+        // 77 % left at the end, about 8.6 h
         let mut b = Battery::default();
-        feed(&mut b, 0, 60, false, |m| 4000 - m / 2);
+        feed(&mut b, 0, 60, false, |m| 4000 - m);
         let left = b.minutes_left().unwrap();
-        assert!((900..=1050).contains(&left), "{left} minutes");
+        assert!((480..=560).contains(&left), "{left} minutes");
     }
 
     #[test]
     fn a_backlight_dip_in_the_window_moves_the_time_little() {
         let steady = || {
             let mut b = Battery::default();
-            feed(&mut b, 0, 60, false, |m| 4000 - m / 2);
+            feed(&mut b, 0, 60, false, |m| 4000 - m);
             b.minutes_left().unwrap()
         };
         // a load sag of 10 mV for one minute (a backlight burst on the cell's resistance), inside the last 20
         let mut b = Battery::default();
-        feed(&mut b, 0, 60, false, |m| 4000 - m / 2 - if m == 50 { 10 } else { 0 });
+        feed(&mut b, 0, 60, false, |m| 4000 - m - if m == 50 { 10 } else { 0 });
         let dip = b.minutes_left().unwrap();
         assert!(dip.abs_diff(steady()) * 7 <= steady(), "{dip} against {}", steady());
     }
@@ -279,25 +284,34 @@ mod tests {
     }
 
     #[test]
-    fn percent_matches_the_old_curve() {
-        // the percent as it was before the tenths: the integer steps of each segment
-        fn old(mv: u16) -> u8 {
-            let mut prev = CURVE[0];
-            for (v, p) in CURVE {
-                if mv <= v {
-                    if v == prev.0 {
-                        return p;
-                    }
-                    let t = u32::from(mv.saturating_sub(prev.0)) * u32::from(p - prev.1) / u32::from(v - prev.0);
-                    return prev.1 + t as u8;
-                }
-                prev = (v, p);
+    fn percent_matches_stock() {
+        // stock's search, ported literally: lo 0, hi 99, mid 50, up to 8 rounds
+        fn stock(mv: u16) -> u8 {
+            if mv >= 4141 {
+                return 100;
             }
-            100
+            if mv < 3450 {
+                return 0;
+            }
+            let (mut lo, mut hi, mut mid) = (0usize, 99usize, 50usize);
+            for _ in 0..8 {
+                let mut h = mid;
+                if STOCK[mid] < mv {
+                    lo = mid;
+                    h = hi;
+                }
+                mid = (h + lo) / 2;
+                hi = h;
+                if h - lo < 2 {
+                    break;
+                }
+            }
+            hi as u8
         }
+        assert!(STOCK.windows(2).all(|w| w[0] < w[1]), "strictly rising, so tenths divides by a step");
         let mut last = 0;
         for mv in 0..=u16::MAX {
-            assert_eq!(percent(mv), old(mv), "{mv} mV");
+            assert_eq!(percent(mv), stock(mv), "{mv} mV");
             assert!(tenths(mv) >= last, "{mv} mV");
             assert_eq!(tenths(mv) / 10, u32::from(percent(mv)), "{mv} mV");
             last = tenths(mv);
