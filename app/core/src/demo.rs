@@ -105,6 +105,8 @@ pub struct Faults {
     pub full: bool,
     /// Answer WRITE_BEGIN with END NOT FOUND (no `\\Workout\\calendar` on the card).
     pub no_calendar: bool,
+    /// Refuse a WRITE_DATA with this status (the write is dropped).
+    pub refuse_data: Option<Status>,
     /// Answer WRITE_END with END MISMATCH.
     pub mismatch: bool,
 }
@@ -220,6 +222,10 @@ impl FakeUnit {
                 end(seq, Status::Ok, 0)
             }
             Command::WriteBegin { seq, .. } => end(seq, Status::BadRequest, 0),
+            Command::WriteData { seq, .. } if self.faults.refuse_data.is_some() => {
+                self.writing = None;
+                end(seq, self.faults.refuse_data.unwrap_or(Status::Busy), 0)
+            }
             Command::WriteData { seq, offset, data } => match &mut self.writing {
                 Some((.., buf)) if buf.len() == offset as usize => {
                     buf.extend_from_slice(data);

@@ -75,7 +75,7 @@ struct WorkoutSection: View {
             get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible
         ) {
             Button("Delete from the unit", role: .destructive) {
-                if let f = deleting { rides.deleteWorkout(key: f.key) }
+                if let f = deleting { rides.deleteWorkout(file: f) }
                 deleting = nil
             }
         } message: {

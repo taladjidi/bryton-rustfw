@@ -10,6 +10,8 @@ protocol FileTransport: AnyObject {
     var onReady: (() -> Void)? { get set }
     /// The link dropped; the transport reconnects by itself and calls onReady.
     var onLost: (() -> Void)? { get set }
+    /// A Control write was taken by the unit (the stack's confirmation): the next one may go.
+    var onWriteDone: (() -> Void)? { get set }
     /// A failure the user should read.
     var onError: ((String) -> Void)? { get set }
     /// The debug line (negotiated write length).
@@ -55,6 +57,8 @@ final class RideBrowser: ObservableObject {
     private var workoutQueue: [String] = []
     private var workoutKey: String?
     private var workoutFiles: [WorkoutFile] = []
+    /// The write under way is a send (not a delete).
+    private var sending = false
 
     var hasTransport: Bool { transport != nil }
     var isDownloading: Bool { if case .downloading = phase { true } else { false } }
@@ -67,6 +71,7 @@ final class RideBrowser: ObservableObject {
             old.onData = nil
             old.onReady = nil
             old.onLost = nil
+            old.onWriteDone = nil
             old.onError = nil
             old.onDebug = nil
         }
@@ -77,11 +82,12 @@ final class RideBrowser: ObservableObject {
         ready = false
         t.onData = { [weak self] d in self?.data(d) }
         t.onReady = { [weak self] in self?.becameReady() }
+        t.onWriteDone = { [weak self] in self?.writeDone() }
         t.onLost = { [weak self] in
             guard let self else { return }
             self.ready = false
             if case .downloading = self.phase { self.message = "Link lost, resuming..." }
-            if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.") }
+            if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
         t.onError = { [weak self] m in self?.message = m }
         t.onDebug = { [weak self] m in self?.debug = m }
@@ -130,30 +136,64 @@ final class RideBrowser: ObservableObject {
 
     /// Sends a workout file to the unit for `day` (`YYYYMMDD`), then lists the unit's workouts again.
     func send(day: String, bytes: Data) {
-        guard ready, phase == .idle || phase == .failed, let t = transport,
-            let cmd = client.writeCommand(day: day, bytes: bytes, nowMs: Self.now)
-        else { return }
-        message = nil
         sendError = nil
         sendDone = false
+        guard ready, phase == .idle || phase == .failed, let t = transport else {
+            sendError = "Not connected to the unit, or it is busy with another transfer. Try again in a moment."
+            return
+        }
+        guard let cmd = client.writeCommand(day: day, bytes: bytes, nowMs: Self.now) else {
+            sendError = bytes.isEmpty || bytes.count > 8192
+                ? "The workout file is empty or larger than the unit keeps." : "That date is not valid."
+            return
+        }
+        message = nil
+        sending = true
         phase = .writing
         progress = Progress(received: 0, total: UInt32(bytes.count), bytesPerS: 0)
         t.write(cmd)
     }
 
-    /// Removes a workout of the last list from the unit, then lists again.
-    func deleteWorkout(key: String) {
-        guard ready, phase == .idle, let t = transport, let cmd = client.deleteCommand(key: key, nowMs: Self.now) else { return }
+    /// Removes a workout of the last list from the unit, then lists again; `file` is what the rider saw, which must
+    /// still be what the list holds (a key is a place in the unit's folder).
+    func deleteWorkout(file: WorkoutFile) {
+        guard ready, phase == .idle, let t = transport else {
+            message = "The unit is busy with another transfer."
+            return
+        }
+        guard workouts.contains(where: { $0.key == file.key && $0.bytes == file.bytes }),
+            let cmd = client.deleteCommand(key: file.key, nowMs: Self.now)
+        else {
+            message = "The unit's list changed. Look again."
+            refreshWorkouts()
+            return
+        }
         message = nil
+        sending = false
         phase = .writing
         t.write(cmd)
     }
 
-    private func endWrite(_ error: String?) {
+    /// The next WRITE_DATA (or WRITE_END) goes once the stack confirmed the last write.
+    private func writeDone() {
+        guard phase == .writing, let t = transport else { return }
+        if let cmd = client.writeNextCommand(maxWrite: UInt32(t.writeLength), nowMs: Self.now) {
+            t.write(cmd)
+            progress = client.progress()
+        }
+    }
+
+    private func endWrite(_ error: String?, isSend: Bool) {
         phase = .idle
-        sendError = error
-        sendDone = error == nil
-        if error != nil { message = error } else { refreshWorkouts() }
+        if isSend {
+            sendError = error
+            sendDone = error == nil
+        }
+        if error != nil {
+            client.abort()  // late answers of the dropped write are ignored
+            message = error
+        }
+        refreshWorkouts()  // not ready (a drop): becameReady lists again
     }
 
     func download(_ r: RideEntry) {
@@ -177,6 +217,7 @@ final class RideBrowser: ObservableObject {
 
     private func becameReady() {
         ready = true
+        if sendError != nil && phase == .idle { refreshWorkouts() }  // a send ended while the link was down
         if case .downloading = phase { resume() } else if phase == .workouts { if listingWorkouts { refreshWorkouts() } else { resume() } } else if rides.isEmpty { refresh() }
     }
 
@@ -195,7 +236,7 @@ final class RideBrowser: ObservableObject {
         } else if phase == .listing {
             refresh()
         } else if phase == .writing {
-            endWrite("The unit did not answer. Look at its list before sending again.")
+            endWrite("The unit did not answer. Look at its list before sending again.", isSend: sending)
         }
     }
 
@@ -212,14 +253,19 @@ final class RideBrowser: ObservableObject {
             phase = .idle
             refreshWorkouts()
         case .writeReady:
-            guard let t = transport else { break }
-            // the unit answers a WRITE_DATA only when it refuses one; the writes go out in order
-            while let cmd = client.writeNextCommand(maxWrite: UInt32(t.writeLength), nowMs: Self.now) { t.write(cmd) }
-            progress = client.progress()
+            // one WRITE_DATA at a time, each after the stack confirmed the last write (writeDone); the unit answers
+            // a WRITE_DATA only when it refuses one
+            if phase == .writing { writeDone() }
+        case .written where phase == .writing, .deleted where phase == .writing:
+            endWrite(nil, isSend: sending)
         case .written, .deleted:
-            endWrite(nil)
+            break  // a late answer of a write that was given up
         case .failed(let e) where phase == .writing:
-            endWrite(Self.text(e))
+            if !sending && (e == .notFound || e == .mismatch) {
+                endWrite("That workout is no longer on the unit. The list was refreshed.", isSend: false)
+            } else {
+                endWrite(Self.text(e), isSend: sending)
+            }
         case .progress:
             progress = client.progress()
             message = nil
@@ -286,7 +332,7 @@ final class RideBrowser: ObservableObject {
         case .tooLong: "The unit sent more than the list said."
         case .short: "The file arrived short. Try again."
         case .countMismatch: "The transfer was inconsistent. Try again."
-        case .readOnly: "This build of the unit does not write its card."
+        case .readOnly: "This unit's software cannot receive workouts from the phone yet."
         case .full: "That day already holds as many workouts as the unit keeps. Delete one or pick another day."
         case .mismatch: "The unit received other bytes than were sent. Send it again."
         case .busy: "The unit is riding or its card is lent to a computer. Try again later."
@@ -312,6 +358,7 @@ final class DemoTransport: FileTransport {
     var onData: ((Data) -> Void)?
     var onReady: (() -> Void)?
     var onLost: (() -> Void)?
+    var onWriteDone: (() -> Void)?
     var onError: ((String) -> Void)?
     var onDebug: ((String) -> Void)?
     private let unit = DemoUnit()
@@ -332,5 +379,8 @@ final class DemoTransport: FileTransport {
 
     var writeLength: Int { 20 }
 
-    func write(_ d: Data) { queue = unit.handle(command: d) }
+    func write(_ d: Data) {
+        queue = unit.handle(command: d)
+        DispatchQueue.main.async { [weak self] in self?.onWriteDone?() }
+    }
 }

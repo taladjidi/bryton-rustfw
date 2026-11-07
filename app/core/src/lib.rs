@@ -21,6 +21,8 @@ pub mod import;
 pub mod ride;
 pub mod workout;
 #[cfg(test)]
+mod write_more_tests;
+#[cfg(test)]
 mod write_tests;
 
 uniffi::setup_scaffolding!();

@@ -232,7 +232,7 @@ on a unit workout's page. `-demo -demo-edit` opens a copy of the first demo work
 
 "Send to the unit" (editor) opens a sheet: a day (today by default) and Send. The core's `FileClient` encodes the draft
 (`write_command`: WRITE_BEGIN with the size and CRC-32), the app then hands out `write_next_command` frames sized from the
-link's write length (14 bytes of data at the default 20, up to 238), then WRITE_END; a progress bar shows the bytes sent and
+link's write length (14 bytes of data at the default 20, up to 238), one at a time, each after the stack confirmed the last write (`onWriteDone`), then WRITE_END; a progress bar shows the bytes sent and
 the unit's workout list is read again afterwards. Swipe Delete on a unit workout asks first, then sends DELETE with the
 key and check of the last list. Statuses become texts: read only build, full day, mismatch (send again), busy (a ride or
 the card lent), no workout calendar yet (WRITE_BEGIN's NOT FOUND), workout gone (DELETE's). Both are refused while a

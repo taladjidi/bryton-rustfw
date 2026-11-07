@@ -4,7 +4,7 @@ use crate::demo::FakeUnit;
 use crate::files::*;
 
 /// Writes `cmd` to the unit and feeds its frames back; the last event that is not Progress.
-fn pump(c: &FileClient, u: &mut FakeUnit, cmd: &[u8], t: &mut u64) -> FileEvent {
+pub(crate) fn pump(c: &FileClient, u: &mut FakeUnit, cmd: &[u8], t: &mut u64) -> FileEvent {
     let mut last = FileEvent::Ignored;
     for f in u.handle(cmd) {
         *t += 10;
@@ -35,7 +35,7 @@ fn send(c: &FileClient, u: &mut FakeUnit, day: &str, bytes: &[u8], max_write: u3
     (last, frames)
 }
 
-fn list_workouts(c: &FileClient, u: &mut FakeUnit, t: &mut u64) -> Vec<String> {
+pub(crate) fn list_workouts(c: &FileClient, u: &mut FakeUnit, t: &mut u64) -> Vec<String> {
     let cmd = c.list_in_command(UnitFolder::Workout, *t);
     assert_eq!(pump(c, u, &cmd, t), FileEvent::Listed);
     c.files_in().into_iter().map(|e| e.name).collect()

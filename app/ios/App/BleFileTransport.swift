@@ -10,6 +10,7 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
     var onData: ((Data) -> Void)?
     var onReady: (() -> Void)?
     var onLost: (() -> Void)?
+    var onWriteDone: (() -> Void)?
     var onError: ((String) -> Void)?
     var onDebug: ((String) -> Void)?
 
@@ -124,7 +125,10 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
-        guard let e = error else { return }
+        guard let e = error else {
+            onWriteDone?()
+            return
+        }
         if Self.needsEncryption(e) {
             onLost?()  // not ready: the silence timer sends the command again, once the link is encrypted
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.onReady?() }

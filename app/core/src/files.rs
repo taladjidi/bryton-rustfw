@@ -373,6 +373,11 @@ impl FileClient {
         if bytes.is_empty() || bytes.len() > WRITE_MAX {
             return None;
         }
+        // a real date, as far as a month and a day number go (the unit makes the folder from it)
+        let num = |r: std::ops::Range<usize>| day.get(r).and_then(|d| std::str::from_utf8(d).ok()?.parse::<u32>().ok());
+        if !(1..=12).contains(&num(4..6)?) || !(1..=31).contains(&num(6..8)?) {
+            return None;
+        }
         let mut s = self.lock();
         s.seq = s.seq.wrapping_add(1);
         let size = u32::try_from(bytes.len()).ok()?;
@@ -409,6 +414,15 @@ impl FileClient {
         };
         s.sent = end;
         Some(cmd)
+    }
+
+    /// Drops a write or delete under way (after a timeout, a lost link or a refusal): late answers are ignored.
+    pub fn abort(&self) {
+        let mut s = self.lock();
+        if matches!(s.mode, Mode::WriteBegin | Mode::Sending | Mode::Ending | Mode::Deleting) {
+            s.mode = Mode::Idle;
+        }
+        (s.out, s.sent) = (Vec::new(), 0);
     }
 
     /// Deletes file `key` of the last LIST_IN (DELETE): the bytes to write to Control; None when it is not listed.
@@ -467,8 +481,10 @@ impl FileClient {
     /// True when an answer is awaited and nothing came for [`SILENCE_MS`]: the unit dropped it.
     pub fn silent(&self, now_ms: u64) -> bool {
         let s = self.lock();
-        matches!(s.mode, Mode::Listing | Mode::Reading | Mode::WriteBegin | Mode::Ending | Mode::Deleting)
-            && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
+        matches!(
+            s.mode,
+            Mode::Listing | Mode::Reading | Mode::WriteBegin | Mode::Sending | Mode::Ending | Mode::Deleting
+        ) && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
     }
 
     /// The rides of the last LIST (complete after [`FileEvent::Listed`]).
