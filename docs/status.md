@@ -18,6 +18,12 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **Switch-off reaches system Standby (2026-11-07, main.rs `standby`: PDDS_D3 set too, as stock; BOARD.md 9):** off
+  before it, the system sat in Stop and the cell lost about 58 % in 88 h (docs/power.md "Switched off"). Owed on the
+  unit: a switch-off, a power-key start, then the crumb (`standby_flags_word`, STANDBY_FLAGS_BKP) must show PWR_CPUCR
+  SBF (bit 6) set; the power key still starts it; then the 2 h off drain A/B: 2 h off on this image and on stock's,
+  the battery history before and after each.
+
 - **A resumed ride goes on by itself once ridden (2026-11-03, owner: "Resume automatically"):** a reset mid-ride
   comes back paused (RIDE RESUMED) and goes on at the first second at speed, cadence or power, the time off an
   auto stop in the file; a ride paused with Start before the reset waits for Start. Seen in the simulator

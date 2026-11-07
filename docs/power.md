@@ -17,6 +17,17 @@ sheets, at their test conditions), none was measured on the unit.
   and the SDRAM keep running (16.5 to 47 mA for the MCU, DS12930 table 44, plus the SDRAM's). Stop mode between
   passes is the plan below ("Stop mode: plan").
 
+## Switched off
+
+- **The STM32 in system Standby** (main.rs `standby`, BOARD.md 9): PWR_CPUCR PDDS_D1, D2 and D3, as stock's switch-off
+  (read in its image, 2026-11-07). DS12930 gives the MCU a few uA there with the RTC on the LSE; the rest is whatever
+  rail the floating GPIOs leave on (BOARD.md 9: unknown board pulls, the same as stock's), plus the Nordic in System
+  OFF (0.3 uA) and the GNSS's backup (28 uA, below).
+- **Measured before that fix (reported 2026-11-07):** off by AUTO OFF, the cell lost about 58 % in 88 h, about 8 mA, with
+  PDDS_D3 left clear: the system sat in Stop (the next boot's crumb, PWR_CPUCR 0x1a3: STOPF, SBF clear), the MCU's
+  2.8 mA (DS12930 table 42) plus what the GPIOs still held on. To measure after it: 2 h off, the battery history
+  before and after, against stock's the same way (docs/status.md).
+
 ## Today, per part (a ride page outdoors in daylight, a phone connected, heart rate and power paired)
 
 | Part | Today | Options | Saving | Done here |
@@ -130,8 +141,9 @@ sheets, at their test conditions), none was measured on the unit.
   from this side without the Nordic image's source.
 - **Switched off:** System OFF, 0.3 uA (nRF52832 PS v1.4); held in reset it would draw about 0.2 mA and more, so the
   switch-off makes sure of System OFF and leaves PA6 released (BOARD.md 11 "Power off"). No pin is known to cut the
-  chip's supply. A chip that will not go off after a reset and a second ask is held in reset: about 0.2 mA for as long
-  as the unit is off (a month: about 150 mAh), against 0.3 mA to several mA for a hung chip left running. Only a failing
+  chip's supply. A chip that will not go off after a reset and a second ask is held in reset, but only until the WFI:
+  in system Standby PA6 floats, the chip's reset pull-up releases it and it boots and runs (0.3 mA to several mA)
+  until the next start (BOARD.md 9). Only a failing
   chip costs this; seen on the unit, a healthy one goes off at the first ask.
 
 ### Backlight and panel
@@ -265,7 +277,8 @@ on the unit (docs/status.md).
   USB RECONNECT notice).
 - **Why 931d594's `bench stop` stayed in Run** (the first unit run, docs/status.md): that run followed a switch-off
   and a power-key wake. Its `srefresh` read PWR_CPUCR 0x1a3 (PDDS_D1, PDDS_D2, STOPF, SBF_D1, SBF_D2: `standby`'s D1 /
-  D2 DStandby, kept since PWR sits in D3, which only stopped) and PWR_CPU2CR 0x1e7 (the same SBF bits). Two things
+  D2 DStandby, kept since PWR sits in D3, which only stopped: that `standby` left PDDS_D3 clear, so the system sat in
+  Stop, "Switched off" above) and PWR_CPU2CR 0x1e7 (the same SBF bits). Two things
   were left from it: PDDS_D1 / D2 set (but `stop_itcm` clears them before its WFI, so not the cause there; a WFI with
   SLEEPDEEP and them set would be a D1 standby, a reset), and the wake-up flag WKUPF1 with WKUPEN1 still on (cleared
   only by PWR_WKUPCR or NRST, RM0399 PWR_WKUPFR; stock clears it at boot, App_HardwareInit, this firmware did not): a
