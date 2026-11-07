@@ -679,6 +679,7 @@ mod tests {
         assert_eq!(Command::parse(&[7; FRAME_BIG + 1]), bad, "longer than the largest frame");
         assert_eq!(Command::parse(b"\x08\x07\x00"), bad, "WRITE_END with more");
         assert_eq!(Command::parse(b"\x09\x07\x00\x0c251026093000\0\0"), bad, "a ride is never deleted");
+        assert_eq!(Command::parse(b"\x09\x07\x00\x0a2026110101\0\0"), bad, "nor anything in folder 0");
         assert_eq!(Command::parse(b"\x09\x07\x01\x0a2026110101\0"), bad, "DELETE without its check");
         assert_eq!(Command::parse(b"\x09\x07\x01\x0a../../ble.b\0\0"), bad, "a path");
         for v in 5..=7 {

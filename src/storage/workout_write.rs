@@ -211,6 +211,20 @@ pub(crate) mod tests {
         out
     }
 
+    /// `data` as `name` in the day folder of [`DAY`] (made if missing), as another writer would leave it.
+    fn put_in_day(d: &mut Ram, name: &str, data: &[u8]) {
+        let mut fat = Fat::mount(d).unwrap();
+        let cal = fat.open(d, CALENDAR).unwrap();
+        let dir = fat.ensure_dir(d, cal, "20261108", T).unwrap();
+        let mut h = fat.create(d, dir, name, T).unwrap();
+        if !data.is_empty() {
+            let mut s = [0; SECTOR];
+            s[..data.len()].copy_from_slice(data);
+            fat.write_sectors(d, &mut h, 0, &s).unwrap();
+            fat.set_size(d, &mut h, data.len() as u32, T).unwrap();
+        }
+    }
+
     fn volume() -> Vec<u8> {
         crate::fat::tests::image()
     }
@@ -283,6 +297,33 @@ pub(crate) mod tests {
         }
         assert_eq!(commit(&mut fat, &mut d, &h, b"20261341", crc, T), Err(Status::BadRequest));
         assert!(day_files(&d.0, "20261341").is_empty());
+        // its name taken by a file of another size: refused, that file kept
+        let n = std::string::String::from_utf8(name(crc).to_vec()).unwrap();
+        put_in_day(&mut d, &n, b"other");
+        let mut fat = Fat::mount(&mut d).unwrap();
+        assert_eq!(commit(&mut fat, &mut d, &h, DAY, crc, T), Err(Status::BadRequest));
+        assert_eq!(day_files(&d.0, "20261108"), [(n, b"other".to_vec())]);
+        // the largest file is taken; a card whose FSInfo counts no room is FULL
+        assert!(begin(&mut fat, &mut d, workout_file::FILE_MAX as u32, T).is_ok());
+        d.0[SECTOR + 488..SECTOR + 492].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(begin(&mut fat, &mut d, 100, T).err(), Some(Status::Full));
+    }
+
+    /// An empty `.fit` (no chain) is deleted by its name; a workout's chain is freed.
+    #[test]
+    fn delete_takes_an_empty_file_and_frees_a_chain() {
+        let mut d = Ram(volume(), 0);
+        put_in_day(&mut d, "EMPTY.fit", b"");
+        write_all(&mut d, &intervals(), DAY).unwrap();
+        for _ in 0..2 {
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let dir = fat.open(&mut d, "Workout/calendar/20261108").unwrap();
+            let mut cur = fat.cursor(dir).unwrap();
+            let e = core::iter::from_fn(|| fat.list(&mut d, &mut cur).unwrap()).find(|e| !e.file.dir).unwrap();
+            delete(&mut fat, &mut d, dir, &e).unwrap();
+        }
+        assert!(day_files(&d.0, "20261108").is_empty());
+        assert_eq!(fsck(&d.0), Ok(0), "nothing lost");
     }
 
     /// A power cut after every sector the whole write makes (and before the first): the calendar holds nothing new
