@@ -1,12 +1,14 @@
-//! The file service on the phone bond (roadmap 9, step A1, reads only): the phone lists and downloads the rides in
-//! `\Activities\`, the unit answers. Pure `no_std` frame formats, encode and decode both ways, with no firmware
+//! The file service on the phone bond (roadmap 9, step A1): the phone lists and downloads the rides in
+//! `\Activities\` and the planned workouts, and sends or deletes a workout (2026-11-07, the only writes); the unit
+//! answers. Pure `no_std` frame formats, encode and decode both ways, with no firmware
 //! types in the API, so the phone app's Rust core can reuse this very file.
 //!
 //! **GATT** (all attributes need the encrypted bond, as the HID ones do). A vendor 128-bit base, random
 //! (`aa3c0000-98d8-4772-99ed-dfb117c6746f`, generated for this project); the 16-bit part (bytes 12 and 13 of the
 //! little endian form) names the attribute:
 //! - service `aa3c0001-...`;
-//! - Control `aa3c0002-...`: the phone writes a command (write with response, 20 bytes at most);
+//! - Control `aa3c0002-...`: the phone writes a command (write with response, 20 bytes at the default MTU, up to
+//!   [`FRAME_BIG`] on the fast link: WRITE_DATA is the only command that grows);
 //! - Data `aa3c0003-...`: the unit notifies the answer (the phone enables its CCCD first).
 //!
 //! **Sizes:** the ATT MTU stays 23, so a write or a notification carries 20 bytes ([`FRAME_MAX`]); one number to
@@ -20,7 +22,19 @@
 //! CANCEL  03                              stops the answer under way, silently
 //! LIST_IN 04 seq folder                   the files of a [`Folder`], one ENTRY_IN each, then END
 //! READ_IN 05 seq folder off[4] len key[len] (check[2])   file `key` of `folder` from byte `off`, CHUNKs, then END
+//! WRITE_BEGIN 06 seq folder day[8] size[4] crc[4]     a workout of `size` bytes for day `day` (YYYYMMDD) and its
+//!                                                     CRC-32 (gzip's); END ok once the unit is ready for the data
+//! WRITE_DATA  07 seq off[4] data[1..]                 the next bytes, in order (`off`: the bytes sent before); no
+//!                                                     answer unless refused (an END, and the write is dropped)
+//! WRITE_END   08 seq                                  checked (size, CRC, a FIT workout), then made visible; END
+//! DELETE      09 seq folder len key[len] check[2]     a listed workout removed; END (count 1)
 //! ```
+//! **Writes** (2026-11-07): folder 1 only, and only a file the unit reads as a workout ([`crate::storage::workout_file::parse`],
+//! at most `FILE_MAX` bytes). The phone never names a path or a file: the unit names it `<CRC-32, 8 hex digits>.fit`
+//! in `\Workout\calendar\<day>\` (stock lists the `.fit` files of a day folder, inferred). A WRITE_DATA carries 14 bytes
+//! at the default MTU, up to 238 on the fast link. The same file sent again (its answer lost) answers ok, written once.
+//! The order of the card writes is storage/workout_write.rs's: nothing shows in the calendar before the whole file
+//! was read back from the card and checked.
 //! **Folders** (2026-11-07, the workouts step): LIST_IN and READ_IN name one of a small table, never a path.
 //! `folder` 0 is `\Activities\` (key: the twelve digits, as above), 1 is `\Workout\calendar\<YYYYMMDD>\` (key: the
 //! day's eight digits then the file's two-digit number among that day's `.fit` files, in directory order, 10
@@ -43,8 +57,10 @@
 //!                                            to 242 on a link whose ATT MTU grew (frame = MTU - 3, 2026-11-07)
 //! END     83 seq status count[4]          the answer is complete; count: entries or bytes sent (u32 little endian)
 //! ```
-//! Status: 0 ok, 1 not found, 2 busy, 3 bad request, 4 card error. BUSY while a ride runs, is paused or is being
-//! saved, or while the card is lent to a computer: the unit never reads under the recorder. A bad command gets an
+//! Status: 0 ok, 1 not found, 2 busy, 3 bad request, 4 card error; for the writes also 5 read only (a build that may
+//! not write the card), 6 mismatch (WRITE_END: the bytes received are not the size or the CRC WRITE_BEGIN gave), 7
+//! full. BUSY while a ride runs, is paused or is being saved, or while the card is lent to a computer: the unit never
+//! reads or writes under the recorder (a ride starting during a write drops it, BUSY). A bad command gets an
 //! END with BAD REQUEST (and the `seq` it carried, 0 if it carried none). END after the last CHUNK is how the phone
 //! knows the file is whole: its bytes equal `count`, and `off + count` equals the size LIST gave.
 //!
@@ -173,6 +189,12 @@ pub enum Status {
     BadRequest = 3,
     /// The card did not answer.
     Io = 4,
+    /// A write in a build that may not write the card.
+    ReadOnly = 5,
+    /// WRITE_END: the bytes received are not the size or the CRC-32 WRITE_BEGIN gave.
+    Mismatch = 6,
+    /// The card has not the room (the recorder's reserve kept).
+    Full = 7,
 }
 
 impl Status {
@@ -184,6 +206,9 @@ impl Status {
             2 => Status::Busy,
             3 => Status::BadRequest,
             4 => Status::Io,
+            5 => Status::ReadOnly,
+            6 => Status::Mismatch,
+            7 => Status::Full,
             _ => return None,
         })
     }
@@ -191,7 +216,7 @@ impl Status {
 
 /// A command the phone writes to Control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Command {
+pub enum Command<'a> {
     /// List the rides.
     List {
         /// Echoed by every frame of the answer.
@@ -226,6 +251,42 @@ pub enum Command {
         /// The file.
         key: Key,
     },
+    /// A workout of `size` bytes for `day` follows (folder 1 only).
+    WriteBegin {
+        /// Echoed by every frame of the answer.
+        seq: u8,
+        /// Where: [`Folder::Workout`], the only one parsed.
+        folder: Folder,
+        /// The day, `YYYYMMDD`, ASCII digits.
+        day: [u8; 8],
+        /// Bytes of the file.
+        size: u32,
+        /// CRC-32 of the whole file (gzip's, [`crate::inflate::crc32`]).
+        crc: u32,
+    },
+    /// The next bytes of the file being written.
+    WriteData {
+        /// Echoed by an END.
+        seq: u8,
+        /// Bytes sent before these.
+        offset: u32,
+        /// The bytes, one or more.
+        data: &'a [u8],
+    },
+    /// The file is whole: checked, then made visible.
+    WriteEnd {
+        /// Echoed by the END.
+        seq: u8,
+    },
+    /// Deletes file `key` of `folder` (folder 1 only; the key carries its check).
+    Delete {
+        /// Echoed by the END.
+        seq: u8,
+        /// Where: [`Folder::Workout`], the only one parsed.
+        folder: Folder,
+        /// The file, as listed.
+        key: Key,
+    },
 }
 
 const LIST: u8 = 1;
@@ -233,6 +294,10 @@ const READ: u8 = 2;
 const CANCEL: u8 = 3;
 const LIST_IN: u8 = 4;
 const READ_IN: u8 = 5;
+const WRITE_BEGIN: u8 = 6;
+const WRITE_DATA: u8 = 7;
+const WRITE_END: u8 = 8;
+const DELETE: u8 = 9;
 const ENTRY: u8 = 0x81;
 const CHUNK: u8 = 0x82;
 const END: u8 = 0x83;
@@ -300,7 +365,7 @@ pub fn file_name<'a>(name: &[u8], out: &'a mut [u8; FILE_NAME_LEN]) -> Option<&'
     core::str::from_utf8(out).ok()
 }
 
-impl Command {
+impl<'a> Command<'a> {
     /// A command from what was written, or the `seq` it carried (0: none) and why it is refused.
     ///
     /// ```
@@ -310,7 +375,7 @@ impl Command {
     /// assert_eq!(Command::parse(&[9, 7]), Err((7, Status::BadRequest)));
     /// assert_eq!(Command::parse(&[2, 7, 0, 0, 0, 0, b'x']), Err((7, Status::BadRequest)));
     /// ```
-    pub fn parse(p: &[u8]) -> Result<Command, (u8, Status)> {
+    pub fn parse(p: &'a [u8]) -> Result<Command<'a>, (u8, Status)> {
         let seq = p.get(1).copied().unwrap_or(0);
         let bad = Err((seq, Status::BadRequest));
         match p.first() {
@@ -337,6 +402,29 @@ impl Command {
                 match (folder, offset, key.and_then(|k| Key::new(folder?, k)), check) {
                     (Some(folder), Some(offset), Some(key), Some(check)) => {
                         Ok(Command::ReadIn { seq, folder, offset, key: key.with_check(check) })
+                    }
+                    _ => bad,
+                }
+            }
+            Some(&WRITE_BEGIN) if p.len() == 19 && p.get(2) == Some(&(Folder::Workout as u8)) => {
+                match (p.get(3..11).and_then(|d| <[u8; 8]>::try_from(d).ok()), u32_at(p, 11), u32_at(p, 15)) {
+                    (Some(day), Some(size), Some(crc)) if day.iter().all(u8::is_ascii_digit) => {
+                        Ok(Command::WriteBegin { seq, folder: Folder::Workout, day, size, crc })
+                    }
+                    _ => bad,
+                }
+            }
+            Some(&WRITE_DATA) if (7..=FRAME_BIG).contains(&p.len()) => match (u32_at(p, 2), p.get(6..)) {
+                (Some(offset), Some(data)) => Ok(Command::WriteData { seq, offset, data }),
+                _ => bad,
+            },
+            Some(&WRITE_END) if p.len() == 2 => Ok(Command::WriteEnd { seq }),
+            Some(&DELETE) if p.get(2) == Some(&(Folder::Workout as u8)) => {
+                let l = usize::from(p.get(3).copied().unwrap_or(0));
+                let key = p.get(4..4 + l).filter(|_| p.len() == 6 + l).and_then(|k| Key::new(Folder::Workout, k));
+                match (key, u16_at(p, 4 + l)) {
+                    (Some(key), Some(check)) => {
+                        Ok(Command::Delete { seq, folder: Folder::Workout, key: key.with_check(check) })
                     }
                     _ => bad,
                 }
@@ -370,6 +458,23 @@ impl Command {
                 let n = put(out, n, &[key.len]);
                 let n = put(out, n, key.bytes());
                 put(out, n, key.check.to_le_bytes().get(..folder.check_len()).unwrap_or(&[]))
+            }
+            Command::WriteBegin { seq, folder, day, size, crc } => {
+                let n = put(out, 0, &[WRITE_BEGIN, *seq, *folder as u8]);
+                let n = put(out, n, day);
+                let n = put(out, n, &size.to_le_bytes());
+                put(out, n, &crc.to_le_bytes())
+            }
+            Command::WriteData { seq, offset, data } => {
+                let n = put(out, 0, &[WRITE_DATA, *seq]);
+                let n = put(out, n, &offset.to_le_bytes());
+                put(out, n, data.get(..data.len().min(out.len().saturating_sub(6))).unwrap_or(&[]))
+            }
+            Command::WriteEnd { seq } => put(out, 0, &[WRITE_END, *seq]),
+            Command::Delete { seq, folder, key } => {
+                let n = put(out, 0, &[DELETE, *seq, *folder as u8, key.len]);
+                let n = put(out, n, key.bytes());
+                put(out, n, &key.check.to_le_bytes())
             }
         }
     }
@@ -546,6 +651,40 @@ mod tests {
         );
         assert_eq!(Command::parse(&[5, 7, 1, 0, 0, 0, 0, 12, b'1', b'1']), bad, "length lies");
         assert_eq!(Command::parse(b"\x05\x07\x01\0\0\0\0\x0c251026093000"), bad, "a ride's key in the workout folder");
+    }
+
+    #[test]
+    fn write_commands_round_trip_fit_both_mtus_and_refuse_other_folders() {
+        let key = Key::new(Folder::Workout, b"2026110101").unwrap().with_check(0xbeef);
+        let data = [9u8; 300];
+        let mut f = [0; FRAME_BIG];
+        let begin = Command::WriteBegin { seq: 1, folder: Folder::Workout, day: *b"20261108", size: 900, crc: 0xdead };
+        for (c, len) in [
+            (begin, 19),
+            (Command::WriteData { seq: 2, offset: 7, data: &data[..14] }, FRAME_MAX),
+            (Command::WriteData { seq: 2, offset: 7, data: &data[..FRAME_BIG - 6] }, FRAME_BIG),
+            (Command::WriteEnd { seq: 3 }, 2),
+            (Command::Delete { seq: 4, folder: Folder::Workout, key }, 16),
+        ] {
+            let n = c.encode(&mut f);
+            assert_eq!((n, Command::parse(&f[..n])), (len, Ok(c)));
+        }
+        let n = Command::WriteData { seq: 2, offset: 7, data: &data }.encode(&mut f);
+        assert_eq!(n, FRAME_BIG, "cut to the frame");
+        let bad = Err((7, Status::BadRequest));
+        assert_eq!(Command::parse(b"\x06\x07\x0020261108\x01\0\0\0\0\0\0\0"), bad, "rides are never written");
+        assert_eq!(Command::parse(b"\x06\x07\x012026110x\x01\0\0\0\0\0\0\0"), bad, "a day of digits only");
+        assert_eq!(Command::parse(b"\x06\x07\x0120261108\x01\0\0\0\0\0\0"), bad, "short");
+        assert_eq!(Command::parse(b"\x07\x07\0\0\0\0"), bad, "WRITE_DATA without data");
+        assert_eq!(Command::parse(&[7; FRAME_BIG + 1]), bad, "longer than the largest frame");
+        assert_eq!(Command::parse(b"\x08\x07\x00"), bad, "WRITE_END with more");
+        assert_eq!(Command::parse(b"\x09\x07\x00\x0c251026093000\0\0"), bad, "a ride is never deleted");
+        assert_eq!(Command::parse(b"\x09\x07\x00\x0a2026110101\0\0"), bad, "nor anything in folder 0");
+        assert_eq!(Command::parse(b"\x09\x07\x01\x0a2026110101\0"), bad, "DELETE without its check");
+        assert_eq!(Command::parse(b"\x09\x07\x01\x0a../../ble.b\0\0"), bad, "a path");
+        for v in 5..=7 {
+            assert_eq!(Status::from_u8(v).map(|s| s as u8), Some(v));
+        }
     }
 
     #[test]

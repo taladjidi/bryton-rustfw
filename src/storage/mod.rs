@@ -24,6 +24,7 @@ pub mod thresholds;
 pub mod trash;
 pub mod volume;
 pub mod workout_file;
+pub mod workout_write;
 
 /// `s.copy_within(src, dest)` that cannot panic: elements out of range are skipped (an edit on malformed counts
 /// changes less, never takes the unit down). Overlap-safe like the original.

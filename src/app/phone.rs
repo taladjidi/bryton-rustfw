@@ -739,7 +739,7 @@ impl App {
             Event::Write { conn, handle, data, .. }
                 if Some(conn) == self.phone.conn && self.phone.is_control(handle) =>
             {
-                self.files_command(data);
+                self.files_command(b, data);
             }
             Event::Connected { conn, role: 1, peer, params } => {
                 self.phone.unlink();
