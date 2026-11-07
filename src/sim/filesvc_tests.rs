@@ -22,6 +22,13 @@ pub(super) fn paired() -> (Sim, App, u16, u16) {
     (sim, app, control, data)
 }
 
+/// PAIR from the menu and run until the phone is linked and secure.
+fn pair_phone(sim: &mut Sim, app: &mut App) {
+    app.activate(sim, Menu::Phone, 1);
+    run(sim, app, 4000);
+    assert_eq!(app.phone.link(), Link::Secure);
+}
+
 /// The unit with the rides on a chip holding `vs_max` vendor bases (0: the default), bonded to the phone.
 fn bonded(vs_max: usize) -> (Sim, App) {
     let mut phone = PhoneSim::new(true);
@@ -37,9 +44,7 @@ fn bonded(vs_max: usize) -> (Sim, App) {
         put_file(&mut d, "Activities", "notes.txt", b"not a ride");
         sim.emmc.image = d.0;
     });
-    app.activate(&mut sim, Menu::Phone, 1);
-    run(&mut sim, &mut app, 4000);
-    assert_eq!(app.phone.link(), Link::Secure);
+    pair_phone(&mut sim, &mut app);
     (sim, app)
 }
 
@@ -55,6 +60,21 @@ pub(super) fn drain(sim: &mut Sim, data: u16) -> Vec<Vec<u8>> {
     let (mine, rest): (Vec<_>, Vec<_>) = sent.into_iter().partition(|s| s.0 == data);
     sim.nordic.server.sent = rest;
     mine.into_iter().map(|s| s.1).collect()
+}
+
+/// The phone's link drops (the chip's DISCONNECTED too) and it connects again at `back_at` (never: `u64::MAX`).
+fn drop_link(sim: &mut Sim, back_at: u64) {
+    let ph = sim.nordic.phone.as_mut().unwrap();
+    ph.hang_up();
+    ph.connect_at = back_at;
+    sim.nordic.evt(0x11, &[0, 0, 0x08]);
+}
+
+/// The phone enables Data again on a new link and the frames of the wait are dropped.
+fn resubscribe(sim: &mut Sim, app: &mut App, data: u16) {
+    sim.nordic.phone_subscribe(data + 1, true);
+    run(sim, app, 200);
+    drain(sim, data);
 }
 
 /// [`run`] with the loop's real pass: the short one while a READ runs on the fast link ([`App::pass_ms`]).
@@ -233,17 +253,13 @@ fn a_dropped_link_resumes_from_the_bytes_kept() {
     let (mut kept, _) = collect(&mut sim, &mut app, data, 15);
     assert!(!kept.is_empty() && kept.len() < bytes.len(), "{} kept", kept.len());
     // the phone walks away and comes back
-    let ph = sim.nordic.phone.as_mut().unwrap();
-    ph.hang_up();
-    ph.connect_at = sim.ms + 500;
-    sim.nordic.evt(0x11, &[0, 0, 0x08]);
+    let back = sim.ms + 500;
+    drop_link(&mut sim, back);
     run(&mut sim, &mut app, 300);
     assert!(!app.phone.files.active(), "the link's end cleared the transfer");
     run(&mut sim, &mut app, 4000);
     assert_eq!(app.phone.link(), Link::Secure);
-    sim.nordic.phone_subscribe(data + 1, true);
-    run(&mut sim, &mut app, 200);
-    drain(&mut sim, data);
+    resubscribe(&mut sim, &mut app, data);
     let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 2, offset: kept.len() as u32, name }, 30_000);
     kept.extend(&a.bytes);
     assert_eq!(kept, bytes);
@@ -352,9 +368,7 @@ pub(super) fn fast_unit(client_mtu: u16, size: usize, tweak: impl FnOnce(&mut Si
         sim.emmc.image = d.0;
         tweak(sim);
     });
-    app.activate(&mut sim, Menu::Phone, 1);
-    run(&mut sim, &mut app, 4000);
-    assert_eq!(app.phone.link(), Link::Secure);
+    pair_phone(&mut sim, &mut app);
     let (control, data) = app.phone.files.handles.expect("the service was added");
     sim.nordic.phone_subscribe(data + 1, true);
     run(&mut sim, &mut app, 200);
@@ -433,10 +447,7 @@ fn the_link_parameters_are_asked_during_a_read_and_given_back_however_it_ends() 
             }
             "stall" => sim.nordic.phone_subscribe(data + 1, false),
             "link drop" => {
-                let ph = sim.nordic.phone.as_mut().unwrap();
-                ph.hang_up();
-                ph.connect_at = u64::MAX;
-                sim.nordic.evt(0x11, &[0, 0, 0x08]);
+                drop_link(&mut sim, u64::MAX);
             }
             _ => {
                 sim.nordic.phone_write(control, &[1, 2]); // a LIST replaces the READ
@@ -458,18 +469,14 @@ fn a_dropped_fast_transfer_resumes_byte_identical() {
     start_read(&mut sim, control, 1, BIG);
     let (mut kept, _) = collect(&mut sim, &mut app, data, 10);
     assert!(!kept.is_empty() && kept.len() < ride.len(), "{} kept", kept.len());
-    let ph = sim.nordic.phone.as_mut().unwrap();
-    ph.hang_up();
-    ph.connect_at = sim.ms + 500;
-    sim.nordic.evt(0x11, &[0, 0, 0x08]);
+    let back = sim.ms + 500;
+    drop_link(&mut sim, back);
     run(&mut sim, &mut app, 300);
     assert!(!app.phone.files.active() && app.phone.files.mtu == 23);
     run(&mut sim, &mut app, 4000);
     assert_eq!(app.phone.link(), Link::Secure);
     assert_eq!(app.phone.files.mtu, 247, "the new link exchanged again");
-    sim.nordic.phone_subscribe(data + 1, true);
-    run(&mut sim, &mut app, 200);
-    drain(&mut sim, data);
+    resubscribe(&mut sim, &mut app, data);
     let off = kept.len() as u32;
     let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 2, offset: off, name: BIG }, 30_000);
     kept.extend(&a.bytes);

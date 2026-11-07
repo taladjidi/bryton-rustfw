@@ -117,13 +117,18 @@ impl NrfExt for Shared {
     }
 }
 
+/// The bridge to Bryton's real app and a Sim on it; None (skipped) without the tools.
+fn emu_sim() -> Option<(Shared, Sim)> {
+    let pipe = Shared(Rc::new(RefCell::new(Pipe::spawn()?)));
+    let mut sim = Sim::new(8, 0, 0);
+    sim.nrf_ext = Some(Box::new(pipe.clone()));
+    Some((pipe, sim))
+}
+
 #[test]
 #[ignore = "needs python3 + unicorn + Bryton's nordic.bin; cargo test-host -- --ignored nrf_emu"]
 fn nrf_emu_ant_broadcasts_through_the_real_parser() {
-    let Some(pipe) = Pipe::spawn() else { return };
-    let pipe = Shared(Rc::new(RefCell::new(pipe)));
-    let mut sim = Sim::new(8, 0, 0);
-    sim.nrf_ext = Some(Box::new(pipe.clone()));
+    let Some((pipe, mut sim)) = emu_sim() else { return };
 
     let v = nrf::start(&mut sim).expect("start against the real app");
     assert!(v.central, "the configured start was accepted");
@@ -163,10 +168,7 @@ fn nrf_emu_ant_broadcasts_through_the_real_parser() {
 #[test]
 #[ignore = "needs python3 + unicorn + Bryton's nordic.bin; cargo test-host -- --ignored nrf_emu"]
 fn nrf_emu_decodes_the_fast_links_configuration() {
-    let Some(pipe) = Pipe::spawn() else { return };
-    let pipe = Shared(Rc::new(RefCell::new(pipe)));
-    let mut sim = Sim::new(8, 0, 0);
-    sim.nrf_ext = Some(Box::new(pipe.clone()));
+    let Some((pipe, mut sim)) = emu_sim() else { return };
     sim.fast_link = true;
     let v = nrf::start(&mut sim).expect("start against the real app");
     assert!((v.central, v.mtu) == (true, nrf::FAST_MTU), "the four configurations were accepted: {v:?}");
