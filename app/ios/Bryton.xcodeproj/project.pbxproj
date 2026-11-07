@@ -3,22 +3,22 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A00000000000000000000010 /* BrytonCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* BrytonCore.xcframework */; };
+		A00000000000000000000010 /* Generated/BrytonCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* Generated/BrytonCore.xcframework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A00000000000000000000001 /* Bryton.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Bryton.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000002 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
-		A00000000000000000000003 /* BrytonCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Generated/BrytonCore.xcframework; sourceTree = "<group>"; };
+		A00000000000000000000003 /* Generated/BrytonCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Generated/BrytonCore.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		A00000000000000000000004 /* App */ = {isa = PBXFileSystemSynchronizedRootGroup; path = App; sourceTree = "<group>"; };
-		A00000000000000000000005 /* swift */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Generated/swift; sourceTree = "<group>"; };
+		A00000000000000000000004 /* App */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = App; sourceTree = "<group>"; };
+		A00000000000000000000005 /* Generated/swift */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Generated/swift; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -26,7 +26,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A00000000000000000000010 /* BrytonCore.xcframework in Frameworks */,
+				A00000000000000000000010 /* Generated/BrytonCore.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -38,8 +38,8 @@
 			children = (
 				A00000000000000000000002 /* Base.xcconfig */,
 				A00000000000000000000004 /* App */,
-				A00000000000000000000005 /* swift */,
-				A00000000000000000000003 /* BrytonCore.xcframework */,
+				A00000000000000000000005 /* Generated/swift */,
+				A00000000000000000000003 /* Generated/BrytonCore.xcframework */,
 				A00000000000000000000007 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -69,7 +69,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A00000000000000000000004 /* App */,
-				A00000000000000000000005 /* swift */,
+				A00000000000000000000005 /* Generated/swift */,
 			);
 			name = Bryton;
 			productName = Bryton;
