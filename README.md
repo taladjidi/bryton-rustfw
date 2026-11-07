@@ -27,6 +27,15 @@ With a course followed, the same page uses the course's climbs. (Picture: the si
 
 More screens, grouped by menu: [the gallery](docs/gallery.md).
 
+## The phone app
+
+<img src="docs/img/app-download.png" width="200" align="right" alt="The phone app downloading a ride">
+
+An iPhone app (Swift over a Rust core) lists the rides on the unit and downloads them over Bluetooth, to save or share.
+Details, build and what the unit showed on a phone: [docs/app.md](docs/app.md). (Picture: the simulator in demo mode.)
+
+<br clear="right">
+
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*
 

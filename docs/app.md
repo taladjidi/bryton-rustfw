@@ -81,5 +81,21 @@ synthetic rides made by the firmware's FIT writer (an invented track, no real da
 `-demo-dl` start it by themselves (`xcrun simctl launch booted <bundle id> -demo -demo-dl`, then
 `xcrun simctl io booted screenshot`).
 
+Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had no iPhone 16 Pro simulator):
+
+| | | |
+|:-:|:-:|:-:|
+| ![The ride list](img/app-rides.png) | ![A download in progress](img/app-download.png) | ![A downloaded ride, ready to save or share](img/app-saved.png) |
+| The ride list, demo mode | A download: bytes of the file, KB/s, cancel | The downloaded ride, share sheet (Save to Files) |
+
 Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
 itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
+
+## Seen on the unit, 2026-11-07
+
+On the owner's iPhone 16 Pro (iOS 27):
+- The app shows S510, rustfw and the battery.
+- The unit's PHONE menu shows the FAST LINK row: the radio chip took the MTU 247 configuration.
+- iOS negotiated ATT MTU 247: `maximumWriteValueLength` is 244 without response and 512 with.
+- A 468,042-byte ride downloaded whole, byte-identical to the same file read over USB (`dev.py drive`, then `cmp`).
+- Speed is about 3 KB/s, far below the simulator's 34 KB/s. Under investigation (connection event length); a separate branch.
