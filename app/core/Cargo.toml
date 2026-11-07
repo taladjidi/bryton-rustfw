@@ -13,11 +13,16 @@ description = "The phone app's Rust core: decodes what the bike computer's GATT 
 [lib]
 crate-type = ["lib", "staticlib"]
 
+# The bindgen CLI is built only with `--features bindgen` (build-core.sh), so the iOS builds do not pull in clap.
+[features]
+bindgen = ["uniffi/cli"]
+
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
 
 [dependencies]
-uniffi = { version = "=0.32.2", features = ["cli"] }
+uniffi = "=0.32.2"
 # The firmware's own library, to share its code with the unit (the same bytes on both sides).
 bryton-rustfw = { path = "../.." }

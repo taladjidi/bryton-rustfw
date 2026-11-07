@@ -8,7 +8,8 @@ is unchanged: it already serves Battery 0x180F and Device Information 0x180A ope
 The unit advertises only while pairing, or bonded and not connected. When the phone already holds the link (the
 notifications bond), the app asks the system for it with `retrieveConnectedPeripherals(withServices:)`, and scans
 otherwise. It looks for the name "S510". That the system's connected list returns a bonded unit is reported by other
-apps, not documented by Apple: **confirm it on the phone**. Not yet seen on a real iPhone.
+apps, not documented by Apple: **confirm it on the phone**. The scan's filter on 0x180F is inferred: whether the unit's
+advertisement carries 0x180F is not verified, so confirm it on the phone too. Not yet seen on a real iPhone.
 
 ## Build
 

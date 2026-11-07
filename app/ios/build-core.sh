@@ -16,7 +16,7 @@ done
 rm -rf "$out"
 mkdir -p "$out/swift" "$out/headers"
 # library mode: the bindings are read from the compiled library's metadata
-cargo run --release --target aarch64-apple-darwin --bin uniffi-bindgen -- \
+cargo run --release --features bindgen --target aarch64-apple-darwin --bin uniffi-bindgen -- \
     generate --library "target/aarch64-apple-ios-sim/release/lib$name.a" --language swift --out-dir "$out/swift"
 mv "$out/swift/${name}FFI.h" "$out/headers/"
 mv "$out/swift/${name}FFI.modulemap" "$out/headers/module.modulemap"

@@ -4,7 +4,8 @@
 // The unit advertises only while pairing, or bonded and not connected. Once the phone holds the link (the
 // notifications bond), the unit is invisible to a scan, so retrieveConnectedPeripherals(withServices:) comes first
 // (Apple: CBCentralManager.retrieveConnectedPeripherals(withServices:)); the scan is the fallback. Only the open
-// services 0x180F and 0x180A are used (iOS hides HID from apps).
+// services 0x180F and 0x180A are used (iOS hides HID from apps). The scan's filter on 0x180F is inferred: to confirm
+// on the phone, since whether the unit's advertisement carries 0x180F is not verified.
 
 import CoreBluetooth
 import Foundation
@@ -101,15 +102,25 @@ final class UnitLink: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        guard p === peripheral else { return }
         p.discoverServices([Self.battery, Self.info])
     }
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
+        guard p === peripheral else { return }
         timeout?.cancel()
         state = .failed(error?.localizedDescription ?? "Could not connect")
     }
 
+    func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        guard p === peripheral, state == .searching else { return }
+        timeout?.cancel()
+        state = .failed(error?.localizedDescription ?? "Disconnected")
+    }
+
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
+        guard p === peripheral else { return }
+        if let e = error { finish(error: e.localizedDescription); return }
         pending = 0
         for s in p.services ?? [] {
             pending += 1
@@ -119,12 +130,15 @@ final class UnitLink: NSObject, ObservableObject, CBCentralManagerDelegate, CBPe
     }
 
     func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor s: CBService, error: Error?) {
+        guard p === peripheral else { return }
+        if let e = error { finish(error: e.localizedDescription); return }
         pending -= 1
         for ch in s.characteristics ?? [] { p.readValue(for: ch); pending += 1 }
         if pending == 0 { finish(error: nil) }
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
+        guard p === peripheral else { return }
         if ch.uuid == Self.levelChar { levelRaw = ch.value }
         if ch.uuid == Self.makerChar { makerRaw = ch.value }
         pending -= 1

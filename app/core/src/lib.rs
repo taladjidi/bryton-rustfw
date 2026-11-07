@@ -75,17 +75,24 @@ mod tests {
         assert_eq!(maker(b""), None);
         assert_eq!(maker(&[0xff, 0xfe]), None);
         assert_eq!(maker(b"a\x07b"), None);
+        assert_eq!(maker(&[b'x'; 64]).map(|m| m.len()), Some(64));
         assert_eq!(maker(&[b'x'; 65]), None);
     }
 
     #[test]
     fn status_never_panics_on_any_bytes() {
+        let (mut makers, mut levels) = (0usize, 0usize);
         for a in 0..=255u8 {
             for b in 0..=255u8 {
-                let _ = decode_status(Some(vec![a, b]), Some(vec![a, b]));
-                let _ = decode_status(Some(vec![a]), Some(vec![a]));
+                let pair = decode_status(Some(vec![a, b]), Some(vec![a, b]));
+                makers += usize::from(pair.maker.is_some());
             }
+            let single = decode_status(Some(vec![a]), Some(vec![a]));
+            makers += usize::from(single.maker.is_some());
+            levels += usize::from(single.battery_percent.is_some());
         }
+        // the loops must reach the accepting branches too, or the test proves nothing about them
+        assert!(makers > 0 && levels > 0);
         assert_eq!(decode_status(None, None), UnitStatus { maker: None, battery_percent: None });
         assert_eq!(
             decode_status(Some(b"rustfw".to_vec()), Some(vec![87])),

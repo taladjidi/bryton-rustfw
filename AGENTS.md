@@ -193,7 +193,8 @@ seconds, and the run ends with all of them and a total:
   markers as information without failing, so branches do not commit marker churn and merges do not conflict in README.md
   and AGENTS.md.
 
-**Skips, only on a branch** (never on main; each prints a `skip:` line and ends up in the `SKIPPED:` summary): the Python
+**Skips, only on a branch** (never on main; each prints a `skip:` line and ends up in the `SKIPPED:` summary): the iOS app
+build when nothing under `app/` changed, and anywhere without full Xcode or the iOS Rust targets; the Python
 self-tests when nothing under `tools/`, `test-data/`, `renode/`, `docs/theming.md`, `src/ui/tiles.rs` or `check.sh`
 changed (the walk selftest: `src/sim/walk_tests.rs` instead of `src/ui/tiles.rs`); the font regeneration when
 `tools/font.py`, `tools/pixel_font.py`, `tools/fonts/` and `src/ui/fonts.rs` are untouched; Renode when `src/main.rs`, `src/lib.rs`, `src/app/pass.rs`, `src/board/`, `src/drivers/`, `src/ui/strip.rs`,

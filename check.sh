@@ -139,10 +139,13 @@ lane_H() {  # the host
     # the phone app's core (app/core, its own lock file and target dir, built for the Mac)
     step "app/core clippy" sh -c 'cd app/core && cargo clippy --all-targets -q -- -D warnings'
     step "app/core tests" sh -c 'cd app/core && cargo test -q'
-    if ! command -v xcodebuild >/dev/null 2>&1; then
+    # xcodebuild -version fails on a Command Line Tools install (its shim needs the full Xcode)
+    if ! xcodebuild -version >/dev/null 2>&1; then
         skip "app/ios build (no xcodebuild)"
     elif ! touched '^app/'; then
         skip "app/ios build (nothing under app/ changed)"
+    elif ! rustup target list --installed 2>/dev/null | grep -q aarch64-apple-ios-sim; then
+        skip "app/ios build (no iOS rust targets)"
     else
         step "app/ios build (simulator)" sh -c 'app/ios/build-core.sh >/dev/null && cd app/ios && xcodebuild -project Bryton.xcodeproj -scheme Bryton -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet build'
     fi
