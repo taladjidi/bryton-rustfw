@@ -227,3 +227,41 @@ fn a_chunk_longer_than_a_frame_is_ignored() {
     assert_eq!(c.on_data(f, 1), FileEvent::Ignored);
     assert_eq!(c.progress().received, 0);
 }
+
+#[test]
+fn workouts_are_listed_and_read_in_their_folder_beside_the_rides() {
+    let mut u = FakeUnit::demo();
+    let c = FileClient::new();
+    let mut t = 0;
+    let cmd = c.list_command(t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    let cmd = c.list_in_command(UnitFolder::Workout, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    assert_eq!(c.entries().len(), 3, "the rides stay listed");
+    let files = c.files_in();
+    assert_eq!(files.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["2026110800", "2026110900", "2026111100"]);
+    let cmd = c.read_in_command("2026110900".into(), t).expect("listed");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), u.workouts[1].1);
+    assert!(crate::workout::decode_workout(c.file(), 250).is_some());
+    assert_eq!(c.read_in_command("2026110901".into(), t), None, "not in the list");
+    // a dropped READ_IN resumes as a READ_IN, from the bytes kept
+    u.faults.drop_after = Some(100);
+    let cmd = c.read_in_command("2026110800".into(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Ignored);
+    let cmd = c.resume_command(t).unwrap();
+    assert_eq!(cmd[0], 5, "READ_IN");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), u.workouts[0].1);
+    // BUSY ends a folder list as it ends a ride list
+    u.faults.busy = true;
+    let cmd = c.list_in_command(UnitFolder::Workout, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Busy);
+    // and a ride still downloads after a workout was read
+    u.faults.busy = false;
+    let cmd = c.list_command(t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    assert_eq!(cmd[0], 2, "READ");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+}

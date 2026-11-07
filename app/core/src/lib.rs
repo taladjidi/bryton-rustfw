@@ -16,6 +16,7 @@ pub mod demo;
 pub mod files;
 #[cfg(test)]
 mod files_tests;
+pub mod workout;
 
 uniffi::setup_scaffolding!();
 

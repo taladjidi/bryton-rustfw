@@ -11,9 +11,10 @@ struct BrytonApp: App {
 struct ContentView: View {
     @StateObject private var link = UnitLink()
     @StateObject private var rides = RideBrowser()
+    @State private var path: [String] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 Section {
                     Text(message).foregroundStyle(.secondary)
@@ -38,6 +39,10 @@ struct ContentView: View {
                         Text("No rides listed").foregroundStyle(.secondary)
                     }
                 }
+                WorkoutSection(rides: rides)
+            }
+            .navigationDestination(for: String.self) { key in
+                if let f = rides.workouts.first(where: { $0.key == key }) { WorkoutDetail(file: f) }
             }
             .navigationTitle("Bike computer")
             .refreshable {
@@ -51,6 +56,11 @@ struct ContentView: View {
                 let args = CommandLine.arguments
                 guard args.contains("-demo") else { return }
                 rides.use(DemoTransport(), demo: true)
+                if args.contains("-demo-workout") {  // open the first workout's page
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        if let f = rides.workouts.first { path = [f.key] }
+                    }
+                }
                 if args.contains("-demo-dl") {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         if let r = rides.rides.first { rides.download(r) }

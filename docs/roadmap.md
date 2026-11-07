@@ -355,6 +355,9 @@ Steps:
   **Reads done 2026-11-07** (app/filesvc.rs, link/filesvc.rs: LIST and READ of `\Activities\` from an offset, BUSY under
   a ride, about 360 B/s at MTU 23; **the fast link of 2026-11-07 takes a 400 KB ride in about 12 s in the simulator (34 KB/s)**; sim only, the unit check is in docs/status.md); writes remain and are critical. Without it no app can do anything.
 - **Ride list and download done (app/core files.rs, app/ios, docs/app.md "Rides"): Simulator demo only; on the phone pending.**
+- **Workouts seen (read only) done 2026-11-07 (docs/app.md "Workouts"):** LIST_IN / READ_IN with a folder table
+  (`\Activities\`, the workout calendar), the core's `decodeWorkout` (the firmware's parser; IF and TSS estimates), a
+  Workouts section and a step chart in the iOS app; Simulator demo only. Editing (writes to the card) is the next step.
 - **Skeleton done (docs/app.md):** `app/core` (UniFFI, decodes Battery Level and maker, uses one item of the firmware's
   library) and `app/ios` (finds the unit, reads and shows both); on a real iPhone still to be tried. The file service (A1 reads) is in the firmware.
 - **A2. The core crate** (`app-core/`): the protocol, sync.py's logic ported, the fake transport, round-trip tests

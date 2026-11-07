@@ -24,7 +24,7 @@ struct SavedRide: Identifiable {
 }
 
 final class RideBrowser: ObservableObject {
-    enum Phase: Equatable { case idle, listing, downloading(String), failed }
+    enum Phase: Equatable { case idle, listing, downloading(String), workouts, failed }
 
     @Published var rides: [RideEntry] = []
     @Published var phase = Phase.idle
@@ -34,6 +34,9 @@ final class RideBrowser: ObservableObject {
     @Published var downloaded = Set<String>()
     @Published var saved: SavedRide?
     @Published var demo = false
+    /// The planned workouts read from the unit, by key (`YYYYMMDDnn`), as the unit holds them: decoded by the core
+    /// for the rider's FTP when shown.
+    @Published var workouts: [WorkoutFile] = []
 
     private let client = FileClient()
     private var transport: FileTransport?
@@ -42,6 +45,11 @@ final class RideBrowser: ObservableObject {
     private var busyRetries = 0
     private var wanted: String?
     private var retry: DispatchWorkItem?
+    /// Workouts: the LIST_IN under way, the keys still to read and the one being read.
+    private var listingWorkouts = false
+    private var workoutQueue: [String] = []
+    private var workoutKey: String?
+    private var workoutFiles: [WorkoutFile] = []
 
     var hasTransport: Bool { transport != nil }
     var isDownloading: Bool { if case .downloading = phase { true } else { false } }
@@ -79,8 +87,39 @@ final class RideBrowser: ObservableObject {
     func refresh() {
         guard ready, let t = transport, !isDownloading else { return }
         message = nil
+        listingWorkouts = false
+        workoutKey = nil
         phase = .listing
         t.write(client.listCommand(nowMs: Self.now))
+    }
+
+    /// Reads the planned workouts: LIST_IN of the Workout folder, then each file whole (they are a few KB).
+    func refreshWorkouts() {
+        guard ready, let t = transport, phase == .idle || phase == .workouts else { return }
+        message = nil
+        phase = .workouts
+        listingWorkouts = true
+        workoutQueue = []
+        workoutKey = nil
+        workoutFiles = []
+        t.write(client.listInCommand(folder: .workout, nowMs: Self.now))
+    }
+
+    private func nextWorkout() {
+        guard let t = transport else { return }
+        guard let key = workoutQueue.first else {
+            workouts = workoutFiles.sorted { $0.key < $1.key }
+            workoutKey = nil
+            phase = .idle
+            return
+        }
+        workoutKey = key
+        if let cmd = client.readInCommand(key: key, nowMs: Self.now) {
+            t.write(cmd)
+        } else {
+            workoutQueue.removeFirst()
+            nextWorkout()
+        }
     }
 
     func download(_ r: RideEntry) {
@@ -103,7 +142,7 @@ final class RideBrowser: ObservableObject {
 
     private func becameReady() {
         ready = true
-        if case .downloading = phase { resume() } else if rides.isEmpty { refresh() }
+        if case .downloading = phase { resume() } else if phase == .workouts { if listingWorkouts { refreshWorkouts() } else { resume() } } else if rides.isEmpty { refresh() }
     }
 
     private func resume() {
@@ -116,6 +155,8 @@ final class RideBrowser: ObservableObject {
         if case .downloading = phase {
             message = "No answer, resuming..."
             resume()
+        } else if phase == .workouts {
+            if listingWorkouts { refreshWorkouts() } else { resume() }
         } else if phase == .listing {
             refresh()
         }
@@ -124,13 +165,22 @@ final class RideBrowser: ObservableObject {
     private func data(_ d: Data) {
         switch client.onData(value: d, nowMs: Self.now) {
         case .ignored, .entry: break
+        case .listed where listingWorkouts:
+            listingWorkouts = false
+            workoutQueue = client.filesIn().map(\.name)
+            nextWorkout()
         case .listed:
             rides = client.entries().sorted { $0.name > $1.name }
             downloaded = Set(rides.map(\.name).filter { FileManager.default.fileExists(atPath: Self.path($0).path) })
             phase = .idle
+            refreshWorkouts()
         case .progress:
             progress = client.progress()
             message = nil
+        case .finished where workoutKey != nil:
+            if let key = workoutKey { workoutFiles.append(WorkoutFile(key: key, bytes: client.file())) }
+            workoutQueue.removeFirst()
+            nextWorkout()
         case .finished:
             progress = client.progress()
             finish()
@@ -146,15 +196,18 @@ final class RideBrowser: ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
             }
         case .partial:
-            progress = client.progress()
+            if !isWorkoutPhase { progress = client.progress() }
             resume()  // the answer ended early but brought bytes: ask for the rest
         case .failed(let e):
             fail(Self.text(e))
         }
     }
 
+    private var isWorkoutPhase: Bool { phase == .workouts }
+
     private func fail(_ m: String) {
         retry?.cancel()
+        listingWorkouts = false
         message = m
         phase = .failed
     }
@@ -215,8 +268,10 @@ final class DemoTransport: FileTransport {
         DispatchQueue.main.async { self.onReady?() }
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             guard let self else { return }
-            for f in self.queue.prefix(10) { self.onData?(f) }
-            self.queue.removeFirst(min(10, self.queue.count))
+            // take the batch first: a handler may write a new command, which replaces the queue
+            let batch = Array(self.queue.prefix(10))
+            self.queue.removeFirst(batch.count)
+            for f in batch { self.onData?(f) }
         }
     }
 

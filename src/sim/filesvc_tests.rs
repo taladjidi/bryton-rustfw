@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::fat::tests::{Ram, put_file};
-use crate::filesvc::{Command, Frame, Name, Status};
+use crate::filesvc::{Command, Folder, Frame, Key, Name, Status};
 
 /// The rides on the test card: (name, bytes). The first spans several sectors.
 pub(super) fn rides() -> [(Name, Vec<u8>); 2] {
@@ -685,4 +685,119 @@ fn during_a_fast_read_the_keys_stay_off_and_the_chips_bytes_wake_the_loop() {
     assert!(wakes.iter().all(|&(keys, _)| !keys), "a key line armed during a READ");
     assert!(wakes.iter().any(|&(_, bytes)| bytes), "the READ's sleep never armed the chip's bytes");
     assert!(radio > 0, "no radio pass woken by a byte during the READ");
+}
+
+type End = Option<(Status, u32)>;
+
+/// LIST_IN of the workout folder: (key, size) of every file, and the answer's END.
+fn list_workouts(sim: &mut Sim, app: &mut App, control: u16, data: u16, seq: u8) -> (Vec<(Vec<u8>, u32)>, End) {
+    let mut f = [0; 20];
+    let n = Command::ListIn { seq, folder: Folder::Workout }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    let (mut entries, mut end) = (Vec::new(), None);
+    for _ in 0..100 {
+        pass(sim, app, 50);
+        for p in drain(sim, data) {
+            match Frame::parse(&p) {
+                Some(Frame::EntryIn { key, size, .. }) => entries.push((key.bytes().to_vec(), size)),
+                Some(Frame::End { status, count, .. }) => end = Some((status, count)),
+                _ => {}
+            }
+        }
+        if end.is_some() {
+            break;
+        }
+    }
+    (entries, end)
+}
+
+#[test]
+fn workouts_are_listed_and_read_whole_or_from_an_offset() {
+    let (mut sim, mut app, control, data) = paired();
+    let (entries, end) = list_workouts(&mut sim, &mut app, control, data, 3);
+    // the synthetic card has four planned files, one per day folder, the past and the broken one too
+    let keys: Vec<_> = entries.iter().map(|e| std::string::String::from_utf8(e.0.clone()).unwrap()).collect();
+    assert_eq!(end, Some((Status::Ok, 4)));
+    assert_eq!(keys, ["2026102000", "2026102300", "2026102400", "2026102500"]);
+    let mut parsed = 0;
+    for (k, size) in entries {
+        let key = Key::new(Folder::Workout, &k).unwrap();
+        let a = ask(
+            &mut sim,
+            &mut app,
+            control,
+            data,
+            Command::ReadIn { seq: 4, folder: Folder::Workout, offset: 0, key },
+            20_000,
+        );
+        assert_eq!(a.end, Some((Status::Ok, size)), "{key:?}");
+        assert_eq!(a.bytes.len() as u32, size);
+        parsed += usize::from(crate::storage::workout_file::parse(&a.bytes).is_ok());
+        let a2 = ask(
+            &mut sim,
+            &mut app,
+            control,
+            data,
+            Command::ReadIn { seq: 5, folder: Folder::Workout, offset: 10, key },
+            20_000,
+        );
+        assert_eq!(a2.bytes, a.bytes[10..]);
+    }
+    assert_eq!(parsed, 3, "all but the broken one decode with the firmware's own parser");
+}
+
+#[test]
+fn only_the_table_of_folders_is_reachable() {
+    let (mut sim, mut app, control, data) = paired();
+    for raw in [
+        &b"\x04\x01\x09"[..],
+        b"\x04\x01",
+        b"\x05\x01\x01\0\0\0\0\x0a../../ble.b",
+        b"\x05\x01\x01\0\0\0\0\x0a2026102x00",
+        b"\x05\x01\x01\0\0\0\0\x0a251026093000",
+        b"\x05\x01\x07\0\0\0\0\x0a2026102300",
+        b"\x05\x01\x01\0\0\0\0\x0c2026102300",
+    ] {
+        let a = ask_raw(&mut sim, &mut app, control, data, raw, 2000);
+        assert_eq!(a.end.map(|e| e.0), Some(Status::BadRequest), "{raw:?}");
+        assert!(a.bytes.is_empty() && a.entries.is_empty());
+    }
+    let key = |k: &[u8]| Key::new(Folder::Workout, k).unwrap();
+    for (k, want) in [(&b"2026102301"[..], Status::NotFound), (b"2027010100", Status::NotFound)] {
+        let a = ask(
+            &mut sim,
+            &mut app,
+            control,
+            data,
+            Command::ReadIn { seq: 2, folder: Folder::Workout, offset: 0, key: key(k) },
+            2000,
+        );
+        assert_eq!(a.end.map(|e| e.0), Some(want), "{k:?}");
+    }
+    let a = ask(
+        &mut sim,
+        &mut app,
+        control,
+        data,
+        Command::ReadIn { seq: 2, folder: Folder::Workout, offset: 99_999, key: key(b"2026102300") },
+        2000,
+    );
+    assert_eq!(a.end.map(|e| e.0), Some(Status::BadRequest), "an offset past the end");
+}
+
+#[test]
+fn workouts_are_busy_during_a_ride() {
+    let (mut sim, mut app, control, data) = paired();
+    app.leave_menus();
+    app.input(&mut sim, Input::Select); // Start
+    run(&mut sim, &mut app, 300);
+    let key = Key::new(Folder::Workout, b"2026102300").unwrap();
+    for cmd in [
+        Command::ListIn { seq: 6, folder: Folder::Workout },
+        Command::ReadIn { seq: 7, folder: Folder::Workout, offset: 0, key },
+    ] {
+        let a = ask(&mut sim, &mut app, control, data, cmd, 5000);
+        assert_eq!(a.end, Some((Status::Busy, 0)), "{cmd:?} during a ride");
+        assert!(a.bytes.is_empty());
+    }
 }

@@ -18,7 +18,14 @@
 //! LIST    01 seq                          the rides, one ENTRY each, then END
 //! READ    02 seq off[4] name[12]          file `name`.fit from byte `off` (u32 little endian), CHUNKs, then END
 //! CANCEL  03                              stops the answer under way, silently
+//! LIST_IN 04 seq folder                   the files of a [`Folder`], one ENTRY_IN each, then END
+//! READ_IN 05 seq folder off[4] len key[len]   file `key` of `folder` from byte `off`, CHUNKs, then END
 //! ```
+//! **Folders** (2026-11-07, the workouts step): LIST_IN and READ_IN name one of a small table, never a path.
+//! `folder` 0 is `\Activities\` (key: the twelve digits, as above), 1 is `\Workout\calendar\<YYYYMMDD>\` (key: the
+//! day's eight digits then the file's two-digit number among that day's `.fit` files, in directory order, 10
+//! bytes: a workout's long name never travels, the phone reads the name from the file). More folders take the
+//! next numbers; an unknown one is BAD REQUEST. LIST and READ stay as they were, for `\Activities\` only.
 //! `name` is the twelve digits of a stock ride name, `YYMMDDhhmmss` (`YYMMDDhhmmss.fit` in `\Activities\`), as
 //! LIST gives them. Nothing else of the card is reachable: no path, no other folder.
 //! A new command replaces the one under way. A READ resumes a dropped link: ask again from the bytes already kept.
@@ -26,6 +33,7 @@
 //! **Answers** (Data):
 //! ```text
 //! ENTRY   81 seq name[12] size[4]         one ride (size in bytes, u32 little endian)
+//! ENTRY_IN 84 seq len key[len] size[4]    one file of LIST_IN
 //! CHUNK   82 seq data[1..]                   the next bytes of the file, in order from `off`: up to 18, and up
 //!                                            to 242 on a link whose ATT MTU grew (frame = MTU - 3, 2026-11-07)
 //! END     83 seq status count[4]          the answer is complete; count: entries or bytes sent (u32 little endian)
@@ -66,6 +74,59 @@ pub const NAME_LEN: usize = 12;
 pub type Name = [u8; NAME_LEN];
 /// `YYMMDDhhmmss.fit`: the file name of a ride.
 pub const FILE_NAME_LEN: usize = NAME_LEN + 4;
+
+/// Longest key of a file in a [`Folder`].
+pub const KEY_MAX: usize = 12;
+
+/// The folders LIST_IN and READ_IN can name: a table, so a phone never reaches the rest of the card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Folder {
+    /// `\Activities\`: the rides.
+    Activities = 0,
+    /// `\Workout\calendar\<day>\`: the planned workouts.
+    Workout = 1,
+}
+
+impl Folder {
+    /// The folder a byte stands for.
+    pub fn from_u8(v: u8) -> Option<Folder> {
+        match v {
+            0 => Some(Folder::Activities),
+            1 => Some(Folder::Workout),
+            _ => None,
+        }
+    }
+
+    /// Whether `k` is a key of this folder: twelve digits (a ride), or ten (a day and a number).
+    pub fn key_ok(self, k: &[u8]) -> bool {
+        let want = match self {
+            Folder::Activities => NAME_LEN,
+            Folder::Workout => 10,
+        };
+        k.len() == want && k.iter().all(u8::is_ascii_digit)
+    }
+}
+
+/// A file's key in a [`Folder`], checked on creation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Key {
+    len: u8,
+    b: [u8; KEY_MAX],
+}
+
+impl Key {
+    /// The key `k` of `folder`, None if it is not one.
+    pub fn new(folder: Folder, k: &[u8]) -> Option<Key> {
+        let mut b = [0; KEY_MAX];
+        b.get_mut(..k.len())?.copy_from_slice(k);
+        folder.key_ok(k).then_some(Key { len: k.len() as u8, b })
+    }
+
+    /// Its bytes, ASCII digits.
+    pub fn bytes(&self) -> &[u8] {
+        self.b.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+}
 
 /// How an answer ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,14 +176,35 @@ pub enum Command {
     },
     /// Stop the answer under way.
     Cancel,
+    /// List the files of a folder.
+    ListIn {
+        /// Echoed by every frame of the answer.
+        seq: u8,
+        /// Where.
+        folder: Folder,
+    },
+    /// Read file `key` of `folder` from byte `offset`.
+    ReadIn {
+        /// Echoed by every frame of the answer.
+        seq: u8,
+        /// Where.
+        folder: Folder,
+        /// First byte wanted.
+        offset: u32,
+        /// The file.
+        key: Key,
+    },
 }
 
 const LIST: u8 = 1;
 const READ: u8 = 2;
 const CANCEL: u8 = 3;
+const LIST_IN: u8 = 4;
+const READ_IN: u8 = 5;
 const ENTRY: u8 = 0x81;
 const CHUNK: u8 = 0x82;
 const END: u8 = 0x83;
+const ENTRY_IN: u8 = 0x84;
 
 /// `v` at `at` in `out`; the end of what is written (unchanged when it does not fit: never, for the frames here).
 fn put(out: &mut [u8], at: usize, v: &[u8]) -> usize {
@@ -206,6 +288,18 @@ impl Command {
                 }
                 _ => bad,
             },
+            Some(&LIST_IN) if p.len() == 3 => match p.get(2).copied().and_then(Folder::from_u8) {
+                Some(folder) => Ok(Command::ListIn { seq, folder }),
+                None => bad,
+            },
+            Some(&READ_IN) if p.len() >= 8 => {
+                let (folder, offset) = (p.get(2).copied().and_then(Folder::from_u8), u32_at(p, 3));
+                let key = p.get(8..).filter(|k| p.get(7).is_some_and(|&l| usize::from(l) == k.len()));
+                match (folder, offset, key.and_then(|k| Key::new(folder?, k))) {
+                    (Some(folder), Some(offset), Some(key)) => Ok(Command::ReadIn { seq, folder, offset, key }),
+                    _ => bad,
+                }
+            }
             _ => bad,
         }
     }
@@ -228,6 +322,13 @@ impl Command {
                 let n = put(out, n, &offset.to_le_bytes());
                 put(out, n, name)
             }
+            Command::ListIn { seq, folder } => put(out, 0, &[LIST_IN, *seq, *folder as u8]),
+            Command::ReadIn { seq, folder, offset, key } => {
+                let n = put(out, 0, &[READ_IN, *seq, *folder as u8]);
+                let n = put(out, n, &offset.to_le_bytes());
+                let n = put(out, n, &[key.len]);
+                put(out, n, key.bytes())
+            }
         }
     }
 }
@@ -241,6 +342,15 @@ pub enum Frame<'a> {
         seq: u8,
         /// The ride.
         name: Name,
+        /// Its size, bytes.
+        size: u32,
+    },
+    /// One file of a LIST_IN.
+    EntryIn {
+        /// The command's.
+        seq: u8,
+        /// The file.
+        key: Key,
         /// Its size, bytes.
         size: u32,
     },
@@ -278,6 +388,11 @@ impl<'a> Frame<'a> {
                 let n = put(out, n, name);
                 put(out, n, &size.to_le_bytes())
             }
+            Frame::EntryIn { seq, key, size } => {
+                let n = put(out, 0, &[ENTRY_IN, *seq, key.len]);
+                let n = put(out, n, key.bytes());
+                put(out, n, &size.to_le_bytes())
+            }
             Frame::Chunk { seq, data } => {
                 let n = put(out, 0, &[CHUNK, *seq]);
                 put(out, n, data.get(..data.len().min(out.len().saturating_sub(2))).unwrap_or(&[]))
@@ -304,6 +419,12 @@ impl<'a> Frame<'a> {
                 let mut name = [0; NAME_LEN];
                 name.copy_from_slice(p.get(2..2 + NAME_LEN)?);
                 is_name(&name).then_some(Frame::Entry { seq, name, size: u32_at(p, 2 + NAME_LEN)? })
+            }
+            ENTRY_IN if p.len() > 3 && p.get(2).is_some_and(|&l| p.len() == 7 + usize::from(l)) => {
+                // the key's length says which folder's: ten or twelve digits
+                let k = p.get(3..p.len() - 4)?;
+                let folder = if k.len() == NAME_LEN { Folder::Activities } else { Folder::Workout };
+                Some(Frame::EntryIn { seq, key: Key::new(folder, k)?, size: u32_at(p, 3 + k.len())? })
             }
             CHUNK if (3..=FRAME_BIG).contains(&p.len()) => Some(Frame::Chunk { seq, data: p.get(2..)? }),
             END if p.len() == 7 => Some(Frame::End { seq, status: Status::from_u8(*p.get(2)?)?, count: u32_at(p, 3)? }),
@@ -341,6 +462,36 @@ mod tests {
         assert_eq!((n, Frame::parse(&big[..n]).is_some()), (FRAME_BIG, true));
         assert_eq!(Frame::parse(&[0x83, 0, 9, 0, 0, 0, 0]), None, "an unknown status");
         assert_eq!(Frame::parse(&[]), None);
+    }
+
+    #[test]
+    fn folder_commands_round_trip_and_refuse_paths() {
+        let key = Key::new(Folder::Workout, b"2026110101").unwrap();
+        let mut f = [0; FRAME_MAX];
+        for c in [
+            Command::ListIn { seq: 4, folder: Folder::Workout },
+            Command::ReadIn { seq: 5, folder: Folder::Workout, offset: 77, key },
+            Command::ReadIn {
+                seq: 6,
+                folder: Folder::Activities,
+                offset: 0,
+                key: Key::new(Folder::Activities, b"251026093000").unwrap(),
+            },
+        ] {
+            let n = c.encode(&mut f);
+            assert_eq!(Command::parse(&f[..n]), Ok(c));
+        }
+        let n = Frame::EntryIn { seq: 1, key, size: 900 }.encode(&mut f);
+        assert_eq!(Frame::parse(&f[..n]), Some(Frame::EntryIn { seq: 1, key, size: 900 }));
+        assert!(n <= FRAME_MAX, "an entry fits the default MTU");
+        let bad = Err((7, Status::BadRequest));
+        assert_eq!(Command::parse(&[4, 7, 9]), bad, "unknown folder");
+        assert_eq!(
+            Command::parse(&[5, 7, 1, 0, 0, 0, 0, 10, b'.', b'.', b'/', b'x', b'x', b'x', b'x', b'x', b'x', b'x']),
+            bad
+        );
+        assert_eq!(Command::parse(&[5, 7, 1, 0, 0, 0, 0, 12, b'1', b'1']), bad, "length lies");
+        assert_eq!(Command::parse(b"\x05\x07\x01\0\0\0\0\x0a251026093000"), bad, "a ride's key in the workout folder");
     }
 
     #[test]

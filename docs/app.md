@@ -91,6 +91,28 @@ Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had 
 Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
 itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
 
+## Workouts (read only)
+
+The planned workouts on the unit, seen from the phone (roadmap 9; editing, which writes to the card, is a later step).
+Stock keeps them in `\Workout\calendar\<YYYYMMDD>\<name>.fit`, long names and one folder a day, so the file service
+gained folder commands: LIST_IN `04 seq folder` and READ_IN `05 seq folder off[4] len key` name one of a small table
+(0 `\Activities\`, 1 the workout calendar), never a path, with the same BUSY, bond and pacing rules (src/link/filesvc.rs,
+src/app/filesvc.rs). A workout's key is ten digits: its day and its number among that day's `.fit` files (the long name
+never travels: the name is read from the file). LIST and READ are unchanged for the old app builds.
+
+The app lists the workouts after the rides (`RideBrowser.refreshWorkouts`: LIST_IN, then each file whole, a few KB), and
+decodes each with the firmware's own parser through `app/core/src/workout.rs` (`decodeWorkout(bytes, ftp)`): name, time,
+steps with repeats already written out, targets as the file gives them (% of FTP, watts, heart rate, cadence) plus the
+watts and power zone for the rider's FTP, and an estimate of IF and TSS from the power steps (4th-power mean over
+time; the firmware has none). The detail page draws a step chart (a bar a step at its target's middle, coloured by zone)
+and lists the steps; the FTP is a stepper kept in the app (200 W by default: the app has no settings sheet yet).
+`-demo-workout` opens the first workout in the Simulator.
+
+| | |
+|:-:|:-:|
+| ![The workout list](img/app-workouts.png) | ![A workout's chart and steps](img/app-workout-detail.png) |
+| The list, demo mode (made-up workouts) | The detail: chart by zone, IF and TSS, steps |
+
 ## Seen on the unit, 2026-11-07
 
 On the owner's iPhone 16 Pro (iOS 27):
