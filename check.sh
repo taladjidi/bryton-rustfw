@@ -136,6 +136,16 @@ lane_F() {  # the firmware
 lane_H() {  # the host
     step "cargo clippy --tests (host)" cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings
     step "cargo test-host" cargo test-host
+    # the phone app's core (app/core, its own lock file and target dir, built for the Mac)
+    step "app/core clippy" sh -c 'cd app/core && cargo clippy --all-targets -q -- -D warnings'
+    step "app/core tests" sh -c 'cd app/core && cargo test -q'
+    if ! command -v xcodebuild >/dev/null 2>&1; then
+        skip "app/ios build (no xcodebuild)"
+    elif ! touched '^app/'; then
+        skip "app/ios build (nothing under app/ changed)"
+    else
+        step "app/ios build (simulator)" sh -c 'app/ios/build-core.sh >/dev/null && cd app/ios && xcodebuild -project Bryton.xcodeproj -scheme Bryton -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet build'
+    fi
     step "cargo doc" env RUSTDOCFLAGS="-D warnings" cargo doc --target aarch64-apple-darwin --no-deps -q
     # the advisory database is fetched from GitHub: without a network, the cached copy (--offline) is checked instead
     deny() {

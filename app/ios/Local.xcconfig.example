@@ -1,0 +1,5 @@
+// Copy to Local.xcconfig (gitignored) and fill in. Nothing personal belongs in git.
+// Your free Apple ID's personal team id: Xcode > Settings > Accounts > your team, or developer.apple.com Membership.
+DEVELOPMENT_TEAM = XXXXXXXXXX
+// A reverse-DNS prefix no one else uses, e.g. com.yourname (the app's id becomes <prefix>.bryton).
+BUNDLE_ID_PREFIX = com.example.yourname

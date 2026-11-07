@@ -1,0 +1,23 @@
+[package]
+name = "bryton-app-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "GPL-3.0-or-later"
+publish = false
+description = "The phone app's Rust core: decodes what the bike computer's GATT server sends; Swift bindings by UniFFI"
+
+# Not a member of the firmware's build: its own lock file and target dir.
+[workspace]
+
+[lib]
+crate-type = ["lib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+uniffi = { version = "=0.32.2", features = ["cli"] }
+# The firmware's own library, to share its code with the unit (the same bytes on both sides).
+bryton-rustfw = { path = "../.." }

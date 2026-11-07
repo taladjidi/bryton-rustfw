@@ -436,4 +436,12 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `deny.toml`: cargo deny's policy (advisories, licences, duplicate crates), run by check.sh.
 - `vendor/`: usb-device, synopsys-usb-otg and usbd-serial, patched to remove their panic sites (Cargo.toml
   `[patch.crates-io]`); `vendor/PATCHES.md` lists every rewritten site and how to refresh a copy.
+- `app/core/`: the phone app's Rust core (docs/app.md), its own crate and lock file, not part of the firmware's build:
+  `src/lib.rs` decodes the unit's Battery Level and maker bytes (UniFFI records and functions for Swift) and uses one
+  item of this firmware's library; `src/bin/uniffi-bindgen.rs` writes the Swift bindings; `.cargo/config.toml` builds
+  for the Mac by default (the root one targets the bike computer).
+- `app/ios/`: the iPhone app. `App/UnitLink.swift` (CoreBluetooth: find, connect, read), `App/ContentView.swift` (the
+  screen), `Bryton.xcodeproj` (hand-written, folders synchronized), `Base.xcconfig` and `Local.xcconfig.example`
+  (team and bundle id prefix; the real `Local.xcconfig` is ignored by the repository), `build-core.sh` (core for both
+  iOS targets, bindings, XCFramework into the ignored `Generated/`).
 - `link.x`, `tools/pack.py`: memory map and the update file. `tools/pack.py` re-checks what the stock updater checks.
