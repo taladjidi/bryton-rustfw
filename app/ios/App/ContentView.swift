@@ -58,7 +58,7 @@ struct ContentView: View {
                 }
             }
             .onChange(of: link.state) { _, s in
-                if s == .connected && !rides.demo { rides.use(BleFileTransport()) }
+                if s == .connected && !rides.demo && !rides.hasTransport { rides.use(BleFileTransport()) }
             }
         }
     }
@@ -120,7 +120,7 @@ struct RideRow: View {
             }
         }
         .foregroundStyle(.primary)
-        .disabled(rides.phase != .idle && !active)
+        .disabled(rides.phase == .listing || (rides.isDownloading && !active))
     }
 }
 

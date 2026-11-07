@@ -56,6 +56,9 @@ pub enum FileEvent {
     Finished,
     /// The unit is busy (riding, USB): [`FileClient::resume_command`] later.
     Busy,
+    /// The answer ended OK but the file is not whole yet: [`FileClient::resume_command`] at once. A resume that
+    /// brings no byte fails as [`FileError::Short`], so a short file is never taken for whole.
+    Partial,
     /// The transfer failed.
     Failed {
         /// Why.
@@ -159,6 +162,7 @@ impl Inner {
             }
             (Mode::Reading, Frame::End { seq, status, count }) if seq == self.seq => match status {
                 Status::Ok if count != self.answer => self.fail(FileError::CountMismatch),
+                Status::Ok if self.file.len() < self.size as usize && self.answer > 0 => FileEvent::Partial,
                 Status::Ok if self.file.len() != self.size as usize => self.fail(FileError::Short),
                 Status::Ok => {
                     self.mode = Mode::Done;

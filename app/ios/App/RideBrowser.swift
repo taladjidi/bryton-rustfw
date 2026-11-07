@@ -41,11 +41,24 @@ final class RideBrowser: ObservableObject {
     private var tick: Timer?
     private var busyRetries = 0
     private var wanted: String?
+    private var retry: DispatchWorkItem?
+
+    var hasTransport: Bool { transport != nil }
+    var isDownloading: Bool { if case .downloading = phase { true } else { false } }
 
     static var now: UInt64 { UInt64(ProcessInfo.processInfo.systemUptime * 1000) }
     static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
 
     func use(_ t: FileTransport, demo: Bool = false) {
+        if let old = transport {
+            old.onData = nil
+            old.onReady = nil
+            old.onLost = nil
+            old.onError = nil
+            old.onDebug = nil
+        }
+        tick?.invalidate()
+        retry?.cancel()
         transport = t
         self.demo = demo
         ready = false
@@ -64,7 +77,7 @@ final class RideBrowser: ObservableObject {
     }
 
     func refresh() {
-        guard ready, let t = transport else { return }
+        guard ready, let t = transport, !isDownloading else { return }
         message = nil
         phase = .listing
         t.write(client.listCommand(nowMs: Self.now))
@@ -73,6 +86,7 @@ final class RideBrowser: ObservableObject {
     func download(_ r: RideEntry) {
         guard ready, let t = transport, let cmd = client.readCommand(name: r.name, nowMs: Self.now) else { return }
         message = nil
+        retry?.cancel()
         busyRetries = 0
         wanted = r.name
         progress = Progress(received: 0, total: r.size, bytesPerS: 0)
@@ -81,6 +95,7 @@ final class RideBrowser: ObservableObject {
     }
 
     func cancel() {
+        retry?.cancel()
         transport?.write(client.cancelCommand())
         phase = .idle
         wanted = nil
@@ -125,16 +140,21 @@ final class RideBrowser: ObservableObject {
                 fail("The unit is busy (riding or on USB). Try again later.")
             } else {
                 message = "The unit is busy (riding or on USB). Waiting..."
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                    if case .downloading = self?.phase { self?.resume() }
-                }
+                retry?.cancel()
+                let item = DispatchWorkItem { [weak self] in self?.resume() }
+                retry = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
             }
+        case .partial:
+            progress = client.progress()
+            resume()  // the answer ended early but brought bytes: ask for the rest
         case .failed(let e):
             fail(Self.text(e))
         }
     }
 
     private func fail(_ m: String) {
+        retry?.cancel()
         message = m
         phase = .failed
     }

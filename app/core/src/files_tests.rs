@@ -2,6 +2,7 @@
 
 use crate::demo::{FakeUnit, synthetic_ride};
 use crate::files::*;
+use bryton_rustfw::filesvc::{CHUNK_MAX, FRAME_MAX};
 
 /// Writes `cmd` to the unit and feeds its frames back, 10 ms apart; the last event that is not Progress.
 fn pump(c: &FileClient, u: &mut FakeUnit, cmd: &[u8], t: &mut u64) -> FileEvent {
@@ -37,7 +38,7 @@ fn the_synthetic_ride_is_a_fit_file() {
 
 #[test]
 fn whole_read_with_any_chunk_size() {
-    for chunk in [1, 7, 18, 1000] {
+    for chunk in [1, 7, CHUNK_MAX, 1000] {
         let (c, mut u, ride) = setup(chunk);
         let mut t = 100;
         let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -52,7 +53,7 @@ fn whole_read_with_any_chunk_size() {
 
 #[test]
 fn drop_then_resume_from_the_bytes_kept() {
-    let (c, mut u, ride) = setup(18);
+    let (c, mut u, ride) = setup(CHUNK_MAX);
     let mut t = 100;
     u.faults.drop_after = Some(1000);
     let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -68,7 +69,7 @@ fn drop_then_resume_from_the_bytes_kept() {
 
 #[test]
 fn busy_mid_read_then_resume() {
-    let (c, mut u, ride) = setup(18);
+    let (c, mut u, ride) = setup(CHUNK_MAX);
     let mut t = 100;
     u.faults.drop_after = Some(500);
     let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -85,10 +86,13 @@ fn busy_mid_read_then_resume() {
 
 #[test]
 fn short_file_and_wrong_count_are_errors() {
-    let (c, mut u, _) = setup(18);
+    let (c, mut u, _) = setup(CHUNK_MAX);
     let mut t = 100;
     u.faults.short_by = 5;
     let cmd = c.read_command("261101090000".into(), t).unwrap();
+    // the answer ended early but brought bytes: resumable, and a resume that brings none is a short file
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
+    let cmd = c.resume_command(t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::Short });
     assert!(c.file().is_empty());
     u.faults.short_by = 0;
@@ -98,8 +102,22 @@ fn short_file_and_wrong_count_are_errors() {
 }
 
 #[test]
+fn an_early_end_resumes_to_a_whole_file() {
+    let (c, mut u, ride) = setup(CHUNK_MAX);
+    let mut t = 100;
+    u.faults.short_by = 5;
+    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
+    assert_eq!(c.progress().received as usize, ride.len() - 5);
+    u.faults.short_by = 0;
+    let cmd = c.resume_command(t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), ride);
+}
+
+#[test]
 fn errors_of_the_unit_and_unknown_rides() {
-    let (c, mut u, _) = setup(18);
+    let (c, mut u, _) = setup(CHUNK_MAX);
     let mut t = 100;
     assert_eq!(c.read_command("000000000000".into(), t), None);
     u.rides.clear(); // deleted since LIST
@@ -110,7 +128,7 @@ fn errors_of_the_unit_and_unknown_rides() {
 
 #[test]
 fn unknown_stale_and_surplus_frames_are_ignored() {
-    let (c, mut u, ride) = setup(18);
+    let (c, mut u, ride) = setup(CHUNK_MAX);
     let t = 100;
     let cmd = c.read_command("261101090000".into(), t).unwrap();
     let mut frames = u.handle(&cmd);
@@ -130,11 +148,11 @@ fn unknown_stale_and_surplus_frames_are_ignored() {
 
 #[test]
 fn more_bytes_than_listed_is_refused() {
-    let (c, _, ride) = setup(18);
+    let (c, _, ride) = setup(CHUNK_MAX);
     let cmd = c.read_command("261101090000".into(), 0).unwrap();
     let big = vec![0u8; ride.len() + 1];
     let mut last = FileEvent::Ignored;
-    for ch in big.chunks(18) {
+    for ch in big.chunks(CHUNK_MAX) {
         let mut f = vec![0x82, cmd[1]];
         f.extend_from_slice(ch);
         last = c.on_data(f, 1);
@@ -157,18 +175,18 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
     };
     let (mut progress, mut done, mut fail, mut busy, mut entry, mut listed) = (0, 0, 0, 0, 0, 0);
     for _ in 0..300 {
-        let (c, mut u, _) = setup(18);
+        let (c, mut u, _) = setup(CHUNK_MAX);
         let mut t = 0u64;
         let mut cmd = c.read_command("261101090000".into(), t).unwrap();
         for _ in 0..200 {
             t += next() % 3000;
             let (r, seq) = (next(), cmd[1]);
             let f: Vec<u8> = match r % 7 {
-                0 => (0..(r >> 8) % 24).map(|_| next() as u8).collect(),
+                0 => (0..(r >> 8) % (FRAME_MAX as u64 + 4)).map(|_| next() as u8).collect(),
                 1 => [&[0x81, seq][..], b"123456789012", &[5, 0, 0, 0]].concat(),
                 2 => {
                     let mut f = vec![0x82, seq];
-                    f.extend((0..1 + (r >> 8) % 18).map(|_| next() as u8));
+                    f.extend((0..1 + (r >> 8) % CHUNK_MAX as u64).map(|_| next() as u8));
                     f
                 }
                 3 => vec![0x83, seq, (r >> 8) as u8 % 6, (r >> 16) as u8, (r >> 24) as u8 % 2, 0, 0],
@@ -181,14 +199,14 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
                     cmd = c.list_command(t);
                     u.handle(&cmd).into_iter().next().unwrap_or_default()
                 }
-                _ => (0..18).map(|_| next() as u8).collect(),
+                _ => (0..FRAME_MAX).map(|_| next() as u8).collect(),
             };
             match c.on_data(f, t) {
                 FileEvent::Entry => entry += 1,
                 FileEvent::Listed => listed += 1,
                 FileEvent::Progress => progress += 1,
                 FileEvent::Finished => done += 1,
-                FileEvent::Busy => busy += 1,
+                FileEvent::Busy | FileEvent::Partial => busy += 1,
                 FileEvent::Failed { .. } => fail += 1,
                 FileEvent::Ignored => {}
             }
@@ -197,4 +215,14 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
     }
     let all = format!("{entry} {listed} {progress} {done} {fail} {busy}");
     assert!(entry > 0 && progress > 0 && fail > 0 && busy > 0, "{all}");
+}
+
+#[test]
+fn a_chunk_longer_than_a_frame_is_ignored() {
+    let (c, _, _) = setup(CHUNK_MAX);
+    let cmd = c.read_command("261101090000".into(), 0).unwrap();
+    let mut f = vec![0x82, cmd[1]];
+    f.extend(std::iter::repeat_n(7u8, FRAME_MAX - 1)); // FRAME_MAX + 1 bytes in all
+    assert_eq!(c.on_data(f, 1), FileEvent::Ignored);
+    assert_eq!(c.progress().received, 0);
 }

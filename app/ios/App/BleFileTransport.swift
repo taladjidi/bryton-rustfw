@@ -23,6 +23,8 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var control: CBCharacteristic?
+    private var dataCharacteristic: CBCharacteristic?
+    private var subscribeTries = 0
 
     func start() { central = CBCentralManager(delegate: self, queue: .main) }
 
@@ -87,11 +89,25 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
             return
         }
         control = c
+        dataCharacteristic = d
+        subscribeTries = 0
         p.setNotifyValue(true, for: d)  // needs the bond: the first use asks iOS to encrypt
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-        if let e = error { onError?("Could not subscribe: \(e.localizedDescription)"); return }
+        if let e = error {
+            // the first use of a bonded characteristic can fail while iOS encrypts the link: try again shortly
+            if Self.needsEncryption(e), subscribeTries < 3 {
+                subscribeTries += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    guard let self, p === self.peripheral, let d = self.dataCharacteristic else { return }
+                    p.setNotifyValue(true, for: d)
+                }
+            } else {
+                onError?("Could not subscribe: \(e.localizedDescription)")
+            }
+            return
+        }
         guard ch.uuid == Self.dataChar, ch.isNotifying else { return }
         let w = p.maximumWriteValueLength(for: .withResponse)
         onDebug?("Write length \(w) B with response (\(p.maximumWriteValueLength(for: .withoutResponse)) B without)")
@@ -103,6 +119,17 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
-        if let e = error { onError?("Write failed: \(e.localizedDescription)") }
+        guard let e = error else { return }
+        if Self.needsEncryption(e) {
+            onLost?()  // not ready: the silence timer sends the command again, once the link is encrypted
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.onReady?() }
+        } else {
+            onError?("Write failed: \(e.localizedDescription)")
+        }
+    }
+
+    private static func needsEncryption(_ e: Error) -> Bool {
+        let c = (e as? CBATTError)?.code
+        return c == .insufficientAuthentication || c == .insufficientEncryption
     }
 }
