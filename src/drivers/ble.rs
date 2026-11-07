@@ -21,10 +21,24 @@
 //!
 //! **Configuration** (`nrf::start`): two links, the phone's (we are its peripheral) and a trainer's (we are its
 //! central, app/ftms.rs), on connection configuration tag [`TAG`]; when the chip refuses that, the defaults (no
-//! `sd_ble_cfg_set`, tag 0: one peripheral link). The ATT MTU stays at 23, an attribute table of 1408 B, 10 vendor
-//! UUIDs, one queued notification (ble_gap.h, ble_gatts.h, ble.h `*_DEFAULT`). A larger MTU (103: `sd_ble_cfg_set`
-//! id 0x23 and an Exchange MTU Request) was tried on 2026-10-31 and taken out on 2026-11-01, suspected of the
-//! radio chip's silences on that day's ride (docs/roadmap.md).
+//! `sd_ble_cfg_set`, tag 0: one peripheral link). An attribute table of 1408 B and 10 vendor UUIDs stay at the defaults
+//! (ble_gap.h, ble_gatts.h, ble.h `*_DEFAULT`).
+//!
+//! **The ATT MTU, a history.** 23 by default. 103 (`sd_ble_cfg_set` id 0x23 and an Exchange MTU Request of ours) was
+//! added on 2026-10-31 and taken out on 2026-11-01 (18bd3828), suspected, never shown, of the radio chip's silences on
+//! that day's ride; the owner closed it on 2026-11-02. **Reopened on 2026-11-07 for ride downloads: 247**, since the
+//! file service moved 360 B/s at 23 (a 400 KB ride in 19 minutes) and a notification carries MTU - 3 bytes. Three
+//! levels in `nrf::start`: the fast link (`nrf::CFG_FAST`: the two links with a 7.5 ms event, MTU 247 through 0x23, a
+//! queue of 4 notifications through 0x22), the two links, the defaults; a chip that refuses one (an error code, or
+//! NO_MEM from `sd_ble_enable`) is reset and started on the next, never left without a radio. We never send an
+//! Exchange MTU Request (the 2026-11-01 suspect): we answer the phone's with 247 (the fast link on, `Version::mtu`
+//! above 23) or 23. The ride build leaves the fast link off until the owner's ride test (main.rs `FAST_LINK`).
+//! Data length 251, the 2M PHY and short connection parameters are asked for only while a file READ runs
+//! ([`data_length_set`], [`phy_set`], app/filesvc.rs), and the 2M PHY is inferred to exist on this chip.
+//! Apple's limits for the parameters: Accessory Design Guidelines for Apple Devices (BLE connection parameters:
+//! interval minimum 15 ms, maximum at least 15 ms above it, latency, supervision time) and QA1931
+//! (developer.apple.com/library/archive/qa/qa1931); Silicon Labs' summary of the same rules,
+//! docs.silabs.com/bluetooth/9.0.0/bluetooth-mobile-applications/suitable-connection-parameters.
 //!
 //! **As a central** (the trainer): `sd_ble_gap_connect` (`ble_gap_connect_req_enc`: the peer's address, the scan
 //! parameters and the connection parameters, each behind a presence byte, then the configuration tag; the address
@@ -102,8 +116,8 @@ pub const NO_CONN: u16 = 0xffff;
 pub const CCCD: u16 = 0x2902;
 
 /// A command being built: the payload, its length, and whether it overflowed (then it is not sent).
-pub struct Cmd {
-    buf: [u8; 160],
+pub struct Cmd<const N: usize = 160> {
+    buf: [u8; N],
     len: usize,
     over: bool,
 }
@@ -111,7 +125,23 @@ pub struct Cmd {
 impl Cmd {
     /// `[CMD][op]`.
     pub fn new(op: u8) -> Self {
-        let mut c = Cmd { buf: [0; 160], len: 0, over: false };
+        Cmd::start(op)
+    }
+}
+
+/// The room a notification of the fast link needs: 244 value bytes and the command's 16 of header.
+const BIG: usize = 264;
+
+impl Cmd<BIG> {
+    /// `[CMD][op]`, with room for a notification at the largest MTU.
+    fn big(op: u8) -> Self {
+        Cmd::start(op)
+    }
+}
+
+impl<const N: usize> Cmd<N> {
+    fn start(op: u8) -> Self {
+        let mut c = Cmd { buf: [0; N], len: 0, over: false };
         c.u8(CMD).u8(op);
         c
     }
@@ -300,7 +330,7 @@ pub fn conn_param_update(
 
 /// Answers a PHY update request: either PHY, the stack chooses.
 pub fn phy_update(b: &mut impl Board, rx: &mut Rx, conn: u16) -> Result<(), Error> {
-    Cmd::new(GAP_PHY_UPDATE).u16(conn).u8(1).u8(0).u8(0).run(b, rx)
+    phy_set(b, rx, conn, 0)
 }
 
 /// Answers a data length update request with automatic values.
@@ -415,8 +445,9 @@ pub fn value_set(b: &mut impl Board, rx: &mut Rx, handle: u16, value: &[u8]) -> 
 }
 
 /// Notifies `value` on `handle` (the value is set too).
+#[inline(never)] // its 264-byte command in its own frame
 pub fn notify(b: &mut impl Board, rx: &mut Rx, conn: u16, handle: u16, value: &[u8]) -> Result<(), Error> {
-    let mut c = Cmd::new(GATTS_HVX);
+    let mut c = Cmd::big(GATTS_HVX);
     c.u16(conn).u8(1).u16(handle).u8(1).u16(0).u8(1).u16(value.len() as u16).u8(1).bytes(value);
     let mut out = [0; 3];
     c.call(b, rx, &mut out).map(|_| ())
@@ -450,13 +481,26 @@ pub fn sys_attr_get(b: &mut impl Board, rx: &mut Rx, conn: u16, out: &mut [u8]) 
     }
 }
 
-/// The ATT MTU the unit uses on every link: the default 23; a larger one (2026-10-31, eb2d025) was taken out after the
-/// 2026-11-01 ride's radio dropouts.
+/// The default ATT MTU: what a link has without an exchange, and what the unit answers when the fast link is off.
 pub const ATT_MTU: u16 = 23;
 
-/// Answers the peer's MTU exchange with our Server Rx MTU, [`ATT_MTU`], so the link never grows past it.
-pub fn exchange_mtu_reply(b: &mut impl Board, rx: &mut Rx, conn: u16) -> Result<(), Error> {
-    Cmd::new(GATTS_EXCHANGE_MTU_REPLY).u16(conn).u16(ATT_MTU).run(b, rx)
+/// Answers the peer's MTU exchange with our Server Rx MTU `mtu` ([`ATT_MTU`], or `nrf::FAST_MTU` on the fast link):
+/// the link's MTU is the smaller of that and the peer's.
+pub fn exchange_mtu_reply(b: &mut impl Board, rx: &mut Rx, conn: u16, mtu: u16) -> Result<(), Error> {
+    Cmd::new(GATTS_EXCHANGE_MTU_REPLY).u16(conn).u16(mtu).run(b, rx)
+}
+
+/// Asks for the PHYs `phys` both ways (`BLE_GAP_PHY_*` bits: 0 auto, 1 1 Mbit, 2 2 Mbit); the answer is
+/// BLE_GAP_EVT_PHY_UPDATE (0x22, not decoded here). Whether the nRF52832 and its SoftDevice do 2M is inferred: an error
+/// code, or a PHY that stays 1M, costs speed and nothing else.
+pub fn phy_set(b: &mut impl Board, rx: &mut Rx, conn: u16, phys: u8) -> Result<(), Error> {
+    Cmd::new(GAP_PHY_UPDATE).u16(conn).u8(1).u8(phys).u8(phys).run(b, rx)
+}
+
+/// Asks for a data length of `octets` each way (27 to 251; times automatic): the link layer then carries a full
+/// notification in a packet or two (`ble_gap_data_length_params_t`, ble_gap.h).
+pub fn data_length_set(b: &mut impl Board, rx: &mut Rx, conn: u16, octets: u16) -> Result<(), Error> {
+    Cmd::new(GAP_DATA_LENGTH_UPDATE).u16(conn).u8(1).u16(octets).u16(octets).u16(0).u16(0).u8(0).run(b, rx)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -641,6 +685,16 @@ pub enum Event<'a> {
     MtuRequest {
         /// Connection handle.
         conn: u16,
+        /// The peer's Client Rx MTU.
+        client: u16,
+    },
+    /// Notifications left the stack's queue and the peer's link layer acknowledged them (BLE_GATTS_EVT_HVN_TX_COMPLETE):
+    /// that many queue slots are free again.
+    TxComplete {
+        /// Connection handle.
+        conn: u16,
+        /// Notifications completed.
+        count: u8,
     },
     /// Primary services found: (16-bit UUID, type, start, end) entries of 7 bytes ([`services`]).
     Services {
@@ -725,7 +779,8 @@ impl Event<'_> {
             | UserMemRequest { conn }
             | Write { conn, .. }
             | SysAttrMissing { conn }
-            | MtuRequest { conn }
+            | MtuRequest { conn, .. }
+            | TxComplete { conn, .. }
             | Services { conn, .. }
             | Chars { conn, .. }
             | Descs { conn, .. }
@@ -800,7 +855,8 @@ pub fn event(p: &[u8]) -> Option<Event<'_>> {
             }
         }
         0x52 => Event::SysAttrMissing { conn: conn? },
-        0x55 => Event::MtuRequest { conn: conn? },
+        0x55 => Event::MtuRequest { conn: conn?, client: crate::storage::bytes::le16(f, 2).unwrap_or(ATT_MTU) },
+        0x57 => Event::TxComplete { conn: conn?, count: *f.get(2)? },
         0x56 | 0x3b => Event::GattTimeout { conn: conn? },
         0x30 | 0x32 | 0x33 | 0x36 | 0x38 | 0x39 => {
             let (conn, status, rest) = (conn?, crate::storage::bytes::le16(f, 2)?, f.get(6..)?);

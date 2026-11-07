@@ -228,6 +228,12 @@ impl Nordic {
         n
     }
 
+    /// `nrf_tx_wait`: the chip's clock goes on while the host waits for its FIFO.
+    pub(super) fn wait_us(&mut self, us: u64) {
+        self.t += us;
+        self.run();
+    }
+
     /// `nrf_send`: the bytes our TX FIFO takes. While the chip holds CTS it fills (16) and then refuses: the board
     /// returns at once with how many it took (the library sleeps and offers the rest again).
     pub(super) fn send(&mut self, data: &[u8], ms: u64) -> usize {

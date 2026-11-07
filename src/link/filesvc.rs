@@ -26,7 +26,8 @@
 //! **Answers** (Data):
 //! ```text
 //! ENTRY   81 seq name[12] size[4]         one ride (size in bytes, u32 little endian)
-//! CHUNK   82 seq data[1..=18]             the next bytes of the file, in order from `off`
+//! CHUNK   82 seq data[1..]                   the next bytes of the file, in order from `off`: up to 18, and up
+//!                                            to 242 on a link whose ATT MTU grew (frame = MTU - 3, 2026-11-07)
 //! END     83 seq status count[4]          the answer is complete; count: entries or bytes sent (u32 little endian)
 //! ```
 //! Status: 0 ok, 1 not found, 2 busy, 3 bad request, 4 card error. BUSY while a ride runs, is paused or is being
@@ -53,10 +54,12 @@ pub const CONTROL: u16 = 2;
 /// Data's 16-bit part (the unit notifies).
 pub const DATA: u16 = 3;
 
-/// A write or a notification's longest value: the ATT MTU (23) less its 3-byte header. Change with the MTU.
+/// A write or a notification's longest value at the default ATT MTU (23) less its 3-byte header: what a phone that
+/// never exchanges the MTU gets, and Control's size.
 pub const FRAME_MAX: usize = 20;
-/// File bytes in a CHUNK: a frame less its kind and `seq`.
-pub const CHUNK_MAX: usize = FRAME_MAX - 2;
+/// The longest frame, at the largest ATT MTU (247, `nrf::FAST_MTU`) less its 3-byte header (2026-11-07: the frame
+/// formats are unchanged, a CHUNK just carries up to `frame - 2` bytes; the phone takes whatever length arrives).
+pub const FRAME_BIG: usize = 244;
 /// A ride's name: twelve digits.
 pub const NAME_LEN: usize = 12;
 /// A ride's name, ASCII digits.
@@ -122,7 +125,7 @@ const CHUNK: u8 = 0x82;
 const END: u8 = 0x83;
 
 /// `v` at `at` in `out`; the end of what is written (unchanged when it does not fit: never, for the frames here).
-fn put(out: &mut [u8; FRAME_MAX], at: usize, v: &[u8]) -> usize {
+fn put(out: &mut [u8], at: usize, v: &[u8]) -> usize {
     match out.get_mut(at..at + v.len()) {
         Some(d) => {
             d.copy_from_slice(v);
@@ -216,7 +219,7 @@ impl Command {
     /// let n = c.encode(&mut f);
     /// assert_eq!(Command::parse(&f[..n]), Ok(c));
     /// ```
-    pub fn encode(&self, out: &mut [u8; FRAME_MAX]) -> usize {
+    pub fn encode(&self, out: &mut [u8]) -> usize {
         match self {
             Command::List { seq } => put(out, 0, &[LIST, *seq]),
             Command::Cancel => put(out, 0, &[CANCEL]),
@@ -245,7 +248,7 @@ pub enum Frame<'a> {
     Chunk {
         /// The command's.
         seq: u8,
-        /// Up to [`CHUNK_MAX`] bytes.
+        /// Up to [`FRAME_BIG`] less 2 bytes (18 at the default MTU).
         data: &'a [u8],
     },
     /// The answer is over.
@@ -260,7 +263,7 @@ pub enum Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
-    /// The bytes to notify for this frame; their count (a CHUNK's data is cut to [`CHUNK_MAX`]).
+    /// The bytes to notify for this frame; their count (a CHUNK's data is cut to fit `out`).
     ///
     /// ```
     /// use bryton_rustfw::filesvc::{Frame, Status};
@@ -268,7 +271,7 @@ impl<'a> Frame<'a> {
     /// let n = Frame::End { seq: 2, status: Status::Busy, count: 0 }.encode(&mut f);
     /// assert_eq!(&f[..n], &[0x83, 2, 2, 0, 0, 0, 0]);
     /// ```
-    pub fn encode(&self, out: &mut [u8; FRAME_MAX]) -> usize {
+    pub fn encode(&self, out: &mut [u8]) -> usize {
         match self {
             Frame::Entry { seq, name, size } => {
                 let n = put(out, 0, &[ENTRY, *seq]);
@@ -277,7 +280,7 @@ impl<'a> Frame<'a> {
             }
             Frame::Chunk { seq, data } => {
                 let n = put(out, 0, &[CHUNK, *seq]);
-                put(out, n, data.get(..data.len().min(CHUNK_MAX)).unwrap_or(&[]))
+                put(out, n, data.get(..data.len().min(out.len().saturating_sub(2))).unwrap_or(&[]))
             }
             Frame::End { seq, status, count } => {
                 let n = put(out, 0, &[END, *seq, *status as u8]);
@@ -302,7 +305,7 @@ impl<'a> Frame<'a> {
                 name.copy_from_slice(p.get(2..2 + NAME_LEN)?);
                 is_name(&name).then_some(Frame::Entry { seq, name, size: u32_at(p, 2 + NAME_LEN)? })
             }
-            CHUNK if (3..=FRAME_MAX).contains(&p.len()) => Some(Frame::Chunk { seq, data: p.get(2..)? }),
+            CHUNK if (3..=FRAME_BIG).contains(&p.len()) => Some(Frame::Chunk { seq, data: p.get(2..)? }),
             END if p.len() == 7 => Some(Frame::End { seq, status: Status::from_u8(*p.get(2)?)?, count: u32_at(p, 3)? }),
             _ => None,
         }
@@ -316,7 +319,7 @@ mod tests {
     #[test]
     fn every_frame_round_trips() {
         let mut f = [0; FRAME_MAX];
-        let data = [7u8; CHUNK_MAX];
+        let data = [7u8; FRAME_MAX - 2];
         for fr in [
             Frame::Entry { seq: 1, name: *b"251026093000", size: 123_456 },
             Frame::Chunk { seq: 2, data: &data },
@@ -332,6 +335,10 @@ mod tests {
     fn a_long_chunk_is_cut_and_a_bad_frame_refused() {
         let mut f = [0; FRAME_MAX];
         assert_eq!(Frame::Chunk { seq: 0, data: &[1; 40] }.encode(&mut f), FRAME_MAX);
+        let mut big = [0; FRAME_BIG];
+        let data = [5u8; 300];
+        let n = Frame::Chunk { seq: 1, data: &data }.encode(&mut big);
+        assert_eq!((n, Frame::parse(&big[..n]).is_some()), (FRAME_BIG, true));
         assert_eq!(Frame::parse(&[0x83, 0, 9, 0, 0, 0, 0]), None, "an unknown status");
         assert_eq!(Frame::parse(&[]), None);
     }

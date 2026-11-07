@@ -120,7 +120,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: ~~completed climbs listed with their
   times~~ done, sim (features.md, ride menu CLIMBS DONE), ~~detection on or off per profile~~ done (CX and COMMUTE off), ~~descents~~ done, sim (features.md: STEEP DESCENT alert, DESCENT AHEAD field);
 - trainer: ~~level mode, a course ridden on the trainer (slope from the course, SLOPE SCALE)~~ done, sim (features.md, Level and slope); ~~a virtual course as a workout from the workout list~~ done, sim (features.md, RIDE A COURSE);
-- the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md); ~~a larger ATT MTU~~ closed, not planned (owner, 2026-11-02: "let's not break something that works"; the MTU stays 23; the gain, fewer packets for long ANCS texts, is small against that risk; tried 2026-10-31, removed 2026-11-01, suspected of the radio chip's silences on the road ride);
+- the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept); ~~the notification's app shown~~ done, sim (features.md, Notifications; not seen on the unit, status.md); a larger ATT MTU: closed 2026-11-02 ("let's not break something that works"; tried 2026-10-31, removed 2026-11-01, suspected of the radio chip's silences on the road ride), **reopened 2026-11-07 by the owner for ride downloads in seconds** (the fast link, MTU 247: sim and test bench done, the unit on the cable next, then one ride with the owner before it goes in a ride build; docs/status.md);
 - ~~battery hours left~~ done, sim (BATT HRS, features.md; not seen on the unit, status.md); ~~a battery saver mode~~ done, sim (SYSTEM > BATT SAVER, features.md; per profile and the measured gain are open); ~~GNSS systems chosen~~ done, sim, one setting for all profiles (features.md; per profile is open); ~~AssistNow offline data from the
   computer~~ done, sim (`tools/assist.py`, features.md; not seen on the unit, status.md); ~~altitude calibration at saved places; favourite places~~ done, sim (PLACES, `\Rustfw\places.bin`,
   features.md; not seen on the unit, status.md); a place named after the nearest named point, routing to a place.
@@ -333,7 +333,7 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
   - the clock and the time zone from the phone's Current Time Service.
   - Next: LE Secure Connections (pairing is legacy Just Works now), a whitelist of the bonded phone (its IRK is
     distributed but not kept). Done in the simulator (2026-10-31): the notification's app shown (ANCS Get App Attributes, cached). A larger ATT MTU (103) was tried and
-    removed on 2026-11-01, suspected of the radio chip's silences on that day's ride; closed, not planned (owner, 2026-11-02: "let's not break something that works"): the MTU stays 23.
+    removed on 2026-11-01, suspected of the radio chip's silences on that day's ride; closed on 2026-11-02, **reopened 2026-11-07** for the file service's downloads: the fast link (ATT MTU 247, 4 queued notifications, a 7.5 ms event, then data length 251, 2M PHY and 15 to 30 ms without latency only during a READ), on in RAM-run builds, off in the `EMMC_WRITE=1` ride build until the owner's ride test passes.
 - With a companion app only: Android notifications and track info, find my phone, live tracking, automatic upload; a
   computer tool over USB can upload rides.
 - The phone app: section 9.
@@ -353,7 +353,7 @@ Decided 2026-10-29 (not yet checked online: UniFFI's and the Android emulator's 
 Steps:
 - **A1. A file service on the bond** (firmware; nrf.rs's serialization): list, read by chunk, write; reads first.
   **Reads done 2026-11-07** (app/filesvc.rs, link/filesvc.rs: LIST and READ of `\Activities\` from an offset, BUSY under
-  a ride, MTU 23 kept, about 360 B/s; sim only, the unit check is in docs/status.md); writes remain and are critical. Without it no app can do anything.
+  a ride, about 360 B/s at MTU 23; **the fast link of 2026-11-07 takes a 400 KB ride in about 9 s in the simulator (45 KB/s)**; sim only, the unit check is in docs/status.md); writes remain and are critical. Without it no app can do anything.
 - **Skeleton done (docs/app.md):** `app/core` (UniFFI, decodes Battery Level and maker, uses one item of the firmware's
   library) and `app/ios` (finds the unit, reads and shows both); on a real iPhone still to be tried. The file service (A1 reads) is in the firmware.
 - **A2. The core crate** (`app-core/`): the protocol, sync.py's logic ported, the fake transport, round-trip tests

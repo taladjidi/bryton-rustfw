@@ -267,10 +267,15 @@ impl App {
             Menu::Climbs => self.climbs_done.get(i).map(|_| Row::Done(i)),
             Menu::Months if self.pmc.load.months().is_empty() => (i == 0).then_some(Row::Empty("NONE YET")),
             Menu::Months => self.pmc.load.months().get(i).map(|_| Row::Month(i)),
-            Menu::Phone => menu::PHONE
-                .get(i)
-                .map(|&r| Row::Phone(r))
-                .or_else(|| (i == menu::PHONE.len()).then_some(Row::Open(Menu::Notifs))),
+            Menu::Phone => {
+                // FAST LINK only on a chip that has the larger MTU: elsewhere it would do nothing
+                let (n, fast) = (menu::PHONE.len(), self.ble.is_some_and(|v| v.mtu > ble::ATT_MTU));
+                menu::PHONE
+                    .get(i)
+                    .map(|&r| Row::Phone(r))
+                    .or_else(|| (fast && i == n).then_some(Row::Phone(menu::PhoneRow::Fast)))
+                    .or_else(|| (i == n + usize::from(fast)).then_some(Row::Open(Menu::Notifs)))
+            }
             Menu::Notifs if self.phone.inbox.is_empty() => (i == 0).then_some(Row::Empty("NO NOTIFICATIONS")),
             Menu::Notifs => self.phone.inbox.get(i).map(|_| Row::Notif(i)),
             Menu::BtTrainers if self.ftms.n_found == 0 => {
@@ -634,6 +639,7 @@ impl App {
                     PhoneRow::Forget if self.phone.bonded() => "BONDED",
                     PhoneRow::Notify => on(self.phone.stored.notify),
                     PhoneRow::Keys => on(self.phone.stored.keys),
+                    PhoneRow::Fast => on(self.phone.stored.fast),
                     _ => "",
                 });
                 if matches!(link, Link::Secure) && r == PhoneRow::Status {
@@ -1156,7 +1162,9 @@ impl App {
     /// Select on a row of the phone menu.
     fn activate_phone(&mut self, b: &mut impl Board, menu: Menu, sel: usize, r: menu::PhoneRow) {
         use menu::PhoneRow;
-        if matches!(r, PhoneRow::Pair | PhoneRow::Forget | PhoneRow::Notify | PhoneRow::Keys) && !self.phone_ready(b) {
+        if matches!(r, PhoneRow::Pair | PhoneRow::Forget | PhoneRow::Notify | PhoneRow::Keys | PhoneRow::Fast)
+            && !self.phone_ready(b)
+        {
             return;
         }
         match r {
@@ -1166,9 +1174,10 @@ impl App {
             PhoneRow::Forget => {}
             PhoneRow::Notify => self.phone.stored.notify = !self.phone.stored.notify,
             PhoneRow::Keys => self.phone.stored.keys = !self.phone.stored.keys,
+            PhoneRow::Fast => self.phone.stored.fast = !self.phone.stored.fast,
             PhoneRow::Media => self.open(Screen::Media),
         }
-        if matches!(r, PhoneRow::Notify | PhoneRow::Keys) {
+        if matches!(r, PhoneRow::Notify | PhoneRow::Keys | PhoneRow::Fast) {
             self.phone_changed();
         }
     }

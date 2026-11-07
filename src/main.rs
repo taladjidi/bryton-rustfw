@@ -1911,6 +1911,12 @@ impl Board for S510 {
     fn nrf_sent(&mut self) -> bool {
         rd(U_ISR) & U_ISR_TC != 0
     }
+    fn nrf_tx_wait(&mut self) {
+        // A bounded poll of TC (the FIFO and the shifter empty): 16 bytes leave in 160 us, and a 1 ms sleep per
+        // 16 bytes capped the uplink at 16 KB/s. The CPU is awake for the transfer either way.
+        let t0 = cycles();
+        while rd(U_ISR) & U_ISR_TC == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 4000 {}
+    }
     fn nrf_cts(&mut self) -> bool {
         pin_low(Port::D, 3) // the pin itself (GPIOD_IDR, RM0399 GPIO: read in AF mode too), whether USART2 runs or not
     }
@@ -1965,6 +1971,9 @@ impl Board for S510 {
     }
     fn emmc_writable(&self) -> bool {
         EMMC_WRITE
+    }
+    fn fast_link(&self) -> bool {
+        FAST_LINK
     }
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
         // a build without EMMC_WRITE=1 never gets here: emmc::Card::write refuses first (emmc_writable)
@@ -2071,6 +2080,14 @@ impl bryton_rustfw::LoopBoard for S510 {
 const EMMC_WRITE: bool = match option_env!("EMMC_WRITE") {
     Some(s) => parse_u32(s) == 1,
     None => false,
+};
+
+/// The fast phone link (ATT MTU 247 and more, docs/roadmap.md 3c): on in the default build (RAM runs), **off in the
+/// card-writing ride build** (`EMMC_WRITE=1`) until the owner's ride test passes, as Stop phase 2b was; `FAST_LINK=1`
+/// turns it on in either, `FAST_LINK=0` off. At run time the PHONE menu's FAST LINK row switches it off without a build.
+const FAST_LINK: bool = match option_env!("FAST_LINK") {
+    Some(s) => parse_u32(s) == 1,
+    None => !EMMC_WRITE,
 };
 
 /// Boot stage at which a diagnostic build stops: `DIAG_STOP=n cargo build --release` (0: never; docs/devloop.md layer 6).

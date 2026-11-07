@@ -343,7 +343,7 @@ impl Phone {
         self.held = None;
         (self.asking, self.app_out) = (None, false);
         self.battery_sent = None;
-        self.files.reset();
+        self.files.link_down();
         (self.link_ms, self.now) = (0, ph::NowPlaying::default()); // what played is not known without the phone
         self.commands = 0; // the next link's app sends its own list (review: a podcast app's kept blocked Next)
     }
@@ -404,6 +404,7 @@ impl App {
     /// data, and registers the phone's vendor UUIDs: once, after the chip started.
     #[inline(never)] // its command buffers in its own frame, once at the start
     pub(crate) fn phone_setup(&mut self, b: &mut impl Board) {
+        let mtu = self.ble.map_or(ble::ATT_MTU, |v| v.mtu);
         let rx = &mut self.rx;
         let p = &mut self.phone;
         let r = (|| -> Result<(), nrf::Error> {
@@ -458,7 +459,11 @@ impl App {
                 self.ftms.vs = ble::uuid_vs_add(b, rx, &crate::fecble::BASE).unwrap_or(0);
             }
             // last, and on its own: a chip that refuses the file service still serves the phone link
-            p.files.handles = super::filesvc::add_service(b, rx);
+            p.files.handles = super::filesvc::add_service(
+                b,
+                rx,
+                usize::from(mtu.saturating_sub(3)).clamp(20, crate::filesvc::FRAME_BIG),
+            );
         }
     }
 
@@ -801,9 +806,8 @@ impl App {
                     }
                 }
             }
-            Event::MtuRequest { conn } => {
-                let _ = ble::exchange_mtu_reply(b, rx, conn);
-            }
+            Event::MtuRequest { conn, client } => self.mtu_reply(b, conn, client),
+            Event::TxComplete { conn, .. } if Some(conn) == self.phone.conn => self.step_files(b, conn),
             Event::ParamRequest { conn, id } => {
                 let _ = match id {
                     0x21 => ble::phy_update(b, rx, conn),

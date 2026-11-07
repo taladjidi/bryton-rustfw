@@ -60,7 +60,7 @@ pub struct Watch {
     pub(crate) reset: Reset,
     /// In that stage, ms.
     reset_ms: u32,
-    /// The configuration being tried by this reset (1: two links, 0: the chip's defaults; as `nrf::start`).
+    /// The configuration being tried by this reset (2: the fast link, 1: two links, 0: the chip's defaults; as `nrf::start`).
     level: u8,
     /// The PAIR window was open when the reset began.
     pub(crate) pairing: bool,
@@ -261,7 +261,7 @@ impl App {
         // nothing goes to the chip until its boot is over (`call` / `send` return at once); the hold flushes our TX FIFO
         self.rx.broken = true;
         b.nrf_hold(true);
-        (self.watch.reset, self.watch.reset_ms, self.watch.level) = (Reset::Held, 0, 1);
+        (self.watch.reset, self.watch.reset_ms, self.watch.level) = (Reset::Held, 0, nrf::start_level(b));
     }
 
     /// A chip reset restarted by hand and run to its end, for the tests that need the chip back at once.
@@ -307,7 +307,7 @@ impl App {
                 let level = self.watch.level;
                 match nrf::configure(b, level) {
                     Err(nrf::Error::Code(_)) if level > 0 => {
-                        (self.watch.level, self.watch.reset, self.watch.reset_ms) = (0, Reset::Held, 0);
+                        (self.watch.level, self.watch.reset, self.watch.reset_ms) = (level - 1, Reset::Held, 0);
                         self.rx.broken = true;
                         b.nrf_hold(true);
                     }

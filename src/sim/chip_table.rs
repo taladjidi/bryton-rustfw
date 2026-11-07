@@ -650,6 +650,7 @@ fn walk(items: &[L], p: &[u8], at: &mut usize) -> Result<(), &'static str> {
                         }
                         match id {
                             0x20 => walk(&[L::U8, L::U16], p, at)?,
+                            0x22 => walk(&[L::U8], p, at)?,
                             0x23 => walk(&[L::U16], p, at)?,
                             0x40 => walk(&[L::U8, L::U8, L::U8], p, at)?,
                             _ => return Err("cfg id not modelled"),
@@ -803,11 +804,12 @@ pub const EVENTS: &[Ev] = &[
     ev!(
         0x55,
         "BLE_GATTS_EVT_EXCHANGE_MTU_REQUEST",
-        2,
+        4,
         Plain,
         "ble_gatts_evt_conn.c: ble_gatts_evt_exchange_mtu_request_enc"
     ),
     ev!(0x56, "BLE_GATTS_EVT_TIMEOUT", 2, Plain, "ble_gatts_evt_conn.c: ble_gatts_evt_timeout_enc"),
+    ev!(0x57, "BLE_GATTS_EVT_HVN_TX_COMPLETE", 3, Plain, "ble_gatts_evt_conn.c: ble_gatts_evt_hvn_tx_complete_enc"),
 ];
 
 /// The event row for `id`.
@@ -939,6 +941,12 @@ mod tests {
         // sd_ble_cfg_set ATT MTU: exactly 9 bytes after nothing but the id (Bryton's app, checked)
         assert!(check(&[0, 0x69, 0x23, 0, 0, 0, 1, 1, 103, 0]).is_ok());
         assert!(check(&[0, 0x69, 0x23, 0, 0, 0, 1, 1, 103]).is_err());
+        // the fast link's configurations (nrf::CFG_FAST): the queue size (ids and layouts inferred, decoded by the app)
+        assert!(check(&[0, 0x69, 0x22, 0, 0, 0, 1, 1, 4]).is_ok());
+        assert!(check(&[0, 0x69, 0x22, 0, 0, 0, 1, 1]).is_err());
+        for c in crate::nrf::CFG_FAST {
+            assert!(check(c).is_ok(), "{c:?}");
+        }
         // the ANT enable as stock sends it
         assert!(check(&[6, 0xfa, 1, 0x0f, 0, 0x20, 0, 0x7c, 0x16, 0x06, 0x24, 0xfc, 0x05]).is_ok());
     }

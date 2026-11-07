@@ -8,13 +8,18 @@
 //!
 //! **Bounded work:** [`PER_PASS`] frames a pass at most; a pass reads the card once per [`BLOCK`] of file bytes
 //! (a few chunks), or scans [`SCAN`] directory entries for the next ride. The stack queues one notification
-//! (`BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT`, recalled, inferred), so the pass that finds it full leaves the frame for
-//! the next one; a transfer the phone does not take for [`STALL_MS`] (Data not subscribed, the link gone quiet) is
+//! (`BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT`, recalled, inferred; [`nrf::FAST_QUEUE`] on the fast link), so the pass that
+//! finds it full leaves the frame for the next one; a transfer the phone does not take for [`STALL_MS`] (Data not subscribed, the link gone quiet) is
 //! dropped. While a transfer runs the loop keeps its 50 ms pass ([`App::pass_ms`]).
 //!
-//! **Throughput** (MTU 23, 18 file bytes a notification, one notification a pass at best, a pass of 50 ms): 20
-//! notifications a second, 360 B/s, so a 400 KB ride takes about 18.5 minutes. The connection interval (15 to 30 ms,
-//! the phone chooses) allows 33 to 66 a second, so the pass is the limit, not the radio.
+//! **Throughput.** At MTU 23 (18 file bytes a notification, one queued, a pass of 50 ms): 20 notifications a second,
+//! 360 B/s, a 400 KB ride in 18.5 minutes. On the fast link ([`nrf::FAST_MTU`], docs/roadmap.md 3c, reopened
+//! 2026-11-07) the frame is the negotiated MTU less 3 (242 file bytes), the stack queues [`nrf::FAST_QUEUE`], a pass
+//! fills the queue and refills it when the stack reports the slots free (`HVN_TX_COMPLETE`), and while a READ runs the
+//! loop passes every [`FAST_POLL_MS`]. **Only during a READ** the unit also asks for data length 251, the 2M PHY and
+//! 15 to 30 ms without latency ([`FAST_PARAMS`]; Apple's Accessory Design Guidelines, QA1931), and gives them back
+//! (`PPCP` of app/phone.rs and PHY auto) when the answer ends, stalls, is cancelled or the link drops. The
+//! UART (1 Mbaud, about 100 KB/s raw, 2.6 ms for a full notification) is then the cap.
 
 use crate::ble::{self, Char};
 use crate::fat::{self, Cursor, File, Seek};
@@ -22,11 +27,18 @@ use crate::filesvc::{self as fs, Frame, Status};
 use crate::*;
 
 /// Frames tried in one pass.
-const PER_PASS: usize = 4;
+const PER_PASS: usize = 8;
 /// Directory entries examined for the next ride in one pass.
 const SCAN: usize = 8;
 /// File bytes read from the card at once: a few chunks, so the card is read once per [`PER_PASS`] frames.
-const BLOCK: usize = fs::CHUNK_MAX * 4;
+const BLOCK: usize = 1024;
+/// The loop's pass while a READ runs on the fast link, ms (the stack takes a few notifications per connection event).
+pub const FAST_POLL_MS: u32 = 10;
+/// The connection parameters of a READ on the fast link: 15 to 30 ms (iOS accepts an interval minimum of 15 ms with a
+/// maximum 15 ms above it), no slave latency, supervision 4 s.
+pub const FAST_PARAMS: ble::ConnParams = (12, 24, 0, 400);
+/// The data length asked for during a READ, octets (the largest, 251).
+const FAST_DLE: u16 = 251;
 /// A transfer whose frame the stack takes for this long is dropped.
 const STALL_MS: u32 = 5000;
 
@@ -59,7 +71,7 @@ pub(crate) struct FileSvc {
     pub(crate) handles: Option<(u16, u16)>,
     job: Job,
     /// The frame built and not yet taken by the stack (`out_len` 0: none).
-    out: [u8; fs::FRAME_MAX],
+    out: [u8; fs::FRAME_BIG],
     out_len: usize,
     /// What the frame in `out` adds to the job's count once the stack takes it (an entry, or file bytes): a count of
     /// what was built would tell the phone of bytes it never got.
@@ -70,6 +82,10 @@ pub(crate) struct FileSvc {
     blk_pos: usize,
     /// How long the stack has refused the frame.
     stall_ms: u32,
+    /// The ATT MTU of the phone's link: 23 until it exchanged one ([`App`]'s MtuRequest handling).
+    pub(crate) mtu: u16,
+    /// The link parameters of a READ are in force (to be given back).
+    pub(crate) boosted: bool,
 }
 
 impl FileSvc {
@@ -77,14 +93,32 @@ impl FileSvc {
         FileSvc {
             handles: None,
             job: Job::Idle,
-            out: [0; fs::FRAME_MAX],
+            out: [0; fs::FRAME_BIG],
             out_len: 0,
             pending: 0,
             blk: [0; BLOCK],
             blk_len: 0,
             blk_pos: 0,
             stall_ms: 0,
+            mtu: ble::ATT_MTU,
+            boosted: false,
         }
+    }
+
+    /// The notification's longest value on this link: the MTU less the ATT header.
+    fn frame_len(&self) -> usize {
+        usize::from(self.mtu.saturating_sub(3)).clamp(fs::FRAME_MAX, fs::FRAME_BIG)
+    }
+
+    /// The link is gone (or reset): back to the defaults, nothing to give back.
+    pub(crate) fn link_down(&mut self) {
+        self.reset();
+        (self.mtu, self.boosted) = (ble::ATT_MTU, false);
+    }
+
+    /// A READ runs on a link with a larger MTU: the loop passes quickly.
+    pub(crate) fn fast(&self) -> bool {
+        self.boosted && self.active()
     }
 
     /// An answer is being streamed (the loop keeps its short pass).
@@ -110,7 +144,7 @@ impl FileSvc {
 
     /// Replaces whatever is pending with an END frame.
     fn finish(&mut self, seq: u8, status: Status, count: u32) {
-        let mut f = [0; fs::FRAME_MAX];
+        let mut f = [0; fs::FRAME_BIG];
         let n = Frame::End { seq, status, count }.encode(&mut f);
         (self.out, self.out_len, self.pending, self.job, self.blk_len, self.blk_pos) = (f, n, 0, Job::Idle, 0, 0);
     }
@@ -152,8 +186,9 @@ impl FileSvc {
 
     /// The work of [`FileSvc::fill`]; Err(status) ends the answer.
     fn build(&mut self, d: &mut impl fat::Disk, seq: u8) -> Result<bool, Status> {
+        let max = self.frame_len();
         let FileSvc { job, out, out_len, pending, blk, blk_len, blk_pos, .. } = self;
-        let mut f = [0; fs::FRAME_MAX];
+        let mut f = [0; fs::FRAME_BIG];
         let io = |_| Status::Io;
         match job {
             Job::Idle => Ok(false),
@@ -203,8 +238,9 @@ impl FileSvc {
                     }
                 }
                 let data = blk.get(*blk_pos..*blk_len).unwrap_or(&[]);
-                let n = data.len().min(fs::CHUNK_MAX);
-                *out_len = Frame::Chunk { seq, data: data.get(..n).unwrap_or(&[]) }.encode(&mut f);
+                let n = data.len().min(max.saturating_sub(2));
+                *out_len = Frame::Chunk { seq, data: data.get(..n).unwrap_or(&[]) }
+                    .encode(f.get_mut(..max).unwrap_or(&mut []));
                 *out = f;
                 *blk_pos += n;
                 *pending = n as u32;
@@ -230,7 +266,7 @@ impl Default for FileSvc {
 
 /// Adds the service: its vendor base, then Control and Data. None when the chip refuses any of it (the phone link
 /// works without the file service).
-pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx) -> Option<(u16, u16)> {
+pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx, frame: usize) -> Option<(u16, u16)> {
     let ty = ble::uuid_vs_add(b, rx, &fs::BASE).ok()?;
     let svc = ble::service_add_vs(b, rx, (fs::SERVICE, ty)).ok()?;
     let control = Char {
@@ -245,7 +281,7 @@ pub(crate) fn add_service(b: &mut impl Board, rx: &mut nrf::Rx) -> Option<(u16, 
         uuid: fs::DATA,
         props: ble::NOTIFY,
         value: &[0],
-        max: fs::FRAME_MAX as u16,
+        max: frame as u16,
         read: ble::ENCRYPTED,
         write: ble::NO_ACCESS,
     };
@@ -286,14 +322,55 @@ impl App {
         }
     }
 
+    /// The fast link is on: the chip has the larger MTU and the PHONE menu's FAST LINK row is on.
+    pub(crate) fn fast_ok(&self) -> bool {
+        self.ble.is_some_and(|v| v.mtu > ble::ATT_MTU) && self.phone.stored.fast
+    }
+
+    /// The Server Rx MTU to answer an Exchange MTU Request on `conn` with, and the link's MTU once the phone's
+    /// `client` is known: the smaller. The trainer's link and a unit without the fast link stay at 23.
+    pub(crate) fn mtu_reply(&mut self, b: &mut impl Board, conn: u16, client: u16) {
+        let phone = Some(conn) == self.phone.conn;
+        let ours = if phone && self.fast_ok() { nrf::FAST_MTU } else { ble::ATT_MTU };
+        if ble::exchange_mtu_reply(b, &mut self.rx, conn, ours).is_ok() && phone {
+            self.phone.files.mtu = client.min(ours).max(ble::ATT_MTU);
+        }
+    }
+
+    /// The link parameters of a READ, asked for once. Every answer is optional (a chip or phone that refuses costs
+    /// speed, nothing else: the errors are dropped).
+    fn boost(&mut self, b: &mut impl Board, conn: u16) {
+        let rx = &mut self.rx;
+        let _ = ble::conn_param_update(b, rx, conn, FAST_PARAMS);
+        let _ = ble::data_length_set(b, rx, conn, FAST_DLE);
+        let _ = ble::phy_set(b, rx, conn, 2);
+        self.phone.files.boosted = true;
+    }
+
+    /// Gives the normal parameters back (`PPCP` of app/phone.rs, PHY auto); the data length stays (it
+    /// costs nothing idle).
+    fn unboost(&mut self, b: &mut impl Board, conn: u16) {
+        let rx = &mut self.rx;
+        let _ = ble::conn_param_update(b, rx, conn, super::phone::PPCP);
+        let _ = ble::phy_set(b, rx, conn, 0);
+        self.phone.files.boosted = false;
+    }
+
     /// The answer's next frames, [`PER_PASS`] at most.
     pub(crate) fn step_files(&mut self, b: &mut impl Board, conn: u16) {
         let Some((_, data)) = self.phone.files.handles else { return };
+        if self.phone.files.boosted && (!self.phone.files.active() || !self.fast_ok()) {
+            self.unboost(b, conn); // the answer ended (or the row went off): the normal parameters, whatever the way
+        }
         if !self.phone.secure || self.phone.stored.bond.is_none() || !self.phone.files.active() {
             return;
         }
         if !matches!(self.phone.files.job, Job::Idle) && (!self.ride_settled() || self.emmc.lent()) {
             self.phone.files.abort(Status::Busy); // a ride began under the transfer
+        }
+        let svc = &self.phone.files;
+        if !svc.boosted && matches!(svc.job, Job::Read { .. }) && svc.mtu > ble::ATT_MTU && self.fast_ok() {
+            self.boost(b, conn);
         }
         let mut sent = false;
         for _ in 0..PER_PASS {

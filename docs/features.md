@@ -503,8 +503,10 @@ MENU
 - **File service on the phone bond (reads, 2026-11-07):** a vendor GATT service on the encrypted bond lets a phone
   list the rides in `\Activities\` and download one, from a byte offset so a dropped link resumes. Only stock-named
   rides (`YYMMDDhhmmss.fit`) are reachable, nothing else of the card. It answers BUSY while a ride runs, is paused or
-  saves, and while the card is lent over USB. The ATT MTU stays 23: 18 file bytes a notification, one a 50 ms pass,
-  about 360 B/s (a 400 KB ride in about 19 minutes). The protocol is in the module doc of `src/link/filesvc.rs`.
+  saves, and while the card is lent over USB. On the **fast link** (2026-11-07: ATT MTU 247, 4 queued notifications, data
+  length 251, 2M PHY and 15 ms connection interval only while a READ runs, given back after) a 400 KB ride takes about 9 s
+  in the simulator (45 KB/s); at MTU 23 it is 18 file bytes a notification, about 360 B/s (19 minutes). The PHONE
+  menu's FAST LINK row turns it off; the card-writing ride build has it off until the ride test. The protocol is in the module doc of `src/link/filesvc.rs`.
 - **Taps act:** one tap on a menu row acts on it, as Start on that row (a destructive row still asks first). While the
   ride runs and moves a tap only selects the row and a second one acts, so a bump or a wet glove does nothing.
 - **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the

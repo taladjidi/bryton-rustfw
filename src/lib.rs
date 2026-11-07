@@ -115,6 +115,10 @@ pub trait Board {
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
     /// Every byte given to [`Board::nrf_send`] has left the wire (USART2 TC, BOARD.md 11).
     fn nrf_sent(&mut self) -> bool;
+    /// The TX FIFO took part of a command and is full: waits for it to drain (16 bytes, 160 us at 1 Mbaud), at most
+    /// 250 us, so a long command goes on at the wire's pace instead of 16 bytes per 1 ms sleep ([`nrf::send`]; a
+    /// 244-byte notification took 16 ms). The default does not wait: the caller sleeps 1 ms as before.
+    fn nrf_tx_wait(&mut self) {}
     /// The chip's RTS (our CTS, PD3) is low: it takes bytes. A chip in System OFF has let go of the line: the pull-up
     /// reads "hold" (BOARD.md 11). The pin's level, read with USART2 on or off (not once parked: analog reads low).
     fn nrf_cts(&mut self) -> bool;
@@ -159,6 +163,12 @@ pub trait Board {
     /// with the owner): without, `emmc::Card::write` refuses every write (the one gate), and the recorder does not
     /// touch the card and says so at a ride's start.
     fn emmc_writable(&self) -> bool {
+        true
+    }
+    /// The Nordic chip is configured for the fast phone link (ATT MTU 247, a queue of notifications, a longer event:
+    /// `nrf::CFG_FAST`) in this build. Off in the card-writing ride build until the owner's ride test passes
+    /// (main.rs `FAST_LINK`); the chip then keeps the configuration of the 2026-11-01 ride.
+    fn fast_link(&self) -> bool {
         true
     }
     /// Reads `buf.len()` bytes from register `reg` on, of the chip at 7-bit address `addr` on the sensor bus (I2C4,

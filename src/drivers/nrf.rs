@@ -345,6 +345,9 @@ fn put(b: &mut impl Board, mut rx: Option<&mut Rx>, mut data: &[u8], limit_ms: u
         if data.is_empty() {
             return Ok(());
         }
+        if took > 0 {
+            b.nrf_tx_wait(); // the FIFO is full and drains in a few byte times: not a 1 ms sleep
+        }
         let mut buf = [0; 16];
         let n = b.nrf_recv(&mut buf);
         if let Some(rx) = rx.as_deref_mut() {
@@ -491,6 +494,8 @@ pub struct Version {
     /// The two links were configured ([`CFG`]): a trainer as central besides the phone, on tag [`crate::ble::TAG`].
     /// False: the chip's defaults, one link (the phone's), tag 0.
     pub central: bool,
+    /// The ATT MTU the chip was configured for ([`FAST_MTU`]), 23 when the fast link is off or the chip refused it.
+    pub mtu: u16,
 }
 
 /// `sd_ble_cfg_set`.
@@ -508,19 +513,54 @@ pub const SD_BLE_CFG_SET: u8 = 0x69;
 pub const CFG: [&[u8]; 2] =
     [&[CMD, SD_BLE_CFG_SET, 0x20, 0, 0, 0, 1, 1, 2, 3, 0], &[CMD, SD_BLE_CFG_SET, 0x40, 0, 0, 0, 1, 1, 1, 0]];
 
+/// The ATT MTU of the fast link (2026-11-07, docs/roadmap.md 3c): the largest, so a notification carries 244 bytes.
+/// Eight times the 18 bytes of a file service frame at MTU 23 and a tenth of the UART's commands per byte.
+pub const FAST_MTU: u16 = 247;
+/// Notifications the stack queues per link on the fast link (default 1): enough to fill a connection event of three
+/// full packets with one to spare. Each queued value holds an MTU-sized buffer in the chip's RAM, which Bryton's app
+/// fixes; when the chip refuses, [`start`] falls back.
+pub const FAST_QUEUE: u8 = 4;
+/// The connection event length of the fast link, 1.25 ms units: 6 is 7.5 ms, room for three 251-byte packets at 1 Mbit
+/// (about 2.2 ms each) where 3 (3.75 ms) held one. Two links share the radio: with the trainer's central link at
+/// 30 to 60 ms its events fit between the phone's at 15 ms, as the scheduler must (inferred, not seen).
+pub const FAST_EVENT_LEN: u8 = 6;
+
+/// The fast link's configuration, in place of [`CFG`]: the same two links with a longer event length, and
+/// - `BLE_CONN_CFG_GATT` (0x23, `ble_gatt_conn_cfg_t`: `att_mtu` u16);
+/// - `BLE_CONN_CFG_GATTS` (0x22, `ble_gatts_conn_cfg_t`: `hvn_tx_queue_size` u8).
+///
+/// The ids are from the enumeration in ble.h (`BLE_CONN_CFG_GAP` = 0x20 then GATTC, GATTS, GATT, L2CAP), **inferred**
+/// as the 2026-10-31 attempt's 0x23 was; Bryton's real app decodes them (`ble_cfg_set_req_dec`, run by
+/// `cargo test-host -- --ignored nrf_emu`, which cannot say whether the SoftDevice's RAM holds them).
+pub const CFG_FAST: [&[u8]; 4] = [
+    &[CMD, SD_BLE_CFG_SET, 0x20, 0, 0, 0, 1, 1, 2, FAST_EVENT_LEN, 0],
+    &[CMD, SD_BLE_CFG_SET, 0x40, 0, 0, 0, 1, 1, 1, 0],
+    &[CMD, SD_BLE_CFG_SET, 0x23, 0, 0, 0, 1, 1, FAST_MTU as u8, (FAST_MTU >> 8) as u8],
+    &[CMD, SD_BLE_CFG_SET, 0x22, 0, 0, 0, 1, 1, FAST_QUEUE],
+];
+
 /// Resets the chip as stock does, configures two links ([`CFG`]), enables BLE and reads the version: proof that the
 /// chip runs and the link works. A chip that refuses the configuration (an error code from `sd_ble_cfg_set`, or
 /// NO_MEM from `sd_ble_enable` when its RAM cannot hold it) is reset and started on its defaults, as before: the
 /// phone link works either way, the trainer's needs [`Version::central`]. A chip that does not answer is not tried
 /// twice (the start's time with a dead chip stays one reset and one time-out).
 pub fn start(b: &mut impl Board) -> Result<Version, Error> {
-    match start_as(b, 1) {
-        Err(Error::Code(_)) => start_as(b, 0),
-        r => r,
+    let mut level = start_level(b);
+    loop {
+        match start_as(b, level) {
+            Err(Error::Code(_)) if level > 0 => level -= 1,
+            r => return r,
+        }
     }
 }
 
-/// `level` 1: the links, 0: the chip's defaults.
+/// The configuration a start tries first: 2, the fast link, when the build has it ([`Board::fast_link`]); else 1.
+pub fn start_level(b: &impl Board) -> u8 {
+    if b.fast_link() { 2 } else { 1 }
+}
+
+/// `level` 2: the links and the fast link's MTU, queue and event length ([`CFG_FAST`]), 1: the links, 0: the chip's
+/// defaults.
 fn start_as(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     b.nrf_reset();
     configure(b, level)
@@ -546,18 +586,26 @@ pub fn flush(b: &mut impl Board) {
 pub fn configure(b: &mut impl Board, level: u8) -> Result<Version, Error> {
     let mut rx = Rx::new();
     let mut out = [0; 8];
-    if level > 0 {
+    if level > 1 {
+        for c in CFG_FAST {
+            call(b, &mut rx, c, &mut [])?;
+        }
+    } else if level > 0 {
         for c in CFG {
             call(b, &mut rx, c, &mut [])?;
         }
     }
-    let central = level > 0;
+    let (central, mtu) = (level > 0, if level > 1 { FAST_MTU } else { 23 });
     call(b, &mut rx, &[CMD, SD_BLE_ENABLE], &mut out)?;
     let n = call(b, &mut rx, &[CMD, SD_BLE_VERSION_GET, 1], &mut out)?;
     match out.get(..n) {
-        Some(&[image, b0, b1, s0, s1, ..]) => {
-            Ok(Version { image, bootloader: u16::from_le_bytes([b0, b1]), sd: u16::from_le_bytes([s0, s1]), central })
-        }
+        Some(&[image, b0, b1, s0, s1, ..]) => Ok(Version {
+            image,
+            bootloader: u16::from_le_bytes([b0, b1]),
+            sd: u16::from_le_bytes([s0, s1]),
+            central,
+            mtu,
+        }),
         _ => Err(Error::Code(u32::MAX)),
     }
 }

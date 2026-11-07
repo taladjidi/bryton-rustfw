@@ -714,13 +714,16 @@ pub struct Stored {
     pub notify: bool,
     /// Media keys (HID) offered.
     pub keys: bool,
+    /// The fast link (a larger MTU, quick parameters during a file transfer, docs/roadmap.md 3c) is allowed. Stored
+    /// inverted (flag bit 3 = off), so a file from before reads on.
+    pub fast: bool,
     /// The bond, if any.
     pub bond: Option<Bond>,
 }
 
 impl Default for Stored {
     fn default() -> Self {
-        Stored { notify: true, keys: true, bond: None }
+        Stored { notify: true, keys: true, fast: true, bond: None }
     }
 }
 
@@ -740,7 +743,10 @@ impl Stored {
     pub fn to_sector(&self) -> [u8; 512] {
         let mut s = [0; 512];
         s[..4].copy_from_slice(MAGIC);
-        s[4] = u8::from(self.notify) | u8::from(self.keys) << 1 | u8::from(self.bond.is_some()) << 2;
+        s[4] = u8::from(self.notify)
+            | u8::from(self.keys) << 1
+            | u8::from(self.bond.is_some()) << 2
+            | u8::from(!self.fast) << 3;
         if let Some(b) = &self.bond {
             s[5..21].copy_from_slice(&b.key.ltk);
             s[21] = b.key.flags;
@@ -773,7 +779,7 @@ impl Stored {
             b.attrs_len = b.attrs_len.min(ATTRS as u8);
             b
         });
-        Some(Stored { notify: flags & 1 != 0, keys: flags & 2 != 0, bond })
+        Some(Stored { notify: flags & 1 != 0, keys: flags & 2 != 0, fast: flags & 8 == 0, bond })
     }
 }
 

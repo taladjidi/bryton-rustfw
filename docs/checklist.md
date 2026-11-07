@@ -294,6 +294,7 @@ Others
 - [x] Media remote from Di2 buttons (patch P12): sim (DI2 KEYS: play, tracks)
 - [x] Camera shutter on the phone (ours): sim
 - [~] Rides and files over the phone link, no cable (ours): the file service lists and reads `\Activities\` on the bond, sim; writes and the app to come
+- [ ] The fast phone link (MTU 247, 2026-11-07): a ride downloads at tens of KB/s on the unit (docs/status.md), then one ride with the owner before it goes in the ride build
 - [ ] Live tracking (stock app, all): needs a phone app
 - [ ] Group ride: members on the map, messages, voice input (stock app, Garmin, Karoo)
 - [x] Ride upload to Strava and Intervals.icu (stock app, all): sim; `tools/sync.py` on the computer, not yet run against the real services

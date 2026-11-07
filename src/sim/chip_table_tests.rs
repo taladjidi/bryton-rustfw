@@ -63,7 +63,7 @@ fn every_command_rustfw_builds_decodes_on_the_chip() {
         let _ = ble::phy_update(b, rx, conn);
         let _ = ble::data_length_update(b, rx, conn);
         let _ = ble::user_mem_reply(b, rx, conn);
-        let _ = ble::exchange_mtu_reply(b, rx, conn);
+        let _ = ble::exchange_mtu_reply(b, rx, conn, ble::ATT_MTU);
         let _ = ble::sys_attr_set(b, rx, conn, None);
         let _ = ble::sys_attr_set(b, rx, conn, Some(&[5; 80]));
         let _ = ble::sys_attr_get(b, rx, conn, &mut [0; 80]);

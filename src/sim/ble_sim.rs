@@ -52,6 +52,8 @@ pub enum Act {
 pub struct PhoneSim {
     /// It connects once the unit advertises and this time has come.
     pub connect_at: u64,
+    /// The Client Rx MTU it asks to exchange right after connecting (iOS does; 0: it never asks, the link stays at 23).
+    pub client_mtu: u16,
     /// The LTK it kept from a bond with the unit.
     pub key: Option<[u8; 16]>,
     pub script: Vec<(u64, Act)>,
@@ -125,6 +127,7 @@ impl PhoneSim {
         add(0x35, U::Sig(0x2a0f), Kind::Value, &[4, 0]); // UTC + 1 h, no DST
         PhoneSim {
             connect_at: 0,
+            client_mtu: 0,
             key: None,
             script: Vec::new(),
             db,
@@ -159,9 +162,73 @@ pub struct Server {
     pub sent: Vec<(u16, Vec<u8>)>,
     /// Value handles only an encrypted link may write (the stack refuses the others before the app hears of it).
     pub locked: Vec<u16>,
-    /// The stack queues one notification (`BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT`, 1): it leaves at the next
-    /// connection event, [`HVN_MS`] after, and until then a second is refused (NRF_ERROR_RESOURCES).
-    pub hvn_free_at: u64,
+    /// The radio model of the phone's link (MTU, data length, PHY, connection events, the notification queue).
+    pub radio: Radio,
+}
+
+/// The phone link's radio, as far as a file transfer can feel it (Nordic's S132 documentation, inferred where it says so):
+/// - the stack queues `hvn_tx_queue_size` notifications (default 1, `BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT`; the
+///   configuration 0x22 sets it) and refuses one more with NRF_ERROR_RESOURCES;
+/// - at each connection event (every `interval_ms`) the link layer sends queued notifications for as long as the
+///   event length (the configuration 0x20) allows, then reports them with BLE_GATTS_EVT_HVN_TX_COMPLETE;
+/// - a notification is cut into link-layer packets of the data length (27, or what was asked for), each costing its
+///   bytes plus 10 of overhead at 8 us a byte (1M; half at 2M) and 380 us of inter-frame spaces and the empty
+///   acknowledgement (inferred from the Core spec, Vol 6 B 4.1);
+/// - the MTU is the smaller of the phone's and the Server Rx MTU the unit answered (at most the configured one).
+pub struct Radio {
+    /// The 2M PHY is available (the SoftDevice does it).
+    pub phy2_able: bool,
+    /// The negotiated ATT MTU.
+    pub mtu: u16,
+    /// The data length, octets.
+    pub dle: u16,
+    /// On the 2M PHY.
+    pub phy2: bool,
+    /// The connection interval, ms.
+    pub interval_ms: u64,
+    /// Slave latency in force.
+    pub latency: u16,
+    /// Queued notifications' value lengths.
+    pub queue: std::collections::VecDeque<usize>,
+    /// The next connection event, ms.
+    pub next_event: u64,
+    /// Notifications that left, in all.
+    pub completed: u32,
+    /// Replies to an MTU exchange the chip refused (a reply above the configured MTU).
+    pub bad_replies: u32,
+}
+
+impl Default for Radio {
+    fn default() -> Self {
+        Radio {
+            phy2_able: true,
+            mtu: 23,
+            dle: 27,
+            phy2: false,
+            interval_ms: HVN_MS,
+            latency: 0,
+            queue: Default::default(),
+            next_event: 0,
+            completed: 0,
+            bad_replies: 0,
+        }
+    }
+}
+
+impl Radio {
+    /// A new connection: the defaults of the link layer.
+    fn connected(&mut self, now: u64) {
+        *self = Radio { phy2_able: self.phy2_able, next_event: now, ..Radio::default() };
+    }
+
+    /// Air time of a notification of `len` value bytes, us.
+    fn air_us(&self, len: usize) -> u64 {
+        let l2cap = (len + 7) as u64;
+        let dle = u64::from(self.dle.max(27));
+        let pdus = l2cap.div_ceil(dle);
+        let per_byte = if self.phy2 { 4 } else { 8 };
+        (l2cap + 10 * pdus) * per_byte + 380 * pdus
+    }
 }
 
 /// The connection interval the simulated phone grants, ms (the unit asks 15 to 30).
@@ -226,13 +293,18 @@ impl Nordic {
 
     /// The scripted phone's moves at `now`.
     pub(super) fn phone_tick(&mut self, now: u64) {
+        self.hvn_run(now);
         let Some(mut ph) = self.phone.take() else { return };
         if !ph.connected && self.server.adv.is_some() && now >= ph.connect_at {
             ph.connected = true;
             self.server.adv = None;
+            self.server.radio.connected(now);
             let mut body = vec![0, 0, 3, 1, 2, 3, 4, 5, 6, 1]; // conn 0, a random address, role peripheral
             body.extend([24, 0, 24, 0, 0, 0, 0x90, 1]);
             self.evt(0x10, &body);
+            if ph.client_mtu > 0 {
+                self.evt(0x55, &[&[0, 0][..], &ph.client_mtu.to_le_bytes()].concat()); // Exchange MTU Request
+            }
             if let Some(_key) = ph.key {
                 // it encrypts with the key it kept: the unit is asked for it by EDIV and Rand
                 let mut b = vec![0, 0, 3, 1, 2, 3, 4, 5, 6];
@@ -443,11 +515,17 @@ impl Nordic {
                     self.queue(&[1, 0xa6, 0x08, 0, 0, 0]); // NRF_ERROR_INVALID_STATE: notifications off
                     return true;
                 }
-                if now < self.server.hvn_free_at {
+                self.hvn_run(now);
+                let r = &self.server.radio;
+                if len > usize::from(r.mtu) - 3 {
+                    self.queue(&[1, 0xa6, 0x0c, 0, 0, 0]); // NRF_ERROR_DATA_SIZE: longer than the MTU less 3
+                    return true;
+                }
+                if r.queue.len() >= self.hvn_cap() {
                     self.queue(&[1, 0xa6, 0x13, 0, 0, 0]); // NRF_ERROR_RESOURCES: the queue is full
                     return true;
                 }
-                self.server.hvn_free_at = now + HVN_MS;
+                self.server.radio.queue.push_back(len);
                 if self.server.attrs.iter().any(|a| a.0 == handle && a.1 == 0x2a4d)
                     && let Some(ph) = &mut self.phone
                 {
@@ -673,6 +751,7 @@ impl Nordic {
                 }
                 self.phone = Some(ph);
             }
+            0x69 if self.refuse_fast_cfg && matches!(args[0], 0x22 | 0x23) => self.queue(&[1, 0x69, 4, 0, 0, 0]),
             0x69 => {
                 self.cfg.push(args.to_vec());
                 ok(self, &[]);
@@ -706,9 +785,43 @@ impl Nordic {
             0x8d => ok(self, &[]),
             0x75 => {
                 self.param_updates.push(args.to_vec());
+                // the phone (conn 0) takes the minimum interval when the latency is 0, else keeps its own 30 ms
+                if u16_at(0) == 0 && args[2] == 1 {
+                    let (min, lat) = (u64::from(u16_at(3)), u16_at(7));
+                    let r = &mut self.server.radio;
+                    (r.interval_ms, r.latency) = (if lat == 0 { (min * 5).div_ceil(4) } else { HVN_MS }, lat);
+                }
                 ok(self, &[]);
             }
-            0x9d | 0x8f | 0x90 | 0x66 | 0xad | 0x78 | 0x7a | 0x7c | 0xa4 => ok(self, &[]),
+            0xad => {
+                // sd_ble_gatts_exchange_mtu_reply(conn, server_rx_mtu): at most the configured MTU (INVALID_PARAM)
+                let reply = u16_at(2);
+                if reply > self.conf_mtu() || reply < 23 {
+                    self.server.radio.bad_replies += 1;
+                    self.queue(&[1, 0xad, 7, 0, 0, 0]);
+                    return true;
+                }
+                let client = self.phone.as_ref().map_or(23, |p| p.client_mtu.max(23));
+                self.server.radio.mtu = client.min(reply);
+                ok(self, &[]);
+            }
+            0x8f => {
+                // sd_ble_gap_phy_update(conn, {tx, rx}): the phone grants what both ask for and the chip can
+                if u16_at(0) == 0 && args[2] == 1 {
+                    let (tx, rx) = (args[3], args[4]);
+                    let r = &mut self.server.radio;
+                    r.phy2 = r.phy2_able && tx == 2 && rx == 2;
+                }
+                ok(self, &[]);
+            }
+            0x90 => {
+                // sd_ble_gap_data_length_update(conn, {tx, rx, tx time, rx time}*, limitation*)
+                if u16_at(0) == 0 && args[2] == 1 {
+                    self.server.radio.dle = u16_at(3).clamp(27, 251);
+                }
+                ok(self, &[]);
+            }
+            0x9d | 0x66 | 0x78 | 0x7a | 0x7c | 0xa4 => ok(self, &[]),
             _ => return false,
         }
         true
@@ -929,6 +1042,60 @@ impl FtmsSim {
 }
 
 impl Nordic {
+    /// A configuration value for the app's connection tag: `id`'s byte `at` (after the presence byte and the tag).
+    fn conn_cfg(&self, id: u8, at: usize) -> Option<u8> {
+        let tag = self.tag();
+        self.cfg.iter().find(|c| c[..2] == [id, 0] && c[5] == tag).and_then(|c| c.get(6 + at).copied())
+    }
+
+    /// The configured hvn queue size (default 1).
+    fn hvn_cap(&self) -> usize {
+        usize::from(self.conn_cfg(0x22, 0).unwrap_or(1).max(1))
+    }
+
+    /// The configured ATT MTU (default 23).
+    fn conf_mtu(&self) -> u16 {
+        match (self.conn_cfg(0x23, 0), self.conn_cfg(0x23, 1)) {
+            (Some(a), Some(b)) => u16::from_le_bytes([a, b]),
+            _ => 23,
+        }
+    }
+
+    /// The configured connection event length, us (default 3 units).
+    fn event_us(&self) -> u64 {
+        match (self.conn_cfg(0x20, 1), self.conn_cfg(0x20, 2)) {
+            (Some(a), Some(b)) => u64::from(u16::from_le_bytes([a, b])) * 1250,
+            _ => 3750,
+        }
+    }
+
+    /// The connection events up to `now`: each sends queued notifications while the event length lasts, and reports
+    /// them (BLE_GATTS_EVT_HVN_TX_COMPLETE).
+    pub(super) fn hvn_run(&mut self, now: u64) {
+        let connected = self.phone.as_ref().is_some_and(|p| p.connected);
+        let iv = self.server.radio.interval_ms.max(1);
+        while connected && self.server.radio.next_event <= now {
+            let r = &mut self.server.radio;
+            r.next_event += iv;
+            if r.queue.is_empty() {
+                r.next_event += (now.saturating_sub(r.next_event) / iv) * iv; // idle events are skipped
+                continue;
+            }
+            let (mut budget, mut done) = (self.event_us(), 0u8);
+            while let Some(&len) = self.server.radio.queue.front() {
+                let air = self.server.radio.air_us(len);
+                if done > 0 && air > budget {
+                    break;
+                }
+                budget = budget.saturating_sub(air);
+                self.server.radio.queue.pop_front();
+                self.server.radio.completed += 1;
+                done += 1;
+            }
+            self.evt(0x57, &[0, 0, done]);
+        }
+    }
+
     /// The connection configuration tag the app configured for two links (1), or 0 (the default).
     pub(super) fn tag(&self) -> u8 {
         let gap = self.cfg.iter().any(|c| c[..2] == [0x20, 0] && c[5] == 1 && c[6] >= 2);

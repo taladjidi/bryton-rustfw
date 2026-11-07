@@ -18,6 +18,24 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **The fast phone link (2026-11-07, roadmap 3c; the MTU decision of 2026-11-02 reopened by the owner; `nrf::CFG_FAST`,
+  app/filesvc.rs):** seen in the simulator and against Bryton's real radio app in the emulator (it decodes the four
+  `sd_ble_cfg_set` commands; its SoftDevice stub answers 0 to anything, so whether the chip's RAM holds an MTU of 247,
+  a queue of 4 and a 7.5 ms event is **not known**: `sd_ble_enable` answering NO_MEM falls back to the two links, then
+  to the defaults). The ids 0x22 and 0x23 and BLE_GATTS_EVT_HVN_TX_COMPLETE (0x57) are inferred from the enumerations.
+  Steps, in this order: (1) RAM run (`tools/dev.py run`, the default build has the fast link; the ride build does not,
+  `FAST_LINK=1` forces it), cable in: `tools/dev.py info` shows the radio started and the PHONE menu shows a FAST LINK
+  row (it appears only when the chip took the configuration; no row means the fallback); (2) the phone app or nRF
+  Connect bonded, no ride: connect, request MTU 247 (iOS asks by itself; nRF Connect has a button) and read the MTU
+  back; (3) enable Data, READ a ride (`02 seq 00 00 00 00 <name>`), time it and compute KB/s (target 40 to 80; the
+  simulator says 45), compare the bytes with the file read through USB; (4) the phone's connection interval during the
+  READ (nRF Connect shows 15 to 30 ms) and back to its normal after the END, a Cancel, a cut link; (5) media keys,
+  a notification banner and a call still work during and after a transfer; (6) a trainer connected at the same time
+  keeps its readings and its control through a READ; (7) an hour with the link up and no ride: the radio chip makes no
+  silence (the suspect of 2026-11-01 was never shown); (8) only then one ride with the owner on a build with
+  `FAST_LINK=1 EMMC_WRITE=1`. The ANCS data (a notification's app name) can come in pieces up to 244 bytes now: events
+  over `nrf::KEPT` (160) are dropped while a command waits, so an app name may be missed; check it still shows.
+
 - **File service on the phone bond (2026-11-07, roadmap 9 A1, reads only; app/filesvc.rs):** seen in the simulator
   only. On the unit, with the phone bonded and no ride running, in nRF Connect (or any BLE tool): the service
   `aa3c0001-98d8-4772-99ed-dfb117c6746f` is listed (the tool must be the bonded phone: the attributes need

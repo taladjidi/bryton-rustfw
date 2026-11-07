@@ -112,6 +112,12 @@ impl Default for Cost {
 }
 
 pub struct Sim {
+    /// The chip is started on the fast link's configuration (`Board::fast_link`); off by default, so the older tests
+    /// keep the two-link configuration they were written against.
+    pub fast_link: bool,
+    /// Charge the Nordic UART's wire time to the clock (see `charge_wire`), us carried over.
+    pub charge_wire: bool,
+    wire_us: u64,
     pub screen: Vec<u16>,
     window: (u32, u32, u32, u32),
     /// Every panel command, in order.
@@ -264,6 +270,9 @@ pub struct Nordic {
     pub dead: bool,
     /// A BLE command the chip refuses (NRF_ERROR_NO_MEM), as one whose configuration it lacks would.
     pub refuse: Option<u8>,
+    /// The configurations of the fast link (ids 0x22, 0x23) are refused (NRF_ERROR_NO_MEM): a chip whose RAM, fixed by
+    /// Bryton's app, cannot hold them. Kept over a reset.
+    pub refuse_fast_cfg: bool,
     /// An ANT command the chip refuses on a channel (op, channel), with an error code.
     pub ant_refuse: Option<[u8; 2]>,
     /// Reset since power-up: before that, commands would go nowhere.
@@ -1036,6 +1045,9 @@ impl Sim {
             dirty: false,
             nordic: Nordic::default(),
             nrf_ext: None,
+            fast_link: false,
+            charge_wire: false,
+            wire_us: 0,
             chip_held: false,
             nrf_parked: false,
             cts_pull_up: true,
@@ -1159,6 +1171,31 @@ fn span(p: &[u8], limit: u32) -> (u32, u32) {
 impl Sim {
     /// What the Nordic chip has sent by now: the scan's end, the sensors' broadcasts, the phone's and the trainer's
     /// traffic (the chip sends as time goes; the board reads it).
+    fn nordic_send(&mut self, data: &[u8]) -> usize {
+        assert!(self.nordic.reset, "bytes to the Nordic chip before its reset");
+        if !data.is_empty() && (self.chip_held || self.ms < self.chip_boot_until) {
+            self.reset_bytes += data.len() as u32;
+            assert!(self.expect_reset_bytes, "{} bytes sent to the Nordic chip while it resets or boots", data.len());
+            return data.len();
+        }
+        self.nordic.send(data, self.ms)
+    }
+
+    /// The UART's time: `bytes` at 10 us each (1 Mbaud, 8N1), charged to the simulated time when a test asks
+    /// (`charge_wire`: it moves every test's clock, so only the throughput tests set it). The remainder under a
+    /// millisecond carries over.
+    fn charge_wire(&mut self, bytes: usize) {
+        if !self.charge_wire {
+            return;
+        }
+        self.wire_us += bytes as u64 * 10;
+        let ms = self.wire_us / 1000;
+        self.wire_us %= 1000;
+        if ms > 0 {
+            self.sleep_ms(ms as u32);
+        }
+    }
+
     fn nordic_due(&mut self) {
         if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
             self.nordic.scan_end = None;
@@ -1195,7 +1232,7 @@ impl Sim {
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
         let (limits, hangs, high_water) = (self.nordic.limits, self.nordic.hangs, self.nordic.high_water);
         let (expect_hang, table_only) = (self.nordic.expect_hang, self.nordic.table_only);
-        let vs_max = self.nordic.vs_max;
+        let (vs_max, refuse_fast_cfg) = (self.nordic.vs_max, self.nordic.refuse_fast_cfg);
         resets.push(self.ms);
         self.nordic = Nordic {
             die_at_ant,
@@ -1220,6 +1257,7 @@ impl Sim {
             expect_hang,
             table_only,
             vs_max,
+            refuse_fast_cfg,
             ..Nordic::default()
         };
     }
@@ -1350,18 +1388,24 @@ impl Board for Sim {
         }
     }
 
+    fn fast_link(&self) -> bool {
+        self.fast_link
+    }
+
+    fn nrf_tx_wait(&mut self) {
+        if self.nrf_ext.is_none() {
+            self.nordic.wait_us(160);
+        }
+    }
+
     fn nrf_send(&mut self, data: &[u8]) -> usize {
         if let Some(x) = &mut self.nrf_ext {
             x.send(data);
             return data.len();
         }
-        assert!(self.nordic.reset, "bytes to the Nordic chip before its reset");
-        if !data.is_empty() && (self.chip_held || self.ms < self.chip_boot_until) {
-            self.reset_bytes += data.len() as u32;
-            assert!(self.expect_reset_bytes, "{} bytes sent to the Nordic chip while it resets or boots", data.len());
-            return data.len();
-        }
-        self.nordic.send(data, self.ms)
+        let took = self.nordic_send(data);
+        self.charge_wire(took);
+        took
     }
 
     fn adc_read(&mut self, channel: u8) -> Option<u16> {
@@ -1509,7 +1553,9 @@ impl Board for Sim {
             return x.recv(buf);
         }
         self.nordic_due();
-        self.nordic.recv(buf, self.ms)
+        let n = self.nordic.recv(buf, self.ms);
+        self.charge_wire(n);
+        n
     }
 
     /// The bridge ([`Sim::nrf_ext`]) has no line state: its TX reads sent and its RTS released (floating), so the

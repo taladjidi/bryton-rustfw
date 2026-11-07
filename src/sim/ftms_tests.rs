@@ -602,3 +602,43 @@ fn a_lost_continuation_does_not_freeze_the_power() {
     app.ftms_hvx(&mut sim, h, &[0x04, 0x00, 0xb8, 0x0b, 180, 0]); // a whole record, no power
     assert_eq!(app.trainer.reading.power, None, "cleared although the flag was left set");
 }
+
+/// A READ of a 100 KB ride on the fast link while the trainer is connected (the second, central link, on the same
+/// radio): the bytes arrive whole and in order, the trainer stays connected and under control, and the phone link's
+/// parameters come back afterwards.
+#[test]
+fn a_ride_downloads_on_the_fast_link_while_the_trainer_is_connected() {
+    use super::filesvc_tests::{BIG, ask, body};
+    let mut phone = PhoneSim::new(true);
+    (phone.connect_at, phone.client_mtu) = (1000, 247);
+    let ride = body(100_000);
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
+    crate::fat::tests::put_file(&mut d, "Activities", "251028120000.fit", &ride);
+    sim.emmc.image = d.0;
+    sim.own_settings();
+    (sim.fast_link, sim.nordic.ftms, sim.nordic.phone) = (true, Some(FtmsSim::new()), Some(phone));
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.activate(&mut sim, Menu::Phone, 1); // PAIR
+    run(&mut sim, &mut app, 2000);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.phone.link(), Link::Secure);
+    assert!(trainer(&sim).connected && trainer(&sim).control, "the trainer is up");
+    let (control, data) = app.phone.files.handles.expect("the service");
+    sim.nordic.phone_subscribe(data + 1, true);
+    run(&mut sim, &mut app, 200);
+    sim.charge_wire = true;
+    let a =
+        ask(&mut sim, &mut app, control, data, crate::filesvc::Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
+    assert!(a.bytes == ride && a.end == Some((crate::filesvc::Status::Ok, 100_000)), "{:?}", a.end);
+    std::println!("fast link with a trainer: 100000 B in {} ms", a.ms);
+    run(&mut sim, &mut app, 500);
+    assert!(trainer(&sim).connected && trainer(&sim).control, "the trainer kept its link and its control");
+    let r = &sim.nordic.server.radio;
+    assert!(
+        !r.phy2 && r.interval_ms == super::ble_sim::HVN_MS && r.latency == 6,
+        "the phone link's parameters came back"
+    );
+}

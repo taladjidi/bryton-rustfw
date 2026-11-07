@@ -155,3 +155,20 @@ fn nrf_emu_ant_broadcasts_through_the_real_parser() {
     assert!(got.iter().all(|&(ch, d)| ch == 0 && d == [1, 2, 3, 4, 5, 6, 7, 8]));
     assert_eq!(pipe.0.borrow().flags & 4, 0, "the app is alive");
 }
+
+/// The fast link's four `sd_ble_cfg_set` commands (nrf::CFG_FAST: the two links with a 7.5 ms event, the ATT MTU 247,
+/// the notification queue) against Bryton's real app: its serialization decoder (`ble_cfg_set_req_dec`) takes them, the
+/// start succeeds at MTU 247 and the app lives. The emulated SoftDevice answers 0 to any configuration, so this
+/// proves the layout and the ids are decoded, **not** that the real chip's RAM holds them (docs/status.md).
+#[test]
+#[ignore = "needs python3 + unicorn + Bryton's nordic.bin; cargo test-host -- --ignored nrf_emu"]
+fn nrf_emu_decodes_the_fast_links_configuration() {
+    let Some(pipe) = Pipe::spawn() else { return };
+    let pipe = Shared(Rc::new(RefCell::new(pipe)));
+    let mut sim = Sim::new(8, 0, 0);
+    sim.nrf_ext = Some(Box::new(pipe.clone()));
+    sim.fast_link = true;
+    let v = nrf::start(&mut sim).expect("start against the real app");
+    assert!((v.central, v.mtu) == (true, nrf::FAST_MTU), "the four configurations were accepted: {v:?}");
+    assert_eq!(pipe.0.borrow().flags & 4, 0, "the app is alive");
+}

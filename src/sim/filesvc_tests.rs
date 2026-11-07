@@ -57,6 +57,15 @@ pub(super) fn drain(sim: &mut Sim, data: u16) -> Vec<Vec<u8>> {
     mine.into_iter().map(|s| s.1).collect()
 }
 
+/// [`run`] with the loop's real pass: the short one while a READ runs on the fast link ([`App::pass_ms`]).
+fn pass(sim: &mut Sim, app: &mut App, ms: u64) {
+    let end = sim.ms + ms;
+    while sim.ms < end {
+        app.step(sim);
+        sim.sleep_ms(if app.phone.files.fast() { app.pass_ms() } else { super::POLL_MS });
+    }
+}
+
 /// Writes a READ of `name` from 0 to Control, without waiting for the answer.
 fn start_read(sim: &mut Sim, control: u16, seq: u8, name: Name) {
     let mut f = [0; 20];
@@ -68,7 +77,7 @@ fn start_read(sim: &mut Sim, control: u16, seq: u8, name: Name) {
 fn collect(sim: &mut Sim, app: &mut App, data: u16, passes: u32) -> (Vec<u8>, Option<(Status, u32)>) {
     let (mut kept, mut end): (Vec<u8>, _) = (Vec::new(), None);
     for _ in 0..passes {
-        run(sim, app, 100);
+        pass(sim, app, 100);
         for p in drain(sim, data) {
             match Frame::parse(&p) {
                 Some(Frame::Chunk { data, .. }) => kept.extend(data),
@@ -106,7 +115,7 @@ pub(super) fn ask_raw(sim: &mut Sim, app: &mut App, control: u16, data: u16, raw
     let start = sim.ms;
     sim.nordic.phone_write(control, raw);
     while a.end.is_none() && sim.ms < start + max_ms {
-        run(sim, app, 50);
+        pass(sim, app, 50);
         for p in drain(sim, data) {
             match Frame::parse(&p) {
                 Some(Frame::Entry { seq: s, name, size }) if s == seq => a.entries.push((name, size)),
@@ -313,4 +322,204 @@ fn a_chip_with_nine_bases_costs_the_file_service_not_the_trainer_or_the_phone() 
     assert_eq!(sim.nordic.server.vs.len(), 9);
     assert_eq!(sim.nordic.server.vs[8], crate::fecble::BASE, "the ninth base is FE-C's");
     assert_ne!(app.ftms.vs, 0, "the trainer's base is held");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The fast link (docs/roadmap.md 3c, reopened 2026-11-07): MTU 247, a queue of notifications, quick parameters
+// during a READ. The UART's time is charged to the clock (`Sim::charge_wire`), so the rates are honest to the model.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The name of the big ride on the fast tests' card.
+pub(super) const BIG: Name = *b"251028120000";
+
+/// A pseudo-random body of `n` bytes.
+pub(super) fn body(n: usize) -> Vec<u8> {
+    (0..n as u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect()
+}
+
+/// A unit on the fast link's configuration, bonded to a phone that asks for `client_mtu`, with a ride of `size`
+/// bytes (`BIG`) on the card and Data enabled; `tweak` runs on the sim before the unit starts. The UART is charged to
+/// the clock from here on.
+pub(super) fn fast_unit(client_mtu: u16, size: usize, tweak: impl FnOnce(&mut Sim)) -> (Sim, App, u16, u16, Vec<u8>) {
+    let mut phone = PhoneSim::new(true);
+    (phone.connect_at, phone.client_mtu) = (1000, client_mtu);
+    let ride = body(size);
+    let (mut sim, mut app) = super::tests::unit_with(None, |sim| {
+        sim.fast_link = true;
+        sim.nordic.phone = Some(phone);
+        let mut d = Ram(sim.emmc.image.clone(), 0);
+        put_file(&mut d, "Activities", "251028120000.fit", &ride);
+        sim.emmc.image = d.0;
+        tweak(sim);
+    });
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.phone.link(), Link::Secure);
+    let (control, data) = app.phone.files.handles.expect("the service was added");
+    sim.nordic.phone_subscribe(data + 1, true);
+    run(&mut sim, &mut app, 200);
+    sim.charge_wire = true;
+    (sim, app, control, data, ride)
+}
+
+/// The radio as the phone link left it: back to the normal parameters, 1M PHY.
+fn radio_normal(sim: &Sim) -> bool {
+    let r = &sim.nordic.server.radio;
+    !r.phy2 && r.interval_ms == super::ble_sim::HVN_MS && r.latency == 6
+}
+
+#[test]
+fn a_400_kb_ride_downloads_in_seconds_on_the_fast_link() {
+    let (mut sim, mut app, control, data, ride) = fast_unit(247, 400_000, |_| {});
+    assert_eq!(app.ble.map(|v| v.mtu), Some(247));
+    assert_eq!((app.phone.files.mtu, sim.nordic.server.radio.mtu), (247, 247), "the exchange answered with our max");
+    assert_eq!(sim.nordic.server.radio.bad_replies, 0);
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 5, offset: 0, name: BIG }, 60_000);
+    assert_eq!(a.end, Some((Status::Ok, ride.len() as u32)));
+    assert!(a.bytes == ride, "the bytes equal the file on the card");
+    assert_eq!(a.stray, 0);
+    let rate = ride.len() as u64 * 1000 / a.ms;
+    std::println!("fast link: {} B in {} ms = {} B/s ({} s)", ride.len(), a.ms, rate, a.ms / 1000);
+    assert!(a.ms < 10_000 && rate >= 40_000, "{rate} B/s");
+    run(&mut sim, &mut app, 300);
+    assert!(radio_normal(&sim) && !app.phone.files.boosted, "the parameters came back with the END");
+}
+
+#[test]
+fn without_the_fast_link_or_with_it_off_a_read_runs_as_before() {
+    // the slow rate is the one the module measured (360 B/s)
+    for off in [false, true] {
+        let (mut sim, mut app, control, data, ride) = fast_unit(if off { 247 } else { 0 }, 3000, |s| s.fast_link = off);
+        if off {
+            app.phone.stored.fast = false; // the PHONE menu's row
+        }
+        let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
+        assert!(a.bytes == ride && a.end == Some((Status::Ok, 3000)), "off {off}");
+        // the row switched off after the exchange: the MTU stays, the requests stop
+        assert_eq!(app.phone.files.mtu, if off { 247 } else { 23 });
+        let r = &sim.nordic.server.radio;
+        assert!(r.dle == 27 && !r.phy2 && r.interval_ms == super::ble_sim::HVN_MS, "no request without the fast link");
+        let rate = 3000 * 1000 / a.ms;
+        std::println!("fast link off ({off}): {rate} B/s");
+        assert!(a.stray == 0 && (if off { 1000..=60_000 } else { 250..=400 }).contains(&rate), "{rate} B/s");
+    }
+}
+
+#[test]
+fn a_chip_that_refuses_the_fast_configuration_keeps_the_phone_link_and_the_files() {
+    let (mut sim, mut app, control, data, ride) = fast_unit(247, 3000, |s| s.nordic.refuse_fast_cfg = true);
+    let v = app.ble.expect("the chip started on a smaller configuration");
+    assert_eq!((v.mtu, v.central), (23, true), "the two links, the default MTU");
+    assert_eq!((sim.nordic.server.radio.mtu, sim.nordic.server.radio.bad_replies), (23, 0), "answered 23, never more");
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
+    assert!(a.bytes == ride && a.end == Some((Status::Ok, 3000)));
+    // refused outright (no configuration at all): the defaults, still no radio lost
+    let (sim, app, ..) = fast_unit(247, 100, |s| s.nordic.refuse = Some(0x69));
+    assert!(app.ble.is_some_and(|v| !v.central && v.mtu == 23) && sim.nordic.cfg.is_empty());
+}
+
+#[test]
+fn the_link_parameters_are_asked_during_a_read_and_given_back_however_it_ends() {
+    for how in ["cancel", "stall", "link drop", "new command"] {
+        let (mut sim, mut app, control, data, _) = fast_unit(247, 400_000, |_| {});
+        start_read(&mut sim, control, 1, BIG);
+        pass(&mut sim, &mut app, 400);
+        let r = &sim.nordic.server.radio;
+        assert!(r.dle == 251 && r.phy2 && r.interval_ms == 15 && r.latency == 0, "{how}: asked for");
+        assert!(app.phone.files.boosted && app.pass_ms() == 10, "{how}");
+        match how {
+            "cancel" => {
+                sim.nordic.phone_write(control, &[3, 9]);
+            }
+            "stall" => sim.nordic.phone_subscribe(data + 1, false),
+            "link drop" => {
+                let ph = sim.nordic.phone.as_mut().unwrap();
+                ph.hang_up();
+                ph.connect_at = u64::MAX;
+                sim.nordic.evt(0x11, &[0, 0, 0x08]);
+            }
+            _ => {
+                sim.nordic.phone_write(control, &[1, 2]); // a LIST replaces the READ
+            }
+        }
+        run(&mut sim, &mut app, if how == "stall" { 7000 } else { 1500 });
+        if how == "link drop" {
+            assert!(!app.phone.files.boosted && app.phone.files.mtu == 23, "{how}: forgotten with the link");
+            continue;
+        }
+        let _ = drain(&mut sim, data);
+        assert!(radio_normal(&sim) && !app.phone.files.boosted, "{how}: given back");
+    }
+}
+
+#[test]
+fn a_dropped_fast_transfer_resumes_byte_identical() {
+    let (mut sim, mut app, control, data, ride) = fast_unit(247, 100_000, |_| {});
+    start_read(&mut sim, control, 1, BIG);
+    let (mut kept, _) = collect(&mut sim, &mut app, data, 10);
+    assert!(!kept.is_empty() && kept.len() < ride.len(), "{} kept", kept.len());
+    let ph = sim.nordic.phone.as_mut().unwrap();
+    ph.hang_up();
+    ph.connect_at = sim.ms + 500;
+    sim.nordic.evt(0x11, &[0, 0, 0x08]);
+    run(&mut sim, &mut app, 300);
+    assert!(!app.phone.files.active() && app.phone.files.mtu == 23);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.phone.link(), Link::Secure);
+    assert_eq!(app.phone.files.mtu, 247, "the new link exchanged again");
+    sim.nordic.phone_subscribe(data + 1, true);
+    run(&mut sim, &mut app, 200);
+    drain(&mut sim, data);
+    let off = kept.len() as u32;
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 2, offset: off, name: BIG }, 30_000);
+    kept.extend(&a.bytes);
+    assert!(kept == ride, "{} of {} bytes", kept.len(), ride.len());
+}
+
+#[test]
+fn the_media_keys_behave_on_the_fast_link_and_ask_nothing_of_the_radio() {
+    let (mut sim, mut app, ..) = fast_unit(247, 100, |_| {});
+    app.media(&mut sim, crate::phone::Media::Next, false);
+    run(&mut sim, &mut app, 500);
+    let ph = sim.nordic.phone.as_ref().unwrap();
+    assert!(!ph.commands.is_empty() || !ph.reports.is_empty(), "the key reached the phone");
+    let r = &sim.nordic.server.radio;
+    assert!(r.dle == 27 && r.interval_ms == super::ble_sim::HVN_MS && !r.phy2, "no parameters outside a transfer");
+}
+
+#[test]
+fn a_fuzz_of_the_new_events_leaves_the_link_whole() {
+    let mut reached = 0;
+    for seed in 1..=12u32 {
+        let (mut sim, mut app, control, data, ride) = fast_unit(247, 20_000, |_| {});
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        start_read(&mut sim, control, 1, BIG);
+        let mut got = Vec::new();
+        for _ in 0..200 {
+            // MTU requests (any size, cut short), TX completes (any count), PHY and data length results, junk
+            let id = [0x55, 0x57, 0x21, 0x23][(next() % 4) as usize];
+            let mut junk: Vec<u8> = (0..4 + next() % 8).map(|_| next() as u8).collect();
+            junk.splice(0..0, [u8::from(next() % 4 == 0), 0]);
+            if next() % 3 > 0 {
+                sim.nordic.evt(id, &junk);
+                reached += 1;
+            }
+            pass(&mut sim, &mut app, 50);
+            for p in drain(&mut sim, data) {
+                if let Some(Frame::Chunk { data, .. }) = Frame::parse(&p) {
+                    got.extend(data);
+                }
+            }
+            let m = app.phone.files.mtu;
+            assert!((23..=247).contains(&m), "seed {seed}: mtu {m}");
+        }
+        assert!(ride.starts_with(&got) || got.len() > ride.len(), "seed {seed}: bytes in order, {} got", got.len());
+    }
+    assert!(reached > 1000, "the fuzz reached the events: {reached}");
 }

@@ -258,7 +258,13 @@ impl App {
             && !self.emmc.lent()
             && !self.phone.files.active() // a transfer to the phone: a notification a pass
             && (self.gps.off || self.gps.ano.done()); // AssistNow Offline messages go out at a pass each
-        if quiet && !self.busy() && self.light.idle_ms >= IDLE_AFTER_MS { IDLE_POLL_MS } else { POLL_MS }
+        if quiet && !self.busy() && self.light.idle_ms >= IDLE_AFTER_MS {
+            IDLE_POLL_MS
+        } else if self.phone.files.fast() {
+            super::filesvc::FAST_POLL_MS // a READ on the fast link: the stack takes a few notifications per event
+        } else {
+            POLL_MS
+        }
     }
 
     /// The sleep after this pass may be Stop (docs/power.md "Stop mode", phase 2a; main loop `MainLoop::pass` adds

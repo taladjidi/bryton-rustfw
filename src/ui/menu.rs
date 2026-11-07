@@ -741,6 +741,8 @@ pub enum PhoneRow {
     Notify,
     /// Media keys, on or off.
     Keys,
+    /// The fast link (larger MTU and quick parameters during a file transfer), on or off.
+    Fast,
     /// Select opens the media remote.
     Media,
 }
@@ -754,12 +756,13 @@ impl PhoneRow {
             PhoneRow::Forget => "FORGET",
             PhoneRow::Notify => "NOTIFY",
             PhoneRow::Keys => "MEDIA KEY",
+            PhoneRow::Fast => "FAST LINK",
             PhoneRow::Media => "REMOTE",
         }
     }
 }
 
-/// The phone menu.
+/// The phone menu. A chip on the fast link's configuration adds [`PhoneRow::Fast`] after these (app/menus.rs).
 pub const PHONE: [PhoneRow; 6] = {
     use PhoneRow::*;
     [Status, Pair, Media, Notify, Keys, Forget]
