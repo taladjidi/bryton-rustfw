@@ -178,7 +178,7 @@ received are not the size or CRC given), 7 FULL. Only folder 1 and only a FIT wo
 unit reads back from the card and parses before it shows; the unit names it `<CRC-32 in hex>.fit` in
 `\Workout\calendar\<day>\` (the day folder made if missing; `\Workout\calendar` itself must exist), so sending the same
 file twice writes it once. The bytes go to `\Rustfw\Inbox\WORKOUT.TMP` first and move into the calendar only once checked: a
-power cut at any point leaves the calendar as it was or with the whole workout (at most one lost cluster, which a
+power cut at any point leaves the calendar as it was or with the whole workout (at most one lost chain, the workout's clusters, which a
 computer's fsck reports). BUSY during a ride or while the card is lent, and a ride that starts drops a write under way;
 a write the phone stops feeding for 5 s is dropped. DELETE needs the key's check, so a folder changed since the list
 answers NOT FOUND, never another file; it frees the file's clusters (a workout, not a ride: nothing is kept) and leaves

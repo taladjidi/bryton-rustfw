@@ -65,7 +65,7 @@ const PER_PASS: usize = 8;
 /// Directory entries examined for the next ride in one pass.
 const SCAN: usize = 8;
 /// Entries of a day folder [`locate`] walks at most (the listing issues numbers below 100).
-const LOCATE_MAX: usize = 200;
+const LOCATE_MAX: usize = workout_write::WALK;
 /// File bytes read from the card at once: a few chunks, so the card is read once per [`PER_PASS`] frames.
 const BLOCK: usize = 1024;
 /// The loop's pass while a READ runs on the fast link, ms (the stack takes a few notifications per connection event).
@@ -389,7 +389,7 @@ impl FileSvc {
                             *files = None;
                             continue;
                         };
-                        if e.file.dir || !is_fit(e.name()) {
+                        if e.file.dir || !workout_write::is_fit(e.name()) {
                             continue;
                         }
                         let n = *ord;
@@ -461,11 +461,6 @@ fn entry(seq: u8, legacy: bool, folder: fs::Folder, key: &[u8], check: u16, size
     })
 }
 
-/// A file name ending in `.fit`, any case, with something before it.
-fn is_fit(name: &[u8]) -> bool {
-    name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(b".fit"))
-}
-
 /// The file `key` of `folder` on the card (a directory is not one). A workout's key is a day folder's name and the
 /// number of the `.fit` among that folder's files, counted as the listing counts them; the file now at that place
 /// must have the name and size the key's check was made of, else NOT FOUND.
@@ -500,7 +495,7 @@ fn locate_workout(fat: &mut fat::Fat, d: &mut impl fat::Disk, k: fs::Key) -> Res
     let mut n = 0;
     for _ in 0..LOCATE_MAX {
         let Some(e) = fat.list(d, &mut c).map_err(found)? else { break };
-        if e.file.dir || !is_fit(e.name()) {
+        if e.file.dir || !workout_write::is_fit(e.name()) {
             continue;
         }
         if n == num {
@@ -640,6 +635,19 @@ impl App {
             fs::Command::WriteData { seq, .. } | fs::Command::WriteEnd { seq } => (seq, false),
             _ => return,
         };
+        if matches!(self.phone.files.job, Job::List { .. } | Job::Read { .. }) {
+            // the LIST or READ under way ends with its END (BUSY, what it sent) before this command's answer, refusal
+            // or not: notified now, since the answer takes its place (a full queue loses it: the phone then sees the
+            // new answer only)
+            self.phone.files.abort(Status::Busy);
+            let svc = &mut self.phone.files;
+            if let (Some(conn), Some((_, data))) = (self.phone.conn, svc.handles) {
+                let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
+                if ble::notify(b, &mut self.rx, conn, data, frame).is_ok() {
+                    svc.taken(self.up_ms);
+                }
+            }
+        }
         let writing = matches!(self.phone.files.job, Job::Write { .. });
         let why = if busy {
             Some(Status::Busy)
@@ -652,18 +660,6 @@ impl App {
         };
         if let Some(why) = why {
             return self.phone.files.finish(seq, why, count_of(&self.phone.files.job, 0));
-        }
-        if writes && matches!(self.phone.files.job, Job::List { .. } | Job::Read { .. }) {
-            // the LIST or READ under way ends with its END (BUSY, what it sent) before this command's answer: notified
-            // now, since the answer takes its place (a full queue loses it: the phone then sees the new answer only)
-            self.phone.files.abort(Status::Busy);
-            let svc = &mut self.phone.files;
-            if let (Some(conn), Some((_, data))) = (self.phone.conn, svc.handles) {
-                let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
-                if ble::notify(b, &mut self.rx, conn, data, frame).is_ok() {
-                    svc.taken(self.up_ms);
-                }
-            }
         }
         let t = fat::write::dos_time(self.rec_time().0);
         let r = self.write_step(b, c, t);

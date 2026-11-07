@@ -1030,6 +1030,29 @@ fn a_write_begun_during_a_read_ends_the_read_first() {
     assert_eq!(ends, [(5, Status::Busy), (6, Status::Ok)]);
 }
 
+/// A refused write command during a LIST (a build without card writes) ends the LIST first too, and the refusal's
+/// count is its own (0), never the list's.
+#[test]
+fn a_refused_write_during_a_list_ends_the_list_first() {
+    let (mut sim, mut app, control, data) = paired();
+    app.card_writable = false;
+    sim.nordic.phone_write(control, &[1, 5]); // LIST
+    let mut f = [0; 40];
+    let n = Command::WriteBegin { seq: 6, folder: Folder::Workout, day: DAY, size: 40, crc: 0 }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    pass(&mut sim, &mut app, 200);
+    let ends: Vec<_> = drain(&mut sim, data)
+        .iter()
+        .filter_map(|p| match Frame::parse(p) {
+            Some(Frame::End { seq, status, count }) => Some((seq, status, count)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    assert_eq!((ends[0].0, ends[0].1), (5, Status::Busy));
+    assert_eq!(ends[1], (6, Status::ReadOnly, 0));
+}
+
 #[test]
 fn a_ride_starting_mid_write_drops_it_and_nothing_shows() {
     let (mut sim, mut app, control, data) = paired();
