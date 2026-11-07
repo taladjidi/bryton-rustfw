@@ -1,0 +1,4 @@
+// Defaults, then the owner's own values from Local.xcconfig (gitignored; copy Local.xcconfig.example).
+BUNDLE_ID_PREFIX = invalid.example
+DEVELOPMENT_TEAM =
+#include? "Local.xcconfig"

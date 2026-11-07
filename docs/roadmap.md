@@ -354,6 +354,8 @@ Steps:
 - **A1. A file service on the bond** (firmware; nrf.rs's serialization): list, read by chunk, write; reads first.
   **Reads done 2026-11-07** (app/filesvc.rs, link/filesvc.rs: LIST and READ of `\Activities\` from an offset, BUSY under
   a ride, MTU 23 kept, about 360 B/s; sim only, the unit check is in docs/status.md); writes remain and are critical. Without it no app can do anything.
+- **Skeleton done (docs/app.md):** `app/core` (UniFFI, decodes Battery Level and maker, uses one item of the firmware's
+  library) and `app/ios` (finds the unit, reads and shows both); on a real iPhone still to be tried. The file service (A1 reads) is in the firmware.
 - **A2. The core crate** (`app-core/`): the protocol, sync.py's logic ported, the fake transport, round-trip tests
   against the firmware's encoder.
 - **A3. iOS:** sync (rides to Intervals.icu and Strava, workouts back), then the features below.
