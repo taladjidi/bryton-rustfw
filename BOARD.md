@@ -23,8 +23,8 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   `0x580244fc 9` the LPENR registers).
 - **Stop mode** (docs/power.md "Stop mode"; phase 1, the dev link's benches). **Seen on the unit 2026-11-03, cable
   in:** a Stop entered from the bench with USB only soft-disconnected (VOS1, the OTG core and PHY clocked) left
-  PWR_CPUCR STOPF clear and the HSE and PLL1 running (their waits took a few cycles): the system stayed in Run. Stock's
-  switch-off does reach system Stop / Standby on this unit (its flags word: PWR_CPUCR 0x1a3, STOPF set). DBGMCU_CR
+  PWR_CPUCR STOPF clear and the HSE and PLL1 running (their waits took a few cycles): the system stayed in Run. This
+  firmware's switch-off did reach system Stop on this unit (its flags word: PWR_CPUCR 0x1a3, STOPF set; section 9). DBGMCU_CR
   (0x5c001004) reads 0. What held it is to find (`bench stop --usboff`, `--keep`). Inferred, not re-read: Stop turns
   the HSE and the PLLs off and wakes on the HSI (RCC_CFGR STOPWUCK 0; RM0399 RCC, inferred from the plan, the manual
   not re-read). The registers keep their values, so hw.rs `stop` puts back what RCC_CR had on before (HSE, HSI48,
@@ -422,15 +422,45 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 - The power button drives both PA0 (high when pressed) and PA1 (low when pressed): seen on the unit (2026-10-23).
 - PA0 must be a GPIO input before standby (stock does it at boot): left in its reset analog mode, the press does
   not wake the unit (seen on the unit, 2026-10-23); only the four-button restart brings it back.
-- Entry as stock: PWR_CPUCR PDDS_D1 and PDDS_D2 set, SLEEPDEEP, WFI. Waking resets the unit.
-- PDDS_D3 stays 0 (stock too): D1 and D2 power down, D3 only stops, so the system is in Stop, not Standby (the
-  HAL's HAL_PWREx_EnterSTANDBYMode doc; Standby needs D1, D2 and D3 all in DStandby), and the GPIOs keep their
-  levels (Nordic PI4 / PA6 high, its UART lines parked analog: section 11 "Power off"; GNSS power). In Stop the WKUP pin reaches the core only through EXTI line 55
+- Entry as stock: PWR_CPUCR PDDS_D1, PDDS_D2 and **PDDS_D3** set, SLEEPDEEP, WFI: whole-system Standby (all of D1, D2
+  and D3 in DStandby, the regulator off; STM32CubeH7 HAL_PWREx_EnterSTANDBYMode doc: "the whole system in STOP if
+  PWR_CPUCR_PDDS_D3 = 0"). Waking resets the unit. Read in the stock image (R039, 2026-11-07): its
+  HAL_PWREx_EnterSTANDBYMode (ITCM 0x5bfa; literal 0x5c84 = 0x58024810, PWR_CPUCR; 0x5c88 = SCB_SCR) sets bit 0,
+  SLEEPDEEP and WFIs for argument 0, sets bit 1 for 1 and bit 2 for any other; Pwr_EnterStandbyMode (0xd018d9d0,
+  inlined in Pwr_ShutdownToStandby 0xd018cd88) calls it with 2, then sets bit 1, then calls it with 0 (literals
+  0xd018e264 = PWR_CPUCR, 0xd0189724 = 0x5bfb). ghidra/recovered_src/system/board.c labels the argument-2 call "D2":
+  wrong, it is D3. This firmware set only PDDS_D1 / D2 until 2026-11-07: off, the system sat in Stop (the next boot's
+  crumb, `standby_flags_word`: PWR_CPUCR 0x1a3, STOPF, SBF_D1, SBF_D2, SBF clear) and the cell lost about 58 % in
+  88 h (about 8 mA; DS12930: about 2.8 mA for the MCU alone in Stop). The M4 allows D3 Standby too (PWR_CPU2CR read
+  0x1e7 on the unit: PDDS_D1..D3 set; RUN_D3, bit 11 of either register, never set here or by stock's switch-off).
+  Expected at the next boot: SBF (PWR_CPUCR bit 6) set; to see on the unit.
+- **In Standby every GPIO floats** (high impedance, no pull; only the reset pad and the enabled WKUP pins keep their
+  function: the H7 reference manual's Standby I/O states as quoted on
+  https://community.st.com/t5/stm32-mcus-products/can-h7-gpio-pullup-pulldown-be-activated-in-standby/td-p/106421; the
+  H7 keeps no pull in Standby). The levels set before it (section 11 "Power off") last only until the WFI. Stock
+  enters the same Standby with the same lines, so it lives with the same floats. Each one then (board pulls unknown,
+  so all inferred):
+  - PA6 (Nordic reset) and PI4 (Nordic boot mode): the chip is already in System OFF, which only a pin reset, a
+    DETECT on a sensed pin, NFC or LPCOMP ends (nRF52832 PS v1.4, POWER). PA6 floating meets the chip's own reset
+    pull-up (13 kOhm), so it goes or stays high, never low: no reset, no wake. PI4 is read by the Nordic bootloader at
+    a reset only; floating it meets the DFU pin's pull-up (inferred) and stays high, so no DETECT either (unless the
+    board pulls it down: then stock would wake into DFU the same way). The fallback for a chip not seen off (PA6 held
+    low) does not survive Standby: the pull-up releases the reset and that chip boots and runs until the next start.
+  - PD3..PD6 (USART2): already analog, no pull; the chip's side is a disconnected input. Nothing flows.
+  - PI6 (GNSS power), PG3 (display and touch power), PH2 (buzzer amplifier), PA7 (ULPI PHY), PB15 (SDRAM power), PA2:
+    each rail goes off only if the board pulls its enable low; if one floats on, it draws as when on. Not knowable
+    from here: the 2 h off drain against stock's is the measure (docs/status.md).
+  - PG13 (backlight) and PH3 (touch reset): off / in reset if the board or the driver chip pulls them low; the touch
+    chip's INT no longer matters (only WKUP1 wakes).
+  - After the wake (a reset) every pin starts analog, as at any boot, until the firmware sets it again.
+- Before the WFI the PWR_CPUCR flags are cleared (CSSF) and the reset flags too (RCC_RSR RMVF), so the next boot's crumb
+  is this switch-off's alone. In case the system lands in Stop instead the WKUP pin reaches the core only through EXTI
+  line 55
   (EXTI_CPUIMR2 bit 23, reset value 0 in ST's SVD, but read 0xfff5ffff on the unit while running: already unmasked
   there): stock unmasks it and enables IRQ 149 (WAKEUP_PIN) before standby. Enabling IRQ 149 in the NVIC (our standby
   had cleared every enable) made the power button start the unit (2026-10-25, rustfw ea359a0, seen on the unit).
-  Without it the press woke nothing (2026-10-25: WFI never returned, PWR_CPUCR.SBF clear at the next boot); to see
-  with the fix.
+  Without it the press woke nothing (2026-10-25: WFI never returned, PWR_CPUCR.SBF clear at the next boot).
+- Not done: WKUP4 (PC13, the cable) as a second wake source, which stock arms; a follow-up.
 - Stock waits for the back key to be released first (otherwise it wakes at once). Power off and on with the
   power button, as this firmware does it:
 
@@ -439,7 +469,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
      PA1 Back    ~~~~\_________________________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~\____/~~~~~~  low pressed
                      |<------- 3 s ------->|   |<- 50 ms ->|                |
                                            |   released    standby          rising edge: reset,
-                             radio off, GNSS off,           (PDDS_D1, D2,   bootloader, firmware
+                             radio off, GNSS off,           (PDDS_D1..D3,   bootloader, firmware
                              screen off, wait for the       SLEEPDEEP, WFI)
                              release
 
@@ -539,8 +569,8 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   - *The part:* an nRF52832 (inferred: the image runs S332 v5, which supports the nRF52832 and nRF52840, and its stack
     tops below 0x20010000, the 64 KB of the nRF52832 QFAA; bryton-S510-mods ghidra/nordic-app.md).
   - *No supply switch is known.* Stock's switch-off sends `sd_power_system_off` (`00 32`, no response) and nothing
-    else to the chip: no pin is driven for it, PA6 and PI4 stay high, and its standby keeps USART2's pins as they are
-    (it parks RTS high only in its own stop mode, BOARD.md 9). Of the output pins on the unit, only PA2 and PB15 are
+    else to the chip: no pin is driven for it, PA6 and PI4 stay high until its standby, where they float with USART2's pins
+    (it parks RTS high only in its own stop mode; section 9). Of the output pins on the unit, only PA2 and PB15 are
     not explained by section 4 (`tools/dev.py peek` of every port, 2026-11-02); stock never drives either at the switch-off.
   - *What the chip draws* (nRF52832 Product Specification v1.4,
     https://infocenter.nordicsemi.com/pdf/nRF52832_PS_v1.4.pdf, and its POWER chapter,
@@ -569,7 +599,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     0.3 mA to several mA (docs/power.md); it costs two resets (about 2.1 s) only for a chip that fails both asks, never
     for a healthy one (3 ms) nor for one that was not started but answers (one reset first, about 1 s). Seen off, and
     only then, USART2 is disabled and PD3..PD6 set analog with no pull (RM0399 GPIO: nothing driven, no pull-up), PA6
-    and PI4 left high; the standby keeps them (section 9). The beep, the backlight and the panel go off before all
+    and PI4 left high until the standby, where they float, which neither resets nor wakes the chip (section 9). The beep, the backlight and the panel go off before all
     this (app/device.rs `power_off`), so the rider's answer never waits for a reset. The next boot's
     `nrf_hold` brings the lines back to AF7 before the reset pulse, which wakes the chip (pin reset; inferred, to see
     on the unit).

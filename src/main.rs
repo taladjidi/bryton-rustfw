@@ -684,18 +684,23 @@ fn rtc_set(tr: u32, dr: u32) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Power off = standby, as Pwr_StopModePeriphTransition(0) + HAL_PWREx_EnterSTANDBYMode(D2) and (D1) in stock
-// (BOARD.md 9): wake-up pin WKUP1 (PA0, the power button), rising edge, no pull. Waking resets the unit:
+// Power off = system Standby, as stock's switch-off (Pwr_ShutdownToStandby 0xd018cd88, Pwr_EnterStandbyMode
+// 0xd018d9d0; BOARD.md 9): wake-up pin WKUP1 (PA0, the power button), rising edge, no pull. Waking resets the unit:
 // bootloader, then this firmware again.
 //
-// PDDS_D3 stays 0, as in stock: D1 and D2 power down but D3 only stops, so the system is in Stop, not Standby
-// (STM32CubeH7 HAL, stm32h7xx_hal_pwr_ex.c, HAL_PWREx_EnterSTANDBYMode: "the whole system in STOP if
-// PWR_CPUCR_PDDS_D3 = 0"; the system enters Standby only when D1, D2 and D3 all are in DStandby). D3 keeps the
-// GPIO levels (Nordic PI4 / PA6, GNSS power, touch reset); in Standby they would float. In Stop the WKUP pins reach
-// the core only through their EXTI lines 55..60 (same file, "Wakeup Pins configuration"), and EXTI_CPUIMR2 resets
-// to 0 (ST's STM32H747_CM7 SVD), so stock unmasks line 55 (HAL_EXTI_D1_EventInputConfig(55, IT, 1) and IRQ 149,
-// ghidra/recovered_src/system/board.c Pwr_StopModePeriphTransition). Without it the press woke nothing (seen on
-// the unit, 2026-10-25: WFI never returned, PWR_CPUCR.SBF clear at the next boot).
+// PDDS_D1, PDDS_D2 and PDDS_D3 all set, as stock: its HAL_PWREx_EnterSTANDBYMode (ITCM 0x5bfa, literal 0x5c84 =
+// PWR_CPUCR 0x58024810, read from the R039 image) sets bit 0 + SLEEPDEEP + WFI for argument 0, bit 1 for 1, bit 2
+// for any other; the switch-off calls it with 2, then sets bit 1, then calls it with 0. The system enters Standby
+// only when D1, D2 and D3 all are in DStandby (STM32CubeH7 stm32h7xx_hal_pwr_ex.c, HAL_PWREx_EnterSTANDBYMode: "the
+// whole system in STOP if PWR_CPUCR_PDDS_D3 = 0"); with D3 left at 0 (until 2026-11-07, a misreading of the arg-2
+// call as D2) the unit sat in Stop when off, PWR_CPUCR 0x1a3 at the next boot (SBF clear), and drained about 8 mA.
+// The M4 allows it too (PWR_CPU2CR read 0x1e7 on the unit: PDDS_D1..D3 set), and nothing here sets RUN_D3 (bit 11).
+// In Standby every GPIO floats (BOARD.md 9 says what each one does then; stock lives with the same). In case the
+// system still lands in Stop the WKUP pins reach the core only through their EXTI lines 55..60 (same file, "Wakeup
+// Pins configuration"), and EXTI_CPUIMR2 resets to 0 (ST's STM32H747_CM7 SVD), so stock unmasks line 55
+// (HAL_EXTI_D1_EventInputConfig(55, IT, 1) and IRQ 149, ghidra/recovered_src/system/board.c
+// Pwr_StopModePeriphTransition). Without it the press woke nothing from that Stop (seen on the unit, 2026-10-25:
+// WFI never returned, PWR_CPUCR.SBF clear at the next boot).
 // ---------------------------------------------------------------------------------------------------------------
 const PWR: u32 = 0x5802_4800;
 const PWR_CR1: u32 = PWR;
@@ -746,7 +751,7 @@ fn standby() -> ! {
     // next boot are then only this switch-off's (they otherwise add up from the last power-on reset)
     modify(RCC_RSR, 0, 1 << 16);
     modify(RCC_RSR, 1 << 16, 0);
-    modify(PWR_CPUCR, 0, (1 << 1) | 1); // PDDS_D2, PDDS_D1
+    modify(PWR_CPUCR, 0, 0b111); // PDDS_D3, PDDS_D2, PDDS_D1: system Standby, not Stop
     modify(0xe000_ed10, 0, 1 << 2); // SCB_SCR.SLEEPDEEP
     loop {
         // nothing pending may wake the WFI, or it returns, the core spins with the panel off and the power button
