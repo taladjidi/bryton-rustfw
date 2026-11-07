@@ -173,6 +173,9 @@ fn raw(i: usize, s: &DraftStep) -> Result<crate::workout::Raw, DraftError> {
 /// than [`MAX_ITEMS`] items or [`MAX_STEPS`] steps once the repeats are written out, a value out of range.
 #[uniffi::export]
 pub fn encode_workout(draft: WorkoutDraft) -> Result<Vec<u8>, DraftError> {
+    if draft.name.trim().is_empty() {
+        return invalid("Give it a name");
+    }
     if draft.name.chars().count() > MAX_NAME || !draft.name.bytes().all(|c| (0x20..0x7f).contains(&c)) {
         return invalid(format!("The name is up to {MAX_NAME} letters, digits and signs, no accents"));
     }
@@ -214,19 +217,48 @@ pub fn draft_preview(draft: WorkoutDraft, ftp: u16, max_hr: u16) -> Result<Worko
 }
 
 /// A draft from a decoded workout, to edit a copy: the file has its repeats written out, so runs of equal steps
-/// (a block of one to 16 steps, three times or more, or a longer block twice) are folded back into a repeat.
+/// (a block of one to 32 steps, three times or more, or a longer block twice) are folded back into a repeat, and
+/// the result is folded again until nothing changes, so nested repeats come back nested. A copy can still pass
+/// [`MAX_ITEMS`] (a stock file of up to 96 steps with no equal runs): the editor then asks to remove some.
 #[uniffi::export]
 pub fn draft_from_view(view: WorkoutView) -> WorkoutDraft {
-    let steps: Vec<DraftStep> = view.steps.iter().map(step_of).collect();
+    let mut steps: Vec<DraftStep> = view.steps.iter().map(step_of).collect();
+    loop {
+        let folded = fold(&steps);
+        if folded.len() == steps.len() {
+            break;
+        }
+        steps = folded;
+    }
+    WorkoutDraft { name: view.name, steps }
+}
+
+/// One pass of folding runs into repeats.
+fn fold(steps: &[DraftStep]) -> Vec<DraftStep> {
+    // A run can end only where no later repeat reaches back across the end, and its block must hold the whole
+    // reach of its own repeats: equal items mean the same only then.
+    let mut cut = vec![true; steps.len() + 1];
+    for (q, s) in steps.iter().enumerate() {
+        if s.repeat_back > 0 {
+            let first = q.saturating_sub(usize::from(s.repeat_back)) + 1;
+            cut.iter_mut().take(q + 1).skip(first).for_each(|c| *c = false);
+        }
+    }
     let mut out = Vec::new();
     let mut i = 0;
     while i < steps.len() {
         // (steps saved, block length, times) of the best fold starting here
         let mut best = (0, 1, 1);
-        for l in 1..=16.min((steps.len() - i) / 2) {
+        for l in 1..=32.min((steps.len() - i) / 2) {
+            if steps[i..i + l].iter().enumerate().any(|(o, s)| usize::from(s.repeat_back) > o) {
+                continue;
+            }
             let mut k = 1;
             while steps.get(i + k * l..i + (k + 1) * l) == steps.get(i..i + l) {
                 k += 1;
+            }
+            while k >= 2 && !cut[i + k * l] {
+                k -= 1;
             }
             if k >= 2 && l * (k - 1) > best.0 + 1 {
                 best = (l * (k - 1) - 1, l, k);
@@ -242,7 +274,7 @@ pub fn draft_from_view(view: WorkoutView) -> WorkoutDraft {
             i += 1;
         }
     }
-    WorkoutDraft { name: view.name, steps: out }
+    out
 }
 
 fn step_of(s: &StepView) -> DraftStep {
@@ -367,6 +399,7 @@ mod tests {
         assert!(bad(draft("A very long workout name", ok.clone())).contains("name"));
         assert!(bad(draft("Caf\u{e9}", ok.clone())).contains("name"));
         assert!(bad(draft("A", vec![])).contains("at least one"));
+        assert!(bad(draft("   ", ok.clone())).contains("name"));
         assert!(bad(draft("A", vec![DraftStep::repeat(1, 2)])).contains("Item 1"));
         assert!(bad(draft("A", vec![ok[0].clone(), DraftStep::repeat(1, 1)])).contains("2 to 1000"));
         assert!(bad(draft("A", vec![ok[0].clone(); 65])).contains("64"));
@@ -410,6 +443,61 @@ mod tests {
         // two equal steps stay two: a repeat would save nothing
         let two = draft_from_view(draft_preview(draft("T", vec![on.clone(), on]), 250, 190).unwrap());
         assert_eq!(two.steps.len(), 2);
+    }
+
+    /// Copies of the demo workouts and of a nested one come back with the same steps, and smaller.
+    #[test]
+    fn copies_round_trip_with_nesting() {
+        let (on, off) = (DraftStep::power_pct(60, 110, 120, 5), DraftStep::power_pct(30, 40, 50, 4));
+        let mut dist = step(DurationKind::Distance, 2500, TargetKind::HeartRate, 130, 145, false);
+        dist.intensity = 2;
+        let lap = step(DurationKind::Lap, 0, TargetKind::Open, 0, 0, false);
+        let nested = draft(
+            "Nested",
+            vec![
+                DraftStep::power_pct(300, 50, 65, 2),
+                on,
+                off,
+                DraftStep::repeat(2, 3),
+                DraftStep::power_pct(120, 45, 55, 4),
+                DraftStep::repeat(5, 2),
+                dist,
+                lap,
+                DraftStep::power_pct(300, 40, 50, 3),
+            ],
+        );
+        let mut views = vec![draft_preview(nested, 250, 190).unwrap()];
+        views.extend(crate::workout::demo_workouts().into_iter().map(|(_, f)| decode_workout(f, 250, 190).unwrap()));
+        assert_eq!(views.len(), 4);
+        for v in views {
+            let back = draft_from_view(v.clone());
+            assert!(
+                back.steps.len() <= v.steps.len() && (v.name != "NESTED" || back.steps.len() < 14),
+                "{}: {} items",
+                v.name,
+                back.steps.len()
+            );
+            assert_eq!(draft_preview(back, 250, 190).unwrap().steps, v.steps, "{}", v.name);
+        }
+        let v = draft_preview(draft("N", vec![DraftStep::power_pct(60, 50, 60, 0)]), 250, 190).unwrap();
+        let two = draft_from_view(v);
+        assert!(two.steps.iter().all(|s| s.repeat_back == 0));
+    }
+
+    /// Writes an encoded workout for `tools/fit_check.py --workout` (the independent FIT decoders).
+    #[test]
+    fn the_encoded_workout_is_written_for_fit_check() {
+        let d = draft(
+            "Sweet spot",
+            vec![
+                DraftStep::power_pct(600, 50, 65, 2),
+                DraftStep::power_pct(60, 90, 95, 5),
+                DraftStep::power_pct(30, 40, 50, 4),
+                DraftStep::repeat(2, 3),
+            ],
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        std::fs::write(dir.join("workout.fit"), encode_workout(d).unwrap()).unwrap();
     }
 
     /// Random drafts, valid and not: nothing panics, and an accepted draft reads back exactly.

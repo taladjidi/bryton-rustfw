@@ -45,7 +45,7 @@ struct WorkoutSection: View {
     var body: some View {
         Section("Workouts") {
             ForEach(rides.workouts) { f in
-                if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(ftp), maxHr: UInt16(maxHR)) {
+                if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
                     NavigationLink(value: WorkoutRoute(key: f.key)) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pretty(w.name))
@@ -77,7 +77,7 @@ struct WorkoutDetail: View {
     @State private var profile = false
 
     var body: some View {
-        let w = decodeWorkout(bytes: file.bytes, ftp: UInt16(ftp), maxHr: UInt16(maxHR))
+        let w = decodeWorkout(bytes: file.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR))
         List {
             if let w {
                 Section {

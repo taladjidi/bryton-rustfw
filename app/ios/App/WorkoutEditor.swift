@@ -50,8 +50,13 @@ final class WorkoutStore: ObservableObject {
             n += 1
         }
         try bytes.write(to: Self.dir.appendingPathComponent(file), options: .atomic)
-        if let old, old != file { try? FileManager.default.removeItem(at: Self.dir.appendingPathComponent(old)) }
         reload()
+        if let old, old != file {
+            do { try FileManager.default.removeItem(at: Self.dir.appendingPathComponent(old)) } catch {
+                throw SaveError.oldFileKept(file: old, why: error.localizedDescription)
+            }
+            reload()
+        }
         return file
     }
 
@@ -61,9 +66,15 @@ final class WorkoutStore: ObservableObject {
     }
 }
 
+/// A save that wrote the new file but could not remove the renamed workout's old one.
+enum SaveError: Error {
+    case oldFileKept(file: String, why: String)
+}
+
 /// The core's refusal as text.
 private func message(_ e: Error) -> String {
     if case DraftError.Invalid(let m) = e { return m }
+    if case SaveError.oldFileKept(let f, let why) = e { return "Saved, but the old file \(f) could not be removed: \(why)" }
     return "\(e)"
 }
 
@@ -79,7 +90,7 @@ struct PhoneWorkoutSection: View {
     var body: some View {
         Section {
             ForEach(store.items) { f in
-                if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(ftp), maxHr: UInt16(maxHR)) {
+                if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
                     Button { onEdit(EditorTarget(draft: draftFromView(view: w).named(pretty(w.name)), file: f.file)) } label: {
                         HStack {
                             Text(pretty(w.name))
@@ -91,6 +102,14 @@ struct PhoneWorkoutSection: View {
                     }
                     .foregroundStyle(.primary)
                     .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
+                } else {
+                    // a saved file the reader refuses stays listed, so it can be deleted
+                    HStack {
+                        Text(f.file)
+                        Spacer()
+                        Text("Unreadable").foregroundStyle(.orange)
+                    }
+                    .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
                 }
             }
             Button { onEdit(EditorTarget(draft: .blank, file: nil)) } label: { Label("New workout", systemImage: "plus") }
@@ -101,6 +120,11 @@ struct PhoneWorkoutSection: View {
                         let ok = url.startAccessingSecurityScopedResource()
                         defer { if ok { url.stopAccessingSecurityScopedResource() } }
                         do {
+                            // the core refuses over 1 MB too; this keeps a huge file out of memory
+                            if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 1_000_000 {
+                                problem = "File too big"
+                                return
+                            }
                             let d = try importWorkout(bytes: try Data(contentsOf: url), fallbackName: url.deletingPathExtension().lastPathComponent)
                             onEdit(EditorTarget(draft: d, file: nil))
                         } catch { problem = message(error) }
@@ -159,7 +183,7 @@ struct WorkoutEditor: View {
     private var draft: WorkoutDraft { WorkoutDraft(name: name, steps: items.map(\.step)) }
 
     private var preview: Result<WorkoutView, Error> {
-        Result { try draftPreview(draft: draft, ftp: UInt16(ftp), maxHr: UInt16(maxHR)) }
+        Result { try draftPreview(draft: draft, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) }
     }
 
     var body: some View {
@@ -184,7 +208,9 @@ struct WorkoutEditor: View {
                 }
                 Section("Steps") {
                     ForEach($items) { $it in
-                        NavigationLink { StepForm(step: $it.step) } label: { StepSummary(step: it.step) }
+                        NavigationLink { StepForm(step: $it.step) } label: {
+                            StepSummary(step: it.step, index: items.firstIndex { $0.id == it.id } ?? 0)
+                        }
                             .swipeActions(edge: .leading) {
                                 Button("Duplicate") { duplicate(it.id) }.tint(.blue)
                             }
@@ -204,6 +230,7 @@ struct WorkoutEditor: View {
                 }
                 if let saveError { Section { Text(saveError).foregroundStyle(.orange) } }
             }
+            .onChange(of: draft) { saveError = nil }
             .navigationTitle(target.file == nil ? "New workout" : "Edit workout")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -221,6 +248,7 @@ struct WorkoutEditor: View {
     }
 
     private func save() {
+        saveError = nil
         do {
             try store.save(draft, replacing: target.file)
             dismiss()
@@ -231,10 +259,16 @@ struct WorkoutEditor: View {
 /// A step in the list: its length, its target, its intensity.
 private struct StepSummary: View {
     let step: DraftStep
+    let index: Int
 
     var body: some View {
         if step.repeatBack > 0 {
-            Label("Repeat the \(step.repeatBack) items above, \(step.repeatTimes) times in all", systemImage: "repeat")
+            VStack(alignment: .leading, spacing: 2) {
+                Label("Repeat the \(step.repeatBack) items above, \(step.repeatTimes) times in all", systemImage: "repeat")
+                if Int(step.repeatBack) > index {
+                    Text("Reaches past the start").font(.caption).foregroundStyle(.orange)
+                }
+            }
         } else {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -279,7 +313,7 @@ private struct StepForm: View {
             if step.repeatBack > 0 {
                 Section {
                     Stepper("The \(step.repeatBack) items above", value: int($step.repeatBack), in: 1...63)
-                    Stepper("\(step.repeatTimes) times in all", value: int($step.repeatTimes), in: 2...100)
+                    Stepper("\(step.repeatTimes) times in all", value: int($step.repeatTimes), in: 2...1000)
                 } footer: {
                     Text("A repeat can reach back over another repeat.")
                 }

@@ -125,15 +125,21 @@ pub type Raw = (u8, u32, u8, u32, u32, u32, u8);
 /// A FIT workout file laid out as the firmware's reader expects (file_id type 5, workout, one workout_step message
 /// per step); the format is in `storage/workout_file.rs`.
 pub fn fit_workout(name: &str, steps: &[Raw]) -> Vec<u8> {
-    let mut d = vec![0x40, 0, 0, 0, 0, 1, 0, 1, 0, 0, 5]; // file_id: type 5
+    // file_id: type 5, manufacturer 255 (development), product 0, time_created 0; the firmware's reader keeps the
+    // type only, the rest is what the FIT SDK's own reader (fit_check.py) wants of a file_id
+    let mut d = vec![0x40, 0, 0, 0, 0, 4, 0, 1, 0, 1, 2, 0x84, 2, 2, 0x84, 4, 4, 0x86];
+    d.extend([0, 5, 0xff, 0, 0, 0, 0, 0, 0, 0]);
     let mut n = [0u8; 16];
     let b = name.as_bytes();
     n[..b.len().min(15)].copy_from_slice(&b[..b.len().min(15)]);
-    d.extend([0x41, 0, 0, 26, 0, 2, 8, 16, 7, 6, 2, 0x84, 1]);
+    // workout: wkt_name (8), num_valid_steps (6), sport (4) = 2 cycling
+    d.extend([0x41, 0, 0, 26, 0, 3, 8, 16, 7, 6, 2, 0x84, 4, 1, 0]);
+    d.push(1);
     d.extend(n);
     d.extend((steps.len() as u16).to_le_bytes());
-    d.extend([0x42, 0, 0, 27, 0, 9, 254, 2, 0x84, 1, 1, 0, 2, 4, 0x86, 3, 1, 0, 4, 4, 0x86, 5, 4, 0x86]);
-    d.extend([6, 4, 0x86, 7, 1, 0, 0, 3, 7]);
+    d.push(2);
+    d.extend([0x42, 0, 0, 27, 0, 8, 254, 2, 0x84, 1, 1, 0, 2, 4, 0x86, 3, 1, 0, 4, 4, 0x86, 5, 4, 0x86]);
+    d.extend([6, 4, 0x86, 7, 1, 0]);
     for (i, &(dt, dv, tt, tv, lo, hi, int)) in steps.iter().enumerate() {
         d.push(0x02);
         d.extend((i as u16).to_le_bytes());
@@ -144,7 +150,6 @@ pub fn fit_workout(name: &str, steps: &[Raw]) -> Vec<u8> {
         d.extend(lo.to_le_bytes());
         d.extend(hi.to_le_bytes());
         d.push(int);
-        d.extend(b"s\0\0");
     }
     let mut f = vec![14, 0x20, 0x5c, 0x08];
     f.extend((d.len() as u32).to_le_bytes());

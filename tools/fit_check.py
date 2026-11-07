@@ -17,6 +17,10 @@ resumed from a record of the build before sub_sport (road), and an MTB ride cut 
     fit_check.py --timer target/fit/autopause.fit
 a ride with auto-pauses: its timer events alternate start and stop_all, the auto-pauses' with timer_trigger auto, and
 each lap's and the session's total_timer_time is its time less the stops in it, read by both decoders.
+A workout the phone editor encodes (app/core, `cargo test the_encoded_workout_is_written_for_fit_check`):
+    fit_check.py --workout app/core/target/workout.fit
+file_id (workout, with manufacturer, product, time_created), a cycling workout with the step count it has and a name,
+and workout_step messages numbered in order, read by both decoders.
 """
 import sys
 import warnings
@@ -233,8 +237,22 @@ def check_timer(path):
           f"{s['total_elapsed_time']} s (fitdecode, garmin-fit-sdk)")
 
 
+def check_workout(path):
+    garmin(path)
+    msgs = read(path)
+    names = [m.name for m in msgs]
+    assert names[0] == "file_id" and names[1] == "workout" and set(names[2:]) == {"workout_step"}, names[:4]
+    fid, w = values(msgs[0]), values(msgs[1])
+    assert fid["type"] == "workout" and {"manufacturer", "product", "time_created"} <= set(fid), fid
+    assert w["sport"] == "cycling" and w["num_valid_steps"] == len(msgs) - 2 and w["wkt_name"], w
+    assert [values(m)["message_index"] for m in msgs[2:]] == list(range(len(msgs) - 2))
+    print(f"{path}: file_id {fid}, workout {w}, {len(msgs) - 2} steps, CRC ok")
+
+
 args = sys.argv[1:]
-if args[:1] == ["--pair"]:
+if args[:1] == ["--workout"]:
+    check_workout(args[1])
+elif args[:1] == ["--pair"]:
     check_pair(args[1], args[2])
 elif args[:1] == ["--timer"]:
     check_timer(args[1])

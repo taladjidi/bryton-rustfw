@@ -186,12 +186,23 @@ unit" button is disabled with a footnote. The core's `draft.rs` holds the model 
   steps once repeats are written out (the reader's `STEPS`), a target or length out of range, a repeat that reaches
   before the first item. `draftPreview` encodes and decodes it with the firmware's parser, so the live chart, the IF / TSS
   estimate and the watts are the unit's own reading. `draftFromView` makes a draft from a decoded workout ("Edit a copy"):
-  runs of equal steps are folded back into repeats.
+  runs of equal steps (blocks up to 32 steps) are folded back into repeats, and the result is folded again so nested
+  repeats come back nested. A copy of a stock file with over 64 steps and no equal runs can pass the 64 items: the
+  editor then shows the refusal until some are removed.
 - `import.rs`, `importWorkout(bytes, fallbackName)`: ZWO (Warmup, Cooldown, Ramp, SteadyState, IntervalsT, FreeRide,
   MaxEffort; a ramp becomes one step with a range, not sub-steps), ERG (watts) and MRC (% of FTP): each pair of points
-  is a step, a slope a range step. A file over the unit's limits opens anyway and the editor shows the refusal.
+  is a step, a slope a range step; an ERG with no `MINUTES PERCENT` header is watts. A file over the unit's limits opens
+  anyway and the editor shows the refusal. Refused outright: over 1 MB, over 500 steps or points, an ERG time past 24 h,
+  a ZWO power above 10 (watts in a fraction field); power 0 is a step with no target; UTF-16 files are decoded.
+- The file: `file_id` (type workout, manufacturer development, product 0, time_created 0), `workout` (name, step count,
+  sport cycling) and one `workout_step` per step, without a step name. The firmware's reader (`workout_file.rs`
+  `wanted`) keeps only file_id type, the workout name and step fields 1 to 7 and 19 to 22, so the added and dropped
+  fields change nothing for the unit. Checked with `tools/fit_check.py --workout app/core/target/workout.fit` (written
+  by the core's test `the_encoded_workout_is_written_for_fit_check`) on 2026-11-07: fitdecode (CRC checked, no warning)
+  and garmin-fit-sdk (integrity, no error) both read it: 1 file_id, 1 workout (Sweet spot, 4 steps, cycling), 4 steps.
 - Tests: every target and length type round-trips through the firmware's parser, nested repeats, each limit, a fuzz over
-  random drafts (every accepted one reads back exactly) and over mutated import files.
+  random drafts (every accepted one reads back exactly) and over mutated import files (extreme numbers, CRLF, a BOM,
+  multi-byte text). `cargo test` in `app/core`: 41 tests.
 
 The editor (`WorkoutEditor.swift`): name, the chart, a step list with add, reorder, delete, duplicate (swipe right) and
 a form per step. It opens from "New workout", "Import from Files" (Files app, any file), a saved workout, or "Edit a copy"

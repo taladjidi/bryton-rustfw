@@ -6,6 +6,8 @@
 //! (github.com/GoldenCheetah/GoldenCheetah, `src/FileIO/ErgFile.cpp`: `[COURSE HEADER]`, `MINUTES WATTS` or `MINUTES
 //! PERCENT`, then `[COURSE DATA]` lines of minutes and a value, each line a point of a line chart; read 2026-11-07).
 //! ZWO is read by hand (a tag scanner for this subset: no XML crate, no entities beyond the five of the name).
+//! A UTF-16 file (byte order mark) is decoded; a `>` inside a quoted attribute value is handled. Not handled: CDATA
+//! (a name in it reads empty), unquoted attributes, other encodings (read as UTF-8, bad bytes replaced).
 //!
 //! What becomes what:
 //! - `Warmup`, `Cooldown`, `Ramp`: one step whose target is the range low to high, in % of FTP. The unit shows a band,
@@ -16,12 +18,21 @@
 //! - ERG / MRC: each pair of points is a step: equal values a flat step (equal neighbours merged), different values
 //!   a range low to high; zero-length pairs (the stairs of a point list) are skipped; a value under 1 is no target.
 //!   ERG values are watts, MRC values % of FTP.
+//! - Refused: a file over 1 MB or with over 500 steps or points, an ERG time past 24 h, a ZWO power above 10 (watts
+//!   written as a fraction of FTP), a number that is not finite.
+//! - Power 0 is a step with no target. An ERG with no `MINUTES` line is read as watts, like Golden Cheetah's ERG
+//!   (MRC is the percent file: its header says `MINUTES PERCENT`).
 //! - Left out: text events, cadence, flat-road and other attributes, a ZWO's description and tags.
 //!
 //! A file with more steps than the unit takes still opens: [`crate::draft::encode_workout`] says so when saving.
 
 use crate::draft::{DraftError, DraftStep, MAX_NAME, WorkoutDraft, invalid};
 use crate::workout::TargetKind;
+
+/// The largest file read, bytes.
+const MAX_FILE: usize = 1 << 20;
+/// The most steps (ZWO) or points (ERG) read.
+const MAX_IMPORT: usize = 500;
 
 /// A name for the file: printable ASCII only, trimmed and cut to what the unit holds; `fallback` when nothing is left.
 fn clean_name(name: &str, fallback: &str) -> String {
@@ -32,7 +43,17 @@ fn clean_name(name: &str, fallback: &str) -> String {
 /// Reads a ZWO, ERG or MRC file (told apart by content); `fallback_name` names a file with no name of its own.
 #[uniffi::export]
 pub fn import_workout(bytes: Vec<u8>, fallback_name: String) -> Result<WorkoutDraft, DraftError> {
-    let text = String::from_utf8_lossy(&bytes);
+    if bytes.len() > MAX_FILE {
+        return invalid("File too big");
+    }
+    let utf16 = |rest: &[u8], f: fn([u8; 2]) -> u16| {
+        String::from_utf16_lossy(&rest.chunks_exact(2).map(|c| f([c[0], c[1]])).collect::<Vec<_>>())
+    };
+    let text = match bytes.as_slice() {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => String::from_utf8_lossy(&bytes).into_owned(),
+    };
     let t = text.trim_start_matches('\u{feff}').trim_start();
     let (name, steps) = if t.starts_with('<') {
         zwo(t)?
@@ -47,8 +68,19 @@ pub fn import_workout(bytes: Vec<u8>, fallback_name: String) -> Result<WorkoutDr
     Ok(WorkoutDraft { name: clean_name(&name, &fallback_name), steps })
 }
 
+/// A timed step with no target.
+fn open_step(seconds: f64, intensity: u8) -> DraftStep {
+    let mut s = DraftStep::power_pct(seconds.round().clamp(1.0, 86_400.0) as u32, 0, 0, intensity);
+    (s.kind, s.percent) = (TargetKind::Open, false);
+    s
+}
+
+/// A timed step with a power range as fractions of FTP; power 0 all through is a step with no target.
 fn timed(seconds: f64, lo: f64, hi: f64, intensity: u8) -> DraftStep {
     let pct = |v: f64| (v * 100.0).round().clamp(0.0, 1000.0) as u16;
+    if pct(lo.max(hi)) == 0 {
+        return open_step(seconds, intensity);
+    }
     DraftStep::power_pct(seconds.round().clamp(1.0, 86_400.0) as u32, pct(lo.min(hi)), pct(lo.max(hi)), intensity)
 }
 
@@ -69,9 +101,33 @@ impl Tag {
         }
     }
 
+    /// A power as a fraction of FTP; above 10 it is surely watts.
+    fn power(&self, key: &str) -> Result<f64, DraftError> {
+        match self.need(key)? {
+            x if x > 10.0 => {
+                invalid(format!("{}: {key}=\"{x}\" looks like watts, Zwift files hold a fraction of FTP", self.name))
+            }
+            x => Ok(x),
+        }
+    }
+
     fn need(&self, key: &str) -> Result<f64, DraftError> {
         self.num(key)?.map_or_else(|| invalid(format!("{} has no {key}", self.name)), Ok)
     }
+}
+
+/// Where a tag ends: the first `>` outside a quoted attribute value.
+fn tag_end(s: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (None, '>') => return Some(i),
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), _) if q == c => quote = None,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The tags of an XML text; comments, `<?..?>` and `<!..>` are skipped.
@@ -84,7 +140,8 @@ fn tags(src: &str) -> Vec<Tag> {
             rest = c.split_once("-->").map_or("", |(_, r)| r);
             continue;
         }
-        let Some((inside, after)) = rest.split_once('>') else { break };
+        let Some(end) = tag_end(rest) else { break };
+        let (inside, after) = (&rest[..end], &rest[end + 1..]);
         let (text, _) = after.split_once('<').unwrap_or((after, ""));
         rest = after;
         if inside.starts_with(['?', '!']) {
@@ -117,6 +174,9 @@ fn unescape(s: &str) -> String {
 fn zwo(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
     let (mut name, mut steps) = (String::new(), Vec::new());
     for t in tags(src).iter().filter(|t| !t.close) {
+        if steps.len() > MAX_IMPORT {
+            return invalid("Too many steps");
+        }
         match t.name.as_str() {
             "name" => name = unescape(&t.text),
             "warmup" | "cooldown" | "ramp" | "rampup" | "rampdown" => {
@@ -125,22 +185,20 @@ fn zwo(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
                     "cooldown" | "rampdown" => 3,
                     _ => 0,
                 };
-                steps.push(timed(t.need("duration")?, t.need("powerlow")?, t.need("powerhigh")?, int));
+                steps.push(timed(t.need("duration")?, t.power("powerlow")?, t.power("powerhigh")?, int));
             }
             "steadystate" | "solidstate" => {
-                let p = t.need("power")?;
+                let p = t.power("power")?;
                 steps.push(timed(t.need("duration")?, p, p, 0));
             }
             "freeride" | "maxeffort" => {
-                let mut s = DraftStep::power_pct(t.need("duration")?.round().clamp(1.0, 86_400.0) as u32, 0, 0, 0);
-                (s.kind, s.percent) = (TargetKind::Open, false);
-                steps.push(s);
+                steps.push(open_step(t.need("duration")?, 0));
             }
             "intervalst" => {
                 let times = t.num("repeat")?.unwrap_or(1.0).round().clamp(1.0, 1000.0) as u16;
                 let (on, off) = (t.need("onduration")?, t.need("offduration")?);
-                steps.push(timed(on, t.need("onpower")?, t.need("onpower")?, 0));
-                steps.push(timed(off, t.need("offpower")?, t.need("offpower")?, 4));
+                steps.push(timed(on, t.power("onpower")?, t.power("onpower")?, 0));
+                steps.push(timed(off, t.power("offpower")?, t.power("offpower")?, 4));
                 if times > 1 {
                     steps.push(DraftStep::repeat(2, times));
                 }
@@ -152,7 +210,7 @@ fn zwo(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
 }
 
 fn erg(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
-    let (mut name, mut watts, mut in_data) = (String::new(), false, false);
+    let (mut name, mut watts, mut in_data) = (String::new(), true, false);
     let mut points: Vec<(f64, f64)> = Vec::new();
     for line in src.lines().map(str::trim) {
         let up = line.to_ascii_uppercase();
@@ -166,14 +224,15 @@ fn erg(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
             let (Ok(m), Ok(v)) = (a.parse::<f64>(), b.parse::<f64>()) else {
                 return invalid(format!("Not a point of the workout: {line}"));
             };
-            if !(m.is_finite() && v.is_finite() && m >= 0.0 && (0.0..=1e5).contains(&v))
+            if !(m.is_finite() && v.is_finite() && (0.0..=1440.0).contains(&m) && (0.0..=1e5).contains(&v))
                 || points.last().is_some_and(|p| m < p.0)
             {
-                return invalid(format!("Points must go forward in time: {line}"));
+                return invalid(format!("Points must go forward in time, up to 24 h: {line}"));
+            }
+            if points.len() >= MAX_IMPORT {
+                return invalid("Too many points");
             }
             points.push((m, v));
-        } else if up.contains("MINUTES") {
-            watts = up.contains("WATTS");
         } else if let Some((k, v)) = line.split_once('=') {
             // FILE NAME names it best; DESCRIPTION when there is none
             if matches!(k.trim().to_ascii_uppercase().as_str(), "FILE NAME" | "DESCRIPTION")
@@ -181,6 +240,8 @@ fn erg(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
             {
                 name = v.trim().to_owned();
             }
+        } else if up.split_whitespace().next() == Some("MINUTES") {
+            watts = !up.contains("PERCENT");
         }
     }
     let target = |s: &mut DraftStep, lo: f64, hi: f64| {
@@ -195,7 +256,7 @@ fn erg(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
     let mut flat: Vec<bool> = Vec::new(); // whether each step is flat, to merge equal neighbours
     for w in points.windows(2) {
         let ((m0, v0), (m1, v1)) = (w[0], w[1]);
-        let secs = (m1 * 60.0).round() - (m0 * 60.0).round();
+        let secs = ((m1 * 60.0).round() - (m0 * 60.0).round()).min(86_400.0);
         if secs < 1.0 {
             continue;
         }
@@ -207,7 +268,7 @@ fn erg(src: &str) -> Result<(String, Vec<DraftStep>), DraftError> {
             (Some(p), Some(true))
                 if is_flat && (p.kind, p.low, p.high, p.percent) == (s.kind, s.low, s.high, s.percent) =>
             {
-                p.amount += s.amount;
+                p.amount = p.amount.saturating_add(s.amount).min(86_400);
             }
             _ => {
                 steps.push(s);
@@ -297,6 +358,45 @@ mod tests {
         assert_eq!(d.name, "Caf");
     }
 
+    #[test]
+    fn extreme_sizes_and_numbers_are_refused() {
+        let erg = |m: &str| open(&format!("[COURSE DATA]\n0 100\n{m} 100\n{m} 50\n{m} 50\n[END COURSE DATA]"));
+        assert!(erg("1e300").is_err() && erg("1441").is_err() && erg("1e9").is_err());
+        assert_eq!(erg("1440").unwrap().steps[0].amount, 86_400);
+        assert!(open("<w><SteadyState Duration=\"1e300\" Power=\"1\"/></w>").is_err());
+        assert!(import_workout(vec![b' '; (1 << 20) + 1], "f".into()).is_err());
+        let many = "<w>".to_owned() + &"<SteadyState Duration=\"1\" Power=\"1\"/>".repeat(600);
+        assert!(open(&many).is_err_and(|e| format!("{e:?}").contains("Too many")));
+        let pts: String = (0..600).map(|i| format!("{i} {}\n", 100 + i % 2)).collect();
+        assert!(open(&format!("[COURSE DATA]\n{pts}")).is_err());
+    }
+
+    #[test]
+    fn units_zero_power_and_encodings() {
+        // a description with the word MINUTES does not turn watts into percent; no MINUTES line means watts
+        let d = open("[COURSE HEADER]\nDESCRIPTION = 20 minutes of sweet spot\n[END COURSE HEADER]\n[COURSE DATA]\n0 200\n5 200\n[END COURSE DATA]").unwrap();
+        assert_eq!((d.steps[0].percent, d.steps[0].low), (false, 200));
+        assert_eq!(d.name, "20 minutes of s", "cut to the unit's 15");
+        // power 0 is no target, watts written as a fraction are refused
+        let z = open(
+            "<w><SteadyState Duration=\"60\" Power=\"0\"/><Ramp Duration=\"60\" PowerLow=\"0\" PowerHigh=\"0.5\"/></w>",
+        )
+        .unwrap();
+        assert_eq!(z.steps[0].kind, TargetKind::Open);
+        assert_eq!((z.steps[1].low, z.steps[1].high), (0, 50));
+        assert!(encode_workout(z).is_ok());
+        assert!(open("<w><SteadyState Duration=\"60\" Power=\"150\"/></w>").is_err());
+        // a > inside a quoted value, and UTF-16 with its byte order mark
+        let q = open("<w><name>N</name><SteadyState Duration=\"60\" Power=\"0.5\" msg=\"a>b\"/></w>").unwrap();
+        assert_eq!(q.steps.len(), 1);
+        let src = "<w><name>Wide</name><SteadyState Duration=\"60\" Power=\"0.5\"/></w>";
+        let le: Vec<u8> = [0xff, 0xfe].into_iter().chain(src.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        let be: Vec<u8> = [0xfe, 0xff].into_iter().chain(src.encode_utf16().flat_map(u16::to_be_bytes)).collect();
+        for b in [le, be] {
+            assert_eq!(import_workout(b, "f".into()).unwrap().name, "Wide");
+        }
+    }
+
     /// Structured and mutated files: nothing panics, and parsed ones reach the encoder.
     #[test]
     fn mutated_files_never_panic() {
@@ -307,10 +407,16 @@ mod tests {
             x ^= x << 17;
             x as usize
         };
-        let seeds = [ZWO, "[COURSE DATA]\n0 50\n5 50\n5 80\n10 100\n[END COURSE DATA]"];
+        let seeds = [
+            ZWO,
+            "[COURSE DATA]\n0 50\n5 50\n5 80\n10 100\n[END COURSE DATA]",
+            "\u{feff}[COURSE HEADER]\r\nMINUTES PERCENT\r\n[END COURSE HEADER]\r\n[COURSE DATA]\r\n0 1e300\r\n1e9 50\r\n[END COURSE DATA]",
+            "[COURSE DATA]\n0 100\n1e300 100\n1e300 50\n1e308 50\n[END COURSE DATA]",
+            "<w><name>\u{e9}\u{4e2d}\u{1f600}</name><SteadyState Duration=\"1e300\" Power=\"1e9\"/><Ramp Duration=\"60\" PowerLow=\"0\" PowerHigh=\"0\"/></w>",
+        ];
         let (mut parsed, mut refused) = (0, 0);
         for _ in 0..3000 {
-            let mut b = seeds[next() % 2].as_bytes().to_vec();
+            let mut b = seeds[next() % seeds.len()].as_bytes().to_vec();
             for _ in 0..next() % 6 {
                 let at = next() % b.len();
                 match next() % 3 {
