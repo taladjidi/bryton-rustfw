@@ -370,6 +370,7 @@ Features, in the owner's order (2026-10-29):
 - **Workouts:** an editor (steps, repeats, targets in % of FTP, watts, heart rate, cadence), ZWO / ERG / MRC
   imported, the Intervals.icu calendar to `\Workout\calendar`.
 - **Fitness:** what is on the unit (stock's rides, CP, W', the power curve), CTL / ATL / TSB, eFTP, HRVT trends.
+- **Ride viewer done 2026-11-07 (Simulator only; docs/app.md "The ride viewer")**: summary, map, graphs linked to the map, laps, zones, power curve. The owner's order of 2026-11-07: 1. download speed, 2. parity with Bryton's app (ride viewer, then workouts seen and edited, then the rest). Left: DFA a1, W' balance, decoupling.
 - **Ride insights:** graphs linked to the map, laps, zones, the ride's power curve, DFA a1 with its artifacts, W'
   balance, decoupling; computed in the core from the full copy.
 - **Platforms:** Intervals.icu as the hub (an open, free API that already pulls from Strava and Garmin), Strava

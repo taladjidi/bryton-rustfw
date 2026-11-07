@@ -457,3 +457,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   tests and fuzz. `demo.rs`: a fake unit (the firmware's FIT writer for synthetic rides) for the tests and Demo mode.
   `app/ios/App/RideBrowser.swift`: the ride list and download model, the Demo transport. `BleFileTransport.swift`: the
   file service over CoreBluetooth. `app/ios/Info-extra.plist`: UIFileSharingEnabled (no INFOPLIST_KEY form).
+- `app/core/src/ride.rs`: `analyze_ride`, a FIT ride decoded (`fitparser`) and summarized with the firmware's power, curve
+  and zone code for the viewer (UniFFI). `ride_tests.rs`: its tests, truncations and corruption.
+  `app/ios/App/RideDetail.swift`: the viewer (summary grid, graphs, laps, zones, curve, the FTP / max HR sheet).
+  `RideMap.swift`: the track on an `MKMapView` with IGN Plan v2 tiles inside France.

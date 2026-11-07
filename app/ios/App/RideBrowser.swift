@@ -18,7 +18,7 @@ protocol FileTransport: AnyObject {
     func write(_ d: Data)
 }
 
-struct SavedRide: Identifiable {
+struct SavedRide: Identifiable, Hashable {
     let url: URL
     var id: URL { url }
 }

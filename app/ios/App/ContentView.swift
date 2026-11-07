@@ -11,6 +11,7 @@ struct BrytonApp: App {
 struct ContentView: View {
     @StateObject private var link = UnitLink()
     @StateObject private var rides = RideBrowser()
+    @State private var profile = false
 
     var body: some View {
         NavigationStack {
@@ -45,7 +46,11 @@ struct ContentView: View {
                 rides.refresh()
                 try? await Task.sleep(nanoseconds: 800_000_000)
             }
-            .sheet(item: $rides.saved) { s in ShareSheet(url: s.url) }
+            .navigationDestination(item: $rides.saved) { s in RideDetail(url: s.url) }
+            .sheet(isPresented: $profile) { ProfileSheet() }
+            .toolbar {
+                Button { profile = true } label: { Image(systemName: "gearshape") }
+            }
             .onAppear {
                 // launch arguments for the Simulator screenshots: -demo, and -demo-dl to download the first ride
                 let args = CommandLine.arguments
@@ -95,7 +100,12 @@ struct RideRow: View {
     var body: some View {
         let active = rides.phase == .downloading(ride.name)
         Button {
-            if !active { rides.download(ride) }
+            if active { return }
+            if rides.downloaded.contains(ride.name) {
+                rides.saved = SavedRide(url: RideBrowser.path(ride.name))  // opens the viewer
+            } else {
+                rides.download(ride)
+            }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {

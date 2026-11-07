@@ -73,13 +73,37 @@ of the answer: a short file is an error, never a silent truncation.
 
 The screen lists the rides (date and time from the `YYMMDDhhmmss` name, size in KB, a check mark when already saved),
 pull to refresh; a tap downloads with a progress bar and KB/s, saves `<name>.fit` in the app's Documents (visible in
-the Files app: `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`) and opens the share sheet. A small line
+the Files app: `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`) and opens the ride viewer (below); a tap on a ride already saved opens it at once, and the viewer's share button opens the share sheet. A small line
 shows `maximumWriteValueLength`, to read the negotiated MTU off the screen for the fast-link test.
 
 **Demo** (the Simulator has no Bluetooth): the "Demo" button runs the same core against the Rust fake unit serving three
-synthetic rides made by the firmware's FIT writer (an invented track, no real data). Launch arguments `-demo` and
+synthetic rides made by the firmware's FIT writer (an invented loop around the Eiffel Tower, a public landmark, no real data). Launch arguments `-demo` and
 `-demo-dl` start it by themselves (`xcrun simctl launch booted <bundle id> -demo -demo-dl`, then
 `xcrun simctl io booted screenshot`).
+
+## The ride viewer
+
+Roadmap 9, "Ride insights" (the owner's order of 2026-11-07: download speed first, then parity with Bryton's app).
+`app/core/src/ride.rs` `analyze_ride(bytes, ftp, max_hr)` gives the viewer a `RideView`: the summary (times, distance,
+ascent and descent, speeds, HR, power, cadence, NP, IF, TSS, kcal, laps, time in 5 HR and 7 power zones, best power
+over 5 s, 1, 5, 20 and 60 min) and at most 2000 samples (time, position, altitude, speed, HR, power, cadence; per
+bucket the first sample and the highest-power one, so the graphs keep their peaks). NP, IF, TSS, kcal, the zones and
+the curve are the firmware's own code (`power`, `power_curve`, `ride`), so the app and the unit agree. The FIT is read
+with the `fitparser` crate (MIT), not the firmware's streaming `fitread`, which gives only the fields the unit shows
+(no speed, cadence, calories, descent, lap start); a panic inside the crate is caught and reported as an unreadable
+file, and the tests cut and corrupt a ride at hundreds of points.
+
+The screen (`RideDetail.swift`, `RideMap.swift`): a grid of the metrics, the map, five Swift Charts graphs (altitude,
+speed, HR, power, cadence) against distance or time, the laps, the zone bars and the power curve. Dragging on a graph
+puts a marker on the map. The map is an `MKMapView`: inside France the base is IGN's Plan IGN v2 (WMTS
+`https://data.geopf.fr/wmts`, layer `GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2`, matrix set `PM`, no key; checked 2026-11-07),
+elsewhere Apple's map. The person icon opens FTP and max HR (UserDefaults, default 200 W and 190 bpm) until the unit's
+profile can be read. Launch argument `-demo-scroll graphs|laps` scrolls the viewer for screenshots.
+
+| | | | |
+|:-:|:-:|:-:|:-:|
+| ![Summary and map](img/app-ride-summary.png) | ![Graphs](img/app-ride-graphs.png) | ![Laps, zones, power curve](img/app-ride-zones.png) | ![Graphs, dark mode](img/app-ride-dark.png) |
+| Summary and track on IGN | Graphs | Laps, zones, curve | Dark mode |
 
 Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had no iPhone 16 Pro simulator):
 
