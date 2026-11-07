@@ -1971,11 +1971,12 @@ fn usb_drive_commands() {
 #[test]
 fn phone_link_events() {
     use super::*;
-    const IDS: [u16; 23] = [
+    const IDS: [u16; 25] = [
         0x10, 0x11, 0x13, 0x14, 0x19, 0x1a, 0x1b, 0x1f, 0x21, 0x23, 0x01, 0x50, 0x52, 0x55, 0x56, 0x30, 0x32, 0x33,
-        0x36, 0x38, 0x39, 0x3a, 0x3b,
+        0x36, 0x38, 0x39, 0x3a, 0x3b, 0x22, 0x24,
     ];
     let (mut answers, mut notifs, mut fresh, mut stored, mut rejected, mut bonds) = (0usize, 0, 0, 0, 0, 0);
+    let mut link_updates = 0usize;
     let (mut sim, mut app) = started();
     for seed in 1..=8u32 {
         let v: Vec<u8> = bytes(seed, 1 << 16).collect();
@@ -1987,7 +1988,11 @@ fn phone_link_events() {
             if c[47] % 4 == 0 {
                 p[3..].iter_mut().take(2).for_each(|b| *b = 0); // connection 0, as the chip's first link
             }
-            let _ = crate::ble::event(&p);
+            let ev = crate::ble::event(&p);
+            link_updates += usize::from(matches!(
+                ev,
+                Some(crate::ble::Event::PhyUpdate { .. } | crate::ble::Event::DataLengthUpdate { .. })
+            ));
             sim.nordic.frees_context(&p); // the real chip's event frees the context it held
             app.phone_event(&mut sim, &p);
         }
@@ -2072,6 +2077,7 @@ fn phone_link_events() {
         "reached: {answers} answers, {notifs} notifications, {fresh} fresh"
     );
     assert!(stored > 0 && rejected > 0 && bonds > 0, "reached: {stored} stored, {rejected} rejected, {bonds} bonds");
+    assert!(link_updates > 200, "reached: {link_updates} PHY and data length updates");
 }
 
 /// Keys and gestures in any order through the menus and pages (UI review, steps 4, 5 and 7): taps on the 44 px rows,

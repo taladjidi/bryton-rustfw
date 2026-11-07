@@ -25,9 +25,9 @@
 //! event going while data is queued. The
 //! UART (1 Mbaud, about 100 KB/s raw, 2.6 ms for a full notification) is then the cap.
 //!
-//! **16.6 KB/s on the unit (2026-11-07, 20989f2a), and why.** 383,218 B in 23 s: 81 notifications a second, 1.6 per
-//! HVN_TX_COMPLETE, 1.2 per connection event. Each costs the loop one blocking UART round trip of about 3.1 ms
-//! (`dev.py prof`: the READ's step time is that and nothing else), the loop was awake about 60 % of the READ, and the
+//! **16.6 KB/s on the unit (2026-11-07, 20989f2a), and why.** 383,218 B in 23 s: 81 notifications a second, 1152 of 1871
+//! confirmations counted (TX_COMPLETEs kept while a command waits are merged, `nrf::Rx::keep`), 1.2 per connection event. Each costs the loop one blocking UART round trip of about 3.1 ms
+//! (`dev.py prof`: the READ's step time is that and nothing else), the loop was awake about 60 % (inferred: `prof` covered 38.6 s, of which 13 s was the READ), and the
 //! chip's events were read once per pass (at the step's start, or kept while a command waited), so a freed slot waited
 //! for the pass's 10 ms sleep and the step before it was refilled: the stack's queue ran empty between passes. Now the
 //! chip's bytes wake the sleep during the READ's pass (`LoopPolicy::begin_sleep`, `Wake::bytes` without `io`), so an
@@ -49,6 +49,7 @@ const SCAN: usize = 8;
 const BLOCK: usize = 1024;
 /// The loop's pass while a READ runs on the fast link, ms (the stack takes a few notifications per connection event).
 pub const FAST_POLL_MS: u32 = 10;
+const _: () = assert!(FAST_POLL_MS < POLL_MS);
 /// The connection parameters of a READ on the fast link: 15 to 30 ms (iOS accepts an interval minimum of 15 ms with a
 /// maximum 15 ms above it), no slave latency, supervision 4 s.
 pub const FAST_PARAMS: ble::ConnParams = (12, 24, 0, 400);

@@ -670,3 +670,19 @@ fn a_byte_from_the_chip_ends_the_sleep_so_the_queue_is_refilled_at_once() {
     );
     assert!(new >= old && new >= 30_000, "{new} against {old} B/s");
 }
+
+#[test]
+fn during_a_fast_read_the_keys_stay_off_and_the_chips_bytes_wake_the_loop() {
+    let (mut sim, mut app, control, _data, _) = fast_unit(247, 400_000, |_| {});
+    start_read(&mut sim, control, 5, BIG);
+    let mut main = crate::MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    let (end, mut radio) = (sim.ms + 3_000, 0);
+    while sim.ms < end && !sim.standby && sim.main.resets == 0 {
+        radio += main.pass(&mut app, &mut sim);
+    }
+    let wakes = &sim.main.wakes;
+    assert!(!wakes.is_empty(), "the loop ran");
+    assert!(wakes.iter().all(|&(keys, _)| !keys), "a key line armed during a READ");
+    assert!(wakes.iter().any(|&(_, bytes)| bytes), "the READ's sleep never armed the chip's bytes");
+    assert!(radio > 0, "no radio pass woken by a byte during the READ");
+}

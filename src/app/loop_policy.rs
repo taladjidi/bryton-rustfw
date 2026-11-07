@@ -276,7 +276,7 @@ impl LoopPolicy {
     /// [`POLL_MS`].
     pub fn begin_sleep(&mut self, pass_ms: u32, radio_up: bool) -> Wake {
         self.slept = 0;
-        // the READ's pass ([`FAST_POLL_MS`], also a finger's [`TOUCH_MS`]) is woken by the chip's bytes too: its
+        // the READ's pass ([`FAST_POLL_MS`]) is woken by the chip's bytes too: its
         // HVN_TX_COMPLETE refills the stack's queue at once instead of at the pass's end (2026-11-07, 16.6 KB/s)
         let fast = pass_ms == super::filesvc::FAST_POLL_MS;
         Wake { io: pass_ms > POLL_MS, radio: radio_up, bytes: radio_up && (pass_ms >= IDLE_POLL_MS || fast) }
@@ -460,6 +460,14 @@ mod tests {
         assert_eq!(p.begin_sleep(IDLE, false), Wake { io: true, radio: false, bytes: false });
         assert_eq!(p.begin_sleep(POLL_MS, true), Wake { io: false, radio: true, bytes: false });
         assert_eq!(p.begin_sleep(TOUCH_MS, false), Wake { io: false, radio: false, bytes: false });
+        assert_eq!(
+            p.begin_sleep(crate::app::filesvc::FAST_POLL_MS, true),
+            Wake { io: false, radio: true, bytes: true }
+        );
+        assert_eq!(
+            p.begin_sleep(crate::app::filesvc::FAST_POLL_MS, false),
+            Wake { io: false, radio: false, bytes: false }
+        );
     }
 
     #[test]
