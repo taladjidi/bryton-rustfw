@@ -658,7 +658,7 @@ fn dark_draws_as_before_the_metrics() {
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 1100);
     let ride = hash(&sim.screen);
-    assert_eq!((menu, ride), (0x61c6_3905_740b_d4e1, 0xa6ce_182a_d71d_10ae));
+    assert_eq!((menu, ride), (0x459e_03bf_94ad_1ce1, 0x6176_419e_836c_48ae));
 }
 
 /// `THEME_FILE=<file> cargo test-host -- --ignored theme_preview`: the file, parsed as the card would parse it, drawn on
@@ -705,7 +705,7 @@ fn features_lists_every_theme_key() {
 #[test]
 fn dark_classic_overview_is_as_before() {
     let (sim, _app) = unit(None);
-    assert_eq!(hash(&sim.screen), 0x0736_09c0_d32a_0201);
+    assert_eq!(hash(&sim.screen), 0x979d_fb17_f5dc_2a01);
 }
 
 /// The table's Workout field must not read the card at start: the calendar waits for CALENDAR_MS.

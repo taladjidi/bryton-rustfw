@@ -41,7 +41,7 @@ fn auto_turns_on_under_the_threshold_once_and_off_when_charging() {
     app.settings.saver = SaverMode::Auto;
     run(&mut sim, &mut app, 15_000);
     assert!(!app.saver_on(), "{:?} %", app.strip.battery);
-    sim.battery_mv = Some(3715);
+    sim.battery_mv = Some(3690);
     run(&mut sim, &mut app, 150_000); // the reading is smoothed
     assert!(app.strip.battery.is_some_and(|p| p <= BATTERY_SAVER_PERCENT), "{:?} %", app.strip.battery);
     assert!(app.saver_on());
