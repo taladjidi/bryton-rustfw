@@ -448,7 +448,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `app/ios/`: the iPhone app. `App/UnitLink.swift` (CoreBluetooth: find, connect, read), `App/ContentView.swift` (the
   screen), `Bryton.xcodeproj` (hand-written, folders synchronized), `Base.xcconfig` and `Local.xcconfig.example`
   (team and bundle id prefix; the real `Local.xcconfig` is ignored by the repository), `build-core.sh` (core for both
-  iOS targets, bindings, XCFramework into the ignored `Generated/`).
+  iOS targets, bindings, XCFramework into the ignored `Generated/`). `Icon/icon.svg` (the icon's source: Ferris on a
+  bike computer screen), `Icon/ferris-rustacean.svg` (Ferris as downloaded, CC0), `Icon/render.py` (renders the
+  light, dark and tinted 1024 px PNGs into `App/Assets.xcassets/AppIcon.appiconset`).
 - `link.x`, `tools/pack.py`: memory map and the update file. `tools/pack.py` re-checks what the stock updater checks.
 - `app/core/src/files.rs`: the phone's file service client (`FileClient`, sans-IO, UniFFI): LIST / READ commands from the
   firmware's own `filesvc` encoder, Data frames in, resume from the bytes kept, progress and speed. `files_tests.rs`: its
