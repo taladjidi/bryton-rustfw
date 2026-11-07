@@ -22,7 +22,18 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   app/filesvc.rs):** seen in the simulator and against Bryton's real radio app in the emulator (it decodes the four
   `sd_ble_cfg_set` commands; its SoftDevice stub answers 0 to anything, so whether the chip's RAM holds an MTU of 247,
   and a queue of 4 are **not known**: `sd_ble_enable` answering NO_MEM falls back to the two links, then
-  to the defaults). The ids 0x22 and 0x23 and BLE_GATTS_EVT_HVN_TX_COMPLETE (0x57) are inferred from the enumerations.
+  to the defaults). **Settled at the chip app's layer (2026-11-07, `src/sim/nrf_session_tests.rs`, the real app with a
+  stub that decodes each SoftDevice call):** the app knows every command the fast link sends and makes the intended
+  call with the intended arguments (cfg ids 0x20 / 0x40 / 0x23 att_mtu 247 / 0x22 queue 4 on tag 1, MTU reply 247, data
+  length 251, 2M PHY, parameter updates, 244-byte hvx, sys_attr_set of 64 bytes); it takes a command payload of 384
+  bytes and **hangs on 385** (nrf.rs MAX_CMD is 384; a notification is 260); four 260-byte notifications back to back
+  are all taken; it encodes the MTU request (0x55), HVN TX complete (0x57, with its count), connection parameter
+  update / request, PHY and data length requests and updates, and a 244-byte GATTC hvx (258 bytes, within KEPT 264) and our parser
+  decodes them; the phone setup registers exactly 10 vendor bases. Through the real app the UART path moves 400 KB in
+  7.95 s (50 KB/s, 8 notifications per 10 ms pass; 68 KB/s back to back, 1 Mbaud), faster than the simulator's chip
+  model (34 KB/s): the UART is not the limit. **Still needs the unit:** the real SoftDevice accepting the
+  configuration (the app passes ram_base 0x20006800 to `sd_ble_enable`; the SoftDevice's need for MTU 247 and a queue of 4
+  is inferred, no primary source found), the 2M PHY, and the SoftDevice's own refusals (hvx NO_MEM / RESOURCES).
   Steps, in this order: (1) RAM run (`tools/dev.py run`, the default build has the fast link; the ride build does not,
   `FAST_LINK=1` forces it), cable in: `tools/dev.py info` shows the radio started and the PHONE menu shows a FAST LINK
   row (it appears only when the chip took the configuration; no row means the fallback); (2) the phone app or nRF

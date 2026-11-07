@@ -204,11 +204,14 @@ specific to it stays in the private notes (`NRF_PRIVATE`, environment only, may 
   are queued, 97 hang it (Bryton's nRF app, reversed: 96 slots).
 - **`--serve` and the Rust test:** `python3 -I tools/nrf_emu.py --serve` is the chip's UART as a byte pipe on
   stdin / stdout (requests `W`rite, `R`ead, `T`ime, `H`old RTS, `A`NT event, `B`roadcasts at a period, BLE `V` HVX,
-  re`X`et; every answer starts with a status and the flags CTS held / RTS held / dead; see `serve`).
+  re`X`et, raw BLE events `E`, the decoded BLE calls `S` / their count `C`; every answer starts with a status and the flags CTS held / RTS held / dead; see `serve`).
   `cargo test-host -- --ignored nrf_emu` runs `src/sim/nrf_emu_tests.rs`: the library's real `nrf::start`, `ant_start`
   and `ant_open` against the real app, then injected broadcasts read through `ant_broadcast`. It prints `skip:` and
   passes without python `unicorn` or the binary. `Sim::nrf_ext` ([`NrfExt`]) routes `nrf_send`, `nrf_recv`, `nrf_reset`
-  and `delay_ms` to the pipe instead of the `Nordic` model.
+  and `delay_ms` to the pipe instead of the `Nordic` model. `src/sim/nrf_session_tests.rs` drives the fast link's whole
+  session through it (calls decoded with the S132 v5 layouts, command size limit 384 / 385 hangs, events, vendor base
+  count, UART rate of a 400 KB READ). A raw `ble_evt_t` needs `evt_len` = body + 4 and GAP parameters at +4 (the
+  union holds pointers); shorter or packed events come out as zeros.
 - **Measured in this emulator (burst of 8 queued ANT events):** 965 instructions of app work between ENDTX of a frame
   and the app starting the next frame's header DMA (STARTTX), 15 us at CPI 1 and 64 MHz; 1167 instructions to the
   first byte on the wire, 18 us. The simulator's `frame_gap_us: 80` is pessimistic by about four times, before the

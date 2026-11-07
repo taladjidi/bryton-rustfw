@@ -1627,6 +1627,8 @@ mod nrf_diff_tests;
 #[cfg(test)]
 mod nrf_emu_tests;
 #[cfg(test)]
+mod nrf_session_tests;
+#[cfg(test)]
 mod panel_model_tests;
 #[cfg(test)]
 mod perf_tests;

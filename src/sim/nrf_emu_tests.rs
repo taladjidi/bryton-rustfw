@@ -22,6 +22,8 @@ pub(super) struct Pipe {
     /// Keep going when the harness reports a hang (nrf_diff_tests.rs): the reason lands in `hung`.
     pub(super) soft: bool,
     pub(super) hung: Option<String>,
+    /// Emulated time so far, us (the wire time of the bytes sent counts: the Sim's own clock does not charge it).
+    pub(super) us: u64,
 }
 
 impl Pipe {
@@ -47,7 +49,7 @@ impl Pipe {
             .spawn()
             .ok()?;
         let (to, from) = (child.stdin.take()?, child.stdout.take()?);
-        Some(Pipe { child, to, from, flags: 0, soft: false, hung: None })
+        Some(Pipe { child, to, from, flags: 0, soft: false, hung: None, us: 0 })
     }
 
     /// One request; returns the answer's payload. Panics when the harness reports a hang.
@@ -78,6 +80,7 @@ impl Pipe {
     }
 
     pub(super) fn advance_us(&mut self, us: u32) {
+        self.us += u64::from(us);
         self.req(&[b"T".as_slice(), &us.to_le_bytes()].concat(), false);
     }
 }
@@ -118,7 +121,7 @@ impl NrfExt for Shared {
 }
 
 /// The bridge to Bryton's real app and a Sim on it; None (skipped) without the tools.
-fn emu_sim() -> Option<(Shared, Sim)> {
+pub(super) fn emu_sim() -> Option<(Shared, Sim)> {
     let pipe = Shared(Rc::new(RefCell::new(Pipe::spawn()?)));
     let mut sim = Sim::new(8, 0, 0);
     sim.nrf_ext = Some(Box::new(pipe.clone()));

@@ -545,7 +545,7 @@ pub const FAST_EVENT_LEN: u8 = 3;
 /// - `BLE_CONN_CFG_GATTS` (0x22, `ble_gatts_conn_cfg_t`: `hvn_tx_queue_size` u8).
 ///
 /// The ids are from the enumeration in ble.h (`BLE_CONN_CFG_GAP` = 0x20 then GATTC, GATTS, GATT, L2CAP), **inferred**
-/// as the 2026-10-31 attempt's 0x23 was; Bryton's real app decodes them (`ble_cfg_set_req_dec`, run by
+/// as the 2026-10-31 attempt's 0x23 was; Bryton's real app decodes them (ids and values checked at its layer, nrf_session_tests.rs; the SoftDevice's acceptance is not) (`ble_cfg_set_req_dec`, run by
 /// `cargo test-host -- --ignored nrf_emu`, which cannot say whether the SoftDevice's RAM holds them).
 pub const CFG_FAST: [&[u8]; 4] = [
     &[CMD, SD_BLE_CFG_SET, 0x20, 0, 0, 0, 1, 1, 2, FAST_EVENT_LEN, 0],

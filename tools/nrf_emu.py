@@ -99,6 +99,10 @@ NEVER_CMDS = ["0074", "0078c403", "008d", "009d00000d00", "00a302000101082901012
 # BLE calls with no output, see the module doc: adv_data_set, adv_start, adv_stop, appearance_set, ppcp_set,
 # device_name_set, scan_start, scan_stop, gatts value_set (it writes back the length it was given: left as is)
 BLE_NO_OUTPUT = {0x72, 0x73, 0x74, 0x78, 0x7A, 0x7C, 0x8A, 0x8B, 0xA4}
+# The fast link's session calls, also inputs only (S132 v5 SVC enums from their bases, pc-ble-driver sd_api_v5 ble_gap.h,
+# ble_gatts.h): conn_param_update 0x75, phy_update 0x8F, data_length_update 0x90 (its limitation output is NULL for us),
+# gatts_hvx 0xA6 (the length is in/out and left as given), sys_attr_set 0xA9, exchange_mtu_reply 0xAD.
+BLE_SESSION = {0x75, 0x8F, 0x90, 0xA6, 0xA9, 0xAD}
 SVC_UUID_VS_ADD, SVC_SERVICE_ADD, SVC_CHAR_ADD, SVC_DESC_ADD = 0x62, 0xA0, 0xA2, 0xA3
 EVENT_RX = 0x80  # ant_parameters.h: the broadcast data event
 NOT_FOUND = 5  # NRF_ERROR_NOT_FOUND
@@ -196,6 +200,7 @@ class Emu:
         self.ble_evts = collections.deque()
         self.ant_evts = collections.deque()
         self.svc_log = []
+        self.calls = []  # decoded BLE calls (describe), for the host test: one text line each
         self.next_handle = 0x0C  # the first attribute handle of the application's GATT table (inferred)
         self.vs_uuids = 0
         try:
@@ -462,6 +467,8 @@ class Emu:
     def svc(self, n):
         a = [self.reg(x) for x in ("r0", "r1", "r2", "r3")]
         self.svc_log.append(n)
+        if n not in (SVC_APP_EVT_WAIT, SVC_EVT_GET, SVC_BLE_EVT_GET, SVC_ANT_EVENT_GET):
+            self.calls.append(self.describe(n, a))
         ret = 0
         if n == SVC_SD_ENABLE:
             pass  # sd_softdevice_enable(clock cfg, fault handler): no output; the ANT licence key is never looked at
@@ -491,7 +498,7 @@ class Emu:
                 self.uc.mem_write(a[2], buf)
             else:
                 ret = NOT_FOUND
-        elif n in BLE_NO_OUTPUT:
+        elif n in BLE_NO_OUTPUT or n in BLE_SESSION:
             pass
         elif n == SVC_UUID_VS_ADD:  # sd_ble_uuid_vs_add(ble_uuid128_t const *, uint8_t *type): types start at 2
             self.vs_uuids += 1
@@ -510,6 +517,53 @@ class Emu:
             self._fail(f"unknown SVC {n:#x} at pc {self.reg('pc'):#x}")
             return
         self.reg_set("r0", ret)
+
+    def mem(self, a, n):
+        """n bytes of RAM at a, or None when a is NULL or outside the RAM."""
+        return bytes(self.uc.mem_read(a, n)) if RAM <= a and a + n <= RAM + RAM_SIZE else None
+
+    def describe(self, n, a):
+        """One line for a BLE call, decoded as the S132 v5 headers lay the arguments out (module doc). Bond data is
+        never printed (sys_attr_set shows its length only)."""
+        def u16s(p, k):
+            m = self.mem(p, 2 * k)
+            return "null" if m is None else ",".join(str(x) for x in struct.unpack(f"<{k}H", m))
+        if n == SVC_SD_ENABLE:
+            return "softdevice_enable"
+        if n == SVC_BLE_VERSION_GET:
+            return "version_get"
+        if n == SVC_BLE_ENABLE:
+            m = self.mem(a[0], 4)
+            return f"enable ram_base={struct.unpack('<I', m)[0]:#x}" if m else "enable"
+        if n == SVC_BLE_CFG_SET:  # ble_cfg_t: a connection configuration is {u8 tag; union}, the union at +2
+            c = self.mem(a[1], 6) or bytes(6)
+            what = {0x20: f"conn_count={c[2]} event_length={c[4]}", 0x22: f"hvn_tx_queue_size={c[2]}",
+                    0x23: f"att_mtu={c[2] | c[3] << 8}", 0x40: f"periph={c[0]} central={c[1]} central_sec={c[2]}"}
+            return f"cfg_set id={a[0]:#x} " + (f"tag={c[0]} " if 0x20 <= a[0] < 0x40 else "") + what.get(a[0], "")
+        if n == 0x75:
+            return f"conn_param_update conn={a[0]} params={u16s(a[1], 4)}"
+        if n == 0x8F:
+            m = self.mem(a[1], 2)
+            return f"phy_update conn={a[0]} phys={'null' if m is None else f'{m[0]},{m[1]}'}"
+        if n == 0x90:
+            return f"data_length_update conn={a[0]} params={u16s(a[1], 4)} limitation={'null' if not a[2] else 'set'}"
+        if n == 0xA6:  # ble_gatts_hvx_params_t {u16 handle; u8 type; u16 offset; u16 *p_len; u8 const *p_data}
+            h = self.mem(a[1], 16)
+            if h is None:
+                return f"hvx conn={a[0]} params=null"
+            handle, ty, off, p_len, p_data = struct.unpack("<HBxH2xII", h)
+            ln = self.mem(p_len, 2)
+            ln = struct.unpack("<H", ln)[0] if ln else -1
+            d = self.mem(p_data, ln) if ln > 0 else b""
+            return (f"hvx conn={a[0]} handle={handle:#x} type={ty} offset={off} len={ln} "
+                    f"data={'null' if d is None else d.hex()}")
+        if n == 0xA9:
+            return f"sys_attr_set conn={a[0]} data={'null' if not a[1] else 'set'} len={a[2] & 0xFFFF} flags={a[3]:#x}"
+        if n == 0xAD:
+            return f"exchange_mtu_reply conn={a[0]} mtu={a[1] & 0xFFFF}"
+        if n == SVC_UUID_VS_ADD:
+            return "uuid_vs_add"
+        return f"svc {n:#x}"
 
     # ---- NVIC and exceptions (ARMv7-M; Unicorn's M core has no NVIC, so entry and return are done here)
     def _prio(self, irq):
@@ -761,10 +815,10 @@ def selftest():
 def hvx_raw(n):
     """One BLE GATTC HVX event of n data bytes as the SoftDevice hands it over. S132/S332 v5 ble_evt_t: {u16 evt_id 0x39
     BLE_GATTC_EVT_HVX, u16 evt_len}, gattc {conn_handle, gatt_status, error_handle}, hvx {handle, type, len, data}
-    (inferred from the v5 headers; a lone data byte comes out of the app with a zero length: an artefact of the
-    inferred input, use 0 or 2 and more)."""
+    (inferred from the v5 headers). evt_len counts the 4-byte header too: the app reads a shorter one as zeros (found
+    2026-11-07 by trying lengths; a lone data byte used to come out with a zero length for that reason)."""
     body = struct.pack("<HHHHBxH", 0, 0, 0, 0x0F, 1, n) + bytes(i & 255 for i in range(n))
-    return struct.pack("<HH", 0x39, len(body)) + body
+    return struct.pack("<HH", 0x39, len(body) + 4) + body
 
 
 def load(seconds=20):
@@ -803,6 +857,9 @@ def serve(inp=None, out=None):
       'A' ch ev n, n bytes    one ANT event now (n data bytes for ev 0x80), SWI2 pended
       'B' ch ev, 8 bytes, u32 period_us, u16 count   count ANT broadcasts, one per period
       'V' u16 n               one BLE GATTC HVX event carrying n bytes
+      'E' u16 n, n bytes      one raw SoftDevice BLE event (ble_evt_t), SWI2 pended
+      'C'                     how many BLE calls so far (then cleared): u16 4, u32 count
+      'S'                     the decoded BLE calls so far, one per line (Emu.describe), then cleared: u16 n, text
       'F' u16 n               the host's RX FIFO holds n bytes: RTS drops while that many are unread (0: unbounded)
       'N'                     bytes of 'W' the chip has not taken yet (not on the wire into it): answer u16 2, u16 n
       'X'                     restart the app (the chip's reset), run to its idle wait
@@ -849,6 +906,15 @@ def serve(inp=None, out=None):
                 x.at(period * (i + 1), lambda ch=ch, ev=ev, data=data: x.inject_ant(ch, ev, data))
         elif c == b"V":
             x.inject_ble(hvx_raw(struct.unpack("<H", inp.read(2))[0]))
+        elif c == b"E":
+            x.inject_ble(inp.read(struct.unpack("<H", inp.read(2))[0]))
+        elif c == b"S":
+            t = "\n".join(x.calls).encode()
+            x.calls.clear()
+            payload = struct.pack("<H", len(t)) + t
+        elif c == b"C":
+            payload = struct.pack("<HI", 4, len(x.calls))
+            x.calls.clear()
         elif c == b"F":
             x.fifo_limit = struct.unpack("<H", inp.read(2))[0]
         elif c == b"N":
