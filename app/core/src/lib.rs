@@ -12,6 +12,11 @@
 //!   peripherals bonded by the system is reported by third-party apps, not stated by Apple (AirBattery PR 2,
 //!   LucasStop/LogiBattery issue 121): to be confirmed on the phone.
 
+pub mod demo;
+pub mod files;
+#[cfg(test)]
+mod files_tests;
+
 uniffi::setup_scaffolding!();
 
 /// Longest maker string kept, in bytes: a longer value is not from a sane unit.

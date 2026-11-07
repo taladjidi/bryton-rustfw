@@ -1,4 +1,8 @@
 // Defaults, then the owner's own values from Local.xcconfig (gitignored; copy Local.xcconfig.example).
 BUNDLE_ID_PREFIX = invalid.example
 DEVELOPMENT_TEAM =
+// The saved rides show in the Files app (Documents folder).
+// that key has no INFOPLIST_KEY_ form: a partial plist merged into the generated one
+INFOPLIST_FILE = Info-extra.plist
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES
 #include? "Local.xcconfig"
