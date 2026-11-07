@@ -444,6 +444,13 @@ private struct SendSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(rides.sendDone ? "Done" : "Close") { dismiss() } } }
             .interactiveDismissDisabled(rides.phase == .writing)
+            #if DEBUG
+            .task {  // Simulator: `-demo-send-go` presses Send once the demo unit is ready
+                guard CommandLine.arguments.contains("-demo-send-go") else { return }
+                try? await Task.sleep(for: .seconds(2))
+                send()
+            }
+            #endif
         }
     }
 

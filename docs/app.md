@@ -237,7 +237,8 @@ the unit's workout list is read again afterwards. Swipe Delete on a unit workout
 key and check of the last list. Statuses become texts: read only build, full day, mismatch (send again), busy (a ride or
 the card lent), no workout calendar yet (WRITE_BEGIN's NOT FOUND), workout gone (DELETE's). Both are refused while a
 listing, a download or another write runs (`RideBrowser.phase`). Demo mode's fake unit accepts both (`-demo -demo-edit
--demo-send` opens the sheet, Debug builds only); its `Faults` can answer each status.
+-demo-send` opens the sheet, `-demo-send-go` also presses Send, Debug builds only; seen in the Simulator: the paced send at
+a 20 B write length ends in "Sent"); its `Faults` can answer each status.
 
 | |
 |:-:|
