@@ -45,7 +45,7 @@ struct ContentView: View {
                 WorkoutSection(rides: rides)
                 PhoneWorkoutSection(store: store) { editing = $0 }
             }
-            .sheet(item: $editing) { WorkoutEditor(target: $0, store: store) }
+            .sheet(item: $editing) { WorkoutEditor(target: $0, store: store, rides: rides) }
             .navigationDestination(for: WorkoutRoute.self) { r in
                 if let f = rides.workouts.first(where: { $0.key == r.key }) { WorkoutDetail(file: f) { d in
                     var d = d

@@ -209,7 +209,7 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
                 FileEvent::Finished => done += 1,
                 FileEvent::Busy | FileEvent::Partial => busy += 1,
                 FileEvent::Failed { .. } => fail += 1,
-                FileEvent::Ignored => {}
+                _ => {}
             }
             let _ = (c.progress(), c.file(), c.entries());
         }

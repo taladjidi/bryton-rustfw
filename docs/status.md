@@ -32,8 +32,9 @@ On the unit: a RAM run (`tools/dev.py run`, no ride) and the app bonded: LIST_IN
 
 **Workouts sent and deleted by the phone (WRITE_BEGIN / WRITE_DATA / WRITE_END / DELETE, docs/app.md "Workouts")**
 
-Seen: simulator only (both MTUs, every refusal, a power cut after every sector written, the fuzz). The app's editor is
-not built yet: on the unit the commands go through nRF Connect (or a test build of the app).
+Seen: simulator only (both MTUs, every refusal, a power cut after every sector written, the fuzz), and the app's "Send to
+the unit" and workout Delete against the Demo unit in the iOS Simulator (core tests: round trip, each status, a resend
+writes once, both MTUs). Not seen with the real app on the real unit.
 
 On the unit, with the owner present (it writes the card):
 1. Build the card-writing ride image (`EMMC_WRITE=1`, which is also what makes the commands answer anything but READ
@@ -45,7 +46,10 @@ On the unit, with the owner present (it writes the card):
    with the size. Check the unit's WORKOUTS list shows it today, LIST_IN lists it and READ_IN gives the same bytes.
 3. The same with a wrong CRC (MISMATCH, nothing new in WORKOUTS), during a ride (BUSY), then DELETE of the listed key:
    END ok, gone from WORKOUTS.
-4. Over USB (`dev.py drive`) the volume passes the computer's fsck, and `\Rustfw\Inbox\WORKOUT.TMP` is there (kept on
+4. The same from the phone app (an `EMMC_WRITE` RAM build, owner present): editor, Send to the unit for today, the app's
+   list shows it, the unit's WORKOUTS and stock's calendar both show it; send it again (still one); swipe Delete in the
+   app, gone from both. A card without `\Workout\calendar` should say "no workout calendar yet".
+5. Over USB (`dev.py drive`) the volume passes the computer's fsck, and `\Rustfw\Inbox\WORKOUT.TMP` is there (kept on
    purpose). Switch to stock: it lists the workout in its calendar for that day (stock reads `<name>.fit` of the day
    folder; that it needs no `.json` beside it is inferred).
 

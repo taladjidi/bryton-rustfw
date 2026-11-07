@@ -41,6 +41,7 @@ struct WorkoutSection: View {
     @ObservedObject var rides: RideBrowser
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
+    @State private var deleting: WorkoutFile?
 
     var body: some View {
         Section("Workouts") {
@@ -59,12 +60,26 @@ struct WorkoutSection: View {
                             .foregroundStyle(.secondary)
                         }
                     }
+                    .swipeActions {
+                        // only when nothing else uses the link: the same guard as a download
+                        Button("Delete", role: .destructive) { deleting = f }.disabled(rides.phase != .idle)
+                    }
                 }
             }
             if rides.workouts.isEmpty {
                 Text(rides.phase == .workouts ? "Reading workouts..." : "No workouts planned")
                     .foregroundStyle(.secondary)
             }
+        }
+        .confirmationDialog("Delete this workout from the unit?", isPresented: Binding(
+            get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible
+        ) {
+            Button("Delete from the unit", role: .destructive) {
+                if let f = deleting { rides.deleteWorkout(key: f.key) }
+                deleting = nil
+            }
+        } message: {
+            Text("A copy kept on the phone stays.")
         }
     }
 }

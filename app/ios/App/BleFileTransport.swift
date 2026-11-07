@@ -31,6 +31,8 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
 
     func start() { central = CBCentralManager(delegate: self, queue: .main) }
 
+    var writeLength: Int { peripheral?.maximumWriteValueLength(for: .withResponse) ?? 20 }
+
     func write(_ d: Data) {
         guard let p = peripheral, let c = control else { return }
         p.writeValue(d, for: c, type: .withResponse)

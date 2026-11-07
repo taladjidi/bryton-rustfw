@@ -189,11 +189,10 @@ stock's `.json` beside it.
 | ![The workout list](img/app-workouts.png) | ![A workout's chart and steps](img/app-workout-detail.png) |
 | The list, demo mode (made-up workouts) | The detail: chart by zone, IF and TSS, steps |
 
-## Workout editor (phone side, nothing sent yet)
+## Workout editor (phone side)
 
 Workouts are made on the phone and kept in the app's Documents (`Workouts/<name>.fit`), listed in an "On the phone"
-section under the unit's. Sending them to the unit waits for the firmware's write commands: the editor's "Send to the
-unit" button is disabled with a footnote. The core's `draft.rs` holds the model and the encoder:
+section under the unit's. The editor's "Send to the unit" button sends the draft (see "Send and delete" below). The core's `draft.rs` holds the model and the encoder:
 - `WorkoutDraft` is a name and a flat list of items; an item is a step (length by time, distance or the Lap key; target
   none, power in % of FTP or watts, heart rate in % of max or bpm, cadence; intensity) or a repeat of the N items before
   it, T times in all. That is the file's own repeat step (`duration_type` 6, from step `i - N`), so repeats nest the way
@@ -228,6 +227,21 @@ on a unit workout's page. `-demo -demo-edit` opens a copy of the first demo work
 | |
 |:-:|
 | ![The workout editor](img/app-workout-edit.png) |
+
+### Send and delete
+
+"Send to the unit" (editor) opens a sheet: a day (today by default) and Send. The core's `FileClient` encodes the draft
+(`write_command`: WRITE_BEGIN with the size and CRC-32), the app then hands out `write_next_command` frames sized from the
+link's write length (14 bytes of data at the default 20, up to 238), then WRITE_END; a progress bar shows the bytes sent and
+the unit's workout list is read again afterwards. Swipe Delete on a unit workout asks first, then sends DELETE with the
+key and check of the last list. Statuses become texts: read only build, full day, mismatch (send again), busy (a ride or
+the card lent), no workout calendar yet (WRITE_BEGIN's NOT FOUND), workout gone (DELETE's). Both are refused while a
+listing, a download or another write runs (`RideBrowser.phase`). Demo mode's fake unit accepts both (`-demo -demo-edit
+-demo-send` opens the sheet, Debug builds only); its `Faults` can answer each status.
+
+| |
+|:-:|
+| ![The send sheet](img/app-workout-send.png) |
 
 ## Seen on the unit, 2026-11-07
 

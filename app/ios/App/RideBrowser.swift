@@ -15,6 +15,8 @@ protocol FileTransport: AnyObject {
     /// The debug line (negotiated write length).
     var onDebug: ((String) -> Void)? { get set }
     func start()
+    /// The most bytes one Control write may carry (the link's write length).
+    var writeLength: Int { get }
     func write(_ d: Data)
 }
 
@@ -24,7 +26,7 @@ struct SavedRide: Identifiable, Hashable {
 }
 
 final class RideBrowser: ObservableObject {
-    enum Phase: Equatable { case idle, listing, downloading(String), workouts, failed }
+    enum Phase: Equatable { case idle, listing, downloading(String), workouts, writing, failed }
 
     @Published var rides: [RideEntry] = []
     @Published var phase = Phase.idle
@@ -37,6 +39,9 @@ final class RideBrowser: ObservableObject {
     /// The planned workouts read from the unit, by key (`YYYYMMDDnn`), as the unit holds them: decoded by the core
     /// for the rider's FTP when shown.
     @Published var workouts: [WorkoutFile] = []
+    /// How the last send ended: the text of its error, or `sendDone`.
+    @Published var sendError: String?
+    @Published var sendDone = false
 
     private let client = FileClient()
     private var transport: FileTransport?
@@ -76,6 +81,7 @@ final class RideBrowser: ObservableObject {
             guard let self else { return }
             self.ready = false
             if case .downloading = self.phase { self.message = "Link lost, resuming..." }
+            if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.") }
         }
         t.onError = { [weak self] m in self?.message = m }
         t.onDebug = { [weak self] m in self?.debug = m }
@@ -85,7 +91,7 @@ final class RideBrowser: ObservableObject {
     }
 
     func refresh() {
-        guard ready, let t = transport, !isDownloading else { return }
+        guard ready, let t = transport, !isDownloading, phase != .writing else { return }
         message = nil
         listingWorkouts = false
         workoutKey = nil
@@ -120,6 +126,34 @@ final class RideBrowser: ObservableObject {
             workoutQueue.removeFirst()
             nextWorkout()
         }
+    }
+
+    /// Sends a workout file to the unit for `day` (`YYYYMMDD`), then lists the unit's workouts again.
+    func send(day: String, bytes: Data) {
+        guard ready, phase == .idle || phase == .failed, let t = transport,
+            let cmd = client.writeCommand(day: day, bytes: bytes, nowMs: Self.now)
+        else { return }
+        message = nil
+        sendError = nil
+        sendDone = false
+        phase = .writing
+        progress = Progress(received: 0, total: UInt32(bytes.count), bytesPerS: 0)
+        t.write(cmd)
+    }
+
+    /// Removes a workout of the last list from the unit, then lists again.
+    func deleteWorkout(key: String) {
+        guard ready, phase == .idle, let t = transport, let cmd = client.deleteCommand(key: key, nowMs: Self.now) else { return }
+        message = nil
+        phase = .writing
+        t.write(cmd)
+    }
+
+    private func endWrite(_ error: String?) {
+        phase = .idle
+        sendError = error
+        sendDone = error == nil
+        if error != nil { message = error } else { refreshWorkouts() }
     }
 
     func download(_ r: RideEntry) {
@@ -160,6 +194,8 @@ final class RideBrowser: ObservableObject {
             if listingWorkouts { refreshWorkouts() } else { resume() }
         } else if phase == .listing {
             refresh()
+        } else if phase == .writing {
+            endWrite("The unit did not answer. Look at its list before sending again.")
         }
     }
 
@@ -175,6 +211,15 @@ final class RideBrowser: ObservableObject {
             downloaded = Set(rides.map(\.name).filter { FileManager.default.fileExists(atPath: Self.path($0).path) })
             phase = .idle
             refreshWorkouts()
+        case .writeReady:
+            guard let t = transport else { break }
+            // the unit answers a WRITE_DATA only when it refuses one; the writes go out in order
+            while let cmd = client.writeNextCommand(maxWrite: UInt32(t.writeLength), nowMs: Self.now) { t.write(cmd) }
+            progress = client.progress()
+        case .written, .deleted:
+            endWrite(nil)
+        case .failed(let e) where phase == .writing:
+            endWrite(Self.text(e))
         case .progress:
             progress = client.progress()
             message = nil
@@ -241,6 +286,11 @@ final class RideBrowser: ObservableObject {
         case .tooLong: "The unit sent more than the list said."
         case .short: "The file arrived short. Try again."
         case .countMismatch: "The transfer was inconsistent. Try again."
+        case .readOnly: "This build of the unit does not write its card."
+        case .full: "That day already holds as many workouts as the unit keeps. Delete one or pick another day."
+        case .mismatch: "The unit received other bytes than were sent. Send it again."
+        case .busy: "The unit is riding or its card is lent to a computer. Try again later."
+        case .noCalendar: "The unit has no workout calendar yet. Plan a workout on the unit or with the Bryton app first."
         }
     }
 
@@ -279,6 +329,8 @@ final class DemoTransport: FileTransport {
             for f in batch { self.onData?(f) }
         }
     }
+
+    var writeLength: Int { 20 }
 
     func write(_ d: Data) { queue = unit.handle(command: d) }
 }

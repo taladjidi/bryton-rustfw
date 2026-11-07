@@ -5,7 +5,7 @@
 //! Chunk sizes are never assumed: each CHUNK says its own length. The whole file is kept in memory, so a dropped
 //! READ (BUSY, a link drop, 5 s of silence) resumes with [`FileClient::resume_command`] from the bytes kept.
 
-use bryton_rustfw::filesvc::{Command, FRAME_MAX, Folder, Frame, Key, NAME_LEN, Status};
+use bryton_rustfw::filesvc::{Command, FRAME_BIG, FRAME_MAX, Folder, Frame, Key, NAME_LEN, Status};
 use std::sync::Mutex;
 
 /// No frame for this long while an answer is awaited means the unit dropped it (filesvc.rs, "Dropped and moved").
@@ -13,6 +13,10 @@ pub const SILENCE_MS: u64 = 5_000;
 /// Largest file accepted (a ride is a few MB at most): a hostile LIST cannot make the app allocate without bound.
 const FILE_MAX: usize = 64 << 20;
 /// Most rides kept from one LIST.
+/// The largest workout the unit takes (src/storage/workout_write.rs, 8 KB).
+const WRITE_MAX: usize = bryton_rustfw::storage::workout_file::FILE_MAX;
+/// WRITE_DATA's header: kind, seq, offset.
+const DATA_HEAD: usize = 6;
 const ENTRIES_MAX: usize = 4096;
 
 /// One ride of the unit's LIST.
@@ -57,6 +61,16 @@ pub enum FileError {
     Short,
     /// END's count differs from the bytes received in the answer.
     CountMismatch,
+    /// A write was refused: this build of the unit does not write its card (the RAM run's).
+    ReadOnly,
+    /// A write was refused: the day already holds as many workouts as the unit keeps.
+    Full,
+    /// A write was refused: the unit received other bytes than it was told (size or CRC). Send it again.
+    Mismatch,
+    /// WRITE_BEGIN found no `\Workout\calendar` on the card: the unit has no workout calendar yet.
+    NoCalendar,
+    /// A write or delete was refused: the unit is riding or its card is lent to a computer.
+    Busy,
 }
 
 /// What a frame did.
@@ -77,6 +91,12 @@ pub enum FileEvent {
     /// The answer ended OK but the file is not whole yet: [`FileClient::resume_command`] at once. A resume that
     /// brings no byte fails as [`FileError::Short`], so a short file is never taken for whole.
     Partial,
+    /// WRITE_BEGIN was accepted: send the data with [`FileClient::write_next_command`].
+    WriteReady,
+    /// The unit has the workout, checked and visible.
+    Written,
+    /// The unit removed the workout.
+    Deleted,
     /// The transfer failed.
     Failed {
         /// Why.
@@ -101,6 +121,14 @@ enum Mode {
     Listing,
     Reading,
     Done,
+    /// WRITE_BEGIN sent, its END awaited.
+    WriteBegin,
+    /// The unit is ready for WRITE_DATA (it answers only a refusal).
+    Sending,
+    /// WRITE_END sent, its END awaited.
+    Ending,
+    /// DELETE sent, its END awaited.
+    Deleting,
 }
 
 struct Inner {
@@ -125,6 +153,9 @@ struct Inner {
     first_ms: Option<u64>,
     first_bytes: usize,
     now_ms: u64,
+    /// A workout being written: its bytes and how many were handed out.
+    out: Vec<u8>,
+    sent: usize,
 }
 
 /// The file service client; one command at a time (a new one replaces the one under way, as on the unit).
@@ -209,8 +240,47 @@ impl Inner {
                 }
                 s => self.end_error(s),
             },
+            (Mode::WriteBegin, Frame::End { seq, status, .. }) if seq == self.seq => match status {
+                Status::Ok => {
+                    self.mode = Mode::Sending;
+                    FileEvent::WriteReady
+                }
+                Status::NotFound => self.fail(FileError::NoCalendar),
+                s => self.write_error(s),
+            },
+            // WRITE_DATA is answered only when refused
+            (Mode::Sending, Frame::End { seq, status, .. }) if seq == self.seq && status != Status::Ok => {
+                self.write_error(status)
+            }
+            (Mode::Ending, Frame::End { seq, status, .. }) if seq == self.seq => match status {
+                Status::Ok => {
+                    self.mode = Mode::Idle;
+                    FileEvent::Written
+                }
+                s => self.write_error(s),
+            },
+            (Mode::Deleting, Frame::End { seq, status, count }) if seq == self.seq => match status {
+                Status::Ok if count == 1 => {
+                    self.mode = Mode::Idle;
+                    FileEvent::Deleted
+                }
+                Status::Ok => self.fail(FileError::CountMismatch),
+                s => self.write_error(s),
+            },
             _ => FileEvent::Ignored,
         }
+    }
+
+    fn write_error(&mut self, s: Status) -> FileEvent {
+        self.fail(match s {
+            Status::Busy => FileError::Busy,
+            Status::ReadOnly => FileError::ReadOnly,
+            Status::Mismatch => FileError::Mismatch,
+            Status::Full => FileError::Full,
+            Status::NotFound => FileError::NotFound,
+            Status::BadRequest => FileError::BadRequest,
+            Status::Io | Status::Ok => FileError::Card,
+        })
     }
 
     fn end_error(&mut self, s: Status) -> FileEvent {
@@ -248,6 +318,8 @@ impl FileClient {
             first_ms: None,
             first_bytes: 0,
             now_ms: 0,
+            out: Vec::new(),
+            sent: 0,
         }))
     }
 
@@ -291,6 +363,64 @@ impl FileClient {
     /// The files of the last LIST_IN (complete after [`FileEvent::Listed`]); `name` is the key.
     pub fn files_in(&self) -> Vec<RideEntry> {
         self.lock().files_in.iter().map(|e| e.0.clone()).collect()
+    }
+
+    /// Starts sending `bytes` as a workout for `day` (`YYYYMMDD`, WRITE_BEGIN): the bytes to write to Control; None
+    /// when the day is not eight digits or the file is empty or over the unit's 8 KB. After [`FileEvent::WriteReady`]
+    /// call [`FileClient::write_next_command`] until it gives None.
+    pub fn write_command(&self, day: String, bytes: Vec<u8>, now_ms: u64) -> Option<Vec<u8>> {
+        let day: [u8; 8] = day.as_bytes().try_into().ok().filter(|d: &[u8; 8]| d.iter().all(u8::is_ascii_digit))?;
+        if bytes.is_empty() || bytes.len() > WRITE_MAX {
+            return None;
+        }
+        let mut s = self.lock();
+        s.seq = s.seq.wrapping_add(1);
+        let size = u32::try_from(bytes.len()).ok()?;
+        let crc = bryton_rustfw::inflate::crc32(bytes.iter().copied());
+        (s.mode, s.last_ms, s.sent, s.out) = (Mode::WriteBegin, now_ms, 0, bytes);
+        let seq = s.seq;
+        Some(s.encode(Command::WriteBegin { seq, folder: Folder::Workout, day, size, crc }))
+    }
+
+    /// The next WRITE_DATA (then WRITE_END) of the write under way, for a Control write of at most `max_write` bytes
+    /// (what the link gives: 20 at the default MTU, 14 bytes of data, up to 244); None until
+    /// [`FileEvent::WriteReady`] and after the WRITE_END. The unit answers a WRITE_DATA only when it refuses it.
+    pub fn write_next_command(&self, max_write: u32, now_ms: u64) -> Option<Vec<u8>> {
+        let mut s = self.lock();
+        if s.mode != Mode::Sending {
+            return None;
+        }
+        s.last_ms = now_ms;
+        let seq = s.seq;
+        if s.sent >= s.out.len() {
+            s.seq = s.seq.wrapping_add(1);
+            s.mode = Mode::Ending;
+            let seq = s.seq;
+            return Some(s.encode(Command::WriteEnd { seq }));
+        }
+        let room = (max_write as usize).clamp(FRAME_MAX, FRAME_BIG).saturating_sub(DATA_HEAD);
+        let end = (s.sent + room).min(s.out.len());
+        let offset = u32::try_from(s.sent).ok()?;
+        let cmd = {
+            let data = s.out.get(s.sent..end)?;
+            let mut f = [0; FRAME_BIG];
+            let n = Command::WriteData { seq, offset, data }.encode(&mut f);
+            f.get(..n)?.to_vec()
+        };
+        s.sent = end;
+        Some(cmd)
+    }
+
+    /// Deletes file `key` of the last LIST_IN (DELETE): the bytes to write to Control; None when it is not listed.
+    pub fn delete_command(&self, key: String, now_ms: u64) -> Option<Vec<u8>> {
+        let mut s = self.lock();
+        let folder = s.list_folder?;
+        let check = s.files_in.iter().find(|e| e.0.name == key).map(|e| e.1)?;
+        let key = Key::new(folder, key.as_bytes())?.with_check(check);
+        s.seq = s.seq.wrapping_add(1);
+        (s.mode, s.last_ms) = (Mode::Deleting, now_ms);
+        let seq = s.seq;
+        Some(s.encode(Command::Delete { seq, folder, key }))
     }
 
     /// Starts downloading a listed ride from byte 0: the bytes to write to Control; None when the ride is not in the
@@ -337,7 +467,7 @@ impl FileClient {
     /// True when an answer is awaited and nothing came for [`SILENCE_MS`]: the unit dropped it.
     pub fn silent(&self, now_ms: u64) -> bool {
         let s = self.lock();
-        matches!(s.mode, Mode::Listing | Mode::Reading) && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
+        matches!(s.mode, Mode::Listing | Mode::Reading | Mode::WriteBegin | Mode::Ending | Mode::Deleting) && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
     }
 
     /// The rides of the last LIST (complete after [`FileEvent::Listed`]).
@@ -348,6 +478,10 @@ impl FileClient {
     /// Bytes kept, the total, and the speed.
     pub fn progress(&self) -> Progress {
         let s = self.lock();
+        if matches!(s.mode, Mode::WriteBegin | Mode::Sending | Mode::Ending) {
+            let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+            return Progress { received: n(s.sent), total: n(s.out.len()), bytes_per_s: 0 };
+        }
         let ms = s.first_ms.map_or(0, |t| s.now_ms.saturating_sub(t));
         let got = s.file.len().saturating_sub(s.first_bytes) as u64;
         Progress {

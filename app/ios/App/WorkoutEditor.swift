@@ -1,6 +1,7 @@
 // The workout editor: workouts made on the phone, kept in the app's Documents as FIT files the unit reads (the Rust
 // core's encodeWorkout), shown beside the unit's own. The core checks every draft against the unit's limits and
-// previews it with the firmware's parser, so the chart here is what the unit will show. Sending is not wired yet.
+// previews it with the firmware's parser, so the chart here is what the unit will show. "Send to the unit" sends the
+// encoded file for a day (the file service's WRITE commands).
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -166,16 +167,19 @@ private let intensityNames = ["Active", "Rest", "Warm-up", "Cool-down", "Recover
 struct WorkoutEditor: View {
     let target: EditorTarget
     @ObservedObject var store: WorkoutStore
+    @ObservedObject var rides: RideBrowser
     @Environment(\.dismiss) private var dismiss
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
     @State private var name: String
     @State private var items: [EditItem]
     @State private var saveError: String?
+    @State private var sending = false
 
-    init(target: EditorTarget, store: WorkoutStore) {
+    init(target: EditorTarget, store: WorkoutStore, rides: RideBrowser) {
         self.target = target
         self.store = store
+        self.rides = rides
         _name = State(initialValue: target.draft.name)
         _items = State(initialValue: target.draft.steps.map { EditItem(step: $0) })
     }
@@ -224,13 +228,18 @@ struct WorkoutEditor: View {
                     .disabled(items.isEmpty)
                 }
                 Section {
-                    Button("Send to the unit") {}.disabled(true)
+                    Button("Send to the unit") { sending = true }
+                        .disabled(!rides.hasTransport || { if case .failure = shown { true } else { false } }())
                 } footer: {
-                    Text("Coming with the unit's write support. Save keeps the workout on the phone.")
+                    Text("Save keeps the workout on the phone; Send puts a copy on the unit for a day you pick.")
                 }
                 if let saveError { Section { Text(saveError).foregroundStyle(.orange) } }
             }
             .onChange(of: draft) { saveError = nil }
+            .sheet(isPresented: $sending) { SendSheet(rides: rides, draft: draft) }
+            #if DEBUG
+            .onAppear { if CommandLine.arguments.contains("-demo-send") { sending = true } }  // Simulator screenshots
+            #endif
             .navigationTitle(target.file == nil ? "New workout" : "Edit workout")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -400,5 +409,52 @@ private struct StepForm: View {
         default: (0, 0)
         }
         step.percent = percent && (k == .power || k == .heartRate)
+    }
+}
+
+/// Picks a day and sends the draft's encoded file to the unit, with progress and the unit's refusal as text.
+private struct SendSheet: View {
+    @ObservedObject var rides: RideBrowser
+    let draft: WorkoutDraft
+    @Environment(\.dismiss) private var dismiss
+    @State private var day = Date()
+    @State private var started = false
+    @State private var encodeError: String?
+
+    private var busy: Bool { rides.phase != .idle && rides.phase != .failed }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    DatePicker("Day", selection: $day, displayedComponents: .date)
+                } footer: {
+                    Text("The unit lists it on that day. Sending the same workout twice for a day keeps one.")
+                }
+                Section {
+                    Button("Send \(pretty(draft.name))") { send() }.disabled(busy)
+                    if rides.phase == .writing {
+                        ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
+                    }
+                    if started, rides.sendDone { Label("Sent", systemImage: "checkmark.circle").foregroundStyle(.green) }
+                    if let e = encodeError ?? (started ? rides.sendError : nil) { Text(e).foregroundStyle(.orange) }
+                }
+            }
+            .navigationTitle("Send to the unit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(rides.sendDone ? "Done" : "Close") { dismiss() } } }
+            .interactiveDismissDisabled(rides.phase == .writing)
+        }
+    }
+
+    private func send() {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: day)
+        let text = String(format: "%04d%02d%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+        do {
+            let bytes = try encodeWorkout(draft: draft)
+            encodeError = nil
+            started = true
+            rides.send(day: text, bytes: bytes)
+        } catch { encodeError = message(error) }
     }
 }

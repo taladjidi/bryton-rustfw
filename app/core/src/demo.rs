@@ -99,6 +99,14 @@ pub struct Faults {
     pub count_off: u32,
     /// CHUNK size (cut to the firmware's maximum).
     pub chunk: usize,
+    /// Answer WRITE_BEGIN and DELETE with END READ ONLY (a build without card writes).
+    pub read_only: bool,
+    /// Answer WRITE_BEGIN with END FULL (a day holding its limit).
+    pub full: bool,
+    /// Answer WRITE_BEGIN with END NOT FOUND (no `\\Workout\\calendar` on the card).
+    pub no_calendar: bool,
+    /// Answer WRITE_END with END MISMATCH.
+    pub mismatch: bool,
 }
 
 /// The fake unit.
@@ -109,6 +117,8 @@ pub struct FakeUnit {
     pub workouts: Vec<(Vec<u8>, Vec<u8>)>,
     /// What goes wrong next.
     pub faults: Faults,
+    /// The write under way: day, size, CRC and the bytes so far.
+    writing: Option<([u8; 8], u32, u32, Vec<u8>)>,
 }
 
 fn enc(f: Frame) -> Vec<u8> {
@@ -120,7 +130,7 @@ fn enc(f: Frame) -> Vec<u8> {
 impl FakeUnit {
     /// A unit with these rides.
     pub fn new(rides: Vec<(Name, Vec<u8>)>) -> FakeUnit {
-        FakeUnit { rides, workouts: Vec::new(), faults: Faults { chunk: BIG_CHUNK, ..Faults::default() } }
+        FakeUnit { rides, workouts: Vec::new(), faults: Faults { chunk: BIG_CHUNK, ..Faults::default() }, writing: None }
     }
 
     /// The Demo unit: three synthetic rides.
@@ -192,11 +202,67 @@ impl FakeUnit {
                 let data = data.clone();
                 self.serve(seq, offset, &data)
             }
-            // the demo unit is read only (the writes are the unit's, src/storage/workout_write.rs)
-            Command::WriteBegin { seq, .. }
-            | Command::WriteData { seq, .. }
-            | Command::WriteEnd { seq }
-            | Command::Delete { seq, .. } => end(seq, Status::ReadOnly, 0),
+            Command::WriteBegin { seq, .. } | Command::Delete { seq, .. } if self.faults.busy => {
+                end(seq, Status::Busy, 0)
+            }
+            Command::WriteBegin { seq, .. } | Command::Delete { seq, .. } if self.faults.read_only => {
+                end(seq, Status::ReadOnly, 0)
+            }
+            Command::WriteBegin { seq, .. } if self.faults.no_calendar => end(seq, Status::NotFound, 0),
+            Command::WriteBegin { seq, .. } if self.faults.full => end(seq, Status::Full, 0),
+            Command::WriteBegin { seq, folder: Folder::Workout, day, size, crc } => {
+                self.writing = Some((day, size, crc, Vec::new()));
+                end(seq, Status::Ok, 0)
+            }
+            Command::WriteBegin { seq, .. } => end(seq, Status::BadRequest, 0),
+            Command::WriteData { seq, offset, data } => match &mut self.writing {
+                Some((.., buf)) if buf.len() == offset as usize => {
+                    buf.extend_from_slice(data);
+                    Vec::new()
+                }
+                _ => {
+                    self.writing = None;
+                    end(seq, Status::BadRequest, 0)
+                }
+            },
+            Command::WriteEnd { seq } => {
+                let Some((day, size, crc, buf)) = self.writing.take() else { return end(seq, Status::BadRequest, 0) };
+                let sound = buf.len() == size as usize && crc == bryton_rustfw::inflate::crc32(buf.iter().copied());
+                if self.faults.mismatch || !sound {
+                    return end(seq, Status::Mismatch, u32::try_from(buf.len()).unwrap_or(0));
+                }
+                // sending the same file again writes it once, as the unit does (it names the file by its CRC)
+                let same_day = |k: &Vec<u8>| k.starts_with(&day);
+                if !self.workouts.iter().any(|(k, d)| same_day(k) && *d == buf) {
+                    let n = self.workouts.iter().filter(|(k, _)| same_day(k)).count();
+                    let mut key = day.to_vec();
+                    key.extend_from_slice(format!("{n:02}").as_bytes());
+                    self.workouts.push((key, buf));
+                    self.workouts.sort_by(|a, b| a.0.cmp(&b.0));
+                }
+                end(seq, Status::Ok, size)
+            }
+            Command::Delete { seq, folder, key } => {
+                let at = (folder == Folder::Workout)
+                    .then(|| {
+                        self.workouts.iter().position(|(k, d)| {
+                            k == key.bytes()
+                                && Some(key.check()) == u32::try_from(d.len()).ok().map(|n| name_check(k, n))
+                        })
+                    })
+                    .flatten();
+                let Some(at) = at else { return end(seq, Status::NotFound, 0) };
+                let (gone, _) = self.workouts.remove(at);
+                // the keys are places in the directory order: the day's later files move up
+                let day = gone.get(..8).unwrap_or(&[]).to_vec();
+                let mut n = 0;
+                for (k, _) in self.workouts.iter_mut().filter(|(k, _)| k.starts_with(&day)) {
+                    k.truncate(8);
+                    k.extend_from_slice(format!("{n:02}").as_bytes());
+                    n += 1;
+                }
+                end(seq, Status::Ok, 1)
+            }
         }
     }
 
