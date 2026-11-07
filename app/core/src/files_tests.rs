@@ -20,13 +20,13 @@ fn pump(c: &FileClient, u: &mut FakeUnit, cmd: &[u8], t: &mut u64) -> FileEvent 
 
 fn setup(chunk: usize) -> (FileClient, FakeUnit, Vec<u8>) {
     let ride = synthetic_ride(9, 300);
-    let mut u = FakeUnit::new(vec![(*b"261101090000", ride.clone())]);
+    let mut u = FakeUnit::new(vec![(*b"261101100000", ride.clone())]);
     u.faults.chunk = chunk;
     let c = FileClient::new();
     let mut t = 0;
     let cmd = c.list_command(t);
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
-    assert_eq!(c.entries(), vec![RideEntry { name: "261101090000".into(), size: ride.len() as u32 }]);
+    assert_eq!(c.entries(), vec![RideEntry { name: "261101100000".into(), size: ride.len() as u32 }]);
     (c, u, ride)
 }
 
@@ -42,7 +42,7 @@ fn whole_read_with_any_chunk_size() {
     for chunk in [1, 7, 18, BIG_CHUNK, 1000] {
         let (c, mut u, ride) = setup(chunk);
         let mut t = 100;
-        let cmd = c.read_command("261101090000".into(), t).unwrap();
+        let cmd = c.read_command("261101100000".into(), t).unwrap();
         assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
         assert_eq!(c.file(), ride);
         let p = c.progress();
@@ -57,7 +57,7 @@ fn drop_then_resume_from_the_bytes_kept() {
     let (c, mut u, ride) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.drop_after = Some(1000);
-    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Ignored);
     assert!(c.silent(t + SILENCE_MS) && !c.silent(t + SILENCE_MS - 20));
     assert_eq!(c.progress().received, 1000);
@@ -73,7 +73,7 @@ fn busy_mid_read_then_resume() {
     let (c, mut u, ride) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.drop_after = Some(500);
-    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
     pump(&c, &mut u, &cmd, &mut t);
     u.faults.busy = true;
     let cmd = c.resume_command(t).unwrap();
@@ -90,7 +90,7 @@ fn short_file_and_wrong_count_are_errors() {
     let (c, mut u, _) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.short_by = 5;
-    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
     // the answer ended early but brought bytes: resumable, and a resume that brings none is a short file
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
     let cmd = c.resume_command(t).unwrap();
@@ -98,7 +98,7 @@ fn short_file_and_wrong_count_are_errors() {
     assert!(c.file().is_empty());
     u.faults.short_by = 0;
     u.faults.count_off = 1;
-    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::CountMismatch });
 }
 
@@ -107,7 +107,7 @@ fn an_early_end_resumes_to_a_whole_file() {
     let (c, mut u, ride) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.short_by = 5;
-    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
     assert_eq!(c.progress().received as usize, ride.len() - 5);
     u.faults.short_by = 0;
@@ -122,7 +122,7 @@ fn errors_of_the_unit_and_unknown_rides() {
     let mut t = 100;
     assert_eq!(c.read_command("000000000000".into(), t), None);
     u.rides.clear(); // deleted since LIST
-    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::NotFound });
     assert_eq!(c.resume_command(t), None);
 }
@@ -131,7 +131,7 @@ fn errors_of_the_unit_and_unknown_rides() {
 fn unknown_stale_and_surplus_frames_are_ignored() {
     let (c, mut u, ride) = setup(BIG_CHUNK);
     let t = 100;
-    let cmd = c.read_command("261101090000".into(), t).unwrap();
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
     let mut frames = u.handle(&cmd);
     assert_eq!(c.on_data(vec![0x55, 1, 2], t), FileEvent::Ignored);
     assert_eq!(c.on_data(vec![], t), FileEvent::Ignored);
@@ -150,7 +150,7 @@ fn unknown_stale_and_surplus_frames_are_ignored() {
 #[test]
 fn more_bytes_than_listed_is_refused() {
     let (c, _, ride) = setup(BIG_CHUNK);
-    let cmd = c.read_command("261101090000".into(), 0).unwrap();
+    let cmd = c.read_command("261101100000".into(), 0).unwrap();
     let big = vec![0u8; ride.len() + 1];
     let mut last = FileEvent::Ignored;
     for ch in big.chunks(BIG_CHUNK) {
@@ -178,7 +178,7 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
     for _ in 0..300 {
         let (c, mut u, _) = setup(BIG_CHUNK);
         let mut t = 0u64;
-        let mut cmd = c.read_command("261101090000".into(), t).unwrap();
+        let mut cmd = c.read_command("261101100000".into(), t).unwrap();
         for _ in 0..200 {
             t += next() % 3000;
             let (r, seq) = (next(), cmd[1]);
@@ -221,9 +221,47 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
 #[test]
 fn a_chunk_longer_than_a_frame_is_ignored() {
     let (c, _, _) = setup(BIG_CHUNK);
-    let cmd = c.read_command("261101090000".into(), 0).unwrap();
+    let cmd = c.read_command("261101100000".into(), 0).unwrap();
     let mut f = vec![0x82, cmd[1]];
     f.extend(std::iter::repeat_n(7u8, FRAME_BIG - 1)); // FRAME_BIG + 1 bytes in all (the largest MTU less 3)
     assert_eq!(c.on_data(f, 1), FileEvent::Ignored);
     assert_eq!(c.progress().received, 0);
+}
+
+#[test]
+fn workouts_are_listed_and_read_in_their_folder_beside_the_rides() {
+    let mut u = FakeUnit::demo();
+    let c = FileClient::new();
+    let mut t = 0;
+    let cmd = c.list_command(t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    let cmd = c.list_in_command(UnitFolder::Workout, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    assert_eq!(c.entries().len(), 3, "the rides stay listed");
+    let files = c.files_in();
+    assert_eq!(files.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["2026110800", "2026110900", "2026111100"]);
+    let cmd = c.read_in_command("2026110900".into(), t).expect("listed");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), u.workouts[1].1);
+    assert!(crate::workout::decode_workout(c.file(), 250, 190).is_some());
+    assert_eq!(c.read_in_command("2026110901".into(), t), None, "not in the list");
+    // a dropped READ_IN resumes as a READ_IN, from the bytes kept
+    u.faults.drop_after = Some(100);
+    let cmd = c.read_in_command("2026110800".into(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Ignored);
+    let cmd = c.resume_command(t).unwrap();
+    assert_eq!(cmd[0], 5, "READ_IN");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), u.workouts[0].1);
+    // BUSY ends a folder list as it ends a ride list
+    u.faults.busy = true;
+    let cmd = c.list_in_command(UnitFolder::Workout, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Busy);
+    // and a ride still downloads after a workout was read
+    u.faults.busy = false;
+    let cmd = c.list_command(t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
+    assert_eq!(cmd[0], 2, "READ");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
 }

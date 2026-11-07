@@ -1,6 +1,15 @@
-//! The file service on the phone bond, reads only (roadmap 9, A1): the GATT table (a vendor service, Control to write,
-//! Data to notify, both needing the encrypted bond), the commands arriving from the phone, and the answer streamed
-//! a few notifications a pass. The frames and the protocol are in link/filesvc.rs.
+//! The file service on the phone bond, reads only (roadmap 9, A1; the workouts folder, 2026-11-07): the GATT table
+//! (a vendor service, Control to write, Data to notify, both needing the encrypted bond), the commands arriving from
+//! the phone, and the answer streamed a few notifications a pass. The frames and the protocol are in link/filesvc.rs.
+//!
+//! **Folders:** LIST and READ serve `\Activities\`; LIST_IN and READ_IN name a [`fs::Folder`] of a table (the rides, and
+//! `\Workout\calendar\<day>\`), never a path. A workout's key is its day and its number among that day's `.fit`
+//! files (link/filesvc.rs); the listing walks the day folders, then each day's files, [`SCAN`] entries a pass, and
+//! leaves out files longer than [`workout_file::FILE_MAX`] (the unit does not show them either; a skipped file counts
+//! against [`SCAN`] like any entry). The key carries a check of the file's name and size ([`fs::name_check`]) and
+//! READ_IN gives it back: a day folder that changed between the two answers NOT FOUND, never another file. Finding a
+//! workout walks at most [`LOCATE_MAX`] entries of its day. Two cursors, so
+//! `Job` holds two sectors while a workout listing runs.
 //!
 //! **Never under the recorder:** a command while a ride runs, is paused or is being saved ([`App::ride_settled`]), or
 //! while the card is lent to a computer, is answered BUSY; a transfer under way when one of those begins ends with
@@ -39,12 +48,15 @@
 use crate::ble::{self, Char};
 use crate::fat::{self, Cursor, File, Seek};
 use crate::filesvc::{self as fs, Frame, Status};
+use crate::storage::workout_file;
 use crate::*;
 
 /// Frames tried in one pass.
 const PER_PASS: usize = 8;
 /// Directory entries examined for the next ride in one pass.
 const SCAN: usize = 8;
+/// Entries of a day folder [`locate`] walks at most (the listing issues numbers below 100).
+const LOCATE_MAX: usize = 200;
 /// File bytes read from the card at once: a few chunks, so the card is read once per [`PER_PASS`] frames.
 const BLOCK: usize = 1024;
 /// The loop's pass while a READ runs on the fast link, ms (the stack takes a few notifications per connection event).
@@ -143,13 +155,21 @@ enum Job {
     Idle,
     List {
         seq: u8,
-        /// The listing, once the folder is open.
+        folder: fs::Folder,
+        /// LIST (ENTRY frames, rides only) rather than LIST_IN.
+        legacy: bool,
+        /// The listing, once the folder is open (the workouts: the day folders).
         cur: Option<Cursor>,
+        /// The workouts: the day's files, its date and the next file's number.
+        files: Option<Cursor>,
+        day: [u8; 8],
+        ord: u8,
         count: u32,
     },
     Read {
         seq: u8,
-        name: fs::Name,
+        folder: fs::Folder,
+        key: fs::Key,
         /// The next byte to read from the card.
         offset: u32,
         file: Option<File>,
@@ -157,6 +177,16 @@ enum Job {
         /// Bytes sent.
         count: u32,
     },
+}
+
+impl Job {
+    fn list(seq: u8, folder: fs::Folder, legacy: bool) -> Job {
+        Job::List { seq, folder, legacy, cur: None, files: None, day: [0; 8], ord: 0, count: 0 }
+    }
+
+    fn read(seq: u8, folder: fs::Folder, key: fs::Key, offset: u32) -> Job {
+        Job::Read { seq, folder, key, offset, file: None, seek: Seek::new(), count: 0 }
+    }
 }
 
 /// The file service's state.
@@ -315,11 +345,12 @@ impl FileSvc {
         let io = |_| Status::Io;
         match job {
             Job::Idle => Ok(false),
-            Job::List { cur, .. } => {
+            Job::List { folder, legacy, cur, files, day, ord, .. } => {
                 let mut fat = fat::Fat::mount(d).map_err(io)?;
                 if cur.is_none() {
-                    // a card with no \Activities\ has no rides: an empty list, not an error
-                    match fat.find(d, fat.root(), "Activities").and_then(|dir| fat.cursor(dir)) {
+                    // a card with no such folder has no files: an empty list, not an error
+                    let path = if *folder == fs::Folder::Activities { "Activities" } else { "Workout/calendar" };
+                    match fat.open(d, path).and_then(|dir| fat.cursor(dir)) {
                         Ok(c) => *cur = Some(c),
                         Err(fat::Error::NotFound) => return Err(Status::Ok),
                         Err(_) => return Err(Status::Io),
@@ -327,28 +358,50 @@ impl FileSvc {
                 }
                 let Some(c) = cur else { return Ok(false) };
                 for _ in 0..SCAN {
+                    if let Some(fc) = files {
+                        let Some(e) = fat.list(d, fc).map_err(io)? else {
+                            *files = None;
+                            continue;
+                        };
+                        if e.file.dir || !is_fit(e.name()) {
+                            continue;
+                        }
+                        let n = *ord;
+                        *ord = ord.saturating_add(1);
+                        let mut key = [0; 10];
+                        key[..8].copy_from_slice(day);
+                        key[8..].copy_from_slice(&[b'0' + n / 10 % 10, b'0' + n % 10]);
+                        if n < 100 && e.file.size as usize <= workout_file::FILE_MAX {
+                            *pending = 1;
+                            let check = fs::name_check(e.name(), e.file.size);
+                            *out_len = entry(seq, *legacy, *folder, &key, check, e.file.size, &mut f).unwrap_or(0);
+                            *out = f;
+                            return Ok(*out_len > 0);
+                        }
+                        continue;
+                    }
                     let Some(e) = fat.list(d, c).map_err(io)? else { return Err(Status::Ok) };
-                    if let (Some(name), false) = (fs::ride_name(e.name()), e.file.dir) {
+                    if *folder == fs::Folder::Workout {
+                        if let (true, Ok(dn)) = (e.file.dir, <[u8; 8]>::try_from(e.name()))
+                            && workout_file::folder_day(&dn).is_some()
+                        {
+                            *files = Some(fat.cursor(e.file).map_err(io)?);
+                            (*day, *ord) = (dn, 0);
+                        }
+                    } else if let (Some(name), false) = (fs::ride_name(e.name()), e.file.dir) {
                         *pending = 1;
-                        *out_len = Frame::Entry { seq, name, size: e.file.size }.encode(&mut f);
+                        *out_len = entry(seq, *legacy, *folder, &name, 0, e.file.size, &mut f).unwrap_or(0);
                         *out = f;
-                        return Ok(true);
+                        return Ok(*out_len > 0);
                     }
                 }
                 Ok(false)
             }
-            Job::Read { name, offset, file, seek, .. } => {
+            Job::Read { folder, key, offset, file, seek, .. } => {
                 if *blk_pos >= *blk_len {
                     let mut fat = fat::Fat::mount(d).map_err(io)?;
                     if file.is_none() {
-                        let mut buf = [0; fs::FILE_NAME_LEN];
-                        let n = fs::file_name(name, &mut buf).ok_or(Status::NotFound)?;
-                        let find = |e| if e == fat::Error::NotFound { Status::NotFound } else { Status::Io };
-                        let dir = fat.find(d, fat.root(), "Activities").map_err(find)?;
-                        let x = fat.find(d, dir, n).map_err(find)?;
-                        if x.dir {
-                            return Err(Status::NotFound);
-                        }
+                        let x = locate(&mut fat, d, *folder, *key)?;
                         if *offset > x.size {
                             return Err(Status::BadRequest);
                         }
@@ -371,6 +424,59 @@ impl FileSvc {
             }
         }
     }
+}
+
+/// The entry frame for `key`, in LIST's shape or LIST_IN's.
+fn entry(seq: u8, legacy: bool, folder: fs::Folder, key: &[u8], check: u16, size: u32, f: &mut [u8]) -> Option<usize> {
+    Some(if legacy {
+        Frame::Entry { seq, name: key.try_into().ok()?, size }.encode(f)
+    } else {
+        Frame::EntryIn { seq, key: fs::Key::new(folder, key)?.with_check(check), size }.encode(f)
+    })
+}
+
+/// A file name ending in `.fit`, any case, with something before it.
+fn is_fit(name: &[u8]) -> bool {
+    name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(b".fit"))
+}
+
+/// The file `key` of `folder` on the card (a directory is not one). A workout's key is a day folder's name and the
+/// number of the `.fit` among that folder's files, counted as the listing counts them; the file now at that place
+/// must have the name and size the key's check was made of, else NOT FOUND.
+fn locate(fat: &mut fat::Fat, d: &mut impl fat::Disk, folder: fs::Folder, k: fs::Key) -> Result<fat::File, Status> {
+    let key = k.bytes();
+    let find = |e| if e == fat::Error::NotFound { Status::NotFound } else { Status::Io };
+    let x = if folder == fs::Folder::Activities {
+        let mut buf = [0; fs::FILE_NAME_LEN];
+        let n = fs::file_name(key, &mut buf).ok_or(Status::NotFound)?;
+        let dir = fat.find(d, fat.root(), "Activities").map_err(find)?;
+        fat.find(d, dir, n).map_err(find)?
+    } else {
+        let (day, num) = key.split_at_checked(8).ok_or(Status::NotFound)?;
+        let day = core::str::from_utf8(day).map_err(|_| Status::NotFound)?;
+        let num = num.iter().fold(0usize, |v, &c| v * 10 + usize::from(c.wrapping_sub(b'0')));
+        let dir = fat.open(d, "Workout/calendar").map_err(find)?;
+        let dir = fat.find(d, dir, day).map_err(find)?;
+        let mut c = fat.cursor(dir).map_err(find)?;
+        let mut n = 0;
+        let mut found = None;
+        for _ in 0..LOCATE_MAX {
+            let Some(e) = fat.list(d, &mut c).map_err(find)? else { break };
+            if e.file.dir || !is_fit(e.name()) {
+                continue;
+            }
+            if n == num {
+                found = Some(e).filter(|e| fs::name_check(e.name(), e.file.size) == k.check()).map(|e| e.file);
+                break;
+            }
+            n += 1;
+        }
+        found.ok_or(Status::NotFound)?
+    };
+    if x.dir || (folder == fs::Folder::Workout && x.size as usize > workout_file::FILE_MAX) {
+        return Err(Status::NotFound);
+    }
+    Ok(x)
 }
 
 /// The count a job has sent (`or` for none).
@@ -442,14 +548,33 @@ impl App {
             Ok(fs::Command::Cancel) => svc.reset(),
             Ok(fs::Command::List { seq }) if !busy => {
                 svc.reset();
-                svc.job = Job::List { seq, cur: None, count: 0 };
+                svc.job = Job::list(seq, fs::Folder::Activities, true);
+            }
+            Ok(fs::Command::ListIn { seq, folder }) if !busy => {
+                svc.reset();
+                svc.job = Job::list(seq, folder, false);
             }
             Ok(fs::Command::Read { seq, offset, name }) if !busy => {
                 svc.reset();
-                svc.job = Job::Read { seq, name, offset, file: None, seek: Seek::new(), count: 0 };
+                match fs::Key::new(fs::Folder::Activities, &name) {
+                    Some(key) => {
+                        svc.job = Job::read(seq, fs::Folder::Activities, key, offset);
+                        svc.info.begin(now);
+                    }
+                    None => svc.finish(seq, Status::BadRequest, 0),
+                }
+            }
+            Ok(fs::Command::ReadIn { seq, folder, offset, key }) if !busy => {
+                svc.reset();
+                svc.job = Job::read(seq, folder, key, offset);
                 svc.info.begin(now);
             }
-            Ok(fs::Command::List { seq } | fs::Command::Read { seq, .. }) => svc.finish(seq, Status::Busy, 0),
+            Ok(
+                fs::Command::List { seq }
+                | fs::Command::Read { seq, .. }
+                | fs::Command::ListIn { seq, .. }
+                | fs::Command::ReadIn { seq, .. },
+            ) => svc.finish(seq, Status::Busy, 0),
             Err((seq, status)) => svc.finish(seq, status, 0),
         }
     }

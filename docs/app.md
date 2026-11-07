@@ -144,6 +144,34 @@ There is no Service Changed indication, which is the standard way to tell iOS. T
 BLE_GATTS_EVT_SC_CONFIRM (0x54) after every indication, and Bryton's chip app hangs on it
 (`nrf_emu_hangs_on_the_service_changed_confirm`, `tools/nrf_emu.py`). So the table stays stable instead.
 
+## Workouts (read only)
+
+The planned workouts on the unit, seen from the phone (roadmap 9; editing, which writes to the card, is a later step).
+Stock keeps them in `\Workout\calendar\<YYYYMMDD>\<name>.fit`, long names and one folder a day, so the file service
+gained folder commands: LIST_IN `04 seq folder` and READ_IN `05 seq folder off[4] len key (check[2])` name one of a small table
+(0 `\Activities\`, 1 the workout calendar), never a path, with the same BUSY, bond and pacing rules (src/link/filesvc.rs,
+src/app/filesvc.rs). A workout's key is ten digits: its day and its number among that day's `.fit` files (the long name
+never travels: the name is read from the file). ENTRY_IN is `84 seq len key (check[2]) size[4]`; a workout's ENTRY_IN and
+READ_IN carry a 16-bit check (the FIT CRC of the file's name as listed, then of its size, `filesvc::name_check`), a
+ride's do not (they would pass the default MTU's 20 bytes). The key is a place in the directory order, so a folder that
+changed between LIST_IN and READ_IN (a file added, removed or rewritten) answers NOT FOUND, never another file. Finding a
+workout walks 200 entries of its day at most. LIST and READ are unchanged for the old app builds.
+
+The app lists the workouts after the rides (`RideBrowser.refreshWorkouts`: LIST_IN, then each file whole, a few KB), and
+decodes each with the firmware's own parser through `app/core/src/workout.rs` (`decodeWorkout(bytes, ftp, maxHr)`): name, time,
+steps with repeats already written out, targets as the file gives them (% of FTP, watts, heart rate, cadence) plus the
+watts and power zone for the rider's FTP, and an estimate of IF and TSS (4th-power mean over
+time; the firmware has none) that is shown only when every step is a power step with a time (a distance, Lap, heart rate
+or cadence step would leave it covering part of the workout). One workout that has gone from the unit since the list is
+skipped; the others still load. The detail page draws a step chart (a bar a step at its target's middle, coloured by zone)
+and lists the steps; the FTP and max heart rate are the profile sheet's (the same `ftp` and `maxHR` as the ride viewer; the detail page opens it).
+`-demo-workout` opens the first workout in the Simulator.
+
+| | |
+|:-:|:-:|
+| ![The workout list](img/app-workouts.png) | ![A workout's chart and steps](img/app-workout-detail.png) |
+| The list, demo mode (made-up workouts) | The detail: chart by zone, IF and TSS, steps |
+
 ## Seen on the unit, 2026-11-07
 
 On the owner's iPhone 16 Pro (iOS 27):

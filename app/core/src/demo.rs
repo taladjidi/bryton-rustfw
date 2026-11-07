@@ -3,7 +3,7 @@
 //! The rides are made by the firmware's FIT writer from invented samples: a made-up loop (a lap of about 5 km, a
 //! wobbling circle) around a public landmark, the Eiffel Tower in Paris; no real ride, nothing of the owner's.
 
-use bryton_rustfw::filesvc::{Command, FRAME_BIG, Frame, Name, Status};
+use bryton_rustfw::filesvc::{Command, FRAME_BIG, Folder, Frame, Key, Name, Status, name_check};
 
 /// The largest CHUNK payload: the fast link's frame (the largest MTU less 3) less the CHUNK header (kind, seq). The
 /// demo unit serves it, as the unit does on a phone that exchanged the MTU.
@@ -105,6 +105,8 @@ pub struct Faults {
 pub struct FakeUnit {
     /// The rides, `(YYMMDDhhmmss, bytes)`.
     pub rides: Vec<(Name, Vec<u8>)>,
+    /// The planned workouts, `(key, FIT file)` (see [`crate::workout::demo_workouts`]).
+    pub workouts: Vec<(Vec<u8>, Vec<u8>)>,
     /// What goes wrong next.
     pub faults: Faults,
 }
@@ -118,16 +120,18 @@ fn enc(f: Frame) -> Vec<u8> {
 impl FakeUnit {
     /// A unit with these rides.
     pub fn new(rides: Vec<(Name, Vec<u8>)>) -> FakeUnit {
-        FakeUnit { rides, faults: Faults { chunk: BIG_CHUNK, ..Faults::default() } }
+        FakeUnit { rides, workouts: Vec::new(), faults: Faults { chunk: BIG_CHUNK, ..Faults::default() } }
     }
 
     /// The Demo unit: three synthetic rides.
     pub fn demo() -> FakeUnit {
-        FakeUnit::new(vec![
+        let mut u = FakeUnit::new(vec![
             (*b"261101100000", synthetic_ride(9, 1500)),
             (*b"261101180000", synthetic_ride(17, 600)),
             (*b"261101070000", synthetic_ride(6, 2400)),
-        ])
+        ]);
+        u.workouts = crate::workout::demo_workouts();
+        u
     }
 
     /// The Data frames the unit notifies for one write to Control, in order.
@@ -141,6 +145,37 @@ impl FakeUnit {
             Command::Cancel => Vec::new(),
             Command::List { seq } if self.faults.busy => end(seq, Status::Busy, 0),
             Command::Read { seq, .. } if self.faults.busy => end(seq, Status::Busy, 0),
+            Command::ListIn { seq, .. } | Command::ReadIn { seq, .. } if self.faults.busy => end(seq, Status::Busy, 0),
+            Command::ListIn { seq, folder } => {
+                let files = if folder == Folder::Workout { &self.workouts } else { &Vec::new() };
+                let mut out: Vec<Vec<u8>> = files
+                    .iter()
+                    .filter_map(|(k, d)| {
+                        let size = u32::try_from(d.len()).ok()?;
+                        Some(enc(Frame::EntryIn {
+                            seq,
+                            key: Key::new(folder, k)?.with_check(name_check(k, size)),
+                            size,
+                        }))
+                    })
+                    .collect();
+                out.push(enc(Frame::End { seq, status: Status::Ok, count: u32::try_from(out.len()).unwrap_or(0) }));
+                out
+            }
+            Command::ReadIn { seq, folder, offset, key } => {
+                let file = (folder == Folder::Workout).then(|| {
+                    self.workouts.iter().find(|(k, d)| {
+                        k == key.bytes() && Some(key.check()) == u32::try_from(d.len()).ok().map(|n| name_check(k, n))
+                    })
+                });
+                match file.flatten() {
+                    Some((_, d)) => {
+                        let d = d.clone();
+                        self.serve(seq, offset, &d)
+                    }
+                    None => end(seq, Status::NotFound, 0),
+                }
+            }
             Command::List { seq } => {
                 let mut out: Vec<Vec<u8>> = self
                     .rides
@@ -154,23 +189,28 @@ impl FakeUnit {
                 let Some((_, data)) = self.rides.iter().find(|(n, _)| *n == name) else {
                     return end(seq, Status::NotFound, 0);
                 };
-                let Some(rest) = data.get(offset as usize..) else { return end(seq, Status::BadRequest, 0) };
-                let mut rest = rest.get(..rest.len().saturating_sub(self.faults.short_by)).unwrap_or(&[]);
-                let dropped = self.faults.drop_after.take();
-                if let Some(n) = dropped {
-                    rest = rest.get(..n.min(rest.len())).unwrap_or(&[]);
-                }
-                let mut out: Vec<Vec<u8>> = rest
-                    .chunks(self.faults.chunk.clamp(1, BIG_CHUNK))
-                    .map(|c| enc(Frame::Chunk { seq, data: c }))
-                    .collect();
-                if dropped.is_none() {
-                    let count = u32::try_from(rest.len()).unwrap_or(0).wrapping_add(self.faults.count_off);
-                    out.push(enc(Frame::End { seq, status: Status::Ok, count }));
-                }
-                out
+                let data = data.clone();
+                self.serve(seq, offset, &data)
             }
         }
+    }
+
+    /// The frames of a READ of `data` from `offset`, with the faults applied.
+    fn serve(&mut self, seq: u8, offset: u32, data: &[u8]) -> Vec<Vec<u8>> {
+        let end = |seq, status, count| vec![enc(Frame::End { seq, status, count })];
+        let Some(rest) = data.get(offset as usize..) else { return end(seq, Status::BadRequest, 0) };
+        let mut rest = rest.get(..rest.len().saturating_sub(self.faults.short_by)).unwrap_or(&[]);
+        let dropped = self.faults.drop_after.take();
+        if let Some(n) = dropped {
+            rest = rest.get(..n.min(rest.len())).unwrap_or(&[]);
+        }
+        let mut out: Vec<Vec<u8>> =
+            rest.chunks(self.faults.chunk.clamp(1, BIG_CHUNK)).map(|c| enc(Frame::Chunk { seq, data: c })).collect();
+        if dropped.is_none() {
+            let count = u32::try_from(rest.len()).unwrap_or(0).wrapping_add(self.faults.count_off);
+            out.push(enc(Frame::End { seq, status: Status::Ok, count }));
+        }
+        out
     }
 }
 

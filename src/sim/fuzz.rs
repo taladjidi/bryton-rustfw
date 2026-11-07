@@ -7854,16 +7854,21 @@ fn file_service_commands() {
     use super::filesvc_tests::{drain, paired, rides};
     use super::run;
     use crate::filesvc::{Command, Frame, Status};
-    let mut reached = [0u32; 6]; // entries, chunks, bad requests, not found, ok ends, busy ends
+    let mut reached = [0u32; 8]; // entries, chunks, bad requests, not found, ok ends, busy ends, workout entries, READ_IN of a listed key
     for seed in 1..=scaled(40) {
         let mut next = xorshift(seed);
         let (mut sim, mut app, control, data) = paired();
         let rides = rides();
+        let mut known: Vec<crate::filesvc::Key> = Vec::new(); // the workout keys (with their checks) LIST_IN gave
         for i in 0..16 {
             match i % 7 {
                 5 => app.emmc.lend(true), // the card goes to a computer for a command
                 6 => app.emmc.lend(false),
                 _ => {}
+            }
+            if i == 9 && seed % 2 == 0 {
+                // the day folder changes under the keys already listed: a file replaced by another of another size
+                sim.emmc.image = super::filesvc_tests::replace_workout(&sim.emmc.image, Some(&[7; 40]));
             }
             if i == 13 && seed % 3 == 0 {
                 app.leave_menus();
@@ -7882,7 +7887,31 @@ fn file_service_commands() {
             };
             let seq = next() as u8;
             let mut f = [0u8; 20];
-            let n = match r % 8 {
+            let wkey = |next: &mut dyn FnMut() -> u32| {
+                if !known.is_empty() && !next().is_multiple_of(4) {
+                    return known[next() as usize % known.len()];
+                }
+                let day = [b"20261020", b"20261023", b"20261024", b"20261025", b"20261026"][next() as usize % 5];
+                let mut k = day.to_vec();
+                k.extend(std::format!("{:02}", next() % 3).bytes());
+                crate::filesvc::Key::new(crate::filesvc::Folder::Workout, &k).unwrap()
+            };
+            let n = match r % 11 {
+                8 => Command::ListIn { seq, folder: crate::filesvc::Folder::Workout }.encode(&mut f),
+                9 => {
+                    let key = wkey(&mut next);
+                    reached[7] += u32::from(key.check() != 0);
+                    Command::ReadIn { seq, folder: crate::filesvc::Folder::Workout, offset, key }.encode(&mut f)
+                }
+                10 => {
+                    // a folder command mutated: a folder byte out of the table, a key with a separator or a lie in its length
+                    let n =
+                        Command::ReadIn { seq, folder: crate::filesvc::Folder::Workout, offset, key: wkey(&mut next) }
+                            .encode(&mut f);
+                    let at = [2, 7, 8 + next() as usize % 10][next() as usize % 3];
+                    f[at % n] = [9, 255, b'/', b'.', 0, 3][next() as usize % 6];
+                    n
+                }
                 0 | 1 => Command::List { seq }.encode(&mut f),
                 2 | 3 => Command::Read { seq, offset, name }.encode(&mut f),
                 4 => Command::Read { seq, offset, name: *b"123456789012" }.encode(&mut f),
@@ -7917,6 +7946,12 @@ fn file_service_commands() {
             for p in drain(&mut sim, data) {
                 match Frame::parse(&p).unwrap_or_else(|| panic!("seed {seed}: {p:?} does not parse")) {
                     Frame::Entry { .. } => reached[0] += 1,
+                    Frame::EntryIn { key, .. } => {
+                        reached[6] += 1;
+                        if known.len() < 16 {
+                            known.push(key);
+                        }
+                    }
                     Frame::Chunk { .. } => reached[1] += 1,
                     Frame::End { status: Status::BadRequest, .. } => reached[2] += 1,
                     Frame::End { status: Status::NotFound, .. } => reached[3] += 1,
@@ -7927,6 +7962,8 @@ fn file_service_commands() {
             }
         }
     }
-    std::println!("file service fuzz: {reached:?} (entries, chunks, bad requests, not found, ok ends)");
+    std::println!(
+        "file service fuzz: {reached:?} (entries, chunks, bad requests, not found, ok ends, busy, workout entries, READ_IN of a listed key)"
+    );
     assert!(reached.iter().all(|&n| n >= thr(20)), "reached {reached:?}");
 }
