@@ -82,7 +82,7 @@ CPU_MHZ = 64
 
 # SoftDevice SVC numbers (see the module doc for the sources)
 SVC_SD_ENABLE, SVC_APP_EVT_WAIT, SVC_EVT_GET = 0x10, 0x3E, 0x48
-SVC_BLE_ENABLE, SVC_BLE_EVT_GET, SVC_BLE_VERSION_GET, SVC_BLE_CFG_SET = 0x60, 0x61, 0x65, 0x69
+SVC_BLE_ENABLE, SVC_BLE_EVT_GET, SVC_BLE_VERSION_GET, SVC_BLE_OPT_SET, SVC_BLE_CFG_SET = 0x60, 0x61, 0x65, 0x67, 0x69
 SVC_ANT_EVENT_GET = 0xC1
 # The ANT commands seen during the app's start and the Rust test's nrf::start / ant_start / ant_open (logged by running
 # with every 0xC0+ number accepted): accepted with success and no output written, which is right for the setters
@@ -91,18 +91,19 @@ ANT_NO_OUTPUT = {0xC2, 0xC4, 0xCC, 0xCD, 0xD1, 0xD3, 0xDA, 0xFA}
 # SoftDevice calls of the Never commands that main's stubs (BLE_NO_OUTPUT) do not cover: connect_cancel and
 # hv_confirm. The table's opcodes are the SVC numbers the app issues (BLE_SVC_BASE 0x60 + the offset in ble.h,
 # ble_gap.h, ble_gattc.h of S132 v5), inferred from the v5 enumeration order. Only result 0 is stubbed.
-NEVER_SVC = {0x8D, 0x9D}
+NEVER_SVC = {0x8D, 0x9D}  # (0x67, opt_set, is in BLE_SESSION)
 # The six commands stock never sends, as rustfw's builders encode them (chip_table_tests.rs, NEVER_BYTES: the same
 # hex, checked there against the builders' output).
 NEVER_CMDS = ["0074", "0078c403", "008d", "009d00000d00", "00a3020001010829010121000200000200020001000101",
-              "00a4ffff0300010000030001070707"]
+              "00a4ffff0300010000030001070707", "0067020000000101"]
 # BLE calls with no output, see the module doc: adv_data_set, adv_start, adv_stop, appearance_set, ppcp_set,
 # device_name_set, scan_start, scan_stop, gatts value_set (it writes back the length it was given: left as is)
 BLE_NO_OUTPUT = {0x72, 0x73, 0x74, 0x78, 0x7A, 0x7C, 0x8A, 0x8B, 0xA4}
 # The fast link's session calls, also inputs only (S132 v5 SVC enums from their bases, pc-ble-driver sd_api_v5 ble_gap.h,
 # ble_gatts.h): conn_param_update 0x75, phy_update 0x8F, data_length_update 0x90 (its limitation output is NULL for us),
-# gatts_hvx 0xA6 (the length is in/out and left as given), sys_attr_set 0xA9, exchange_mtu_reply 0xAD.
-BLE_SESSION = {0x75, 0x8F, 0x90, 0xA6, 0xA9, 0xAD}
+# gatts_hvx 0xA6 (the length is in/out and left as given), sys_attr_set 0xA9, exchange_mtu_reply 0xAD; opt_set 0x67
+# (ble.h: BLE_SVC_BASE + 7, after ENABLE, EVT_GET, UUID_VS_ADD, UUID_DECODE, UUID_ENCODE, VERSION_GET, USER_MEM_REPLY).
+BLE_SESSION = {0x67, 0x75, 0x8F, 0x90, 0xA6, 0xA9, 0xAD}
 SVC_UUID_VS_ADD, SVC_SERVICE_ADD, SVC_CHAR_ADD, SVC_DESC_ADD = 0x62, 0xA0, 0xA2, 0xA3
 EVENT_RX = 0x80  # ant_parameters.h: the broadcast data event
 NOT_FOUND = 5  # NRF_ERROR_NOT_FOUND
@@ -540,6 +541,9 @@ class Emu:
             what = {0x20: f"conn_count={c[2]} event_length={c[4]}", 0x22: f"hvn_tx_queue_size={c[2]}",
                     0x23: f"att_mtu={c[2] | c[3] << 8}", 0x40: f"periph={c[0]} central={c[1]} central_sec={c[2]}"}
             return f"cfg_set id={a[0]:#x} " + (f"tag={c[0]} " if 0x20 <= a[0] < 0x40 else "") + what.get(a[0], "")
+        if n == SVC_BLE_OPT_SET:  # sd_ble_opt_set(opt_id, ble_opt_t*): id 2 is BLE_COMMON_OPT_CONN_EVT_EXT {u8 enable:1}
+            m = self.mem(a[1], 1)
+            return f"opt_set id={a[0]} " + ("params=null" if m is None else f"enable={m[0] & 1}")
         if n == 0x75:
             return f"conn_param_update conn={a[0]} params={u16s(a[1], 4)}"
         if n == 0x8F:

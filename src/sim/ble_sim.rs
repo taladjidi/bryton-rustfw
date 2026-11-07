@@ -173,7 +173,11 @@ pub struct Server {
 ///   event length (the configuration 0x20) allows, then reports them with BLE_GATTS_EVT_HVN_TX_COMPLETE;
 /// - a notification is cut into link-layer packets of the data length (27, or what was asked for), each costing its
 ///   bytes plus 10 of overhead at 8 us a byte (1M; half at 2M) and 380 us of inter-frame spaces and the empty
-///   acknowledgement (inferred from the Core spec, Vol 6 B 4.1);
+///   acknowledgement (inferred from the Core spec, Vol 6 B 4.1); an event sends whole packets only while the next one
+///   fits in the event length (one at least), and a notification is reported once its last packet is out;
+/// - with the connection event length extension (`sd_ble_opt_set`, `BLE_COMMON_OPT_CONN_EVT_EXT`) the event lasts
+///   until the next one is due, whatever the length configured (Nordic's S132 v5 documentation, ble.h; the other link's
+///   time is not modelled);
 /// - the MTU is the smaller of the phone's and the Server Rx MTU the unit answered (at most the configured one).
 pub struct Radio {
     /// The 2M PHY is available (the SoftDevice does it).
@@ -194,6 +198,10 @@ pub struct Radio {
     pub next_event: u64,
     /// Notifications that left, in all.
     pub completed: u32,
+    /// Bytes of the head notification (L2CAP frame) already sent in earlier events.
+    pub head_sent: usize,
+    /// The connection event length extension is on (chip wide, survives a new connection).
+    pub ext: bool,
     /// Replies to an MTU exchange the chip refused (a reply above the configured MTU).
     pub bad_replies: u32,
 }
@@ -210,6 +218,8 @@ impl Default for Radio {
             queue: Default::default(),
             next_event: 0,
             completed: 0,
+            head_sent: 0,
+            ext: false,
             bad_replies: 0,
         }
     }
@@ -218,16 +228,15 @@ impl Default for Radio {
 impl Radio {
     /// A new connection: the defaults of the link layer.
     fn connected(&mut self, now: u64) {
-        *self = Radio { phy2_able: self.phy2_able, next_event: now, ..Radio::default() };
+        *self = Radio { phy2_able: self.phy2_able, ext: self.ext, next_event: now, ..Radio::default() };
     }
 
-    /// Air time of a notification of `len` value bytes, us.
-    fn air_us(&self, len: usize) -> u64 {
-        let l2cap = (len + 7) as u64;
-        let dle = u64::from(self.dle.max(27));
-        let pdus = l2cap.div_ceil(dle);
+    /// Air time of the next link-layer packet of a notification of `len` value bytes, us, and its payload bytes.
+    pub(super) fn pdu_us(&self, len: usize) -> (u64, usize) {
+        let l2cap = len + 7;
+        let n = (l2cap - self.head_sent.min(l2cap)).min(usize::from(self.dle.max(27)));
         let per_byte = if self.phy2 { 4 } else { 8 };
-        (l2cap + 10 * pdus) * per_byte + 380 * pdus
+        ((n as u64 + 10) * per_byte + 380, n)
     }
 }
 
@@ -766,6 +775,12 @@ impl Nordic {
                 self.cfg.push(args.to_vec());
                 ok(self, &[]);
             }
+            0x67 => {
+                // sd_ble_opt_set(opt_id, ble_opt_t*): the connection event length extension (id 2), one enable bit
+                self.server.radio.ext = args[..4] == [2, 0, 0, 0] && args.get(5).is_some_and(|b| b & 1 == 1);
+                self.opt_sets.push(args.to_vec());
+                ok(self, &[]);
+            }
             0x8b => {
                 self.scan_end = None;
                 ok(self, &[]);
@@ -825,13 +840,18 @@ impl Nordic {
                     let (tx, rx) = (args[3], args[4]);
                     let r = &mut self.server.radio;
                     r.phy2 = r.phy2_able && tx == 2 && rx == 2;
+                    let (tx, rx) = if r.phy2 { (2, 2) } else { (1, 1) };
+                    self.evt(0x22, &[0, 0, 0, tx, rx]); // BLE_GAP_EVT_PHY_UPDATE: status, the PHYs now
                 }
                 ok(self, &[]);
             }
             0x90 => {
                 // sd_ble_gap_data_length_update(conn, {tx, rx, tx time, rx time}*, limitation*)
                 if u16_at(0) == 0 && args[2] == 1 {
-                    self.server.radio.dle = u16_at(3).clamp(27, 251);
+                    let dle = u16_at(3).clamp(27, 251);
+                    self.server.radio.dle = dle;
+                    let (o, t) = (dle.to_le_bytes(), (dle * 8 + 112).to_le_bytes());
+                    self.evt(0x24, &[0, 0, o[0], o[1], o[0], o[1], t[0], t[1], t[0], t[1]]);
                 }
                 ok(self, &[]);
             }
@@ -1089,22 +1109,29 @@ impl Nordic {
         let connected = self.phone.as_ref().is_some_and(|p| p.connected);
         let iv = self.server.radio.interval_ms.max(1);
         while connected && self.server.radio.next_event <= now {
+            let ev_us = self.event_us();
             let r = &mut self.server.radio;
             r.next_event += iv;
             if r.queue.is_empty() {
                 r.next_event += (now.saturating_sub(r.next_event) / iv) * iv; // idle events are skipped
                 continue;
             }
-            let (mut budget, mut done) = (self.event_us(), 0u8);
+            let (mut budget, mut done, mut first) = (if r.ext { iv * 1000 } else { ev_us }, 0u8, true);
             while let Some(&len) = self.server.radio.queue.front() {
-                let air = self.server.radio.air_us(len);
-                if done > 0 && air > budget {
+                let r = &mut self.server.radio;
+                let (air, n) = r.pdu_us(len);
+                if !first && air > budget {
                     break;
                 }
-                budget = budget.saturating_sub(air);
-                self.server.radio.queue.pop_front();
-                self.server.radio.completed += 1;
-                done += 1;
+                (budget, first, r.head_sent) = (budget.saturating_sub(air), false, r.head_sent + n);
+                if r.head_sent >= len + 7 {
+                    r.queue.pop_front();
+                    (r.head_sent, r.completed) = (0, r.completed + 1);
+                    done = done.saturating_add(1);
+                }
+            }
+            if done == 0 {
+                continue;
             }
             self.evt(0x57, &[0, 0, done]);
         }

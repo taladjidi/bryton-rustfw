@@ -94,12 +94,13 @@ fn nrf_emu_the_fast_links_calls_reach_the_softdevice_as_meant() {
     nrf::start(&mut sim).expect("start");
     let want = [
         "softdevice_enable",
-        "cfg_set id=0x20 tag=1 conn_count=2 event_length=3",
+        "cfg_set id=0x20 tag=1 conn_count=2 event_length=6",
         "cfg_set id=0x40 periph=1 central=1 central_sec=0",
         "cfg_set id=0x23 tag=1 att_mtu=247",
         "cfg_set id=0x22 tag=1 hvn_tx_queue_size=4",
         // the RAM base the app hands the SoftDevice: its own link's start of RAM (the SoftDevice owns the bytes below)
         "enable ram_base=0x20006800",
+        "opt_set id=2 enable=1", // the connection event length extension, decoded by the app into the struct it passes
         "version_get",
     ];
     assert_eq!(pipe.0.borrow_mut().calls(), want, "the start");
@@ -190,11 +191,11 @@ fn nrf_emu_encodes_the_events_the_fast_link_relies_on() {
             gap_evt(0x23, &[le16(251), le16(251), le16(0), le16(0)].concat()),
             Event::ParamRequest { conn: CONN, id: 0x23 },
         ),
-        ("PHY update (not decoded)", gap_evt(0x22, &[0, 2, 2]), Event::Other),
+        ("PHY update", gap_evt(0x22, &[0, 2, 2]), Event::PhyUpdate { conn: CONN, status: 0, tx: 2, rx: 2 }),
         (
-            "data length update (not decoded)",
+            "data length update",
             gap_evt(0x24, &[le16(251), le16(251), le16(2120), le16(2120)].concat()),
-            Event::Other,
+            Event::DataLengthUpdate { conn: CONN, octets: (251, 251), time: (2120, 2120) },
         ),
         ("ANCS notification of 244 bytes", hvx, Event::Hvx { conn: CONN, handle: 0x2a, kind: 1, data: &big }),
     ];
