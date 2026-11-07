@@ -15,10 +15,20 @@ pub(super) fn rides() -> [(Name, Vec<u8>); 2] {
 /// A unit with the rides (and what must stay hidden) on the card, paired and connected with a phone that has
 /// enabled Data; the handles of Control and Data.
 pub(super) fn paired() -> (Sim, App, u16, u16) {
+    let (mut sim, mut app) = bonded(0);
+    let (control, data) = app.phone.files.handles.expect("the service was added");
+    sim.nordic.phone_subscribe(data + 1, true);
+    run(&mut sim, &mut app, 200);
+    (sim, app, control, data)
+}
+
+/// The unit with the rides on a chip holding `vs_max` vendor bases (0: the default), bonded to the phone.
+fn bonded(vs_max: usize) -> (Sim, App) {
     let mut phone = PhoneSim::new(true);
     phone.connect_at = 1000;
     let (mut sim, mut app) = super::tests::unit_with(None, |sim| {
         sim.nordic.phone = Some(phone);
+        sim.nordic.vs_max = vs_max;
         let mut d = Ram(sim.emmc.image.clone(), 0);
         for (name, data) in rides() {
             put_file(&mut d, "Activities", &std::format!("{}.fit", std::str::from_utf8(&name).unwrap()), &data);
@@ -30,10 +40,13 @@ pub(super) fn paired() -> (Sim, App, u16, u16) {
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 4000);
     assert_eq!(app.phone.link(), Link::Secure);
-    let (control, data) = app.phone.files.handles.expect("the service was added");
-    sim.nordic.phone_subscribe(data + 1, true);
-    run(&mut sim, &mut app, 200);
-    (sim, app, control, data)
+    (sim, app)
+}
+
+/// Nothing was answered and nothing is under way, after 500 ms.
+fn stays_silent(sim: &mut Sim, app: &mut App, data: u16) {
+    run(sim, app, 500);
+    assert!(!app.phone.files.active() && drain(sim, data).is_empty());
 }
 
 /// The Data frames notified so far, drained.
@@ -42,6 +55,29 @@ pub(super) fn drain(sim: &mut Sim, data: u16) -> Vec<Vec<u8>> {
     let (mine, rest): (Vec<_>, Vec<_>) = sent.into_iter().partition(|s| s.0 == data);
     sim.nordic.server.sent = rest;
     mine.into_iter().map(|s| s.1).collect()
+}
+
+/// Writes a READ of `name` from 0 to Control, without waiting for the answer.
+fn start_read(sim: &mut Sim, control: u16, seq: u8, name: Name) {
+    let mut f = [0; 20];
+    let n = Command::Read { seq, offset: 0, name }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+}
+
+/// Runs `passes` of 100 ms and gathers the Data frames: the file bytes and the END (status, count).
+fn collect(sim: &mut Sim, app: &mut App, data: u16, passes: u32) -> (Vec<u8>, Option<(Status, u32)>) {
+    let (mut kept, mut end): (Vec<u8>, _) = (Vec::new(), None);
+    for _ in 0..passes {
+        run(sim, app, 100);
+        for p in drain(sim, data) {
+            match Frame::parse(&p) {
+                Some(Frame::Chunk { data, .. }) => kept.extend(data),
+                Some(Frame::End { status, count, .. }) => end = Some((status, count)),
+                _ => {}
+            }
+        }
+    }
+    (kept, end)
 }
 
 /// What an answer held.
@@ -134,23 +170,13 @@ fn a_ride_or_the_lent_card_makes_it_busy() {
     assert_eq!(a.end, Some((Status::Busy, 0)), "lent over USB");
     app.emmc.lend(false);
     // a transfer under way when the ride begins ends with BUSY, and the ride records on
-    let mut f = [0; 20];
-    let n = Command::Read { seq: 5, offset: 0, name }.encode(&mut f);
-    sim.nordic.phone_write(control, &f[..n]);
+    start_read(&mut sim, control, 5, name);
     run(&mut sim, &mut app, 300);
     app.leave_menus();
     app.input(&mut sim, Input::Select); // Start
-    let mut end = None;
-    for _ in 0..40 {
-        run(&mut sim, &mut app, 100);
-        for p in drain(&mut sim, data) {
-            if let Some(Frame::End { status, .. }) = Frame::parse(&p) {
-                end = Some(status);
-            }
-        }
-    }
+    let (_, end) = collect(&mut sim, &mut app, data, 40);
     assert_eq!(app.ride.state(), ride::State::Running);
-    assert_eq!(end, Some(Status::Busy), "the transfer was cut");
+    assert_eq!(end.map(|e| e.0), Some(Status::Busy), "the transfer was cut");
     for cmd in [Command::List { seq: 6 }, Command::Read { seq: 7, offset: 0, name }] {
         let a = ask(&mut sim, &mut app, control, data, cmd, 5000);
         assert_eq!(a.end, Some((Status::Busy, 0)), "{cmd:?} during a ride");
@@ -167,8 +193,7 @@ fn nothing_is_served_without_the_encrypted_bond() {
     // and the app itself ignores one that reaches it on a link it does not hold secure
     app.phone.secure = false;
     app.files_command(&[1, 1]);
-    run(&mut sim, &mut app, 500);
-    assert!(!app.phone.files.active() && drain(&mut sim, data).is_empty());
+    stays_silent(&mut sim, &mut app, data);
 }
 
 #[test]
@@ -195,16 +220,8 @@ fn only_activities_rides_are_reachable() {
 fn a_dropped_link_resumes_from_the_bytes_kept() {
     let (mut sim, mut app, control, data) = paired();
     let [(name, bytes), _] = rides();
-    let mut f = [0; 20];
-    let n = Command::Read { seq: 1, offset: 0, name }.encode(&mut f);
-    sim.nordic.phone_write(control, &f[..n]);
-    run(&mut sim, &mut app, 1500);
-    let mut kept: Vec<u8> = Vec::new();
-    for p in drain(&mut sim, data) {
-        if let Some(Frame::Chunk { data, .. }) = Frame::parse(&p) {
-            kept.extend(data);
-        }
-    }
+    start_read(&mut sim, control, 1, name);
+    let (mut kept, _) = collect(&mut sim, &mut app, data, 15);
     assert!(!kept.is_empty() && kept.len() < bytes.len(), "{} kept", kept.len());
     // the phone walks away and comes back
     let ph = sim.nordic.phone.as_mut().unwrap();
@@ -239,24 +256,12 @@ fn a_phone_that_never_subscribes_does_not_hold_the_service() {
 fn a_ride_starting_mid_read_counts_only_the_bytes_the_phone_got() {
     let (mut sim, mut app, control, data) = paired();
     let [(name, bytes), _] = rides();
-    let mut f = [0; 20];
-    let n = Command::Read { seq: 1, offset: 0, name }.encode(&mut f);
-    sim.nordic.phone_write(control, &f[..n]);
+    start_read(&mut sim, control, 1, name);
     run(&mut sim, &mut app, 1000);
     assert!(app.phone.files.has_pending(), "a chunk waits for the stack");
     app.leave_menus();
     app.input(&mut sim, Input::Select); // Start
-    let (mut kept, mut end): (Vec<u8>, _) = (Vec::new(), None);
-    for _ in 0..40 {
-        run(&mut sim, &mut app, 100);
-        for p in drain(&mut sim, data) {
-            match Frame::parse(&p) {
-                Some(Frame::Chunk { data, .. }) => kept.extend(data),
-                Some(Frame::End { status, count, .. }) => end = Some((status, count)),
-                _ => {}
-            }
-        }
-    }
+    let (kept, end) = collect(&mut sim, &mut app, data, 40);
     assert_eq!(end, Some((Status::Busy, kept.len() as u32)), "END counts what was taken");
     assert_eq!(app.ride.state(), ride::State::Running);
     assert_eq!(kept, bytes[..kept.len()]);
@@ -281,17 +286,14 @@ fn an_encrypted_link_without_the_bond_is_refused() {
     let (mut sim, mut app, control, data) = paired();
     app.phone.stored.bond = None;
     sim.nordic.phone_write(control, &[1, 1]);
-    run(&mut sim, &mut app, 500);
-    assert!(!app.phone.files.active() && drain(&mut sim, data).is_empty());
+    stays_silent(&mut sim, &mut app, data);
 }
 
 #[test]
 fn deleting_a_ride_ends_a_transfer_under_way() {
     let (mut sim, mut app, control, data) = paired();
     let [(name, _), _] = rides();
-    let mut f = [0; 20];
-    let n = Command::Read { seq: 1, offset: 0, name }.encode(&mut f);
-    sim.nordic.phone_write(control, &f[..n]);
+    start_read(&mut sim, control, 1, name);
     run(&mut sim, &mut app, 500);
     app.phone.files.abort(Status::Busy); // what delete_past does first
     run(&mut sim, &mut app, 500);
@@ -305,14 +307,7 @@ fn deleting_a_ride_ends_a_transfer_under_way() {
 
 #[test]
 fn a_chip_with_nine_bases_costs_the_file_service_not_the_trainer_or_the_phone() {
-    let mut phone = PhoneSim::new(true);
-    phone.connect_at = 1000;
-    let (mut sim, mut app) = super::tests::unit_with(None, |sim| {
-        sim.nordic.phone = Some(phone);
-        sim.nordic.vs_max = 9;
-    });
-    app.activate(&mut sim, Menu::Phone, 1);
-    run(&mut sim, &mut app, 4000);
+    let (sim, app) = bonded(9);
     assert_eq!(app.phone.link(), Link::Secure, "the phone link works");
     assert!(app.phone.files.handles.is_none(), "no file service");
     assert_eq!(sim.nordic.server.vs.len(), 9);
