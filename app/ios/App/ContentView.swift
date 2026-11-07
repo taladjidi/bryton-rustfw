@@ -12,7 +12,9 @@ struct ContentView: View {
     @StateObject private var link = UnitLink()
     @StateObject private var rides = RideBrowser()
     @State private var profile = false
+    @StateObject private var store = WorkoutStore()
     @State private var path: [WorkoutRoute] = []
+    @State private var editing: EditorTarget?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -41,9 +43,15 @@ struct ContentView: View {
                     }
                 }
                 WorkoutSection(rides: rides)
+                PhoneWorkoutSection(store: store) { editing = $0 }
             }
+            .sheet(item: $editing) { WorkoutEditor(target: $0, store: store) }
             .navigationDestination(for: WorkoutRoute.self) { r in
-                if let f = rides.workouts.first(where: { $0.key == r.key }) { WorkoutDetail(file: f) }
+                if let f = rides.workouts.first(where: { $0.key == r.key }) { WorkoutDetail(file: f) { d in
+                    var d = d
+                    d.name = pretty(d.name)
+                    editing = EditorTarget(draft: d, file: nil)
+                } }
             }
             .navigationTitle("Bike computer")
             .refreshable {
@@ -65,6 +73,15 @@ struct ContentView: View {
                 if args.contains("-demo-workout") {  // open the first workout's page
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         if let f = rides.workouts.first { path = [WorkoutRoute(key: f.key)] }
+                    }
+                }
+                if args.contains("-demo-edit") {  // the editor on a copy of the first workout (after a saved one)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        guard let f = rides.workouts.first, let w = decodeWorkout(bytes: f.bytes, ftp: 200, maxHr: 190) else { return }
+                        var d = draftFromView(view: w)
+                        d.name = pretty(d.name)
+                        if args.contains("-demo-saved") { _ = try? store.save(d, replacing: nil) }
+                        else { editing = EditorTarget(draft: d, file: nil) }
                     }
                 }
                 if args.contains("-demo-dl") {

@@ -172,6 +172,35 @@ and lists the steps; the FTP and max heart rate are the profile sheet's (the sam
 | ![The workout list](img/app-workouts.png) | ![A workout's chart and steps](img/app-workout-detail.png) |
 | The list, demo mode (made-up workouts) | The detail: chart by zone, IF and TSS, steps |
 
+## Workout editor (phone side, nothing sent yet)
+
+Workouts are made on the phone and kept in the app's Documents (`Workouts/<name>.fit`), listed in an "On the phone"
+section under the unit's. Sending them to the unit waits for the firmware's write commands: the editor's "Send to the
+unit" button is disabled with a footnote. The core's `draft.rs` holds the model and the encoder:
+- `WorkoutDraft` is a name and a flat list of items; an item is a step (length by time, distance or the Lap key; target
+  none, power in % of FTP or watts, heart rate in % of max or bpm, cadence; intensity) or a repeat of the N items before
+  it, T times in all. That is the file's own repeat step (`duration_type` 6, from step `i - N`), so repeats nest the way
+  the firmware's reader expands them. "Until Lap" and "open" are one thing in FIT (`duration_type` 5).
+- `encodeWorkout` writes the FIT file the unit's parser reads (the same writer as the Demo workouts) and refuses what the
+  unit cannot take, with a message: a name over 15 characters or not printable ASCII, no step, over 64 items, over 96
+  steps once repeats are written out (the reader's `STEPS`), a target or length out of range, a repeat that reaches
+  before the first item. `draftPreview` encodes and decodes it with the firmware's parser, so the live chart, the IF / TSS
+  estimate and the watts are the unit's own reading. `draftFromView` makes a draft from a decoded workout ("Edit a copy"):
+  runs of equal steps are folded back into repeats.
+- `import.rs`, `importWorkout(bytes, fallbackName)`: ZWO (Warmup, Cooldown, Ramp, SteadyState, IntervalsT, FreeRide,
+  MaxEffort; a ramp becomes one step with a range, not sub-steps), ERG (watts) and MRC (% of FTP): each pair of points
+  is a step, a slope a range step. A file over the unit's limits opens anyway and the editor shows the refusal.
+- Tests: every target and length type round-trips through the firmware's parser, nested repeats, each limit, a fuzz over
+  random drafts (every accepted one reads back exactly) and over mutated import files.
+
+The editor (`WorkoutEditor.swift`): name, the chart, a step list with add, reorder, delete, duplicate (swipe right) and
+a form per step. It opens from "New workout", "Import from Files" (Files app, any file), a saved workout, or "Edit a copy"
+on a unit workout's page. `-demo -demo-edit` opens a copy of the first demo workout in the Simulator (`-demo-saved` saves it).
+
+| |
+|:-:|
+| ![The workout editor](img/app-workout-edit.png) |
+
 ## Seen on the unit, 2026-11-07
 
 On the owner's iPhone 16 Pro (iOS 27):

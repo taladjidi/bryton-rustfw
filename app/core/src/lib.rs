@@ -13,9 +13,11 @@
 //!   LucasStop/LogiBattery issue 121): to be confirmed on the phone.
 
 pub mod demo;
+pub mod draft;
 pub mod files;
 #[cfg(test)]
 mod files_tests;
+pub mod import;
 pub mod ride;
 pub mod workout;
 

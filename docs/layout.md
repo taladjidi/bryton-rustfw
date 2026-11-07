@@ -456,6 +456,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   firmware's own `filesvc` encoder, Data frames in, resume from the bytes kept, progress and speed. `files_tests.rs`: its
   tests and fuzz. `demo.rs`: a fake unit (the firmware's FIT writer for synthetic rides) for the tests and Demo mode.
   `workout.rs`: a workout file decoded by the firmware's parser for the screen, and the Demo unit's synthetic workouts.
+  `draft.rs`: the workout editor's draft, its FIT encoder with the unit's limits, the preview through the firmware's parser
+  and the copy of a decoded workout; `import.rs`: ZWO, ERG and MRC read into a draft. `app/ios/App/WorkoutEditor.swift`: the
+  editor, the phone's workout store and the "On the phone" section.
   `app/ios/App/WorkoutViews.swift`: the Workouts section, a workout's step chart and step list.
   `app/ios/App/RideBrowser.swift`: the ride list and download model, the Demo transport. `BleFileTransport.swift`: the
   file service over CoreBluetooth. `app/ios/Info-extra.plist`: UIFileSharingEnabled (no INFOPLIST_KEY form).

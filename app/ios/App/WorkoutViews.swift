@@ -17,13 +17,13 @@ struct WorkoutRoute: Hashable { let key: String }
 /// The power zones' colours (Coggan zones 1 to 7, as the unit's ride pages draw them).
 private let zoneColors: [Color] = [.gray, .blue, .green, .yellow, .orange, .red, .purple]
 
-private func zoneColor(_ z: UInt8) -> Color { z >= 1 && z <= 7 ? zoneColors[Int(z) - 1] : .secondary }
+func zoneColor(_ z: UInt8) -> Color { z >= 1 && z <= 7 ? zoneColors[Int(z) - 1] : .secondary }
 
 /// The unit keeps names in capitals: "SWEET SPOT 3X10" as "Sweet spot 3x10".
-private func pretty(_ name: String) -> String { name.prefix(1) + name.dropFirst().lowercased() }
+func pretty(_ name: String) -> String { name.prefix(1) + name.dropFirst().lowercased() }
 
 /// "1 h 05" or "45 min".
-private func duration(_ s: UInt32) -> String {
+func duration(_ s: UInt32) -> String {
     let m = (s + 30) / 60
     return m >= 60 ? String(format: "%d h %02d", m / 60, m % 60) : "\(m) min"
 }
@@ -71,6 +71,7 @@ struct WorkoutSection: View {
 
 struct WorkoutDetail: View {
     let file: WorkoutFile
+    var onEdit: (WorkoutDraft) -> Void = { _ in }
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
     @State private var profile = false
@@ -94,6 +95,11 @@ struct WorkoutDetail: View {
                     }
                 } footer: {
                     Text("Targets follow your profile. IF and TSS are estimates from power steps with a time; they are left out when other steps are mixed in.")
+                }
+                Section {
+                    Button { onEdit(draftFromView(view: w)) } label: { Label("Edit a copy", systemImage: "square.and.pencil") }
+                } footer: {
+                    Text("The copy stays on the phone; the workout on the unit is not changed.")
                 }
                 Section("Steps") {
                     ForEach(Array(w.steps.enumerated()), id: \.offset) { i, s in StepRow(index: i + 1, step: s) }

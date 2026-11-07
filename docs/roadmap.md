@@ -358,6 +358,9 @@ Steps:
 - **Workouts seen (read only) done 2026-11-07 (docs/app.md "Workouts"):** LIST_IN / READ_IN with a folder table
   (`\Activities\`, the workout calendar), the core's `decodeWorkout` (the firmware's parser; IF and TSS estimates), a
   Workouts section and a step chart in the iOS app; Simulator demo only. Editing (writes to the card) is the next step.
+- **Workout editor, phone side done 2026-11-07 (docs/app.md "Workout editor"):** the core's `encodeWorkout` (round-trips
+  through the firmware's parser, the unit's limits refused), ZWO / ERG / MRC import, an editor with a live chart, drafts kept
+  in the app's Documents; Simulator only. Left: sending to the unit (needs the firmware's write commands).
 - **Skeleton done (docs/app.md):** `app/core` (UniFFI, decodes Battery Level and maker, uses one item of the firmware's
   library) and `app/ios` (finds the unit, reads and shows both); on a real iPhone still to be tried. The file service (A1 reads) is in the firmware.
 - **A2. The core crate** (`app-core/`): the protocol, sync.py's logic ported, the fake transport, round-trip tests
