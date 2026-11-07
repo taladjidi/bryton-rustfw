@@ -220,6 +220,8 @@ impl Inner {
             Status::NotFound => self.fail(FileError::NotFound),
             Status::BadRequest => self.fail(FileError::BadRequest),
             Status::Io | Status::Ok => self.fail(FileError::Card),
+            // the writes' statuses: never the answer to a list or a read
+            Status::ReadOnly | Status::Mismatch | Status::Full => self.fail(FileError::BadRequest),
         }
     }
 }

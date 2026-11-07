@@ -30,6 +30,25 @@ Seen: simulator (a folder changed between the two commands, fuzz), app core test
 
 On the unit: a RAM run (`tools/dev.py run`, no ride) and the app bonded: LIST_IN of the real calendar lists the owner's workouts, each reads whole and decodes, and a file changed on the card between the list and a read gives NOT FOUND.
 
+**Workouts sent and deleted by the phone (WRITE_BEGIN / WRITE_DATA / WRITE_END / DELETE, docs/app.md "Workouts")**
+
+Seen: simulator only (both MTUs, every refusal, a power cut after every sector written, the fuzz). The app's editor is
+not built yet: on the unit the commands go through nRF Connect (or a test build of the app).
+
+On the unit, with the owner present (it writes the card):
+1. Build the card-writing ride image (`EMMC_WRITE=1`, which is also what makes the commands answer anything but READ
+   ONLY: the default RAM-run build answers 5) and install it as the owner installs a ride build (docs/install.md);
+   `tools/dev.py info` says `card writes yes`. No ride running.
+2. Bond the phone, enable Data, write WRITE_BEGIN for today with the size and CRC-32 of a small workout file (one that
+   `tools/fit_check.py` or the app's core decodes), then its bytes in WRITE_DATA frames of 14 bytes (and once of 238
+   on the fast link: Control must accept 244 bytes, which only the unit's radio chip can say), then WRITE_END: END ok
+   with the size. Check the unit's WORKOUTS list shows it today, LIST_IN lists it and READ_IN gives the same bytes.
+3. The same with a wrong CRC (MISMATCH, nothing new in WORKOUTS), during a ride (BUSY), then DELETE of the listed key:
+   END ok, gone from WORKOUTS.
+4. Over USB (`dev.py drive`) the volume passes the computer's fsck, and `\Rustfw\workout.tmp` is there (kept on
+   purpose). Switch to stock: it lists the workout in its calendar for that day (stock reads `<name>.fit` of the day
+   folder; that it needs no `.json` beside it is inferred).
+
 **The fast phone link (2026-11-07, roadmap 3c; `nrf::CFG_FAST`, app/filesvc.rs)**
 
 Seen: simulator; Bryton's real radio app in the emulator (`src/sim/nrf_session_tests.rs`); unit 2026-11-07 (RAM run, iPhone 16 Pro), steps 1 to 3 done, speed measured twice. The chip-bytes wake build (main 7bd424c5) is not measured on the unit yet.
