@@ -21,9 +21,20 @@
 //! (`PPCP` of app/phone.rs and PHY auto) when the answer ends, stalls, is cancelled or the link drops. The unit
 //! measured 3 KB/s on 2026-11-07 (docs/status.md), so what the link really has is kept in [`LinkInfo`] (the interval,
 //! PHY and data length from the stack's events, the boost calls' result codes, the last READ's bytes, time, frames and
-//! confirmations) and shown by `dev.py info`; the connection event length extension (`nrf::OPT_CONN_EVT_EXT`) keeps an
+//! confirmations, the frames the stack refused for a full queue, the passes that sent) and shown by `dev.py info`; the connection event length extension (`nrf::OPT_CONN_EVT_EXT`) keeps an
 //! event going while data is queued. The
 //! UART (1 Mbaud, about 100 KB/s raw, 2.6 ms for a full notification) is then the cap.
+//!
+//! **16.6 KB/s on the unit (2026-11-07, 20989f2a), and why.** 383,218 B in 23 s: 81 notifications a second, 1.6 per
+//! HVN_TX_COMPLETE, 1.2 per connection event. Each costs the loop one blocking UART round trip of about 3.1 ms
+//! (`dev.py prof`: the READ's step time is that and nothing else), the loop was awake about 60 % of the READ, and the
+//! chip's events were read once per pass (at the step's start, or kept while a command waited), so a freed slot waited
+//! for the pass's 10 ms sleep and the step before it was refilled: the stack's queue ran empty between passes. Now the
+//! chip's bytes wake the sleep during the READ's pass (`LoopPolicy::begin_sleep`, `Wake::bytes` without `io`), so an
+//! HVN_TX_COMPLETE reaches [`App::step_files`] at once and refills the slots it freed. What this cannot change: how
+//! many notifications the phone accepts an event. `full` against `turns` in `dev.py info` says which limit a READ met:
+//! `full` high, the stack's queue ([`nrf::FAST_QUEUE`], 4; 8 is the next try, the unit decides: a chip that cannot
+//! hold it falls back to no fast link at all) or the phone; `full` near 0 and a low rate, the loop or the UART.
 
 use crate::ble::{self, Char};
 use crate::fat::{self, Cursor, File, Seek};
@@ -71,6 +82,11 @@ pub struct LinkInfo {
     /// See `bytes`. Confirmations the unit saw: an event the pass drops while a command waits is not counted, so this
     /// can fall short of `sent` (the simulator: 433 of 488).
     pub hvn: u32,
+    /// See `bytes`. Frames the stack refused because its queue was full (the chip is the limit, not the unit's loop);
+    /// 0 with a slow READ means the queue ran empty, so the unit's pacing or the UART is the limit.
+    pub full: u32,
+    /// See `bytes`. Passes that sent at least one frame.
+    pub turns: u32,
     /// The time of the READ's command, [`App`]'s `up_ms`.
     t0: u32,
 }
@@ -78,7 +94,7 @@ pub struct LinkInfo {
 impl LinkInfo {
     /// A READ begins at `now`.
     fn begin(&mut self, now: u32) {
-        (self.bytes, self.ms, self.sent, self.hvn, self.t0) = (0, 0, 0, 0, now);
+        (self.bytes, self.ms, self.sent, self.hvn, self.full, self.turns, self.t0) = (0, 0, 0, 0, 0, 0, now);
     }
 
     /// The stack took a READ frame of `bytes` file bytes at `now`.
@@ -191,7 +207,19 @@ impl FileSvc {
             link: None,
             restore_tries: 0,
             max_frame: fs::FRAME_MAX,
-            info: LinkInfo { interval: 0, phy: 0, dle: 0, boost: [0; 3], bytes: 0, ms: 0, sent: 0, hvn: 0, t0: 0 },
+            info: LinkInfo {
+                interval: 0,
+                phy: 0,
+                dle: 0,
+                boost: [0; 3],
+                bytes: 0,
+                ms: 0,
+                sent: 0,
+                hvn: 0,
+                full: 0,
+                turns: 0,
+                t0: 0,
+            },
         }
     }
 
@@ -501,12 +529,18 @@ impl App {
             let svc = &mut self.phone.files;
             let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
             if ble::notify(b, &mut self.rx, conn, data, frame).is_err() {
+                if matches!(svc.job, Job::Read { .. }) {
+                    svc.info.full = svc.info.full.saturating_add(1);
+                }
                 break; // the queue is full (or Data is not subscribed): the same frame next pass
             }
             svc.taken(self.up_ms);
             (svc.stall_ms, sent) = (0, true);
         }
         let svc = &mut self.phone.files;
+        if sent && matches!(svc.job, Job::Read { .. }) {
+            svc.info.turns = svc.info.turns.saturating_add(1);
+        }
         if svc.out_len > 0 && !sent {
             svc.stall_ms = svc.stall_ms.saturating_add(self.dt_ms);
             if svc.stall_ms >= STALL_MS {

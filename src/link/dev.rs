@@ -571,6 +571,8 @@ impl Session {
                     (b" B", l.ms),
                     (b" ms hvn", l.hvn),
                     (b" sent", l.sent),
+                    (b" full", l.full),
+                    (b" turns", l.turns),
                 ];
                 for (i, (k, v)) in nums.into_iter().enumerate() {
                     h.send(k);

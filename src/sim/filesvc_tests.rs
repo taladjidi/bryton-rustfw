@@ -79,10 +79,25 @@ fn resubscribe(sim: &mut Sim, app: &mut App, data: u16) {
 
 /// [`run`] with the loop's real pass: the short one while a READ runs on the fast link ([`App::pass_ms`]).
 fn pass(sim: &mut Sim, app: &mut App, ms: u64) {
+    pass_with(sim, app, ms, true);
+}
+
+/// [`pass`]; `wake`: the chip's bytes end the sleep for a radio pass (`LoopPolicy::begin_sleep`, since 2026-11-07),
+/// else the events wait for the next step (the loop of 20989f2a, which measured 16.6 KB/s on the unit).
+fn pass_with(sim: &mut Sim, app: &mut App, ms: u64, wake: bool) {
     let end = sim.ms + ms;
     while sim.ms < end {
         app.step(sim);
-        sim.sleep_ms(if app.phone.files.fast() { app.pass_ms() } else { super::POLL_MS });
+        if !app.phone.files.fast() {
+            sim.sleep_ms(super::POLL_MS);
+            continue;
+        }
+        for slept in 1..=app.pass_ms() {
+            sim.sleep_ms(1);
+            if wake && crate::LoopBoard::byte_waiting(sim) {
+                app.radio_pass(sim, slept);
+            }
+        }
     }
 }
 
@@ -626,4 +641,32 @@ fn a_table_that_refuses_the_big_data_value_gets_the_small_one_and_small_frames()
     let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
     assert!(a.bytes == ride && a.end == Some((Status::Ok, 3000)));
     assert!(sim.nordic.server.sent.iter().all(|s| s.1.len() <= 20));
+}
+
+/// The READ's rate with the chip's bytes waking the sleep and without (the pacing before 2026-11-07). The simulator's
+/// chip sends up to the queue's depth each event, so it cannot show the unit's 16.6 KB/s (1.6 notifications an event);
+/// what it checks is that the refill at once never costs rate and keeps the stack's queue fuller.
+#[test]
+fn a_byte_from_the_chip_ends_the_sleep_so_the_queue_is_refilled_at_once() {
+    let rate = |wake: bool| {
+        let (mut sim, mut app, control, data, _) = fast_unit(247, 400_000, |_| {});
+        start_read(&mut sim, control, 5, BIG);
+        let (t0, mut done) = (sim.ms, false);
+        while !done && sim.ms < t0 + 60_000 {
+            pass_with(&mut sim, &mut app, 50, wake);
+            done = drain(&mut sim, data).iter().any(|p| matches!(Frame::parse(p), Some(Frame::End { .. })));
+        }
+        assert!(done, "the READ ended");
+        let l = app.phone_link().2;
+        (u64::from(l.bytes) * 1000 / (sim.ms - t0), l)
+    };
+    let ((old, lo), (new, ln)) = (rate(false), rate(true));
+    std::println!(
+        "READ, events read at the pass: {old} B/s (full {}, turns {}); woken by the chip: {new} B/s (full {}, turns {})",
+        lo.full,
+        lo.turns,
+        ln.full,
+        ln.turns
+    );
+    assert!(new >= old && new >= 30_000, "{new} against {old} B/s");
 }
