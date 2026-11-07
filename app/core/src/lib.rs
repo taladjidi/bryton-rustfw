@@ -14,6 +14,7 @@
 
 pub mod demo;
 pub mod files;
+pub mod ride;
 #[cfg(test)]
 mod files_tests;
 

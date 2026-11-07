@@ -26,3 +26,4 @@ required-features = ["bindgen"]
 uniffi = "=0.32.2"
 # The firmware's own library, to share its code with the unit (the same bytes on both sides).
 bryton-rustfw = { path = "../.." }
+fitparser = "0.12.0"

@@ -1,7 +1,7 @@
 //! A fake unit: answers the file service's commands with the firmware's own encoder. The tests use it to drive
 //! [`crate::files::FileClient`]; the app's Demo mode (the Simulator has no Bluetooth) serves synthetic rides from it.
-//! The rides are made by the firmware's FIT writer from invented samples (a made-up track near latitude 0, longitude
-//! 0): no real ride, no real place.
+//! The rides are made by the firmware's FIT writer from invented samples: a made-up loop (a lap of about 5 km, a
+//! wobbling circle) around a public landmark, the Eiffel Tower in Paris; no real ride, nothing of the owner's.
 
 use bryton_rustfw::filesvc::{Command, FRAME_BIG, Frame, Name, Status};
 
@@ -32,6 +32,15 @@ impl Sink for Mem {
     }
 }
 
+/// Where second `i` is on the demo loop, degrees x 1e7: a circle of about 0.8 km radius with a wobble, around the
+/// Eiffel Tower (48.8584 N, 2.2945 E, public), one lap every 600 s.
+fn loop_point(i: u32) -> (i32, i32) {
+    let a = f64::from(i % 600) / 600.0 * std::f64::consts::TAU;
+    let r = 0.007 + 0.0015 * (3.0 * a).sin();
+    let (lat, lon) = (48.8584 + r * a.sin(), 2.2945 + r * 1.5 * a.cos());
+    ((lat * 1e7) as i32, (lon * 1e7) as i32)
+}
+
 /// A synthetic ride of `seconds` starting at 2026-11-01 `hour`:00 UTC, by the firmware's FIT writer.
 pub fn synthetic_ride(hour: u8, seconds: u32) -> Vec<u8> {
     let t0 = fit::fit_time((2026, 11, 1, hour, 0, 0));
@@ -40,7 +49,7 @@ pub fn synthetic_ride(hour: u8, seconds: u32) -> Vec<u8> {
     for i in 0..seconds {
         let s = Sample {
             time: t0 + i,
-            pos: Some((i32::try_from(i * 90).unwrap_or(0), i32::try_from(i * 60).unwrap_or(0))),
+            pos: Some(loop_point(i)),
             alt_mm: Some(50_000 + (i32::try_from(i % 600).unwrap_or(0) - 300).abs() * 100),
             speed_mm_s: Some(7_000 + (i % 40) * 100),
             hr: Some(u8::try_from(120 + i % 50).unwrap_or(120)),
