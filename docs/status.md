@@ -18,6 +18,18 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
 
 ## Not yet seen on the unit
 
+- **File service on the phone bond (2026-11-07, roadmap 9 A1, reads only; app/filesvc.rs):** seen in the simulator
+  only. On the unit, with the phone bonded and no ride running, in nRF Connect (or any BLE tool): the service
+  `aa3c0001-98d8-4772-99ed-dfb117c6746f` is listed (the tool must be the bonded phone: the attributes need
+  encryption); enable notifications on Data (`...0003`), write `01 01` to Control (`...0002`): one
+  `81 01 <12 digits> <size>` per ride, then `83 01 00 <count>`; write `02 02 00 00 00 00 <12 digits of a ride>`:
+  `82 02 <18 bytes>` frames until `83 02 00 <size>`; compare the bytes with the file read through USB. Cut the link
+  mid-read and resume from the bytes kept. During a ride the same commands answer `83 .. 02` (BUSY). Time a whole
+  ride (expected about 360 B/s at MTU 23, 50 ms passes) and check that the stack really queues one notification (a
+  second in a pass answers NRF_ERROR_RESOURCES; the simulator models it). The bond's saved CCCDs (`ATTRS`, 64 bytes)
+  must hold Data's as well as the HID report's and the battery's. The vendor UUID bases are now 10 of the stack's 10
+  (8 for the phone, the FE-C trainer, this one): an eleventh needs `sd_ble_cfg_set`.
+
 - **Switch-off reaches system Standby (2026-11-07, main.rs `standby`: PDDS_D3 set too, as stock; BOARD.md 9):** off
   before it, the system sat in Stop and the cell lost about 58 % in 88 h (docs/power.md "Switched off"). Owed on the
   unit: a switch-off, a power-key start, then the crumb (`standby_flags_word`, STANDBY_FLAGS_BKP) must show PWR_CPUCR

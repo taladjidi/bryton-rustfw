@@ -141,12 +141,14 @@ pub struct Phone {
     pub(crate) conn: Option<u16>,
     /// How long the link has been up (a link left unencrypted is dropped: [`UNSECURED_MS`]).
     link_ms: u32,
-    secure: bool,
+    pub(crate) secure: bool,
     /// Our attributes: the HID report and its CCCD, the battery level and its CCCD.
     report: (u16, u16),
     battery: (u16, u16),
     /// The vendor UUID types the stack gave [`ph::VS`] (0: not registered).
     types: [u8; 8],
+    /// The file service (app/filesvc.rs).
+    pub(crate) files: super::filesvc::FileSvc,
     disc: Disc,
     /// Since the discovery's last request ([`DISC_MS`]).
     disc_ms: u32,
@@ -210,6 +212,7 @@ impl Default for Phone {
             report: (0, 0),
             battery: (0, 0),
             types: [0; 8],
+            files: Default::default(),
             disc: Disc::Idle,
             disc_ms: 0,
             svc_end: 0,
@@ -340,6 +343,7 @@ impl Phone {
         self.held = None;
         (self.asking, self.app_out) = (None, false);
         self.battery_sent = None;
+        self.files.reset();
         (self.link_ms, self.now) = (0, ph::NowPlaying::default()); // what played is not known without the phone
         self.commands = 0; // the next link's app sends its own list (review: a podcast app's kept blocked Next)
     }
@@ -447,6 +451,10 @@ impl App {
             Ok(())
         })();
         p.ready = r.is_ok();
+        if p.ready {
+            // last, and on its own: a chip that refuses the file service still serves the phone link
+            p.files.handles = super::filesvc::add_service(b, rx);
+        }
     }
 
     /// Advertising as `want` (a no-op when it already is).
@@ -609,6 +617,7 @@ impl App {
             }
             self.phone.battery_sent = level;
         }
+        self.step_files(b, conn);
         self.next_op(b, conn);
     }
 
@@ -714,6 +723,11 @@ impl App {
         }
         let rx = &mut self.rx;
         match e {
+            Event::Write { conn, handle, data, .. }
+                if Some(conn) == self.phone.conn && self.phone.is_control(handle) =>
+            {
+                self.files_command(data);
+            }
             Event::Connected { conn, role: 1, peer } => {
                 self.phone.unlink();
                 (self.phone.conn, self.phone.adv) = (Some(conn), Adv::Off); // the stack stopped advertising

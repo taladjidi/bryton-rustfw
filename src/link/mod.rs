@@ -3,6 +3,7 @@
 //! Re-exported at the crate root by their own names (`crate::dev`).
 
 pub mod dev;
+pub mod filesvc;
 pub mod msc;
 pub mod packets;
 pub mod phone;

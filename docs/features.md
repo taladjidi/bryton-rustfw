@@ -500,6 +500,11 @@ MENU
   SECURE; ERR and a command's code if the radio refused the set-up), PAIR, REMOTE (the media remote), NOTIFY on /
   off, MEDIA KEY on / off, FORGET (BONDED while a phone is). The bond's key (LTK, ediv, rand) is kept in clear in
   `\Rustfw\ble.bin`, on the volume a computer can read: whoever mounts the drive can impersonate the unit to that phone.
+- **File service on the phone bond (reads, 2026-11-07):** a vendor GATT service on the encrypted bond lets a phone
+  list the rides in `\Activities\` and download one, from a byte offset so a dropped link resumes. Only stock-named
+  rides (`YYMMDDhhmmss.fit`) are reachable, nothing else of the card. It answers BUSY while a ride runs, is paused or
+  saves, and while the card is lent over USB. The ATT MTU stays 23: 18 file bytes a notification, one a 50 ms pass,
+  about 360 B/s (a 400 KB ride in about 19 minutes). The protocol is in the module doc of `src/link/filesvc.rs`.
 - **Taps act:** one tap on a menu row acts on it, as Start on that row (a destructive row still asks first). While the
   ride runs and moves a tap only selects the row and a second one acts, so a bump or a wet glove does nothing.
 - **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the

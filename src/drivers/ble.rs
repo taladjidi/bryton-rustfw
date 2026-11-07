@@ -81,6 +81,8 @@ pub const NO_ACCESS: u8 = 0x00;
 
 /// Characteristic property bits (as ATT's, ble_gatt_char_props_t_enc).
 pub const READ: u8 = 0x02;
+/// Write with a response.
+pub const WRITE: u8 = 0x08;
 /// Write without response.
 pub const WRITE_CMD: u8 = 0x04;
 /// Notify.
@@ -317,8 +319,13 @@ pub fn user_mem_reply(b: &mut impl Board, rx: &mut Rx, conn: u16) -> Result<(), 
 
 /// Adds a primary service with a 16-bit UUID; returns its handle.
 pub fn service_add(b: &mut impl Board, rx: &mut Rx, uuid: u16) -> Result<u16, Error> {
+    service_add_vs(b, rx, (uuid, UUID_BLE))
+}
+
+/// Adds a primary service named by a registered vendor base ([`uuid_vs_add`]) and a 16-bit part; returns its handle.
+pub fn service_add_vs(b: &mut impl Board, rx: &mut Rx, (uuid, ty): Uuid) -> Result<u16, Error> {
     let mut out = [0; 3];
-    match (Cmd::new(GATTS_SERVICE_ADD).u8(1).u8(1).u16(uuid).u8(UUID_BLE).u8(1).call(b, rx, &mut out)?, out) {
+    match (Cmd::new(GATTS_SERVICE_ADD).u8(1).u8(1).u16(uuid).u8(ty).u8(1).call(b, rx, &mut out)?, out) {
         (3, [1, h0, h1]) => Ok(u16::from_le_bytes([h0, h1])),
         _ => Err(Error::Code(u32::MAX)),
     }
@@ -347,6 +354,17 @@ fn attr_md(c: &mut Cmd, read: u8, write: u8, vlen: bool) {
 
 /// Adds characteristic `ch` to service `svc`; returns (value handle, CCCD handle: 0 without notify / indicate).
 pub fn characteristic_add(b: &mut impl Board, rx: &mut Rx, svc: u16, ch: &Char) -> Result<(u16, u16), Error> {
+    characteristic_add_vs(b, rx, svc, ch, UUID_BLE)
+}
+
+/// [`characteristic_add`] for a characteristic whose `ch.uuid` is the 16-bit part of vendor base type `ty`.
+pub fn characteristic_add_vs(
+    b: &mut impl Board,
+    rx: &mut Rx,
+    svc: u16,
+    ch: &Char,
+    ty: u8,
+) -> Result<(u16, u16), Error> {
     let mut c = Cmd::new(GATTS_CHARACTERISTIC_ADD);
     c.u16(svc).u8(1);
     // characteristic metadata: properties, no extended ones, no user description, no presentation format, a
@@ -360,7 +378,7 @@ pub fn characteristic_add(b: &mut impl Board, rx: &mut Rx, svc: u16, ch: &Char) 
     }
     c.u8(0);
     // the value attribute
-    c.u8(1).u8(1).u16(ch.uuid).u8(UUID_BLE).u8(1);
+    c.u8(1).u8(1).u16(ch.uuid).u8(ty).u8(1);
     attr_md(&mut c, ch.read, ch.write, ch.max as usize > ch.value.len());
     c.u16(0).u16(ch.max).data16(ch.value).u8(1);
     let mut out = [0; 9];

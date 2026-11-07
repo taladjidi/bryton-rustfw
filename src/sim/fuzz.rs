@@ -7837,3 +7837,76 @@ fn long_names_revived_and_relinked() {
     );
     assert!(revived >= thr(20) && crossing >= thr(2) && relinked >= thr(10) && located >= thr(50), "reached");
 }
+
+/// The file service's Control (app/filesvc.rs): commands of real shapes (LIST, READ of a ride at an offset inside, at
+/// and past its end, READ of a name that is not there, CANCEL) and their mutations (bytes flipped, cut, lengthened,
+/// pure noise, and names with separators) written to Control of a bonded unit, between passes that stream the
+/// answers. No panic, every notification parses, and each path is reached over the seeds: rides listed, bytes read,
+/// and the three refusals.
+#[test]
+fn file_service_commands() {
+    use super::filesvc_tests::{drain, paired, rides};
+    use super::run;
+    use crate::filesvc::{Command, Frame, Status};
+    let mut reached = [0u32; 5]; // entries, chunks, bad requests, not found, ok ends
+    for seed in 1..=scaled(40) {
+        let mut next = xorshift(seed);
+        let (mut sim, mut app, control, data) = paired();
+        let rides = rides();
+        for _ in 0..16 {
+            let r = next();
+            let (name, size) = {
+                let (n, d) = &rides[(r >> 8) as usize % 2];
+                (*n, d.len() as u32)
+            };
+            let offset = match next() % 4 {
+                0 => 0,
+                1 => next() % size.max(1),
+                2 => size,
+                _ => size.saturating_add(next() % 9),
+            };
+            let seq = next() as u8;
+            let mut f = [0u8; 20];
+            let n = match r % 8 {
+                0 | 1 => Command::List { seq }.encode(&mut f),
+                2 | 3 => Command::Read { seq, offset, name }.encode(&mut f),
+                4 => Command::Read { seq, offset, name: *b"123456789012" }.encode(&mut f),
+                5 => Command::Cancel.encode(&mut f),
+                6 => {
+                    // a valid command mutated
+                    let n = Command::Read { seq, offset, name }.encode(&mut f);
+                    let at = next() as usize % 20;
+                    match next() % 3 {
+                        0 => f[at % n] ^= 1 << (next() % 8),
+                        1 => f[at % n] = b"/\\.\0"[next() as usize % 4],
+                        _ => {}
+                    }
+                    if next().is_multiple_of(2) {
+                        n.saturating_sub(next() as usize % 4).max(1)
+                    } else {
+                        (n + next() as usize % 4).min(20)
+                    }
+                }
+                _ => {
+                    let n = next() as usize % 21;
+                    f.iter_mut().for_each(|b| *b = next() as u8);
+                    n
+                }
+            };
+            sim.nordic.phone_write(control, &f[..n]);
+            run(&mut sim, &mut app, 100 + u64::from(next() % 600));
+            for p in drain(&mut sim, data) {
+                match Frame::parse(&p).unwrap_or_else(|| panic!("seed {seed}: {p:?} does not parse")) {
+                    Frame::Entry { .. } => reached[0] += 1,
+                    Frame::Chunk { .. } => reached[1] += 1,
+                    Frame::End { status: Status::BadRequest, .. } => reached[2] += 1,
+                    Frame::End { status: Status::NotFound, .. } => reached[3] += 1,
+                    Frame::End { status: Status::Ok, .. } => reached[4] += 1,
+                    Frame::End { .. } => {}
+                }
+            }
+        }
+    }
+    std::println!("file service fuzz: {reached:?} (entries, chunks, bad requests, not found, ok ends)");
+    assert!(reached.iter().all(|&n| n >= thr(20)), "reached {reached:?}");
+}

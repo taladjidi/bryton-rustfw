@@ -256,6 +256,7 @@ impl App {
             && self.tones.quiet()
             && self.notes.ms.is_none()
             && !self.emmc.lent()
+            && !self.phone.files.active() // a transfer to the phone: a notification a pass
             && (self.gps.off || self.gps.ano.done()); // AssistNow Offline messages go out at a pass each
         if quiet && !self.busy() && self.light.idle_ms >= IDLE_AFTER_MS { IDLE_POLL_MS } else { POLL_MS }
     }

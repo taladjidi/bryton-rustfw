@@ -293,6 +293,7 @@ Others
 - [x] Now playing: title, artist, elapsed (ours): sim
 - [x] Media remote from Di2 buttons (patch P12): sim (DI2 KEYS: play, tracks)
 - [x] Camera shutter on the phone (ours): sim
+- [~] Rides and files over the phone link, no cable (ours): the file service lists and reads `\Activities\` on the bond, sim; writes and the app to come
 - [ ] Live tracking (stock app, all): needs a phone app
 - [ ] Group ride: members on the map, messages, voice input (stock app, Garmin, Karoo)
 - [x] Ride upload to Strava and Intervals.icu (stock app, all): sim; `tools/sync.py` on the computer, not yet run against the real services

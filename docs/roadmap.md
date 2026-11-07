@@ -352,7 +352,8 @@ Decided 2026-10-29 (not yet checked online: UniFFI's and the Android emulator's 
 
 Steps:
 - **A1. A file service on the bond** (firmware; nrf.rs's serialization): list, read by chunk, write; reads first.
-  Writes are critical. Without it no app can do anything.
+  **Reads done 2026-11-07** (app/filesvc.rs, link/filesvc.rs: LIST and READ of `\Activities\` from an offset, BUSY under
+  a ride, MTU 23 kept, about 360 B/s; sim only, the unit check is in docs/status.md); writes remain and are critical. Without it no app can do anything.
 - **A2. The core crate** (`app-core/`): the protocol, sync.py's logic ported, the fake transport, round-trip tests
   against the firmware's encoder.
 - **A3. iOS:** sync (rides to Intervals.icu and Strava, workouts back), then the features below.

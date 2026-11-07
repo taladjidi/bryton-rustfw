@@ -157,7 +157,15 @@ pub struct Server {
     pub sys_attrs: Option<Vec<u8>>,
     /// Notifications sent: (handle, value).
     pub sent: Vec<(u16, Vec<u8>)>,
+    /// Value handles only an encrypted link may write (the stack refuses the others before the app hears of it).
+    pub locked: Vec<u16>,
+    /// The stack queues one notification (`BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT`, 1): it leaves at the next
+    /// connection event, [`HVN_MS`] after, and until then a second is refused (NRF_ERROR_RESOURCES).
+    pub hvn_free_at: u64,
 }
+
+/// The connection interval the simulated phone grants, ms (the unit asks 15 to 30).
+pub const HVN_MS: u64 = 30;
 
 impl Server {
     fn next(&self) -> u16 {
@@ -307,6 +315,42 @@ impl Nordic {
         }
     }
 
+    /// The phone writes `data` to the unit's attribute `handle`; false if the stack refuses it (no link, or the link is
+    /// not encrypted and the attribute needs it).
+    pub fn phone_write(&mut self, handle: u16, data: &[u8]) -> bool {
+        let Some(ph) = &self.phone else { return false };
+        if !ph.connected || (!ph.secure && self.server.locked.contains(&handle)) {
+            return false;
+        }
+        let uuid = self.server.attrs.iter().find(|a| a.0 == handle).map_or(0, |a| a.1);
+        let mut b = vec![0, 0];
+        b.extend(handle.to_le_bytes());
+        b.extend(uuid.to_le_bytes());
+        b.extend([1, 1, 0, 0, 0]);
+        b.extend((data.len() as u16).to_le_bytes());
+        b.extend(data);
+        self.evt(0x50, &b);
+        true
+    }
+
+    /// The phone enables (or not) the notifications of the CCCD `handle`, as a write to it.
+    pub fn phone_subscribe(&mut self, cccd: u16, on: bool) {
+        if let Some(a) = self.server.attrs.iter_mut().find(|a| a.0 == cccd) {
+            a.3 = vec![u8::from(on), 0];
+        }
+        let mut b = vec![0, 0];
+        b.extend(cccd.to_le_bytes());
+        b.extend([0x02, 0x29, 1, 1, 0, 0, 0, 2, 0, u8::from(on), 0]);
+        self.evt(0x50, &b);
+    }
+
+    /// The phone's link loses its encryption (a stranger on the link).
+    pub fn unsecure_phone(&mut self) {
+        if let Some(ph) = &mut self.phone {
+            ph.secure = false;
+        }
+    }
+
     /// `h` is the CCCD of the HID report (0x2a4d).
     fn report_cccd(&self, h: u16) -> bool {
         self.server.attrs.iter().any(|a| a.1 == 0x2a4d && a.0 + 1 == h)
@@ -336,6 +380,7 @@ impl Nordic {
                 let mut b = [0; 16];
                 b.copy_from_slice(&args[1..17]);
                 self.server.vs.push(b);
+                assert!(self.server.vs.len() <= 10, "the stack's default is 10 vendor UUID bases");
                 let t = self.server.vs.len() as u8 + 1;
                 ok(self, &[1, t]);
             }
@@ -369,6 +414,9 @@ impl Nordic {
                 let decl = self.server.next();
                 self.server.attrs.push((decl, 0x2803, false, vec![props]));
                 self.server.attrs.push((decl + 1, uuid, false, value));
+                if args[at + 7] == 0x21 {
+                    self.server.locked.push(decl + 1); // write permission: encrypted
+                }
                 let cccd = if notify {
                     self.server.attrs.push((decl + 2, 0x2902, true, vec![0, 0]));
                     decl + 2
@@ -393,6 +441,11 @@ impl Nordic {
                     self.queue(&[1, 0xa6, 0x08, 0, 0, 0]); // NRF_ERROR_INVALID_STATE: notifications off
                     return true;
                 }
+                if now < self.server.hvn_free_at {
+                    self.queue(&[1, 0xa6, 0x13, 0, 0, 0]); // NRF_ERROR_RESOURCES: the queue is full
+                    return true;
+                }
+                self.server.hvn_free_at = now + HVN_MS;
                 if self.server.attrs.iter().any(|a| a.0 == handle && a.1 == 0x2a4d)
                     && let Some(ph) = &mut self.phone
                 {

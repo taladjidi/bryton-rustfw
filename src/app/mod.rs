@@ -15,6 +15,7 @@ mod drive;
 mod editor;
 mod faultlog;
 mod fields;
+mod filesvc;
 mod fitness;
 mod ftms;
 mod gps;

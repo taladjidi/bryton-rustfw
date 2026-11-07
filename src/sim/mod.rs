@@ -1605,6 +1605,8 @@ mod loop_model;
 pub use loop_model::{LoopModel, SimLink};
 
 #[cfg(test)]
+mod filesvc_tests;
+#[cfg(test)]
 mod phone_tests;
 
 #[cfg(test)]

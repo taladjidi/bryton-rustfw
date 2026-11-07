@@ -48,7 +48,7 @@ fn pairing_from_the_menu() {
     let server = &sim.nordic.server;
     assert!(server.attrs.iter().any(|a| a.1 == 0x2a4d), "the HID report in the table");
     assert_eq!(server.adv_data, crate::phone::ADV);
-    assert_eq!(server.vs.len(), 8, "ANCS and AMS UUIDs registered");
+    assert_eq!(server.vs.len(), 9, "ANCS and AMS UUIDs registered, and the file service's base");
     run(&mut sim, &mut app, 2000);
     assert_eq!(sim.nordic.server.adv, None, "no bond, not asked: not advertising");
     assert_eq!(app.phone.link(), Link::Off);
