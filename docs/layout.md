@@ -258,7 +258,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/storage/workout_file.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
   whole (name, steps, targets, repeats written out), the calendar from today on. `src/training/workout.rs`: the player, pure
   logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
-- `src/storage/workout_write.rs`: a workout the phone sends, written into stock's calendar (through `\Rustfw\workout.tmp`,
+- `src/storage/workout_write.rs`: a workout the phone sends, written into stock's calendar (through `\Rustfw\Inbox\WORKOUT.TMP`,
   read back and checked, then moved: the order and what a cut leaves in its module doc), and a listed one deleted.
 - `src/storage/course_file.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course

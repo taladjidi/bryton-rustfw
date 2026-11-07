@@ -7847,17 +7847,20 @@ fn long_names_revived_and_relinked() {
 /// The file service's writes (app/filesvc.rs, storage/workout_write.rs): workouts sent as the phone sends them
 /// (WRITE_BEGIN, WRITE_DATA in chunks of 1 to 238 bytes, WRITE_END) and their mutations (a CRC or size that lies, a
 /// chunk skipped, sent twice or out of order, a byte flipped, a file that is no workout, a second WRITE_BEGIN, noise
-/// starting with a write command's byte), DELETEs of listed and made-up keys, the card lent or a ride started under
+/// starting with a write command's byte, the link dropped mid-write), DELETEs of listed and made-up keys, the card lent
+/// or a ride started under
 /// them. No panic, every notification parses, the day folder only ever holds whole workouts the phone sent, fsck finds
 /// nothing new, and over the seeds a commit, a delete and each refusal are reached.
 #[test]
 fn file_service_writes() {
-    use super::filesvc_tests::{DAY, End, day_files, drain, list_workouts, long_workout, paired};
+    use super::filesvc_tests::{
+        DAY, End, ask_raw, day_files, drain, drop_link, list_workouts, long_workout, paired, resubscribe,
+    };
     use super::run;
     use crate::filesvc::{Command, FRAME_BIG, Folder, Frame, Key, Status};
     let files = [long_workout(), crate::storage::workout_file::tests::intervals(), std::vec![0x5a; 300]];
     // commits, deletes, mismatches, bad requests, busy, not found
-    let mut reached = [0u32; 6];
+    let mut reached = [0u32; 8]; // commits, deletes, mismatches, bad requests, busy, not found, noise, links dropped
     for seed in 1..=scaled(24) {
         let mut next = xorshift(seed);
         let (mut sim, mut app, control, data) = paired();
@@ -7905,10 +7908,28 @@ fn file_service_writes() {
                         1 => at += c.len(),                            // a chunk skipped
                         2 => c[0] ^= 1,                                // a byte flipped
                         3 => write(&mut sim, b"\x06\x01\x0120261108"), // noise of a WRITE_BEGIN
-                        4 => {
-                            let k = next() as usize % 20 + 1;
-                            let noise: Vec<u8> = (0..k).map(|i| if i == 0 { 7 } else { next() as u8 }).collect();
+                        4 | 5 => {
+                            // noise starting with a write command's byte, 1 to 30 bytes
+                            let (lead, k) = ([6, 7, 8, 9][next() as usize % 4], next() as usize % 30 + 1);
+                            let noise: Vec<u8> = (0..k).map(|i| if i == 0 { lead } else { next() as u8 }).collect();
                             write(&mut sim, &noise);
+                            reached[6] += 1;
+                        }
+                        6 if seed % 3 == 0 && round < 4 && !app.emmc.lent() => {
+                            // the link drops and comes back: the write is gone, the next data refused
+                            let back = sim.ms + 500;
+                            drop_link(&mut sim, back);
+                            run(&mut sim, &mut app, 4500);
+                            resubscribe(&mut sim, &mut app, data);
+                            let n = Command::WriteData { seq: 4, offset: off, data: &c }.encode(&mut f);
+                            let a = ask_raw(&mut sim, &mut app, control, data, &f[..n], 2000);
+                            assert_eq!(
+                                a.end,
+                                Some((Status::BadRequest, 0)),
+                                "seed {seed}: data after the link dropped"
+                            );
+                            reached[7] += 1;
+                            break;
                         }
                         _ => {}
                     }

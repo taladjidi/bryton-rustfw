@@ -63,7 +63,7 @@ pub(super) fn drain(sim: &mut Sim, data: u16) -> Vec<Vec<u8>> {
 }
 
 /// The phone's link drops (the chip's DISCONNECTED too) and it connects again at `back_at` (never: `u64::MAX`).
-fn drop_link(sim: &mut Sim, back_at: u64) {
+pub(super) fn drop_link(sim: &mut Sim, back_at: u64) {
     let ph = sim.nordic.phone.as_mut().unwrap();
     ph.hang_up();
     ph.connect_at = back_at;
@@ -71,7 +71,7 @@ fn drop_link(sim: &mut Sim, back_at: u64) {
 }
 
 /// The phone enables Data again on a new link and the frames of the wait are dropped.
-fn resubscribe(sim: &mut Sim, app: &mut App, data: u16) {
+pub(super) fn resubscribe(sim: &mut Sim, app: &mut App, data: u16) {
     sim.nordic.phone_subscribe(data + 1, true);
     run(sim, app, 200);
     drain(sim, data);
@@ -982,6 +982,52 @@ fn every_risky_write_is_refused_and_the_calendar_stays_as_it_was() {
     assert!(!app.phone.files.active(), "dropped after the stall");
     assert!(day_files(&sim).is_empty());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0));
+}
+
+/// After a failed write (the FAT copies suspect), a DELETE makes the copies equal before it frees anything.
+#[test]
+fn a_delete_after_a_failed_write_syncs_the_fat_copies_first() {
+    let (mut sim, mut app, control, data) = paired();
+    let file = long_workout();
+    let sent = send_workout(&mut sim, &mut app, (control, data), &file, crc(&file), 238);
+    assert_eq!(sent.1, Some((Status::Ok, file.len() as u32)));
+    let (listed, _) = list_workouts(&mut sim, &mut app, control, data, 7);
+    let key = listed.iter().find(|e| e.0.bytes().starts_with(b"20261108")).unwrap().0;
+    // the second FAT's last sector differs (a write cut between the copies), and the app knows a write failed
+    let img = &mut sim.emmc.image;
+    let u16_at = |i: usize| u32::from(u16::from_le_bytes([img[i], img[i + 1]]));
+    let (reserved, size) = (u16_at(14), u32::from_le_bytes(img[36..40].try_into().unwrap()));
+    let end = ((reserved + 2 * size) * 512) as usize;
+    img[end - 1] ^= 0x01;
+    assert_eq!(crate::fat::write::tests::fsck_cut(img).unwrap().apart, 1);
+    app.fats_unsure();
+    let mut f = [0; 20];
+    let n = Command::Delete { seq: 8, folder: Folder::Workout, key }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 1)));
+    assert_eq!(crate::fat::write::tests::fsck_cut(&sim.emmc.image).unwrap().apart, 0);
+    assert!(day_files(&sim).is_empty());
+}
+
+/// A WRITE_BEGIN during a READ ends the READ with its END (BUSY, the bytes sent) before its own answer.
+#[test]
+fn a_write_begun_during_a_read_ends_the_read_first() {
+    let (mut sim, mut app, control, data) = paired();
+    let [(name, _), _] = rides();
+    start_read(&mut sim, control, 5, name);
+    pass(&mut sim, &mut app, 60);
+    drain(&mut sim, data);
+    let mut f = [0; 40];
+    let n = Command::WriteBegin { seq: 6, folder: Folder::Workout, day: DAY, size: 40, crc: 0 }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    pass(&mut sim, &mut app, 200);
+    let ends: Vec<_> = drain(&mut sim, data)
+        .iter()
+        .filter_map(|p| match Frame::parse(p) {
+            Some(Frame::End { seq, status, .. }) => Some((seq, status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, [(5, Status::Busy), (6, Status::Ok)]);
 }
 
 #[test]

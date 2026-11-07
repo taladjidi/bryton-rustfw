@@ -3,7 +3,7 @@
 //! app's side in app/filesvc.rs). Pure FAT work over [`DiskWrite`], with the FAT writer's own write order
 //! (fat/write.rs) under it.
 //!
-//! **Where the bytes go first:** `\Rustfw\workout.tmp`, this firmware's own folder (AGENTS.md, "Share the storage
+//! **Where the bytes go first:** `\Rustfw\Inbox\WORKOUT.TMP`, this firmware's own folder (AGENTS.md, "Share the storage
 //! with stock": stock never reads it), sized at [`begin`] (the chain taken, then the size set), then each 512-byte
 //! sector written in place as the data comes ([`put`]): no FAT or directory write during the transfer, so a cut there
 //! leaves a whole, named temporary file and nothing else. It is not removed after a cut: the next [`begin`] writes
@@ -50,8 +50,15 @@ use crate::filesvc::Status;
 use crate::recorder::{DIR, FULL_RESERVE};
 use crate::storage::workout_file;
 
-/// The temporary file, in `\Rustfw`.
-pub const TMP: &str = "workout.tmp";
+/// The temporary file, in [`INBOX`]: upper case, an 8.3 name.
+pub const TMP: &str = "WORKOUT.TMP";
+/// Its folder, in `\Rustfw`: the entries each commit leaves deleted (the writer never reuses a slot) pile up there,
+/// never in the recorder's folder.
+pub const INBOX: &str = "Inbox";
+/// `.fit` files a day folder holds at most: the listing numbers them in two digits (link/filesvc.rs).
+pub const DAY_MAX: usize = 100;
+/// Entries of a day folder counted at most (app/filesvc.rs walks as many to find one).
+const WALK: usize = 200;
 /// Stock's calendar, which holds a folder a day.
 pub const CALENDAR: &str = "Workout/calendar";
 
@@ -71,6 +78,7 @@ pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, size: u32, t: (u16, u16)) ->
         return Err(Status::Full);
     }
     let own = fat.ensure_own_dir(d, fat.root(), DIR, t).map_err(card)?;
+    let own = fat.ensure_own_dir(d, own, INBOX, t).map_err(card)?;
     let mut h = match fat.locate(d, own, TMP) {
         Ok(h) => h,
         Err(Error::NotFound) => fat.create(d, own, TMP, t).map_err(card)?,
@@ -121,18 +129,39 @@ pub fn commit(
         Ok(_) | Err(Error::NotFound) => return Err(Status::NotFound),
         Err(e) => return Err(card(e)),
     };
-    let dir = fat.ensure_dir(d, cal, day, t).map_err(card)?;
+    let dir = match fat.find(d, cal, day) {
+        Ok(f) if f.dir => f,
+        Ok(_) => return Err(Status::BadRequest), // a file of the day's name: never written over
+        Err(Error::NotFound) => fat.ensure_dir(d, cal, day, t).map_err(card)?,
+        Err(e) => return Err(card(e)),
+    };
     match fat.find(d, dir, n) {
         Ok(f) if !f.dir && f.size == h.size => return Ok(()), // sent again after a lost answer: there whole
         Ok(_) => return Err(Status::BadRequest),
         Err(Error::NotFound) => {}
         Err(e) => return Err(card(e)),
     }
+    if fit_files(fat, d, dir)? >= DAY_MAX {
+        return Err(Status::Full); // the listing could not number another
+    }
     fat.make_room(d, dir, n).map_err(card)?;
     fat.remove(d, h).map_err(card)?;
     // from here to the link the chain is named by nothing: a cut leaves it lost, the calendar as it was
     fat.link(d, dir, n, h, t).map_err(card)?;
     Ok(())
+}
+
+/// The `.fit` files of folder `dir` (any case, folders left out), [`WALK`] entries at most.
+fn fit_files(fat: &mut Fat, d: &mut impl DiskWrite, dir: File) -> Result<usize, Status> {
+    let mut c = fat.cursor(dir).map_err(card)?;
+    let mut n = 0;
+    for _ in 0..WALK {
+        let Some(e) = fat.list(d, &mut c).map_err(card)? else { break };
+        let name = e.name();
+        let fit = name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(b".fit"));
+        n += usize::from(fit && !e.file.dir);
+    }
+    Ok(n)
 }
 
 /// Step 1 of [`commit`]: the file as the card holds it, its size and CRC-32 `crc`, and a workout.
@@ -307,6 +336,70 @@ pub(crate) mod tests {
         assert!(begin(&mut fat, &mut d, workout_file::FILE_MAX as u32, T).is_ok());
         d.0[SECTOR + 488..SECTOR + 492].copy_from_slice(&0u32.to_le_bytes());
         assert_eq!(begin(&mut fat, &mut d, 100, T).err(), Some(Status::Full));
+    }
+
+    /// A day holds [`DAY_MAX`] workouts: the 101st is FULL, nothing written; the same file sent again is still ok.
+    #[test]
+    fn a_full_day_refuses_one_more() {
+        let mut d = Ram(volume(), 0);
+        let one = |i: u32| {
+            let steps = [(0, 60_000 + i, 4, 0, 100, 110, 0)];
+            crate::storage::workout_file::tests::file(5, &std::format!("W{i}"), &steps)
+        };
+        for i in 0..DAY_MAX as u32 {
+            write_all(&mut d, &one(i), DAY).unwrap_or_else(|e| panic!("{i}: {e:?}"));
+        }
+        assert_eq!(day_files(&d.0, "20261108").len(), DAY_MAX);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let file = one(1000);
+        let mut h = begin(&mut fat, &mut d, file.len() as u32, T).unwrap();
+        let mut s = [0; SECTOR];
+        s[..file.len()].copy_from_slice(&file);
+        put(&mut fat, &mut d, &mut h, 0, &s).unwrap();
+        let mid = d.0.clone();
+        assert_eq!(
+            commit(&mut fat, &mut d, &h, DAY, crate::inflate::crc32(file.iter().copied()), T),
+            Err(Status::Full)
+        );
+        assert!(d.0 == mid, "nothing written by the refused commit");
+        assert_eq!(day_files(&d.0, "20261108").len(), DAY_MAX);
+        write_all(&mut d, &one(7), DAY).unwrap();
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// A power cut after every sector a delete writes: the day folder holds the file whole or nothing, fsck passes (a
+    /// lost chain at most, between the entry's delete and the chain freed), and a second delete or a re-send goes through.
+    #[test]
+    fn a_cut_at_every_write_of_a_delete() {
+        let file = intervals();
+        let mut d = Ram(volume(), 0);
+        write_all(&mut d, &file, DAY).unwrap();
+        let base = d.0;
+        let delete_first = |c: &mut Cut| -> Result<(), Status> {
+            let mut fat = Fat::mount(c).map_err(card)?;
+            let dir = fat.open(c, "Workout/calendar/20261108").map_err(card)?;
+            let mut cur = fat.cursor(dir).map_err(card)?;
+            let e = core::iter::from_fn(|| fat.list(c, &mut cur).ok().flatten()).find(|e| !e.file.dir);
+            delete(&mut fat, c, dir, &e.ok_or(Status::NotFound)?)
+        };
+        let mut full = Cut(Ram(base.clone(), 0), u32::MAX);
+        delete_first(&mut full).unwrap();
+        let writes = u32::MAX - full.1;
+        assert!(writes >= 3, "{writes}");
+        for at in 0..writes {
+            let mut c = Cut(Ram(base.clone(), 0), at);
+            assert_eq!(delete_first(&mut c), Err(Status::Io), "cut at {at}");
+            let scan = fsck_cut(&c.0.0).unwrap_or_else(|e| panic!("cut at {at}: {e}"));
+            assert!(scan.lost <= 1 && scan.past.is_empty(), "cut at {at}: {} lost {:?}", scan.lost, scan.past);
+            let left = day_files(&c.0.0, "20261108");
+            assert!(left.is_empty() || left[0].1 == file, "cut at {at}");
+            c.1 = u32::MAX;
+            if left.is_empty() {
+                write_all(&mut c, &file, DAY).unwrap_or_else(|e| panic!("re-send after a cut at {at}: {e:?}"));
+            } else {
+                delete_first(&mut c).unwrap_or_else(|e| panic!("again after a cut at {at}: {e:?}"));
+            }
+        }
     }
 
     /// An empty `.fit` (no chain) is deleted by its name; a workout's chain is freed.

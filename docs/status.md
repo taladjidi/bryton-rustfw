@@ -45,7 +45,7 @@ On the unit, with the owner present (it writes the card):
    with the size. Check the unit's WORKOUTS list shows it today, LIST_IN lists it and READ_IN gives the same bytes.
 3. The same with a wrong CRC (MISMATCH, nothing new in WORKOUTS), during a ride (BUSY), then DELETE of the listed key:
    END ok, gone from WORKOUTS.
-4. Over USB (`dev.py drive`) the volume passes the computer's fsck, and `\Rustfw\workout.tmp` is there (kept on
+4. Over USB (`dev.py drive`) the volume passes the computer's fsck, and `\Rustfw\Inbox\WORKOUT.TMP` is there (kept on
    purpose). Switch to stock: it lists the workout in its calendar for that day (stock reads `<name>.fit` of the day
    folder; that it needs no `.json` beside it is inferred).
 

@@ -653,6 +653,18 @@ impl App {
         if let Some(why) = why {
             return self.phone.files.finish(seq, why, count_of(&self.phone.files.job, 0));
         }
+        if writes && matches!(self.phone.files.job, Job::List { .. } | Job::Read { .. }) {
+            // the LIST or READ under way ends with its END (BUSY, what it sent) before this command's answer: notified
+            // now, since the answer takes its place (a full queue loses it: the phone then sees the new answer only)
+            self.phone.files.abort(Status::Busy);
+            let svc = &mut self.phone.files;
+            if let (Some(conn), Some((_, data))) = (self.phone.conn, svc.handles) {
+                let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
+                if ble::notify(b, &mut self.rx, conn, data, frame).is_ok() {
+                    svc.taken(self.up_ms);
+                }
+            }
+        }
         let t = fat::write::dos_time(self.rec_time().0);
         let r = self.write_step(b, c, t);
         let svc = &mut self.phone.files;
@@ -676,19 +688,21 @@ impl App {
 
     /// The card work of a write command `c`; Err: its answer.
     fn write_step(&mut self, b: &mut impl Board, c: fs::Command, t: (u16, u16)) -> Result<(), Status> {
-        if matches!(c, fs::Command::WriteBegin { .. }) && self.fats_suspect {
-            // a failed write before: the FAT copies (and FSInfo's count, which the room check reads) made right first
+        if !matches!(c, fs::Command::WriteData { .. }) && self.fats_suspect {
+            // a failed write before: the FAT copies (and FSInfo's count, which the room check reads) made right before
+            // a step that takes or frees clusters (as storage/screenshot.rs's write)
             let mut d = emmc::Volume(&mut self.emmc, b);
             fat::Fat::mount(&mut d).and_then(|mut fat| fat.sync_fats(&mut d)).map_err(|_| Status::Io)?;
             self.fats_equal();
         }
         let mut d = emmc::Volume(&mut self.emmc, b);
-        let mut fat = fat::Fat::mount(&mut d).map_err(|_| Status::Io)?;
+        let mount = |d: &mut emmc::Volume<_>| fat::Fat::mount(d).map_err(|_| Status::Io);
         let svc = &mut self.phone.files;
         match c {
             fs::Command::WriteBegin { seq, day, size, crc, .. } => {
                 workout_file::folder_day(&day).ok_or(Status::BadRequest)?;
                 svc.reset();
+                let mut fat = mount(&mut d)?;
                 let h = workout_write::begin(&mut fat, &mut d, size, t)?;
                 (svc.job, svc.blk) = (Job::Write { seq, day, crc, got: 0, h }, [0; BLOCK]);
                 Ok(())
@@ -706,7 +720,9 @@ impl App {
                     blk.get_mut(*blk_len..*blk_len + now.len()).ok_or(Status::Io)?.copy_from_slice(now);
                     (*blk_len, *got, rest) = (*blk_len + now.len(), *got + now.len() as u32, later);
                     if *blk_len == fat::SECTOR || *got == end && end == h.size {
+                        // mounted only when a sector fills: most frames only buffer
                         let s: &[u8; fat::SECTOR] = blk.first_chunk().ok_or(Status::Io)?;
+                        let mut fat = mount(&mut d)?;
                         workout_write::put(&mut fat, &mut d, h, (*got - 1) / fat::SECTOR as u32, s)?;
                         (*blk, *blk_len) = ([0; BLOCK], 0);
                     }
@@ -718,10 +734,12 @@ impl App {
                 if got != h.size {
                     return Err(Status::Mismatch);
                 }
+                let mut fat = mount(&mut d)?;
                 workout_write::commit(&mut fat, &mut d, &h, &day, crc, t)
             }
             fs::Command::Delete { key, .. } => {
                 svc.reset();
+                let mut fat = mount(&mut d)?;
                 let (dir, e) = locate_workout(&mut fat, &mut d, key)?;
                 workout_write::delete(&mut fat, &mut d, dir, &e)
             }

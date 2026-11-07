@@ -177,7 +177,7 @@ DELETE's with count 1. New statuses: 5 READ ONLY (a build without card writes, t
 received are not the size or CRC given), 7 FULL. Only folder 1 and only a FIT workout file of 8 KB at most, which the
 unit reads back from the card and parses before it shows; the unit names it `<CRC-32 in hex>.fit` in
 `\Workout\calendar\<day>\` (the day folder made if missing; `\Workout\calendar` itself must exist), so sending the same
-file twice writes it once. The bytes go to `\Rustfw\workout.tmp` first and move into the calendar only once checked: a
+file twice writes it once. The bytes go to `\Rustfw\Inbox\WORKOUT.TMP` first and move into the calendar only once checked: a
 power cut at any point leaves the calendar as it was or with the whole workout (at most one lost cluster, which a
 computer's fsck reports). BUSY during a ride or while the card is lent, and a ride that starts drops a write under way;
 a write the phone stops feeding for 5 s is dropped. DELETE needs the key's check, so a folder changed since the list
