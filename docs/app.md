@@ -98,4 +98,40 @@ On the owner's iPhone 16 Pro (iOS 27):
 - The unit's PHONE menu shows the FAST LINK row: the radio chip took the MTU 247 configuration.
 - iOS negotiated ATT MTU 247: `maximumWriteValueLength` is 244 without response and 512 with.
 - A 468,042-byte ride downloaded whole, byte-identical to the same file read over USB (`dev.py drive`, then `cmp`).
-- Speed is about 3 KB/s, far below the simulator's 34 KB/s. Under investigation (connection event length); a separate branch.
+- Speed was about 3 KB/s, far below the simulator's 34 KB/s; after the event length 6 and the connection event extension it is 16.6 KB/s (below, and docs/status.md for the steps still owed).
+- iOS keeps a stale GATT table after the unit switches firmware (no Service Changed characteristic yet): forget S510 and pair again fixes it; a RAM run's new bond lives only in RAM.
+
+## Fast link: the chip app's layer and the speed model
+
+Moved from docs/status.md (2026-11-07).
+
+**Settled at the chip app's layer** (`src/sim/nrf_session_tests.rs`, the real app with a stub that decodes each
+SoftDevice call; the stub answers 0 to anything, so whether the chip's RAM holds an MTU of 247 and a queue of 4 is not
+known from it): the app knows every command the fast link sends and makes the intended call with the intended
+arguments (cfg ids 0x20 / 0x40 / 0x23 att_mtu 247 / 0x22 queue 4 on tag 1, MTU reply 247, data length 251, 2M PHY,
+parameter updates, 244-byte hvx, sys_attr_set of 64 bytes); it takes a command payload of 384 bytes and **hangs on
+385** (nrf.rs MAX_CMD is 384; a notification is 260); four 260-byte notifications back to back are all taken; it
+encodes the MTU request (0x55), HVN TX complete (0x57, with its count), connection parameter update / request, PHY and
+data length requests and updates, and a 244-byte GATTC hvx (258 bytes, within KEPT 264) and our parser decodes them;
+the phone setup registers exactly 10 vendor bases. Through the real app the UART path moves 400 KB in 7.95 s (50 KB/s,
+8 notifications per 10 ms pass; 68 KB/s back to back, 1 Mbaud), faster than the simulator's chip model (34 KB/s): the
+UART is not the limit.
+
+**Why the first unit run gave 3 KB/s** (2026-11-07): the simulator let a whole notification through an event whatever
+the data length, and gave the 15 ms interval and the 2M PHY it was asked for. Changed after that: `nrf::FAST_EVENT_LEN`
+6 (7.5 ms), the connection event length extension (`sd_ble_opt_set` 0x67, `BLE_COMMON_OPT_CONN_EVT_EXT` id 2, sent
+after `sd_ble_enable` on the fast link; decoded by Bryton's real app without a hang, nrf_session_tests.rs), the PHY and
+data length update events decoded (0x22, 0x24), and the simulator's radio now sends whole link-layer packets only while
+they fit the event (at data length 27 a 244-byte notification costs ten packets, 1M: about 6.7 ms) and models the
+extension. The model's estimate (packets of 676 us at data length 27 and 1M, ten to a notification; 30 ms interval):
+event 3.75 ms about 4 KB/s, which is what the unit gave, so the unit probably ran at data length 27 and 1M; event 7.5 ms
+about 9 KB/s; with the extension about 37 KB/s at 30 ms; with 251 and 2M granted 44 KB/s (the simulator,
+`a_400_kb_ride_downloads...`).
+
+**The second measurement** (RAM run of 20989f2a): 16.6 KB/s, `info` int 12 phy 2 dle 251 ext 1 boost 0 0 0, 1.2
+notifications per connection event, 81 a second; 1152 of 1871 confirmations counted (TX_COMPLETEs kept while a command
+waits are merged, `nrf::Rx::keep`). The step time is the 1871 sends and the loop slept only 10 ms between passes whose
+events were read once; the chip's bytes now wake that sleep. The simulator's chip is more generous than the unit's
+phone (it sends the queue's depth every event), so it shows 44 KB/s before and 54 KB/s after the wake, not 16.6.
+`FAST_QUEUE` stays 4: nothing shows the queue to be the limit, and a chip that cannot hold 8 falls back to no fast
+link.
