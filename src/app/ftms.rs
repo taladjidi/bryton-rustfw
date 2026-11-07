@@ -130,7 +130,7 @@ pub(crate) struct Ftms {
     /// (0: not registered with the chip yet; kept across links, not across a chip reset), and whether the trainer's
     /// frames carry the sum checksum (fecble.rs).
     fec: bool,
-    vs: u8,
+    pub(crate) vs: u8,
     fec_sum: bool,
     /// The CCCDs of [`NOTIFYING`].
     cccd: [u16; 3],

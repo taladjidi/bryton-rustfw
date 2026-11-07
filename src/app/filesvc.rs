@@ -61,6 +61,9 @@ pub(crate) struct FileSvc {
     /// The frame built and not yet taken by the stack (`out_len` 0: none).
     out: [u8; fs::FRAME_MAX],
     out_len: usize,
+    /// What the frame in `out` adds to the job's count once the stack takes it (an entry, or file bytes): a count of
+    /// what was built would tell the phone of bytes it never got.
+    pending: u32,
     /// File bytes read and not yet framed.
     blk: [u8; BLOCK],
     blk_len: usize,
@@ -76,6 +79,7 @@ impl FileSvc {
             job: Job::Idle,
             out: [0; fs::FRAME_MAX],
             out_len: 0,
+            pending: 0,
             blk: [0; BLOCK],
             blk_len: 0,
             blk_pos: 0,
@@ -88,9 +92,15 @@ impl FileSvc {
         !matches!(self.job, Job::Idle) || self.out_len > 0
     }
 
+    /// A frame waits for the stack.
+    #[cfg(test)]
+    pub(crate) fn has_pending(&self) -> bool {
+        self.out_len > 0
+    }
+
     /// The link is gone: nothing is answered.
     pub(crate) fn reset(&mut self) {
-        (self.job, self.out_len, self.blk_len, self.blk_pos, self.stall_ms) = (Job::Idle, 0, 0, 0, 0);
+        (self.job, self.out_len, self.pending, self.blk_len, self.blk_pos, self.stall_ms) = (Job::Idle, 0, 0, 0, 0, 0);
     }
 
     /// Control's handle, when the service exists.
@@ -102,7 +112,25 @@ impl FileSvc {
     fn finish(&mut self, seq: u8, status: Status, count: u32) {
         let mut f = [0; fs::FRAME_MAX];
         let n = Frame::End { seq, status, count }.encode(&mut f);
-        (self.out, self.out_len, self.job, self.blk_len, self.blk_pos) = (f, n, Job::Idle, 0, 0);
+        (self.out, self.out_len, self.pending, self.job, self.blk_len, self.blk_pos) = (f, n, 0, Job::Idle, 0, 0);
+    }
+
+    /// The stack took the frame in `out`: what it carried counts.
+    fn taken(&mut self) {
+        if let Job::List { count, .. } | Job::Read { count, .. } = &mut self.job {
+            *count = count.saturating_add(self.pending);
+        }
+        (self.out_len, self.pending) = (0, 0);
+    }
+
+    /// Ends the answer under way, if any, with `status` (the card is about to be used, or a ride began): what the
+    /// phone got is what the END's count says.
+    pub(crate) fn abort(&mut self, status: Status) {
+        let (seq, count) = match self.job {
+            Job::List { seq, count, .. } | Job::Read { seq, count, .. } => (seq, count),
+            Job::Idle => return,
+        };
+        self.finish(seq, status, count);
     }
 
     /// Builds the next frame of the job into `out`; false when there is none this pass (nothing to answer, or the
@@ -124,12 +152,12 @@ impl FileSvc {
 
     /// The work of [`FileSvc::fill`]; Err(status) ends the answer.
     fn build(&mut self, d: &mut impl fat::Disk, seq: u8) -> Result<bool, Status> {
-        let FileSvc { job, out, out_len, blk, blk_len, blk_pos, .. } = self;
+        let FileSvc { job, out, out_len, pending, blk, blk_len, blk_pos, .. } = self;
         let mut f = [0; fs::FRAME_MAX];
         let io = |_| Status::Io;
         match job {
             Job::Idle => Ok(false),
-            Job::List { cur, count, .. } => {
+            Job::List { cur, .. } => {
                 let mut fat = fat::Fat::mount(d).map_err(io)?;
                 if cur.is_none() {
                     // a card with no \Activities\ has no rides: an empty list, not an error
@@ -143,7 +171,7 @@ impl FileSvc {
                 for _ in 0..SCAN {
                     let Some(e) = fat.list(d, c).map_err(io)? else { return Err(Status::Ok) };
                     if let (Some(name), false) = (fs::ride_name(e.name()), e.file.dir) {
-                        *count += 1;
+                        *pending = 1;
                         *out_len = Frame::Entry { seq, name, size: e.file.size }.encode(&mut f);
                         *out = f;
                         return Ok(true);
@@ -151,7 +179,7 @@ impl FileSvc {
                 }
                 Ok(false)
             }
-            Job::Read { name, offset, file, seek, count, .. } => {
+            Job::Read { name, offset, file, seek, .. } => {
                 if *blk_pos >= *blk_len {
                     let mut fat = fat::Fat::mount(d).map_err(io)?;
                     if file.is_none() {
@@ -160,6 +188,9 @@ impl FileSvc {
                         let find = |e| if e == fat::Error::NotFound { Status::NotFound } else { Status::Io };
                         let dir = fat.find(d, fat.root(), "Activities").map_err(find)?;
                         let x = fat.find(d, dir, n).map_err(find)?;
+                        if x.dir {
+                            return Err(Status::NotFound);
+                        }
                         if *offset > x.size {
                             return Err(Status::BadRequest);
                         }
@@ -176,7 +207,7 @@ impl FileSvc {
                 *out_len = Frame::Chunk { seq, data: data.get(..n).unwrap_or(&[]) }.encode(&mut f);
                 *out = f;
                 *blk_pos += n;
-                *count += n as u32;
+                *pending = n as u32;
                 Ok(true)
             }
         }
@@ -233,7 +264,8 @@ impl Phone {
 impl App {
     /// The phone wrote Control: a command to answer. Only on the encrypted link (the stack enforces it too).
     pub(crate) fn files_command(&mut self, written: &[u8]) {
-        if !self.phone.secure {
+        // rides are GPS tracks: the bond, not just an encrypted link (Just Works pairing during the PAIR window)
+        if !self.phone.secure || self.phone.stored.bond.is_none() {
             return;
         }
         let busy = !self.ride_settled() || self.emmc.lent();
@@ -257,15 +289,11 @@ impl App {
     /// The answer's next frames, [`PER_PASS`] at most.
     pub(crate) fn step_files(&mut self, b: &mut impl Board, conn: u16) {
         let Some((_, data)) = self.phone.files.handles else { return };
-        if !self.phone.secure || !self.phone.files.active() {
+        if !self.phone.secure || self.phone.stored.bond.is_none() || !self.phone.files.active() {
             return;
         }
         if !matches!(self.phone.files.job, Job::Idle) && (!self.ride_settled() || self.emmc.lent()) {
-            let (seq, count) = match self.phone.files.job {
-                Job::List { seq, count, .. } | Job::Read { seq, count, .. } => (seq, count),
-                Job::Idle => (0, 0),
-            };
-            self.phone.files.finish(seq, Status::Busy, count); // a ride began under the transfer
+            self.phone.files.abort(Status::Busy); // a ride began under the transfer
         }
         let mut sent = false;
         for _ in 0..PER_PASS {
@@ -280,7 +308,8 @@ impl App {
             if ble::notify(b, &mut self.rx, conn, data, frame).is_err() {
                 break; // the queue is full (or Data is not subscribed): the same frame next pass
             }
-            (svc.out_len, svc.stall_ms, sent) = (0, 0, true);
+            svc.taken();
+            (svc.stall_ms, sent) = (0, true);
         }
         let svc = &mut self.phone.files;
         if svc.out_len > 0 && !sent {

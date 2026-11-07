@@ -256,6 +256,7 @@ impl App {
             return;
         }
         let r = self.past.ride;
+        self.phone.files.abort(crate::filesvc::Status::Busy); // a phone reading a ride must not read it moved
         let t = fat::write::dos_time(self.rec_time().0);
         match trash::delete(&mut emmc::Volume(&mut self.emmc, b), &r.file, t) {
             Ok(None) => {

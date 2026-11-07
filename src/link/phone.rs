@@ -685,6 +685,10 @@ pub fn local_offset(p: &[u8]) -> Option<i8> {
 // ---------------------------------------------------------------------------------------------------------------
 
 /// Longest system attributes kept (a handle, a value per CCCD and a CRC: about 4 bytes each, a dozen fit).
+// The room for `sd_ble_gatts_sys_attr_get`'s blob, which holds Service Changed's CCCD and one per notifying characteristic
+// of ours with its CCCD set: the HID report, the battery level and the file service's Data, 3 plus 1. The blob's format
+// is the SoftDevice's own (not checked: inferred 8 bytes of header and at most 6 a CCCD, 8 + 4 * 6 = 32), so 64 keeps
+// twice that; a longer blob makes the call fail and only the CCCDs are lost (the phone enables them again).
 pub const ATTRS: usize = 64;
 
 /// The phone bonded with: the key to answer it with, its address then, the CCCDs it set; and the phone settings.

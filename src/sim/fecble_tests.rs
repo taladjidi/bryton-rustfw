@@ -47,8 +47,8 @@ fn the_d500_is_paired_and_read() {
     run(&mut sim, &mut app, 3000);
     let t = trainer(&sim);
     assert!(t.connected && t.on(FC_NOTIFY, 1), "connected and subscribed");
-    assert_eq!(sim.nordic.server.vs.len(), vs + 1);
-    assert_eq!(sim.nordic.server.vs[vs], fecble::BASE, "the base registered with the chip");
+    assert_eq!(sim.nordic.server.vs.len(), vs, "registered at the phone setup, not again");
+    assert_eq!(sim.nordic.server.vs[8], fecble::BASE, "the base registered with the chip, after the phone's eight");
     assert_eq!(t.got.first(), Some(&vec![0x46, 255, 255, 255, 255, 1, 54, 1]), "the capabilities asked for");
     assert_eq!((t.violations, t.rejected), (0, 0));
     assert_eq!(file_proto(&sim), Some((t.peer(), true)));

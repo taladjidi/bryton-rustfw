@@ -376,11 +376,13 @@ impl Nordic {
         let ok = |n: &mut Nordic, out: &[u8]| n.queue(&[&[1, *op, 0, 0, 0, 0][..], out].concat());
         let u16_at = |i: usize| u16::from_le_bytes([args[i], args[i + 1]]);
         match *op {
+            0x62 if self.server.vs.len() >= if self.vs_max == 0 { 10 } else { self.vs_max } => {
+                self.queue(&[1, 0x62, 0x04, 0, 0, 0]); // NRF_ERROR_NO_MEM
+            }
             0x62 => {
                 let mut b = [0; 16];
                 b.copy_from_slice(&args[1..17]);
                 self.server.vs.push(b);
-                assert!(self.server.vs.len() <= 10, "the stack's default is 10 vendor UUID bases");
                 let t = self.server.vs.len() as u8 + 1;
                 ok(self, &[1, t]);
             }

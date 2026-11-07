@@ -452,6 +452,11 @@ impl App {
         })();
         p.ready = r.is_ok();
         if p.ready {
+            // FE-C's base first (it would register it at the first connection): the 10th base is the file service's, so
+            // a chip holding fewer costs the file service, never the trainer or the phone link
+            if self.ftms.vs == 0 {
+                self.ftms.vs = ble::uuid_vs_add(b, rx, &crate::fecble::BASE).unwrap_or(0);
+            }
             // last, and on its own: a chip that refuses the file service still serves the phone link
             p.files.handles = super::filesvc::add_service(b, rx);
         }

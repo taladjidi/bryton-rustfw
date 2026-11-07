@@ -7848,12 +7848,21 @@ fn file_service_commands() {
     use super::filesvc_tests::{drain, paired, rides};
     use super::run;
     use crate::filesvc::{Command, Frame, Status};
-    let mut reached = [0u32; 5]; // entries, chunks, bad requests, not found, ok ends
+    let mut reached = [0u32; 6]; // entries, chunks, bad requests, not found, ok ends, busy ends
     for seed in 1..=scaled(40) {
         let mut next = xorshift(seed);
         let (mut sim, mut app, control, data) = paired();
         let rides = rides();
-        for _ in 0..16 {
+        for i in 0..16 {
+            match i % 7 {
+                5 => app.emmc.lend(true), // the card goes to a computer for a command
+                6 => app.emmc.lend(false),
+                _ => {}
+            }
+            if i == 13 && seed % 3 == 0 {
+                app.leave_menus();
+                app.input(&mut sim, crate::Input::Select); // a ride starts under the service
+            }
             let r = next();
             let (name, size) = {
                 let (n, d) = &rides[(r >> 8) as usize % 2];
@@ -7871,7 +7880,11 @@ fn file_service_commands() {
                 0 | 1 => Command::List { seq }.encode(&mut f),
                 2 | 3 => Command::Read { seq, offset, name }.encode(&mut f),
                 4 => Command::Read { seq, offset, name: *b"123456789012" }.encode(&mut f),
-                5 => Command::Cancel.encode(&mut f),
+                5 => {
+                    // CANCEL, then a READ with the same seq at once
+                    sim.nordic.phone_write(control, &[3]);
+                    Command::Read { seq, offset, name }.encode(&mut f)
+                }
                 6 => {
                     // a valid command mutated
                     let n = Command::Read { seq, offset, name }.encode(&mut f);
@@ -7902,6 +7915,7 @@ fn file_service_commands() {
                     Frame::End { status: Status::BadRequest, .. } => reached[2] += 1,
                     Frame::End { status: Status::NotFound, .. } => reached[3] += 1,
                     Frame::End { status: Status::Ok, .. } => reached[4] += 1,
+                    Frame::End { status: Status::Busy, .. } => reached[5] += 1,
                     Frame::End { .. } => {}
                 }
             }

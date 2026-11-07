@@ -234,3 +234,88 @@ fn a_phone_that_never_subscribes_does_not_hold_the_service() {
     run(&mut sim, &mut app, 6000);
     assert!(!app.phone.files.active(), "dropped after the stall time-out");
 }
+
+#[test]
+fn a_ride_starting_mid_read_counts_only_the_bytes_the_phone_got() {
+    let (mut sim, mut app, control, data) = paired();
+    let [(name, bytes), _] = rides();
+    let mut f = [0; 20];
+    let n = Command::Read { seq: 1, offset: 0, name }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.phone.files.has_pending(), "a chunk waits for the stack");
+    app.leave_menus();
+    app.input(&mut sim, Input::Select); // Start
+    let (mut kept, mut end): (Vec<u8>, _) = (Vec::new(), None);
+    for _ in 0..40 {
+        run(&mut sim, &mut app, 100);
+        for p in drain(&mut sim, data) {
+            match Frame::parse(&p) {
+                Some(Frame::Chunk { data, .. }) => kept.extend(data),
+                Some(Frame::End { status, count, .. }) => end = Some((status, count)),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(end, Some((Status::Busy, kept.len() as u32)), "END counts what was taken");
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert_eq!(kept, bytes[..kept.len()]);
+}
+
+#[test]
+fn a_folder_with_a_ride_name_is_not_a_ride() {
+    let (mut sim, mut app, control, data) = paired();
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let act = fat.open(&mut d, "Activities").unwrap();
+    fat.ensure_dir(&mut d, act, "251028080000", (0, 0)).unwrap();
+    sim.emmc.image = d.0;
+    let a = ask(&mut sim, &mut app, control, data, Command::List { seq: 1 }, 5000);
+    assert!(!a.entries.iter().any(|e| &e.0 == b"251028080000"));
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 2, offset: 0, name: *b"251028080000" }, 5000);
+    assert_eq!(a.end.map(|e| e.0), Some(Status::NotFound));
+}
+
+#[test]
+fn an_encrypted_link_without_the_bond_is_refused() {
+    let (mut sim, mut app, control, data) = paired();
+    app.phone.stored.bond = None;
+    sim.nordic.phone_write(control, &[1, 1]);
+    run(&mut sim, &mut app, 500);
+    assert!(!app.phone.files.active() && drain(&mut sim, data).is_empty());
+}
+
+#[test]
+fn deleting_a_ride_ends_a_transfer_under_way() {
+    let (mut sim, mut app, control, data) = paired();
+    let [(name, _), _] = rides();
+    let mut f = [0; 20];
+    let n = Command::Read { seq: 1, offset: 0, name }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    run(&mut sim, &mut app, 500);
+    app.phone.files.abort(Status::Busy); // what delete_past does first
+    run(&mut sim, &mut app, 500);
+    let ends = drain(&mut sim, data)
+        .iter()
+        .filter(|p| matches!(Frame::parse(p), Some(Frame::End { status: Status::Busy, .. })))
+        .count();
+    assert_eq!(ends, 1);
+    assert!(!app.phone.files.active());
+}
+
+#[test]
+fn a_chip_with_nine_bases_costs_the_file_service_not_the_trainer_or_the_phone() {
+    let mut phone = PhoneSim::new(true);
+    phone.connect_at = 1000;
+    let (mut sim, mut app) = super::tests::unit_with(None, |sim| {
+        sim.nordic.phone = Some(phone);
+        sim.nordic.vs_max = 9;
+    });
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.phone.link(), Link::Secure, "the phone link works");
+    assert!(app.phone.files.handles.is_none(), "no file service");
+    assert_eq!(sim.nordic.server.vs.len(), 9);
+    assert_eq!(sim.nordic.server.vs[8], crate::fecble::BASE, "the ninth base is FE-C's");
+    assert_ne!(app.ftms.vs, 0, "the trainer's base is held");
+}

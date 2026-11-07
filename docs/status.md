@@ -28,7 +28,13 @@ The simulator (src/sim/) is the host tests' fake board. Nothing below is checked
   ride (expected about 360 B/s at MTU 23, 50 ms passes) and check that the stack really queues one notification (a
   second in a pass answers NRF_ERROR_RESOURCES; the simulator models it). The bond's saved CCCDs (`ATTRS`, 64 bytes)
   must hold Data's as well as the HID report's and the battery's. The vendor UUID bases are now 10 of the stack's 10
-  (8 for the phone, the FE-C trainer, this one): an eleventh needs `sd_ble_cfg_set`.
+  (8 for the phone, the FE-C trainer, this one): an eleventh needs `sd_ble_cfg_set`. FE-C's base is now registered
+  at the phone setup, before the file service's, so a chip holding fewer costs the file service (no service in the
+  table), never the trainer: check that the 10th `uuid_vs_add` answers OK on the unit. Also read `sys_attr_get`'s
+  length after enabling Data (ATTRS is 64; inferred need about 32). The service answers only to the stored bond
+  (Just Works pairing in the 60 s PAIR window is the protection). The recorder's eMMC urgent path (lib.rs
+  `emmc.urgent(!ride_settled())`) is set on a ride start and cuts a running back-off, so a read error before it
+  does not delay the first checkpoint.
 
 - **Switch-off reaches system Standby (2026-11-07, main.rs `standby`: PDDS_D3 set too, as stock; BOARD.md 9):** off
   before it, the system sat in Stop and the cell lost about 58 % in 88 h (docs/power.md "Switched off"). Owed on the

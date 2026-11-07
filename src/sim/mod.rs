@@ -258,6 +258,8 @@ pub use gnss_model::Gnss;
 /// hear the [`AntSensor`]s in range.
 #[derive(Default)]
 pub struct Nordic {
+    /// Vendor UUID bases the chip holds (0: the default, 10); it refuses more (NRF_ERROR_NO_MEM). Kept over a reset.
+    pub vs_max: usize,
     /// False: the chip never answers (not running).
     pub dead: bool,
     /// A BLE command the chip refuses (NRF_ERROR_NO_MEM), as one whose configuration it lacks would.
@@ -1193,6 +1195,7 @@ impl Sim {
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
         let (limits, hangs, high_water) = (self.nordic.limits, self.nordic.hangs, self.nordic.high_water);
         let (expect_hang, table_only) = (self.nordic.expect_hang, self.nordic.table_only);
+        let vs_max = self.nordic.vs_max;
         resets.push(self.ms);
         self.nordic = Nordic {
             die_at_ant,
@@ -1216,6 +1219,7 @@ impl Sim {
             high_water,
             expect_hang,
             table_only,
+            vs_max,
             ..Nordic::default()
         };
     }

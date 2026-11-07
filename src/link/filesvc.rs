@@ -34,6 +34,13 @@
 //! END with BAD REQUEST (and the `seq` it carried, 0 if it carried none). END after the last CHUNK is how the phone
 //! knows the file is whole: its bytes equal `count`, and `off + count` equals the size LIST gave.
 //!
+//! **Dropped and moved:** a frame the stack does not take for 5 s (Data not subscribed, the link quiet) drops the
+//! answer silently: no frame for 5 s means dropped, re-issue READ from the bytes kept. A ride deleted from HISTORY
+//! while it is read ends the answer with BUSY, so the phone checks the bytes it holds against the size LIST gave.
+//! END's `count` is only what the stack took, so `off + count` is where to resume.
+//! **Who:** the stored bond and an encrypted link are both required. The protection is the pairing itself: Just Works,
+//! accepted only during the 60 s PAIR window of the PHONE menu, so whoever pairs then can read the rides (GPS tracks).
+//!
 //! Notifications are ordered and the link is reliable, so a CHUNK carries no offset; the phone counts.
 
 /// The vendor base, little endian, bytes 12 and 13 (the 16-bit part) zero: what `sd_ble_uuid_vs_add` takes.
