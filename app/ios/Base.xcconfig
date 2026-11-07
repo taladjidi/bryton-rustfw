@@ -1,4 +1,7 @@
 // Defaults, then the owner's own values from Local.xcconfig (gitignored; copy Local.xcconfig.example).
 BUNDLE_ID_PREFIX = invalid.example
 DEVELOPMENT_TEAM =
+// The saved rides show in the Files app (Documents folder).
+// a partial plist merged into the generated one: UIFileSharingEnabled has no INFOPLIST_KEY_ form
+INFOPLIST_FILE = Info-extra.plist
 #include? "Local.xcconfig"

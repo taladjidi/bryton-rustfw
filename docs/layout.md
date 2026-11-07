@@ -450,3 +450,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   (team and bundle id prefix; the real `Local.xcconfig` is ignored by the repository), `build-core.sh` (core for both
   iOS targets, bindings, XCFramework into the ignored `Generated/`).
 - `link.x`, `tools/pack.py`: memory map and the update file. `tools/pack.py` re-checks what the stock updater checks.
+- `app/core/src/files.rs`: the phone's file service client (`FileClient`, sans-IO, UniFFI): LIST / READ commands from the
+  firmware's own `filesvc` encoder, Data frames in, resume from the bytes kept, progress and speed. `files_tests.rs`: its
+  tests and fuzz. `demo.rs`: a fake unit (the firmware's FIT writer for synthetic rides) for the tests and Demo mode.
+  `app/ios/App/RideBrowser.swift`: the ride list and download model, the Demo transport. `BleFileTransport.swift`: the
+  file service over CoreBluetooth. `app/ios/Info-extra.plist`: UIFileSharingEnabled (no INFOPLIST_KEY form).

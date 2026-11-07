@@ -39,3 +39,25 @@ over Wi-Fi.
 
 Build from source for now. TestFlight and the App Store need the paid Apple Developer account, and the App Store's
 terms are to be checked against this project's GPLv3. The free route for others is an Android APK (step A4).
+
+## Rides
+
+The ride list and download (roadmap 9, A1 reads). `app/core/src/files.rs` is a sans-IO `FileClient`: Swift writes the
+bytes it returns to Control (write with response) and feeds every Data notification to `onData`. Frames are encoded and
+decoded by the firmware's own `src/link/filesvc.rs`; no chunk size is assumed (each CHUNK gives its length), so the
+faster link needs no app change. The file is kept in memory; after BUSY, a link drop or 5 s of silence `resumeCommand`
+asks READ again from the bytes kept. The final length is checked against LIST's size and END's count against the bytes
+of the answer: a short file is an error, never a silent truncation.
+
+The screen lists the rides (date and time from the `YYMMDDhhmmss` name, size in KB, a check mark when already saved),
+pull to refresh; a tap downloads with a progress bar and KB/s, saves `<name>.fit` in the app's Documents (visible in
+the Files app: `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`) and opens the share sheet. A small line
+shows `maximumWriteValueLength`, to read the negotiated MTU off the screen for the fast-link test.
+
+**Demo** (the Simulator has no Bluetooth): the "Demo" button runs the same core against the Rust fake unit serving three
+synthetic rides made by the firmware's FIT writer (an invented track, no real data). Launch arguments `-demo` and
+`-demo-dl` start it by themselves (`xcrun simctl launch booted <bundle id> -demo -demo-dl`, then
+`xcrun simctl io booted screenshot`).
+
+Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
+itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
