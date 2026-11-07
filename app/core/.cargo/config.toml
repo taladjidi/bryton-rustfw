@@ -1,0 +1,4 @@
+# The root .cargo/config.toml (cargo reads every config from here upward) sets the bike computer's target; this
+# crate builds for the Mac by default, and for iOS with an explicit --target (app/ios/build-core.sh).
+[build]
+target = "aarch64-apple-darwin"
