@@ -24,6 +24,12 @@ names). A feature not listed here was seen on the unit. What was fully seen is i
 
 ### Phone and phone app
 
+**Workouts read by the phone (LIST_IN / READ_IN of `\Workout\calendar`, docs/app.md "Workouts")**
+
+Seen: simulator (a folder changed between the two commands, fuzz), app core tests, the iOS Simulator demo. Reading only.
+
+On the unit: a RAM run (`tools/dev.py run`, no ride) and the app bonded: LIST_IN of the real calendar lists the owner's workouts, each reads whole and decodes, and a file changed on the card between the list and a read gives NOT FOUND.
+
 **The fast phone link (2026-11-07, roadmap 3c; `nrf::CFG_FAST`, app/filesvc.rs)**
 
 Seen: simulator; Bryton's real radio app in the emulator (`src/sim/nrf_session_tests.rs`); unit 2026-11-07 (RAM run, iPhone 16 Pro), steps 1 to 3 done, speed measured twice. The chip-bytes wake build (main 7bd424c5) is not measured on the unit yet.

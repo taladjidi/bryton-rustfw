@@ -14,9 +14,10 @@
 
 pub mod demo;
 pub mod files;
-pub mod ride;
 #[cfg(test)]
 mod files_tests;
+pub mod ride;
+pub mod workout;
 
 uniffi::setup_scaffolding!();
 

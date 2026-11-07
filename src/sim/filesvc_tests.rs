@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::fat::tests::{Ram, put_file};
-use crate::filesvc::{Command, Frame, Name, Status};
+use crate::filesvc::{Command, Folder, Frame, Key, Name, Status};
 
 /// The rides on the test card: (name, bytes). The first spans several sectors.
 pub(super) fn rides() -> [(Name, Vec<u8>); 2] {
@@ -685,4 +685,161 @@ fn during_a_fast_read_the_keys_stay_off_and_the_chips_bytes_wake_the_loop() {
     assert!(wakes.iter().all(|&(keys, _)| !keys), "a key line armed during a READ");
     assert!(wakes.iter().any(|&(_, bytes)| bytes), "the READ's sleep never armed the chip's bytes");
     assert!(radio > 0, "no radio pass woken by a byte during the READ");
+}
+
+type End = Option<(Status, u32)>;
+
+/// LIST_IN of the workout folder: (key, size) of every file, and the answer's END.
+fn list_workouts(sim: &mut Sim, app: &mut App, control: u16, data: u16, seq: u8) -> (Vec<(Key, u32)>, End) {
+    let mut f = [0; 20];
+    let n = Command::ListIn { seq, folder: Folder::Workout }.encode(&mut f);
+    sim.nordic.phone_write(control, &f[..n]);
+    let (mut entries, mut end) = (Vec::new(), None);
+    for _ in 0..100 {
+        pass(sim, app, 50);
+        for p in drain(sim, data) {
+            match Frame::parse(&p) {
+                Some(Frame::EntryIn { key, size, .. }) => entries.push((key, size)),
+                Some(Frame::End { status, count, .. }) => end = Some((status, count)),
+                _ => {}
+            }
+        }
+        if end.is_some() {
+            break;
+        }
+    }
+    (entries, end)
+}
+
+#[test]
+fn workouts_are_listed_and_read_whole_or_from_an_offset() {
+    let (mut sim, mut app, control, data) = paired();
+    let (entries, end) = list_workouts(&mut sim, &mut app, control, data, 3);
+    // the synthetic card has four planned files, one per day folder, the past and the broken one too
+    let keys: Vec<_> = entries.iter().map(|e| std::string::String::from_utf8(e.0.bytes().to_vec()).unwrap()).collect();
+    assert_eq!(end, Some((Status::Ok, 4)));
+    assert_eq!(keys, ["2026102000", "2026102300", "2026102400", "2026102500"]);
+    let mut parsed = 0;
+    for (key, size) in entries {
+        let a = ask(
+            &mut sim,
+            &mut app,
+            control,
+            data,
+            Command::ReadIn { seq: 4, folder: Folder::Workout, offset: 0, key },
+            20_000,
+        );
+        assert_eq!(a.end, Some((Status::Ok, size)), "{key:?}");
+        assert_eq!(a.bytes.len() as u32, size);
+        parsed += usize::from(crate::storage::workout_file::parse(&a.bytes).is_ok());
+        let a2 = ask(
+            &mut sim,
+            &mut app,
+            control,
+            data,
+            Command::ReadIn { seq: 5, folder: Folder::Workout, offset: 10, key },
+            20_000,
+        );
+        assert_eq!(a2.bytes, a.bytes[10..]);
+    }
+    assert_eq!(parsed, 3, "all but the broken one decode with the firmware's own parser");
+}
+
+#[test]
+fn only_the_table_of_folders_is_reachable() {
+    let (mut sim, mut app, control, data) = paired();
+    for raw in [
+        &b"\x04\x01\x09"[..],
+        b"\x04\x01",
+        b"\x05\x01\x01\0\0\0\0\x0a../../ble.b",
+        b"\x05\x01\x01\0\0\0\0\x0a2026102x00",
+        b"\x05\x01\x01\0\0\0\0\x0c251026093000",
+        b"\x05\x01\x07\0\0\0\0\x0a2026102300",
+        b"\x05\x01\x01\0\0\0\0\x0c2026102300",
+    ] {
+        let a = ask_raw(&mut sim, &mut app, control, data, raw, 2000);
+        assert_eq!(a.end.map(|e| e.0), Some(Status::BadRequest), "{raw:?}");
+        assert!(a.bytes.is_empty() && a.entries.is_empty());
+    }
+    let (listed, _) = list_workouts(&mut sim, &mut app, control, data, 9);
+    let key = |k: &[u8]| Key::new(Folder::Workout, k).unwrap();
+    for (k, want) in [(&b"2026102301"[..], Status::NotFound), (b"2027010100", Status::NotFound)] {
+        let a = ask(
+            &mut sim,
+            &mut app,
+            control,
+            data,
+            Command::ReadIn { seq: 2, folder: Folder::Workout, offset: 0, key: key(k) },
+            2000,
+        );
+        assert_eq!(a.end.map(|e| e.0), Some(want), "{k:?}");
+    }
+    let a = ask(
+        &mut sim,
+        &mut app,
+        control,
+        data,
+        Command::ReadIn { seq: 2, folder: Folder::Workout, offset: 99_999, key: listed[1].0 },
+        2000,
+    );
+    assert_eq!(a.end.map(|e| e.0), Some(Status::BadRequest), "an offset past the end");
+}
+
+#[test]
+fn workouts_are_busy_during_a_ride() {
+    let (mut sim, mut app, control, data) = paired();
+    app.leave_menus();
+    app.input(&mut sim, Input::Select); // Start
+    run(&mut sim, &mut app, 300);
+    let key = Key::new(Folder::Workout, b"2026102300").unwrap();
+    for cmd in [
+        Command::ListIn { seq: 6, folder: Folder::Workout },
+        Command::ReadIn { seq: 7, folder: Folder::Workout, offset: 0, key },
+    ] {
+        let a = ask(&mut sim, &mut app, control, data, cmd, 5000);
+        assert_eq!(a.end, Some((Status::Busy, 0)), "{cmd:?} during a ride");
+        assert!(a.bytes.is_empty());
+    }
+}
+
+/// The image with "Short Intervals.fit" of 2026-10-23 removed (if it is there), and `new` (if any) written in its place as NEW.FIT.
+pub(super) fn replace_workout(image: &[u8], new: Option<&[u8]>) -> Vec<u8> {
+    let mut d = Ram(image.to_vec(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let dir = fat.open(&mut d, "Workout/calendar/20261023").unwrap();
+    if let Ok(old) = fat.locate(&mut d, dir, "Short Intervals.fit") {
+        fat.remove(&mut d, &old).unwrap();
+    }
+    if let Some(data) = new {
+        let mut h = fat.create(&mut d, dir, "NEW.FIT", (0, 0)).unwrap();
+        let mut padded = data.to_vec();
+        padded.resize(data.len().div_ceil(512).max(1) * 512, 0);
+        fat.write_sectors(&mut d, &mut h, 0, &padded).unwrap();
+        fat.set_size(&mut d, &mut h, data.len() as u32, (0, 0)).unwrap();
+    }
+    d.0
+}
+
+#[test]
+fn a_folder_changed_between_list_and_read_never_serves_another_file() {
+    let (mut sim, mut app, control, data) = paired();
+    let (listed, _) = list_workouts(&mut sim, &mut app, control, data, 3);
+    let (key, size) = listed[1]; // 2026102300: "Short Intervals.fit"
+    let read = |sim: &mut Sim, app: &mut App, key| {
+        ask(sim, app, control, data, Command::ReadIn { seq: 4, folder: Folder::Workout, offset: 0, key }, 20_000)
+    };
+    assert_eq!(read(&mut sim, &mut app, key).end, Some((Status::Ok, size)), "unchanged");
+    // the file is removed: nothing is at its place
+    sim.emmc.image = replace_workout(&sim.emmc.image, None);
+    let a = read(&mut sim, &mut app, key);
+    assert_eq!((a.end.map(|e| e.0), a.bytes.len()), (Some(Status::NotFound), 0), "removed");
+    // another file of another size takes the place: still NOT FOUND, its bytes never sent under the old key
+    sim.emmc.image = replace_workout(&sim.emmc.image, Some(&[7; 40]));
+    let a = read(&mut sim, &mut app, key);
+    assert_eq!((a.end.map(|e| e.0), a.bytes.len()), (Some(Status::NotFound), 0), "replaced");
+    // a new listing gives the new check, and the file reads again
+    let (relisted, _) = list_workouts(&mut sim, &mut app, control, data, 5);
+    let (k2, s2) = relisted.into_iter().find(|e| e.0.bytes() == key.bytes()).expect("listed again");
+    assert_ne!(k2.check(), key.check());
+    assert_eq!(read(&mut sim, &mut app, k2).end, Some((Status::Ok, s2)));
 }

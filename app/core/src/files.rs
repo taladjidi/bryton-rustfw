@@ -5,7 +5,7 @@
 //! Chunk sizes are never assumed: each CHUNK says its own length. The whole file is kept in memory, so a dropped
 //! READ (BUSY, a link drop, 5 s of silence) resumes with [`FileClient::resume_command`] from the bytes kept.
 
-use bryton_rustfw::filesvc::{Command, FRAME_MAX, Frame, NAME_LEN, Status};
+use bryton_rustfw::filesvc::{Command, FRAME_MAX, Folder, Frame, Key, NAME_LEN, Status};
 use std::sync::Mutex;
 
 /// No frame for this long while an answer is awaited means the unit dropped it (filesvc.rs, "Dropped and moved").
@@ -22,6 +22,24 @@ pub struct RideEntry {
     pub name: String,
     /// Bytes.
     pub size: u32,
+}
+
+/// A folder of the unit LIST_IN and READ_IN can name (src/link/filesvc.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum UnitFolder {
+    /// The rides, `\Activities\`.
+    Activities,
+    /// The planned workouts, `\Workout\calendar\<day>\`: the key is `YYYYMMDD` and the file's number.
+    Workout,
+}
+
+impl From<UnitFolder> for Folder {
+    fn from(f: UnitFolder) -> Folder {
+        match f {
+            UnitFolder::Activities => Folder::Activities,
+            UnitFolder::Workout => Folder::Workout,
+        }
+    }
 }
 
 /// Why a list or a download failed.
@@ -89,6 +107,13 @@ struct Inner {
     mode: Mode,
     seq: u8,
     entries: Vec<RideEntry>,
+    /// The last LIST_IN's files (`name` is the key): kept apart, so listing the workouts leaves the rides listed.
+    files_in: Vec<(RideEntry, u16)>,
+    /// The check READ_IN gives back for the file being read (see link/filesvc.rs).
+    read_check: u16,
+    /// The folder of the list under way, and of the download under way (None: LIST and READ, the rides).
+    list_folder: Option<Folder>,
+    read_folder: Option<Folder>,
     name: String,
     size: u32,
     file: Vec<u8>,
@@ -122,7 +147,12 @@ impl Inner {
             name.copy_from_slice(b);
         }
         let offset = u32::try_from(self.file.len()).unwrap_or(u32::MAX);
-        self.encode(Command::Read { seq: self.seq, offset, name })
+        let key =
+            self.read_folder.and_then(|f| Some((f, Key::new(f, self.name.as_bytes())?.with_check(self.read_check))));
+        match key {
+            Some((folder, key)) => self.encode(Command::ReadIn { seq: self.seq, folder, offset, key }),
+            None => self.encode(Command::Read { seq: self.seq, offset, name }),
+        }
     }
 
     fn fail(&mut self, error: FileError) -> FileEvent {
@@ -139,6 +169,15 @@ impl Inner {
                 self.listed += 1;
                 // the firmware's parser checked the twelve digits
                 self.entries.push(RideEntry { name: String::from_utf8_lossy(&name).into_owned(), size });
+                FileEvent::Entry
+            }
+            (Mode::Listing, Frame::EntryIn { seq, key, size }) if seq == self.seq && self.list_folder.is_some() => {
+                if self.files_in.len() >= ENTRIES_MAX {
+                    return self.fail(FileError::TooLong);
+                }
+                self.listed += 1;
+                let name = String::from_utf8_lossy(key.bytes()).into_owned();
+                self.files_in.push((RideEntry { name, size }, key.check()));
                 FileEvent::Entry
             }
             (Mode::Listing, Frame::End { seq, status, count }) if seq == self.seq => match status {
@@ -194,6 +233,10 @@ impl FileClient {
             mode: Mode::Idle,
             seq: 0,
             entries: Vec::new(),
+            files_in: Vec::new(),
+            read_check: 0,
+            list_folder: None,
+            read_folder: None,
             name: String::new(),
             size: 0,
             file: Vec::new(),
@@ -212,8 +255,40 @@ impl FileClient {
         s.seq = s.seq.wrapping_add(1);
         (s.mode, s.listed, s.last_ms) = (Mode::Listing, 0, now_ms);
         s.entries.clear();
+        s.list_folder = None;
         let seq = s.seq;
         s.encode(Command::List { seq })
+    }
+
+    /// The bytes to write to Control to list the files of `folder` (LIST_IN); clears the last such list.
+    pub fn list_in_command(&self, folder: UnitFolder, now_ms: u64) -> Vec<u8> {
+        let mut s = self.lock();
+        s.seq = s.seq.wrapping_add(1);
+        (s.mode, s.listed, s.last_ms) = (Mode::Listing, 0, now_ms);
+        s.files_in.clear();
+        s.list_folder = Some(folder.into());
+        let seq = s.seq;
+        s.encode(Command::ListIn { seq, folder: folder.into() })
+    }
+
+    /// Starts downloading file `key` of the last LIST_IN from byte 0 (READ_IN): the bytes to write to Control; None
+    /// when the key is not in that list (or too large). The finished file is [`FileClient::file`].
+    pub fn read_in_command(&self, key: String, now_ms: u64) -> Option<Vec<u8>> {
+        let mut s = self.lock();
+        let folder = s.list_folder?;
+        let (size, check) = s.files_in.iter().find(|e| e.0.name == key).map(|e| (e.0.size, e.1))?;
+        if size as usize > FILE_MAX {
+            return None;
+        }
+        (s.name, s.size, s.last_ms, s.first_ms, s.read_folder) = (key, size, now_ms, None, Some(folder));
+        s.read_check = check;
+        s.file.clear();
+        Some(s.read_cmd())
+    }
+
+    /// The files of the last LIST_IN (complete after [`FileEvent::Listed`]); `name` is the key.
+    pub fn files_in(&self) -> Vec<RideEntry> {
+        self.lock().files_in.iter().map(|e| e.0.clone()).collect()
     }
 
     /// Starts downloading a listed ride from byte 0: the bytes to write to Control; None when the ride is not in the
@@ -224,7 +299,7 @@ impl FileClient {
         if size as usize > FILE_MAX {
             return None;
         }
-        (s.name, s.size, s.last_ms, s.first_ms) = (name, size, now_ms, None);
+        (s.name, s.size, s.last_ms, s.first_ms, s.read_folder) = (name, size, now_ms, None, None);
         s.file.clear();
         Some(s.read_cmd())
     }
