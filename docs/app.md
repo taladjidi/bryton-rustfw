@@ -7,9 +7,9 @@ is unchanged: it already serves Battery 0x180F and Device Information 0x180A ope
 
 The unit advertises only while pairing, or bonded and not connected. When the phone already holds the link (the
 notifications bond), the app asks the system for it with `retrieveConnectedPeripherals(withServices:)`, and scans
-otherwise. It looks for the name "S510". That the system's connected list returns a bonded unit is reported by other
-apps, not documented by Apple: **confirm it on the phone**. The scan's filter on 0x180F is inferred: whether the unit's
-advertisement carries 0x180F is not verified, so confirm it on the phone too. Not yet seen on a real iPhone.
+otherwise. It looks for the name "S510". Confirmed on the owner's iPhone (2026-11-07): the app shows S510, rustfw and
+the battery, through `retrieveConnectedPeripherals`. The scan's filter on 0x180F is inferred: whether the unit's
+advertisement carries 0x180F is not verified.
 
 ## Build
 
@@ -34,6 +34,28 @@ tests, and the simulator build when something under `app/` changed on a branch.
 
 The install lasts 7 days; Run again renews it. After one cable pairing, Xcode's "Connect via network" lets Run work
 over Wi-Fi.
+
+### First install, the traps
+
+- Developer Mode appears in Settings > Privacy & Security only after Xcode has connected to the phone once.
+- Xcode cannot mount its developer disk image while the phone is locked: keep it unlocked on the home screen.
+- The first launch needs Settings > General > VPN & Device Management > Developer App > Trust.
+- Installing from the terminal works (`<UDID>` from `xcrun devicectl list devices`):
+
+      app/ios/build-core.sh
+      xcodebuild -project Bryton.xcodeproj -scheme Bryton -destination 'id=<UDID>' -allowProvisioningUpdates build
+      xcrun devicectl device install app --device <UDID> <path of Bryton.app in DerivedData>
+      xcrun devicectl device process launch --device <UDID> <bundle id>
+
+## The icon
+
+Ferris the crab (the unofficial Rust mascot) riding a bike on a teal background: few shapes, bold outline, one
+background, so it reads at 60 px. The dark variant swaps the teal gradient for a deep teal one, and the tinted variant
+is its greyscale. Ferris is the artwork from https://rustacean.net, released to the public domain
+(CC0 1.0, https://creativecommons.org/publicdomain/zero/1.0/; the site's footer says so), kept as
+`app/ios/Icon/ferris-rustacean.svg`. The bike is drawn here and carries no brand mark. Edit `app/ios/Icon/icon.svg`,
+run `python3 app/ios/Icon/render.py`: it writes the light, dark and tinted 1024 px PNGs (opaque, iOS rounds them)
+into the asset catalog.
 
 ## Distribution
 
