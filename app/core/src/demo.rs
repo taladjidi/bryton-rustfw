@@ -41,20 +41,39 @@ fn loop_point(i: u32) -> (i32, i32) {
     ((lat * 1e7) as i32, (lon * 1e7) as i32)
 }
 
-/// A synthetic ride of `seconds` starting at 2026-11-01 `hour`:00 UTC, by the firmware's FIT writer.
+/// A synthetic ride of `seconds` starting at 2026-11-01 `hour`:00 UTC, by the firmware's FIT writer. Smooth waves
+/// for the altitude, power, cadence and speed, a heart rate that lags the power, a coast every 450 s. The Demo unit
+/// names its files in Paris time (UTC+1 in November), as the bike computer names them in local time.
 pub fn synthetic_ride(hour: u8, seconds: u32) -> Vec<u8> {
     let t0 = fit::fit_time((2026, 11, 1, hour, 0, 0));
     let mut m = Mem(Vec::new());
     let Ok(mut w) = Writer::begin_with(&mut m, t0, false) else { return Vec::new() };
+    let mut hr_f = 110.0f64;
     for i in 0..seconds {
+        let x = f64::from(i);
+        let wave = |period: f64, phase: f64| (std::f64::consts::TAU * x / period + phase).sin();
+        // pseudo-random in [-1, 1], from the second and a channel
+        let n =
+            |k: u32| f64::from((i.wrapping_mul(2_654_435_761).wrapping_add(k * 40_503) >> 16) & 0xffff) / 32767.5 - 1.0;
+        let coast = (300..320).contains(&(i % 450));
+        let power = if coast {
+            0.0
+        } else {
+            (185.0 + 55.0 * wave(240.0, 0.0) + 30.0 * wave(47.0, 1.0) + 12.0 * n(1)).clamp(0.0, 900.0)
+        };
+        // the heart rate follows the power with a lag
+        hr_f += (105.0 + 0.38 * (power - 100.0) + 0.004 * x - hr_f) / 25.0;
+        let cadence = if coast { 0.0 } else { 88.0 + 6.0 * wave(90.0, 0.0) + 0.03 * (power - 185.0) + 1.5 * n(2) };
+        let alt_m = 65.0 + 15.0 * wave(600.0, 0.0) + 1.2 * wave(97.0, 0.0);
+        let speed = 8.4 + 1.2 * wave(150.0, 0.0) + 0.9 * wave(600.0, 2.0) + 0.2 * n(3);
         let s = Sample {
             time: t0 + i,
             pos: Some(loop_point(i)),
-            alt_mm: Some(50_000 + (i32::try_from(i % 600).unwrap_or(0) - 300).abs() * 100),
-            speed_mm_s: Some(7_000 + (i % 40) * 100),
-            hr: Some(u8::try_from(120 + i % 50).unwrap_or(120)),
-            cadence: Some(u8::try_from(80 + i % 15).unwrap_or(80)),
-            power: Some(u16::try_from(150 + i % 120).unwrap_or(150)),
+            alt_mm: Some((alt_m * 1000.0) as i32),
+            speed_mm_s: Some((speed * 1000.0) as u32),
+            hr: Some(hr_f.round().clamp(60.0, 200.0) as u8),
+            cadence: Some(cadence.clamp(0.0, 130.0) as u8),
+            power: Some(power as u16),
             ..Sample::default()
         };
         if w.record(&mut m, &s).is_err() {
@@ -105,9 +124,9 @@ impl FakeUnit {
     /// The Demo unit: three synthetic rides.
     pub fn demo() -> FakeUnit {
         FakeUnit::new(vec![
-            (*b"261101090000", synthetic_ride(9, 1500)),
-            (*b"261031173000", synthetic_ride(17, 600)),
-            (*b"261029064500", synthetic_ride(6, 2400)),
+            (*b"261101100000", synthetic_ride(9, 1500)),
+            (*b"261101180000", synthetic_ride(17, 600)),
+            (*b"261101070000", synthetic_ride(6, 2400)),
         ])
     }
 

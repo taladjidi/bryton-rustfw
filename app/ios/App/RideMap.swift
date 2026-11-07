@@ -18,9 +18,18 @@ struct RideMap: UIViewRepresentable {
         + "&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM"
         + "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png"
 
-    /// Metropolitan France, roughly: where IGN's tiles exist.
+    /// Where IGN's tiles exist, roughly: mainland France and Corsica (boxes, so a bit of the neighbours is in too;
+    /// the tiles are drawn over Apple's map, so a 404 there only leaves Apple's map showing).
     static func inFrance(_ c: CLLocationCoordinate2D) -> Bool {
-        (41.0...51.5).contains(c.latitude) && (-5.5...9.9).contains(c.longitude)
+        let mainland = (42.3...51.1).contains(c.latitude) && (-5.2...8.3).contains(c.longitude)
+        let corsica = (41.3...43.1).contains(c.latitude) && (8.5...9.6).contains(c.longitude)
+        return mainland || corsica
+    }
+
+    /// The whole track decides, by the middle of its bounding box (not its first point).
+    static func usesIGN(_ points: [CLLocationCoordinate2D]) -> Bool {
+        guard let la = points.map(\.latitude).minMax(), let lo = points.map(\.longitude).minMax() else { return false }
+        return inFrance(CLLocationCoordinate2D(latitude: (la.0 + la.1) / 2, longitude: (lo.0 + lo.1) / 2))
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
@@ -54,9 +63,9 @@ struct RideMap: UIViewRepresentable {
         m.delegate = context.coordinator
         m.pointOfInterestFilter = .excludingAll
         guard let first = points.first, let last = points.last else { return m }
-        if Self.inFrance(first) {
+        if Self.usesIGN(points) {
             let t = MKTileOverlay(urlTemplate: Self.ign)
-            t.canReplaceMapContent = true
+            t.canReplaceMapContent = false  // Apple's map stays under the tiles where IGN has none
             t.maximumZ = 18
             m.addOverlay(t, level: .aboveLabels)
         }
@@ -75,14 +84,26 @@ struct RideMap: UIViewRepresentable {
 
     func updateUIView(_ m: MKMapView, context: Context) {
         let c = context.coordinator
-        if let old = c.marker { m.removeAnnotation(old) }
-        c.marker = nil
-        if let s = selected {
+        guard let s = selected else {
+            if let old = c.marker { m.removeAnnotation(old) }
+            c.marker = nil
+            return
+        }
+        if let a = c.marker {
+            a.coordinate = s  // moved, not re-added, on every drag tick
+        } else {
             let a = MKPointAnnotation()
             a.coordinate = s
             a.title = "Here"
             m.addAnnotation(a)
             c.marker = a
         }
+    }
+}
+
+extension Array where Element == Double {
+    func minMax() -> (Double, Double)? {
+        guard let lo = self.min(), let hi = self.max() else { return nil }
+        return (lo, hi)
     }
 }

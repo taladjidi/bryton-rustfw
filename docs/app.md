@@ -87,18 +87,35 @@ Roadmap 9, "Ride insights" (the owner's order of 2026-11-07: download speed firs
 `app/core/src/ride.rs` `analyze_ride(bytes, ftp, max_hr)` gives the viewer a `RideView`: the summary (times, distance,
 ascent and descent, speeds, HR, power, cadence, NP, IF, TSS, kcal, laps, time in 5 HR and 7 power zones, best power
 over 5 s, 1, 5, 20 and 60 min) and at most 2000 samples (time, position, altitude, speed, HR, power, cadence; per
-bucket the first sample and the highest-power one, so the graphs keep their peaks). NP, IF, TSS, kcal, the zones and
+bucket the first sample, the highest-power one and the altitude's lowest and highest, and always the last one, so
+the graphs keep their peaks and reach the finish). NP, IF, TSS, kcal, the zones and
 the curve are the firmware's own code (`power`, `power_curve`, `ride`), so the app and the unit agree. The FIT is read
 with the `fitparser` crate (MIT), not the firmware's streaming `fitread`, which gives only the fields the unit shows
 (no speed, cadence, calories, descent, lap start); a panic inside the crate is caught and reported as an unreadable
-file, and the tests cut and corrupt a ride at hundreds of points.
+file. A ride whose CRC does not match (never finalized, damaged tail after a power cut) is read again without the CRC
+checks, so it still opens. The tests cut and flip bytes in a ride over thousands of cases, with the CRCs made right
+again so the damaged content reaches the viewer's code (and count the files opened and the ones refused), and call it
+directly with odd records (no timestamp, no power, NaN, time going backwards, gaps).
+
+The numbers are right for rides of this firmware or Bryton's with a record every second, and for smart-recording files
+(1 to 10 s between records): each record counts for the time to the next one, at most 5 s, so zones, averages and NP
+count seconds. Ascent and descent come from one method: the file's pair when it has a total_descent, else both from
+the altitude samples with 3 m of hysteresis (this firmware's files have no total_descent).
 
 The screen (`RideDetail.swift`, `RideMap.swift`): a grid of the metrics, the map, five Swift Charts graphs (altitude,
 speed, HR, power, cadence) against distance or time, the laps, the zone bars and the power curve. Dragging on a graph
 puts a marker on the map. The map is an `MKMapView`: inside France the base is IGN's Plan IGN v2 (WMTS
 `https://data.geopf.fr/wmts`, layer `GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2`, matrix set `PM`, no key; checked 2026-11-07),
-elsewhere Apple's map. The person icon opens FTP and max HR (UserDefaults, default 200 W and 190 bpm) until the unit's
-profile can be read. Launch argument `-demo-scroll graphs|laps` scrolls the viewer for screenshots.
+elsewhere Apple's map (the IGN tiles are drawn over it, so where IGN has none Apple's shows). The map says "(c) IGN"
+in its corner (IGN's Plan IGN v2 is open data under the Etalab Open Licence 2.0, which asks for the source to be
+credited). The person icon opens FTP and max HR (UserDefaults, default 200 W and 190 bpm) until the unit's
+profile can be read. Launch arguments `-demo` and `-demo-scroll graphs|laps` (Debug builds only) drive the Simulator screenshots.
+The viewer needs iOS 17 (`chartXSelection`, the two-argument `onChange`; the project's deployment target is 17.0).
+
+The static library the core builds into grew from 18.3 MB to 21.8 MB per target with `fitparser` (what the app
+links is far less: the linker drops what is not called). `fitparser` takes `chrono` with its default features (the
+clock, `iana-time-zone`): its Cargo.toml offers no switch, and a feature of a dependency cannot be turned off from the
+outside, so that stays until the crate changes or is replaced.
 
 | | | | |
 |:-:|:-:|:-:|:-:|

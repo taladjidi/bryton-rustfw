@@ -51,6 +51,7 @@ struct ContentView: View {
             .toolbar {
                 Button { profile = true } label: { Image(systemName: "gearshape") }
             }
+            #if DEBUG
             .onAppear {
                 // launch arguments for the Simulator screenshots: -demo, and -demo-dl to download the first ride
                 let args = CommandLine.arguments
@@ -62,6 +63,7 @@ struct ContentView: View {
                     }
                 }
             }
+            #endif
             .onChange(of: link.state) { _, s in
                 if s == .connected && !rides.demo && !rides.hasTransport { rides.use(BleFileTransport()) }
             }

@@ -14,7 +14,12 @@ use bryton_rustfw::{
     power_curve::{DURATIONS, Rolling},
     ride::{hr_zone, power_zone},
 };
-use fitparser::{FitDataField, FitDataRecord, profile::MesgNum};
+use fitparser::{
+    FitDataField, FitDataRecord,
+    de::{DecodeOption, from_bytes_with_options},
+    profile::MesgNum,
+};
+use std::collections::HashSet;
 
 /// The most samples handed to the graphs and the map.
 pub const MAX_SAMPLES: usize = 2000;
@@ -165,39 +170,49 @@ fn u32_of(v: Option<f64>) -> Option<u32> {
     v.filter(|v| *v >= 0.0).map(|v| v.round().min(f64::from(u32::MAX)) as u32)
 }
 
-/// Keeps at most [`MAX_SAMPLES`]: per bucket the first sample and the one with the highest power (else heart rate,
-/// else speed), so the graphs keep their peaks.
+/// Keeps at most [`MAX_SAMPLES`]: per bucket the first sample, the one with the highest power (else heart rate, else
+/// speed) and the altitude's lowest and highest, so the graphs keep their peaks and valleys; always the last sample,
+/// so the graphs and the End marker reach the finish.
 fn decimate(all: Vec<TrackSample>) -> Vec<TrackSample> {
     if all.len() <= MAX_SAMPLES {
         return all;
     }
-    let bucket = all.len().div_ceil(MAX_SAMPLES / 2);
+    // at most 4 per bucket, and the last one
+    let bucket = all.len().div_ceil(MAX_SAMPLES / 4 - 1);
     let key = |s: &TrackSample| {
         f64::from(s.power.unwrap_or(0)) * 1000.0 + f64::from(s.hr.unwrap_or(0)) + s.speed_ms.unwrap_or(0.0)
     };
-    let mut out = Vec::with_capacity(MAX_SAMPLES);
-    for chunk in all.chunks(bucket) {
-        let peak = (0..chunk.len())
-            .max_by(|&a, &b| match (chunk.get(a), chunk.get(b)) {
-                (Some(x), Some(y)) => key(x).total_cmp(&key(y)),
-                _ => core::cmp::Ordering::Equal,
-            })
-            .unwrap_or(0);
-        out.extend(chunk.first().cloned());
-        if let Some(p) = chunk.get(peak).filter(|_| peak > 0) {
-            out.push(p.clone());
-        }
+    let mut keep = Vec::with_capacity(MAX_SAMPLES);
+    for (b, chunk) in all.chunks(bucket).enumerate() {
+        let alt = || chunk.iter().enumerate().filter_map(|(i, s)| s.alt_m.map(|a| (i, a)));
+        let picks = [
+            Some(0),
+            chunk.iter().enumerate().max_by(|a, c| key(a.1).total_cmp(&key(c.1))).map(|x| x.0),
+            alt().max_by(|a, c| a.1.total_cmp(&c.1)).map(|x| x.0),
+            alt().min_by(|a, c| a.1.total_cmp(&c.1)).map(|x| x.0),
+        ];
+        keep.extend(picks.into_iter().flatten().map(|i| b * bucket + i));
     }
-    out
+    keep.push(all.len() - 1);
+    keep.sort_unstable();
+    keep.dedup();
+    keep.into_iter().filter_map(|i| all.get(i).cloned()).collect()
 }
 
 /// Decodes a FIT file's bytes. `ftp` (W) and `max_hr` (bpm) set the intensity and the zones; 0 leaves them out.
 #[uniffi::export]
 pub fn analyze_ride(bytes: Vec<u8>, ftp: u16, max_hr: u16) -> Result<RideView, RideError> {
     // the crate is not fuzzed by us: a panic inside it is an unreadable file, not a crash of the app
-    let msgs = std::panic::catch_unwind(|| fitparser::from_bytes(&bytes))
-        .map_err(|_| RideError::Unreadable)?
-        .map_err(|_| RideError::Unreadable)?;
+    let parse = |lax: bool| {
+        let opts: HashSet<DecodeOption> = if lax {
+            [DecodeOption::SkipDataCrcValidation, DecodeOption::SkipHeaderCrcValidation].into()
+        } else {
+            HashSet::new()
+        };
+        std::panic::catch_unwind(|| from_bytes_with_options(&bytes, &opts)).ok().and_then(Result::ok)
+    };
+    // a ride never finalized or with a damaged tail (power cut) still has its records: retry without the CRCs
+    let msgs = parse(false).or_else(|| parse(true)).ok_or(RideError::Unreadable)?;
     view(&msgs, ftp, max_hr)
 }
 
@@ -234,40 +249,45 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
             _ => {}
         }
     }
-    let (Some(first_s), Some(last_s)) = (samples.first(), samples.last()) else { return Err(RideError::Empty) };
+    let Some(last_s) = samples.last() else { return Err(RideError::Empty) };
     let ses: &[FitDataField] = session.unwrap_or(&[]);
 
-    // Per-second pass over the records, as the unit counts a ride read back: one record is one second.
+    // Per-second pass over the records, as the unit counts a ride read back.
     let (mut power, mut rolling) = (Power::new(), Rolling::new());
     let (mut hr_z, mut p_z) = (vec![0u32; 5], vec![0u32; 7]);
     let (mut hr_sum, mut hr_n, mut cad_sum, mut cad_n) = (0u64, 0u64, 0u64, 0u64);
     let (mut hr_max, mut v_max, mut moving) = (0u16, 0f64, 0u32);
     let (mut up, mut down, mut anchor) = (0f64, 0f64, None::<f64>);
-    for s in &samples {
-        power.sample(s.power, true);
-        rolling.sample(s.t_s, s.power);
+    for (i, s) in samples.iter().enumerate() {
+        // Each record stands for the time to the next one, 1 to 5 s (a smart-recording file has gaps; a gap over
+        // 5 s is a pause, not riding), so the zones, the averages and NP count seconds, not records.
+        let dt = samples.get(i + 1).map_or(1, |n| n.t_s.saturating_sub(s.t_s).clamp(1, 5));
+        for k in 0..dt {
+            power.sample(s.power, true);
+            rolling.sample(s.t_s + k, s.power);
+        }
         if let Some(p) = s.power.filter(|_| ftp > 0)
             && let Some(z) = p_z.get_mut(usize::from(power_zone(p, ftp)).wrapping_sub(1))
         {
-            *z += 1;
+            *z += dt;
         }
         if let Some(h) = s.hr {
-            hr_sum += u64::from(h);
-            hr_n += 1;
+            hr_sum += u64::from(h) * u64::from(dt);
+            hr_n += u64::from(dt);
             hr_max = hr_max.max(h);
             if max_hr > 0
                 && let Some(z) = hr_z.get_mut(usize::from(hr_zone(h, max_hr)).wrapping_sub(1))
             {
-                *z += 1;
+                *z += dt;
             }
         }
         if let Some(c) = s.cadence.filter(|c| *c > 0) {
-            cad_sum += u64::from(c);
-            cad_n += 1;
+            cad_sum += u64::from(c) * u64::from(dt);
+            cad_n += u64::from(dt);
         }
         let v = s.speed_ms.unwrap_or(0.0);
         v_max = v_max.max(v);
-        moving += u32::from(v > 0.5);
+        moving += if v > 0.5 { dt } else { 0 };
         // 3 m of hysteresis against the altitude's noise (a common ascent rule)
         if let Some(a) = s.alt_m {
             let base = *anchor.get_or_insert(a);
@@ -289,14 +309,18 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
             rolling.best.get(i).copied().filter(|w| *w > 0).map(|watts| CurvePoint { secs, watts })
         })
         .collect();
-    let has_alt = first_s.alt_m.is_some();
+    let has_alt = samples.iter().any(|s| s.alt_m.is_some());
+    // One method for both: the file's (barometer) pair when it has a descent, else both from the samples (the
+    // firmware's writer has no total_descent), so ascent and descent never come from different methods.
+    let file_ascent = u32_of(num(ses, "total_ascent")).filter(|a| *a > 0);
+    let file_descent = u32_of(num(ses, "total_descent")).filter(|a| *a > 0);
     let summary = RideSummary {
         start_unix: num(ses, "start_time").map_or_else(|| t0.unwrap_or(0.0) as i64, |v| v as i64),
         elapsed_s: u32_of(num(ses, "total_elapsed_time")).unwrap_or(elapsed_s).max(elapsed_s),
         moving_s,
         distance_m,
-        ascent_m: u32_of(num(ses, "total_ascent")).filter(|a| *a > 0).or(has_alt.then_some(up.round() as u32)),
-        descent_m: u32_of(num(ses, "total_descent")).filter(|a| *a > 0).or(has_alt.then_some(down.round() as u32)),
+        ascent_m: if file_descent.is_some() || !has_alt { file_ascent } else { Some(up.round() as u32) },
+        descent_m: file_descent.or(has_alt.then_some(down.round() as u32)),
         avg_speed_ms: first(ses, &["enhanced_avg_speed", "avg_speed"])
             .or_else(|| (moving_s > 0).then(|| distance_m / f64::from(moving_s))),
         max_speed_ms: first(ses, &["enhanced_max_speed", "max_speed"]).or((v_max > 0.0).then_some(v_max)),
