@@ -28,7 +28,6 @@ from pathlib import Path
 ALLOW = {
     "broadcast": "src/drivers/fecble.rs: used by src/sim and by its own doc test",
     "readable": "src/ui/theme.rs: its doc test is an example that needs it public",
-    "CHUNK_MAX": "src/link/filesvc.rs: used by app/core (the phone app), outside src/",
 }
 # the same for tools-dead
 ALLOW_DEAD = {}

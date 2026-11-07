@@ -57,8 +57,6 @@ pub const DATA: u16 = 3;
 /// A write or a notification's longest value at the default ATT MTU (23) less its 3-byte header: what a phone that
 /// never exchanges the MTU gets, and Control's size.
 pub const FRAME_MAX: usize = 20;
-/// File bytes in a CHUNK at the default MTU (the phone app's unit tests chunk by it).
-pub const CHUNK_MAX: usize = FRAME_MAX - 2;
 /// The longest frame, at the largest ATT MTU (247, `nrf::FAST_MTU`) less its 3-byte header (2026-11-07: the frame
 /// formats are unchanged, a CHUNK just carries up to `frame - 2` bytes; the phone takes whatever length arrives).
 pub const FRAME_BIG: usize = 244;

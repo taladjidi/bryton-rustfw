@@ -1,8 +1,9 @@
 //! Tests of the file client against the fake unit, which answers with the firmware's own encoder.
 
+use crate::demo::BIG_CHUNK;
 use crate::demo::{FakeUnit, synthetic_ride};
 use crate::files::*;
-use bryton_rustfw::filesvc::{CHUNK_MAX, FRAME_BIG, FRAME_MAX};
+use bryton_rustfw::filesvc::{FRAME_BIG, FRAME_MAX};
 
 /// Writes `cmd` to the unit and feeds its frames back, 10 ms apart; the last event that is not Progress.
 fn pump(c: &FileClient, u: &mut FakeUnit, cmd: &[u8], t: &mut u64) -> FileEvent {
@@ -38,7 +39,7 @@ fn the_synthetic_ride_is_a_fit_file() {
 
 #[test]
 fn whole_read_with_any_chunk_size() {
-    for chunk in [1, 7, CHUNK_MAX, 1000] {
+    for chunk in [1, 7, 18, BIG_CHUNK, 1000] {
         let (c, mut u, ride) = setup(chunk);
         let mut t = 100;
         let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -53,7 +54,7 @@ fn whole_read_with_any_chunk_size() {
 
 #[test]
 fn drop_then_resume_from_the_bytes_kept() {
-    let (c, mut u, ride) = setup(CHUNK_MAX);
+    let (c, mut u, ride) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.drop_after = Some(1000);
     let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -69,7 +70,7 @@ fn drop_then_resume_from_the_bytes_kept() {
 
 #[test]
 fn busy_mid_read_then_resume() {
-    let (c, mut u, ride) = setup(CHUNK_MAX);
+    let (c, mut u, ride) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.drop_after = Some(500);
     let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -86,7 +87,7 @@ fn busy_mid_read_then_resume() {
 
 #[test]
 fn short_file_and_wrong_count_are_errors() {
-    let (c, mut u, _) = setup(CHUNK_MAX);
+    let (c, mut u, _) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.short_by = 5;
     let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -103,7 +104,7 @@ fn short_file_and_wrong_count_are_errors() {
 
 #[test]
 fn an_early_end_resumes_to_a_whole_file() {
-    let (c, mut u, ride) = setup(CHUNK_MAX);
+    let (c, mut u, ride) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.short_by = 5;
     let cmd = c.read_command("261101090000".into(), t).unwrap();
@@ -117,7 +118,7 @@ fn an_early_end_resumes_to_a_whole_file() {
 
 #[test]
 fn errors_of_the_unit_and_unknown_rides() {
-    let (c, mut u, _) = setup(CHUNK_MAX);
+    let (c, mut u, _) = setup(BIG_CHUNK);
     let mut t = 100;
     assert_eq!(c.read_command("000000000000".into(), t), None);
     u.rides.clear(); // deleted since LIST
@@ -128,7 +129,7 @@ fn errors_of_the_unit_and_unknown_rides() {
 
 #[test]
 fn unknown_stale_and_surplus_frames_are_ignored() {
-    let (c, mut u, ride) = setup(CHUNK_MAX);
+    let (c, mut u, ride) = setup(BIG_CHUNK);
     let t = 100;
     let cmd = c.read_command("261101090000".into(), t).unwrap();
     let mut frames = u.handle(&cmd);
@@ -148,11 +149,11 @@ fn unknown_stale_and_surplus_frames_are_ignored() {
 
 #[test]
 fn more_bytes_than_listed_is_refused() {
-    let (c, _, ride) = setup(CHUNK_MAX);
+    let (c, _, ride) = setup(BIG_CHUNK);
     let cmd = c.read_command("261101090000".into(), 0).unwrap();
     let big = vec![0u8; ride.len() + 1];
     let mut last = FileEvent::Ignored;
-    for ch in big.chunks(CHUNK_MAX) {
+    for ch in big.chunks(BIG_CHUNK) {
         let mut f = vec![0x82, cmd[1]];
         f.extend_from_slice(ch);
         last = c.on_data(f, 1);
@@ -175,7 +176,7 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
     };
     let (mut progress, mut done, mut fail, mut busy, mut entry, mut listed) = (0, 0, 0, 0, 0, 0);
     for _ in 0..300 {
-        let (c, mut u, _) = setup(CHUNK_MAX);
+        let (c, mut u, _) = setup(BIG_CHUNK);
         let mut t = 0u64;
         let mut cmd = c.read_command("261101090000".into(), t).unwrap();
         for _ in 0..200 {
@@ -186,7 +187,7 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
                 1 => [&[0x81, seq][..], b"123456789012", &[5, 0, 0, 0]].concat(),
                 2 => {
                     let mut f = vec![0x82, seq];
-                    f.extend((0..1 + (r >> 8) % CHUNK_MAX as u64).map(|_| next() as u8));
+                    f.extend((0..1 + (r >> 8) % BIG_CHUNK as u64).map(|_| next() as u8));
                     f
                 }
                 3 => vec![0x83, seq, (r >> 8) as u8 % 6, (r >> 16) as u8, (r >> 24) as u8 % 2, 0, 0],
@@ -219,7 +220,7 @@ fn fuzz_frames_never_panic_and_reach_every_path() {
 
 #[test]
 fn a_chunk_longer_than_a_frame_is_ignored() {
-    let (c, _, _) = setup(CHUNK_MAX);
+    let (c, _, _) = setup(BIG_CHUNK);
     let cmd = c.read_command("261101090000".into(), 0).unwrap();
     let mut f = vec![0x82, cmd[1]];
     f.extend(std::iter::repeat_n(7u8, FRAME_BIG - 1)); // FRAME_BIG + 1 bytes in all (the largest MTU less 3)

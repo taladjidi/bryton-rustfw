@@ -3,7 +3,11 @@
 //! The rides are made by the firmware's FIT writer from invented samples (a made-up track near latitude 0, longitude
 //! 0): no real ride, no real place.
 
-use bryton_rustfw::filesvc::{CHUNK_MAX, Command, FRAME_MAX, Frame, Name, Status};
+use bryton_rustfw::filesvc::{Command, FRAME_BIG, Frame, Name, Status};
+
+/// The largest CHUNK payload: the fast link's frame (the largest MTU less 3) less the CHUNK header (kind, seq). The
+/// demo unit serves it, as the unit does on a phone that exchanged the MTU.
+pub const BIG_CHUNK: usize = FRAME_BIG - 2;
 use bryton_rustfw::fit::{self, Sample, Sink, Writer};
 use std::sync::Mutex;
 
@@ -78,7 +82,7 @@ pub struct FakeUnit {
 }
 
 fn enc(f: Frame) -> Vec<u8> {
-    let mut b = [0; FRAME_MAX];
+    let mut b = [0; FRAME_BIG];
     let n = f.encode(&mut b);
     b.get(..n).unwrap_or(&[]).to_vec()
 }
@@ -86,7 +90,7 @@ fn enc(f: Frame) -> Vec<u8> {
 impl FakeUnit {
     /// A unit with these rides.
     pub fn new(rides: Vec<(Name, Vec<u8>)>) -> FakeUnit {
-        FakeUnit { rides, faults: Faults { chunk: CHUNK_MAX, ..Faults::default() } }
+        FakeUnit { rides, faults: Faults { chunk: BIG_CHUNK, ..Faults::default() } }
     }
 
     /// The Demo unit: three synthetic rides.
@@ -128,8 +132,10 @@ impl FakeUnit {
                 if let Some(n) = dropped {
                     rest = rest.get(..n.min(rest.len())).unwrap_or(&[]);
                 }
-                let mut out: Vec<Vec<u8>> =
-                    rest.chunks(self.faults.chunk.clamp(1, CHUNK_MAX)).map(|c| enc(Frame::Chunk { seq, data: c })).collect();
+                let mut out: Vec<Vec<u8>> = rest
+                    .chunks(self.faults.chunk.clamp(1, BIG_CHUNK))
+                    .map(|c| enc(Frame::Chunk { seq, data: c }))
+                    .collect();
                 if dropped.is_none() {
                     let count = u32::try_from(rest.len()).unwrap_or(0).wrapping_add(self.faults.count_off);
                     out.push(enc(Frame::End { seq, status: Status::Ok, count }));
