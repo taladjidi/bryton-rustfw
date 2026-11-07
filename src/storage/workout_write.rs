@@ -22,17 +22,18 @@
 //!
 //! **A power cut or a reset** at any point leaves the calendar as it was or with the whole workout, never a part of
 //! one: before step 3 the calendar holds nothing new (at most an empty day folder, which stock and this firmware
-//! list as no workouts); between 3 and 4 the chain is named by no entry, a lost chain of one cluster on the unit
-//! (8 KB at most, a 16 KB cluster) that a computer's fsck reports and turns into a `.CHK`, as a screenshot cut does
+//! list as no workouts); between 3 and 4 the chain is named by no entry, a lost chain (the workout's clusters: one
+//! on the unit, 8 KB at most in a 16 KB cluster) that a computer's fsck reports and turns into a `.CHK`, as a
+//! screenshot cut does
 //! (storage/screenshot.rs); after 4 the workout is there whole. The FAT writer's own steps that take a cluster (the
 //! temporary file's first, at [`begin`], before its size names it; a new day folder's, before its entry) leave one
-//! lost cluster the same way when cut inside. No cluster is ever named twice, none is freed while an entry may name
+//! lost chain the same way when cut inside. No cluster is ever named twice, none is freed while an entry may name
 //! it, and the phone learns of a cut by the END that never came, and sends again (written over the temporary file,
 //! nothing more lost: the tests cut after every sector, `a_cut_at_every_write...` here and in src/sim/filesvc_tests.rs).
 //!
 //! Why no recovery record (as `trash.rs` keeps for a ride's move): the workout is not a ride, the phone still holds it,
 //! and a record would have to tell a lost chain from one a computer's fsck named meanwhile (trash.rs `named_on_top`);
-//! one lost cluster after a cut in a two-write window costs less than that code.
+//! one lost chain (the workout's clusters) after a cut in a two-write window costs less than that code.
 //!
 //! **Names:** `<CRC-32 as 8 hex digits>.fit` (12 characters, a valid 8.3 name too), so the same file sent twice gets
 //! the same name and two different files in a day almost never share one (a clash answers BAD REQUEST). Stock names
@@ -57,8 +58,23 @@ pub const TMP: &str = "WORKOUT.TMP";
 pub const INBOX: &str = "Inbox";
 /// `.fit` files a day folder holds at most: the listing numbers them in two digits (link/filesvc.rs).
 pub const DAY_MAX: usize = 100;
-/// Entries of a day folder counted at most (app/filesvc.rs walks as many to find one).
-const WALK: usize = 200;
+/// Entries of a day folder walked at most, here and by app/filesvc.rs to find a workout: a folder longer than this
+/// takes no more (the listing could not reach a new file).
+pub(crate) const WALK: usize = 200;
+
+/// A file name ending in `.fit`, any case, with something before it: a workout's (stock's list, inferred).
+pub(crate) fn is_fit(name: &[u8]) -> bool {
+    name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(b".fit"))
+}
+
+/// Stock's calendar folder, or NOT FOUND (never made here: stock makes it when it syncs).
+fn calendar(fat: &mut Fat, d: &mut impl DiskWrite) -> Result<File, Status> {
+    match fat.open(d, CALENDAR) {
+        Ok(c) if c.dir => Ok(c),
+        Ok(_) | Err(Error::NotFound) => Err(Status::NotFound),
+        Err(e) => Err(card(e)),
+    }
+}
 /// Stock's calendar, which holds a folder a day.
 pub const CALENDAR: &str = "Workout/calendar";
 
@@ -77,6 +93,7 @@ pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, size: u32, t: (u16, u16)) ->
     if free < u64::from(size) + FULL_RESERVE {
         return Err(Status::Full);
     }
+    calendar(fat, d)?; // nothing written for a card that cannot take the workout
     let own = fat.ensure_own_dir(d, fat.root(), DIR, t).map_err(card)?;
     let own = fat.ensure_own_dir(d, own, INBOX, t).map_err(card)?;
     let mut h = match fat.locate(d, own, TMP) {
@@ -124,11 +141,7 @@ pub fn commit(
     let (n, day) = (name(crc), core::str::from_utf8(day).map_err(|_| Status::BadRequest)?);
     let n = core::str::from_utf8(&n).map_err(|_| Status::Io)?;
     workout_file::folder_day(day.as_bytes()).ok_or(Status::BadRequest)?;
-    let cal = match fat.open(d, CALENDAR) {
-        Ok(c) if c.dir => c,
-        Ok(_) | Err(Error::NotFound) => return Err(Status::NotFound),
-        Err(e) => return Err(card(e)),
-    };
+    let cal = calendar(fat, d)?;
     let dir = match fat.find(d, cal, day) {
         Ok(f) if f.dir => f,
         Ok(_) => return Err(Status::BadRequest), // a file of the day's name: never written over
@@ -151,17 +164,18 @@ pub fn commit(
     Ok(())
 }
 
-/// The `.fit` files of folder `dir` (any case, folders left out), [`WALK`] entries at most.
+/// The `.fit` files of folder `dir` (folders left out); [`DAY_MAX`] for a folder of more than [`WALK`] entries.
 fn fit_files(fat: &mut Fat, d: &mut impl DiskWrite, dir: File) -> Result<usize, Status> {
     let mut c = fat.cursor(dir).map_err(card)?;
     let mut n = 0;
     for _ in 0..WALK {
-        let Some(e) = fat.list(d, &mut c).map_err(card)? else { break };
-        let name = e.name();
-        let fit = name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(b".fit"));
-        n += usize::from(fit && !e.file.dir);
+        let Some(e) = fat.list(d, &mut c).map_err(card)? else { return Ok(n) };
+        n += usize::from(is_fit(e.name()) && !e.file.dir);
     }
-    Ok(n)
+    match fat.list(d, &mut c).map_err(card)? {
+        None => Ok(n),
+        Some(_) => Ok(DAY_MAX), // past WALK: a new file there could not be found
+    }
 }
 
 /// Step 1 of [`commit`]: the file as the card holds it, its size and CRC-32 `crc`, and a workout.
@@ -336,6 +350,30 @@ pub(crate) mod tests {
         assert!(begin(&mut fat, &mut d, workout_file::FILE_MAX as u32, T).is_ok());
         d.0[SECTOR + 488..SECTOR + 492].copy_from_slice(&0u32.to_le_bytes());
         assert_eq!(begin(&mut fat, &mut d, 100, T).err(), Some(Status::Full));
+    }
+
+    /// No `\Workout\calendar` on the card: BEGIN is NOT FOUND and writes nothing.
+    #[test]
+    fn no_calendar_no_write() {
+        let mut img = volume();
+        let at = img.windows(11).position(|w| w == b"CALENDAR   ").expect("the calendar's 8.3 entry");
+        img[at + 7] = b'X'; // CALENDAX: its long name no longer matches, the folder is not found
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        assert_eq!(begin(&mut fat, &mut d, 100, T).err(), Some(Status::NotFound));
+        assert!(d.0 == img, "nothing written");
+    }
+
+    /// A day folder of more entries than [`WALK`] takes no more: the listing could not reach the new file.
+    #[test]
+    fn a_day_longer_than_the_walk_is_full() {
+        let mut d = Ram(volume(), 0);
+        for i in 0..=WALK {
+            put_in_day(&mut d, &std::format!("note{i}.txt"), b"x");
+        }
+        assert_eq!(write_all(&mut d, &intervals(), DAY), Err(Status::Full));
+        assert!(day_files(&d.0, "20261108").is_empty());
+        assert!(is_fit(b"A.FIT") && !is_fit(b".fit") && !is_fit(b"a.fi"));
     }
 
     /// A day holds [`DAY_MAX`] workouts: the 101st is FULL, nothing written; the same file sent again is still ok.

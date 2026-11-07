@@ -17,11 +17,11 @@ pub mod draft;
 pub mod files;
 #[cfg(test)]
 mod files_tests;
-#[cfg(test)]
-mod write_tests;
 pub mod import;
 pub mod ride;
 pub mod workout;
+#[cfg(test)]
+mod write_tests;
 
 uniffi::setup_scaffolding!();
 

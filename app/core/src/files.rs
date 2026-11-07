@@ -467,7 +467,8 @@ impl FileClient {
     /// True when an answer is awaited and nothing came for [`SILENCE_MS`]: the unit dropped it.
     pub fn silent(&self, now_ms: u64) -> bool {
         let s = self.lock();
-        matches!(s.mode, Mode::Listing | Mode::Reading | Mode::WriteBegin | Mode::Ending | Mode::Deleting) && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
+        matches!(s.mode, Mode::Listing | Mode::Reading | Mode::WriteBegin | Mode::Ending | Mode::Deleting)
+            && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
     }
 
     /// The rides of the last LIST (complete after [`FileEvent::Listed`]).

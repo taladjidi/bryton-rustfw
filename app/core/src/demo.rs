@@ -130,7 +130,12 @@ fn enc(f: Frame) -> Vec<u8> {
 impl FakeUnit {
     /// A unit with these rides.
     pub fn new(rides: Vec<(Name, Vec<u8>)>) -> FakeUnit {
-        FakeUnit { rides, workouts: Vec::new(), faults: Faults { chunk: BIG_CHUNK, ..Faults::default() }, writing: None }
+        FakeUnit {
+            rides,
+            workouts: Vec::new(),
+            faults: Faults { chunk: BIG_CHUNK, ..Faults::default() },
+            writing: None,
+        }
     }
 
     /// The Demo unit: three synthetic rides.
@@ -255,11 +260,9 @@ impl FakeUnit {
                 let (gone, _) = self.workouts.remove(at);
                 // the keys are places in the directory order: the day's later files move up
                 let day = gone.get(..8).unwrap_or(&[]).to_vec();
-                let mut n = 0;
-                for (k, _) in self.workouts.iter_mut().filter(|(k, _)| k.starts_with(&day)) {
+                for (n, (k, _)) in self.workouts.iter_mut().filter(|(k, _)| k.starts_with(&day)).enumerate() {
                     k.truncate(8);
                     k.extend_from_slice(format!("{n:02}").as_bytes());
-                    n += 1;
                 }
                 end(seq, Status::Ok, 1)
             }
