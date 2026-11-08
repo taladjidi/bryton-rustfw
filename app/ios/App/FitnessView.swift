@@ -38,53 +38,89 @@ extension IntervalsClient {
     }
 }
 
+/// What a source gave: the days, eFTP and the curve.
+struct FitnessData {
+    var days: [FitnessDay] = []
+    var eftp: Double?
+    var curve: [CurvePoint] = []
+}
+
 struct FitnessView: View {
     @ObservedObject var library: RideLibrary
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
-    @State private var days: [FitnessDay] = []
-    @State private var eftp: Double?
-    @State private var curve: [CurvePoint] = []
-    @State private var source = ""
+    /// Intervals.icu's answer, fetched once per key and athlete (a change of FTP or a new ride does not ask again).
+    @State private var remote: FitnessData?
     @State private var note: String?
-    @State private var loading = true
+    @State private var fetching = true
+    /// From this phone's rides, worked out again when they change.
+    @State private var local = FitnessData()
+    private var shown: FitnessData { remote ?? local }
 
-    private static let isoDay: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
+    private var today: Int64 {
+        let now = Date()
+        return Int64(((now.timeIntervalSince1970 + Double(TimeZone.current.secondsFromGMT(for: now))) / 86_400).rounded(.down))
+    }
+
+    /// Days since 1970 as "YYYY-MM-DD" (Hinnant's civil_from_days, public domain), with no formatter or time zone.
+    static func iso(_ day: Int64) -> String {
+        let z = day + 719_468
+        let era = (z >= 0 ? z : z - 146_096) / 146_097
+        let doe = z - era * 146_097
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        let mp = (5 * doy + 2) / 153
+        let d = doy - (153 * mp + 2) / 5 + 1
+        let m = mp < 10 ? mp + 3 : mp - 9
+        return String(format: "%04d-%02d-%02d", yoe + era * 400 + (m <= 2 ? 1 : 0), m, d)
+    }
 
     private func date(_ day: Int64) -> Date { Date(timeIntervalSince1970: Double(day) * 86_400 + 43_200) }
 
+    private var hasKey: Bool {
+        #if DEBUG
+        if CommandLine.arguments.contains("-demo") { return true }
+        #endif
+        return Keychain.get("apikey") != nil
+    }
+
     var body: some View {
+        let d = shown
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                if let d = days.last {
+                if let last = d.days.last {
                     HStack {
-                        stat("Fitness", String(format: "%.0f", d.ctl), .blue)
-                        stat("Fatigue", String(format: "%.0f", d.atl), .pink)
-                        stat("Form", String(format: "%+.0f", d.tsb), d.tsb >= 0 ? .green : .orange)
-                        if let e = eftp { stat("eFTP", String(format: "%.0f W", e), .orange) }
+                        stat("Fitness", String(format: "%.0f", last.ctl), .blue)
+                        stat("Fatigue", String(format: "%.0f", last.atl), .pink)
+                        stat("Form", String(format: "%+.0f", last.tsb), last.tsb >= 0 ? .green : .orange)
+                        if let e = d.eftp { stat("eFTP", String(format: "%.0f W", e), .orange) }
                     }
-                    loadChart
-                    formChart
-                } else if loading {
+                    if last.day < today - 1 {
+                        Text("The last day is \(Self.iso(last.day)).").font(.footnote).foregroundStyle(.orange)
+                    }
+                    loadChart(d.days)
+                    formChart(d.days)
+                } else if fetching && remote == nil {
                     ProgressView().padding(40)
                 } else {
                     Text("No rides to work a trend from yet. Download some, or add an Intervals.icu key in the profile.")
                         .foregroundStyle(.secondary)
                 }
-                if !curve.isEmpty { power }
-                if !source.isEmpty { Text(source).font(.footnote).foregroundStyle(.secondary) }
+                if !d.curve.isEmpty { power(d.curve) }
+                Text(remote != nil
+                    ? "Source: Intervals.icu (wellness)"
+                    : "From this phone's rides: 42 and 7 day averages of their loads. The series starts at 0, so it needs about 6 weeks of rides to be right. Intervals.icu's numbers need its key (profile).")
+                    .font(.footnote).foregroundStyle(.secondary)
                 if let n = note { Text(n).font(.footnote).foregroundStyle(.orange) }
             }
             .padding()
         }
         .navigationTitle("Fitness")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(ftp) \(maxHR) \(library.briefs.count)") { await load() }
+        .task(id: "\(Keychain.get("apikey") ?? "") \(UserDefaults.standard.string(forKey: IntervalsSync.athleteKey) ?? "")") {
+            await fetchRemote()
+        }
+        .task(id: "\(ftp) \(maxHR) \(library.briefs.count)") { computeLocal() }
     }
 
     private func stat(_ label: String, _ value: String, _ color: Color) -> some View {
@@ -97,7 +133,7 @@ struct FitnessView: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    private var loadChart: some View {
+    private func loadChart(_ days: [FitnessDay]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Fitness and fatigue").font(.subheadline.bold())
             Chart(days, id: \.day) { d in
@@ -111,7 +147,7 @@ struct FitnessView: View {
         }
     }
 
-    private var formChart: some View {
+    private func formChart(_ days: [FitnessDay]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Form (TSB)").font(.subheadline.bold())
             Chart(days, id: \.day) { d in
@@ -123,7 +159,7 @@ struct FitnessView: View {
         }
     }
 
-    private var power: some View {
+    private func power(_ curve: [CurvePoint]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Power curve, last 90 days").font(.subheadline.bold())
             Chart(curve, id: \.secs) { p in
@@ -135,47 +171,43 @@ struct FitnessView: View {
         }
     }
 
-    private func load() async {
-        loading = true
-        defer { loading = false }
+    private func fetchRemote() async {
+        fetching = true
+        defer { fetching = false }
         #if DEBUG
         let demo = CommandLine.arguments.contains("-demo")
         #else
         let demo = false
         #endif
-        let now = Date()
-        let tz = TimeZone.current
-        let today = Int64(((now.timeIntervalSince1970 + Double(tz.secondsFromGMT(for: now))) / 86_400).rounded(.down))
-        if let key = demo ? "demo" : Keychain.get("apikey") {
-            do {
-                let athlete = UserDefaults.standard.string(forKey: IntervalsSync.athleteKey) ?? ""
-                let q = [
-                    URLQueryItem(name: "oldest", value: Self.isoDay.string(from: date(today - 89))),
-                    URLQueryItem(name: "newest", value: Self.isoDay.string(from: date(today))),
-                ]
-                let w = try wellnessParse(json: try await IntervalsClient.get(key: key, athlete: athlete, path: "wellness.json", query: q))
-                guard !w.days.isEmpty else { throw IntervalsFailure(text: "Intervals.icu has no fitness values for these days.") }
-                (days, eftp, source, note) = (w.days, w.eftp, "Source: Intervals.icu (wellness)", nil)
-                // the curve is a bonus: its failure leaves the rest
-                let cq = [URLQueryItem(name: "curves", value: "90d"), URLQueryItem(name: "type", value: "Ride")]
-                curve = (try? powerCurveParse(json: try await IntervalsClient.get(key: key, athlete: athlete, path: "power-curves.json", query: cq))) ?? []
-                return
-            } catch let e as IntervalsFailure {
-                note = e.text + " Showing this phone's rides."
-            } catch {
-                note = "Intervals.icu answered with something unreadable. Showing this phone's rides."
-            }
+        guard let key = demo ? "demo" : Keychain.get("apikey") else { (remote, note) = (nil, nil); return }
+        do {
+            let athlete = UserDefaults.standard.string(forKey: IntervalsSync.athleteKey) ?? ""
+            let t = today
+            let q = [URLQueryItem(name: "oldest", value: Self.iso(t - 89)), URLQueryItem(name: "newest", value: Self.iso(t))]
+            let w = try wellnessParse(json: try await IntervalsClient.get(key: key, athlete: athlete, path: "wellness.json", query: q))
+            guard !w.days.isEmpty else { throw IntervalsFailure(text: "Intervals.icu has no fitness values for these days.") }
+            var r = FitnessData(days: w.days, eftp: w.eftp)
+            // the curve is a bonus: its failure leaves the rest
+            let cq = [URLQueryItem(name: "curves", value: "90d"), URLQueryItem(name: "type", value: "Ride")]
+            r.curve = (try? powerCurveParse(json: try await IntervalsClient.get(key: key, athlete: athlete, path: "power-curves.json", query: cq))) ?? []
+            (remote, note) = (r, nil)
+        } catch let e as IntervalsFailure {
+            (remote, note) = (nil, e.text + " Showing this phone's rides.")
+        } catch {
+            (remote, note) = (nil, "Intervals.icu answered with something unreadable. Showing this phone's rides.")
         }
-        // from the cached ride loads: the tool's own 42 and 7 day averages
+    }
+
+    /// From the cached ride loads: the firmware's 42 and 7 day averages.
+    private func computeLocal() {
+        let tz = TimeZone.current
         let loads: [DayLoad] = library.briefs.compactMap { name, b in
             let off = Int32(clamping: tz.secondsFromGMT(for: Date(timeIntervalSince1970: Double(b.startUnix))))
             let s = rideStat(b: b, name: name, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR), tzOffsetS: off)
             guard let l = s.load else { return nil }
-            let day = s.localDay ?? Int64((Double(b.startUnix) + Double(off)) / 86_400)
-            return DayLoad(day: day, load: l)
+            return DayLoad(day: s.localDay ?? Int64((Double(b.startUnix) + Double(off)) / 86_400), load: l)
         }
-        (days, eftp, curve) = (fitnessFromLoads(loads: loads, today: today), nil, [])
-        source = "From this phone's rides: 42 and 7 day averages of their loads. Intervals.icu's numbers need its key (profile)."
+        local = FitnessData(days: fitnessFromLoads(loads: loads, today: today))
     }
 }
 

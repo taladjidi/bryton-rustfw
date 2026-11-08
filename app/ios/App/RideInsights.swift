@@ -6,11 +6,15 @@ import Charts
 import CoreLocation
 import SwiftUI
 
-/// Results kept for the session, one per ride file and profile: worked out once, off the main thread.
+/// Results kept for the session (the last few rides, least recently used out), one per ride file and profile: worked
+/// out once, off the main thread, and two askers of the same key share one run.
 actor InsightCache {
     static let shared = InsightCache()
-    private var insights: [String: RideInsight] = [:]
-    private var views: [String: RideView] = [:]
+    private static let limit = 8
+    private var insights = Lru<RideInsight>()
+    private var views = Lru<RideView>()
+    private var running: [String: Task<RideInsight?, Never>] = [:]
+    private var running2: [String: Task<RideView?, Never>] = [:]
 
     private func key(_ url: URL, _ extra: String) -> String {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
@@ -19,23 +23,56 @@ actor InsightCache {
 
     func insight(_ url: URL, weight: UInt16, cp: UInt16, wPrime: UInt16) async -> RideInsight? {
         let k = key(url, "\(weight) \(cp) \(wPrime)")
-        if let c = insights[k] { return c }
-        let r = await Task.detached(priority: .utility) {
+        if let c = insights.get(k) { return c }
+        let t = running[k] ?? Task.detached(priority: .utility) {
             try? rideInsight(bytes: Data(contentsOf: url), weightKg: weight, cp: cp, wprimeJ: wPrime)
-        }.value
-        if let r { insights[k] = r }
+        }
+        running[k] = t
+        let r = await t.value
+        running[k] = nil
+        if let r { insights.put(k, r, Self.limit) }
         return r
     }
 
     func view(_ url: URL, ftp: UInt16, maxHR: UInt16) async -> RideView? {
         let k = key(url, "\(ftp) \(maxHR)")
-        if let c = views[k] { return c }
-        let r = await Task.detached(priority: .utility) {
+        if let c = views.get(k) { return c }
+        let t = running2[k] ?? Task.detached(priority: .utility) {
             try? analyzeRide(bytes: Data(contentsOf: url), ftp: ftp, maxHr: maxHR)
-        }.value
-        if let r { views[k] = r }
+        }
+        running2[k] = t
+        let r = await t.value
+        running2[k] = nil
+        if let r { views.put(k, r, Self.limit) }
         return r
     }
+}
+
+/// A small least-recently-used map.
+struct Lru<V> {
+    private var items: [String: V] = [:]
+    private var order: [String] = []
+
+    mutating func get(_ k: String) -> V? {
+        guard let v = items[k] else { return nil }
+        order.removeAll { $0 == k }
+        order.append(k)
+        return v
+    }
+
+    mutating func put(_ k: String, _ v: V, _ limit: Int) {
+        items[k] = v
+        order.removeAll { $0 == k }
+        order.append(k)
+        while order.count > limit { items[order.removeFirst()] = nil }
+    }
+}
+
+/// A climb's part of the altitude line, cut once per ride and axis (not on every pass of a chart's body).
+struct ClimbSlice: Identifiable {
+    let id: Int
+    let color: Color
+    let pts: [Pt]
 }
 
 extension Color {
@@ -49,7 +86,7 @@ extension ClimbStat {
     /// The track's stretch of the climb, from the viewer's samples.
     func coords(in samples: [TrackSample]) -> [CLLocationCoordinate2D] {
         samples.compactMap { s in
-            guard s.distM >= Double(startM), s.distM <= Double(startM + lenM), let a = s.lat, let o = s.lon,
+            guard s.distM >= Double(startM), s.distM <= Double(startM) + Double(lenM), let a = s.lat, let o = s.lon,
                 abs(a) <= 90, abs(o) <= 180
             else { return nil }
             return CLLocationCoordinate2D(latitude: a, longitude: o)
@@ -58,7 +95,7 @@ extension ClimbStat {
 
     /// The chart x range of the climb on the chosen axis.
     func xRange(byTime: Bool) -> ClosedRange<Double> {
-        byTime ? Double(startS) / 60...Double(max(endS, startS)) / 60 : Double(startM) / 1000...Double(startM + lenM) / 1000
+        byTime ? Double(startS) / 60...Double(max(endS, startS)) / 60 : (Double(startM) / 1000)...((Double(startM) + Double(lenM)) / 1000)
     }
 }
 
@@ -105,7 +142,8 @@ struct WbalChart: View {
                 Spacer()
                 if let m = minJ { Text(String(format: "lowest %.1f kJ", Double(m) / 1000)).font(.caption).foregroundStyle(.secondary) }
             }
-            Chart(points, id: \.tS) { p in
+            Chart(points.indices, id: \.self) { i in
+                let p = points[i]
                 AreaMark(x: .value("min", Double(p.tS) / 60), y: .value("kJ", Double(p.wbalJ) / 1000))
                     .foregroundStyle(.purple.opacity(0.3))
                 LineMark(x: .value("min", Double(p.tS) / 60), y: .value("kJ", Double(p.wbalJ) / 1000))
@@ -122,12 +160,12 @@ struct DecouplingRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Aerobic decoupling (Pw:HR)").font(.subheadline.bold())
+            Text("Aerobic decoupling (Pa:HR)").font(.subheadline.bold())
             HStack {
                 // under 5 % is the usual mark of a well-built aerobic base (Friel); inferred, not a diagnosis
                 Text(String(format: "%.1f %%", d.percent)).font(.title3.bold().monospacedDigit())
                     .foregroundStyle(d.percent < 5 ? .green : .orange)
-                Text(String(format: "EF %.2f to %.2f W/bpm, first half to second", d.efFirst, d.efSecond))
+                Text(String(format: "%.2f to %.2f W/bpm, first half to second", d.efFirst, d.efSecond))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -143,8 +181,8 @@ struct DfaChart: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("DFA alpha1").font(.subheadline.bold())
             Chart {
-                ForEach(points, id: \.tS) { p in
-                    LineMark(x: .value("min", Double(p.tS) / 60), y: .value("a1", p.a1)).foregroundStyle(.teal)
+                ForEach(points.indices, id: \.self) { i in
+                    LineMark(x: .value("min", Double(points[i].tS) / 60), y: .value("a1", points[i].a1)).foregroundStyle(.teal)
                 }
                 RuleMark(y: .value("VT1", vt1)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
                     .foregroundStyle(.green).annotation(position: .top, alignment: .trailing) {
@@ -174,6 +212,7 @@ struct CompareSection: View {
     @AppStorage("maxHR") private var maxHR = 190
     @State private var other: (name: String, view: RideView, climbs: [ClimbStat])?
     @State private var loading = false
+    @State private var picking: Task<Void, Never>?
 
     private static func candidates(excluding url: URL) -> [String] {
         let dir = url.deletingLastPathComponent()
@@ -205,12 +244,15 @@ struct CompareSection: View {
 
     private func pick(_ name: String, dir: URL) {
         loading = true
+        picking?.cancel()  // two quick picks: only the last one may set the result
         let (f, m) = (UInt16(clamping: ftp), UInt16(clamping: maxHR))
-        Task {
+        picking = Task {
             let u = dir.appendingPathComponent("\(name).fit")
             async let v = InsightCache.shared.view(u, ftp: f, maxHR: m)
             async let i = InsightCache.shared.insight(u, weight: weight, cp: cp, wPrime: wPrime)
-            if let v = await v { other = (name, v, await i?.climbs ?? []) }
+            let (rv, ri) = (await v, await i)
+            guard !Task.isCancelled else { return }
+            if let rv { other = (name, rv, ri?.climbs ?? []) }
             loading = false
         }
     }
@@ -219,6 +261,8 @@ struct CompareSection: View {
 
     @ViewBuilder private func curve(_ o: (name: String, view: RideView, climbs: [ClimbStat])) -> some View {
         let rows = [("This ride", view.summary.curve), (RideBrowser.title(o.name), o.view.summary.curve)]
+        // every duration either ride held, in order
+        let secs = Set(rows.flatMap { $0.1.map(\.secs) }).sorted()
         Chart {
             ForEach(rows.indices, id: \.self) { r in
                 ForEach(rows[r].1, id: \.secs) { p in
@@ -228,6 +272,7 @@ struct CompareSection: View {
                 }
             }
         }
+        .chartXScale(domain: secs.map(label))
         .chartForegroundStyleScale([rows[0].0: Color.orange, rows[1].0: Color.blue])
         .frame(height: 160)
     }

@@ -86,8 +86,19 @@ struct Prep {
     /// The map points with their x, to find the one under the chart's cursor.
     var geo: [(x: Double, c: CLLocationCoordinate2D)] = []
     var series: [Series] = []
+    /// The climbs' parts of the altitude line (set by `attach`).
+    var climbSlices: [ClimbSlice] = []
 
     init() {}
+
+    /// Cuts the climbs out of the altitude line, once, when the insight or the axis changes.
+    mutating func attach(_ climbs: [ClimbStat], byTime: Bool) {
+        guard let alt = series.first(where: { $0.id.hasPrefix("Altitude") }) else { climbSlices = []; return }
+        climbSlices = climbs.indices.map { i in
+            let r = climbs[i].xRange(byTime: byTime)
+            return ClimbSlice(id: i, color: Color(rgb: climbs[i].color), pts: alt.pts.filter { r.contains($0.x) })
+        }
+    }
 
     init(_ r: RideView, byTime: Bool) {
         let xf: (TrackSample) -> Double = { byTime ? Double($0.tS) / 60 : $0.distM / 1000 }
@@ -209,8 +220,12 @@ struct RideDetail: View {
         }
         .onChange(of: byTime) { _, t in
             selX = nil
-            if let r = ride { prep = Prep(r, byTime: t) }
+            if let r = ride {
+                prep = Prep(r, byTime: t)
+                prep.attach(insight?.climbs ?? [], byTime: t)
+            }
         }
+        .onChange(of: insight) { _, i in prep.attach(i?.climbs ?? [], byTime: byTime) }
     }
 
     private func load() async {
@@ -223,6 +238,7 @@ struct RideDetail: View {
         case .success(let r):
             ride = r
             prep = Prep(r, byTime: byTime)
+            prep.attach(insight?.climbs ?? [], byTime: byTime)
             error = nil
         case .failure(let e): error = "This file cannot be shown: \(e)"
         }
@@ -236,7 +252,7 @@ struct RideDetail: View {
             }
             .pickerStyle(.segmented)
             ForEach(prep.series) { s in
-                MetricChart(series: s, byTime: byTime, selX: $selX, climbs: s.id.hasPrefix("Altitude") ? (insight?.climbs ?? []) : [])
+                MetricChart(series: s, byTime: byTime, selX: $selX, slices: s.id.hasPrefix("Altitude") ? prep.climbSlices : [])
             }
         }
     }
@@ -258,7 +274,7 @@ struct MetricChart: View {
     let byTime: Bool
     @Binding var selX: Double?
     /// The climbs, drawn over the altitude line in their grade colour.
-    var climbs: [ClimbStat] = []
+    var slices: [ClimbSlice] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -276,11 +292,10 @@ struct MetricChart: View {
                     }
                     LineMark(x: .value("x", p.x), y: .value("y", p.y)).foregroundStyle(series.color)
                 }
-                ForEach(climbs.indices, id: \.self) { i in
-                    let r = climbs[i].xRange(byTime: byTime)
-                    ForEach(series.pts.filter { r.contains($0.x) }) { p in
-                        LineMark(x: .value("x", p.x), y: .value("y", p.y), series: .value("climb", i))
-                            .foregroundStyle(Color(rgb: climbs[i].color)).lineStyle(StrokeStyle(lineWidth: 4))
+                ForEach(slices) { c in
+                    ForEach(c.pts) { p in
+                        LineMark(x: .value("x", p.x), y: .value("y", p.y), series: .value("climb", c.id))
+                            .foregroundStyle(c.color).lineStyle(StrokeStyle(lineWidth: 4))
                     }
                 }
             }

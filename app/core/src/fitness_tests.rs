@@ -6,6 +6,9 @@ fn days_are_counted_from_1970() {
     assert_eq!(day_of("2026-11-08"), Some(20_765));
     assert_eq!(day_of("2026-11-08T07:00:00"), Some(20_765));
     assert_eq!(day_of("2026-13-08"), None);
+    // the month's own length, leap years included
+    assert_eq!((day_of("2026-02-29"), day_of("2024-02-29").is_some(), day_of("2100-02-29")), (None, true, None));
+    assert_eq!((day_of("2026-04-31"), day_of("2026-04-30").is_some()), (None, true));
     assert_eq!(day_of("junk"), None);
 }
 
@@ -26,6 +29,23 @@ fn ctl_and_atl_of_a_known_load() {
     let many = fitness_from_loads(vec![DayLoad { day: 0, load: 50 }, DayLoad { day: 0, load: 50 }], 300);
     assert_eq!(many.len(), DAYS);
     assert_eq!(many.last().map(|d| d.day), Some(300));
+}
+
+#[test]
+fn form_after_a_gap_is_the_days_own() {
+    let j = r#"[{"id":"2026-11-01","ctl":50,"atl":60},{"id":"2026-11-02","ctl":51,"atl":58},{"id":"2026-11-05","ctl":52,"atl":50}]"#;
+    let d = wellness_parse(j.as_bytes().to_vec()).unwrap().days;
+    // day 2 starts with day 1's 50 - 60, day 5 (a gap of two days) with its own 52 - 50
+    assert_eq!((d[1].tsb, d[2].tsb), (-10.0, 2.0));
+}
+
+#[test]
+fn a_sprint_is_clamped_not_dropped() {
+    let j = r#"{"list":[{"secs":[1,5],"values":[2500,1e9]}]}"#;
+    let c = power_curve_parse(j.as_bytes().to_vec()).unwrap();
+    assert_eq!(c, vec![CurvePoint { secs: 1, watts: 2500 }, CurvePoint { secs: 5, watts: 3000 }]);
+    let w = wellness_parse(br#"[{"id":"2026-11-01","ctl":1,"atl":1,"sportInfo":[{"type":"Ride","eftp":5000}]}]"#.to_vec());
+    assert_eq!(w.unwrap().eftp, Some(3000.0));
 }
 
 const SAMPLE: &str = r#"[

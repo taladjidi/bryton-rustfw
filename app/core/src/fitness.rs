@@ -28,8 +28,10 @@ const CTL_D: f64 = 42.0;
 const ATL_D: f64 = 7.0;
 /// The curve's durations kept, s.
 const CURVE_S: [u32; 11] = [1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600];
-/// The largest value taken for a load, CTL, ATL or W.
+/// The largest CTL or ATL taken.
 const CAP: f64 = 1000.0;
+/// The largest power taken, W: a sprint is clamped to it, not dropped.
+const WATTS_CAP: f64 = 3000.0;
 
 /// One day of the trend.
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
@@ -88,14 +90,25 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 fn day_of(id: &str) -> Option<i64> {
     let mut it = id.get(..10)?.split('-');
     let (y, m, d) = (it.next()?.parse::<i64>().ok()?, it.next()?.parse::<i64>().ok()?, it.next()?.parse::<i64>().ok()?);
-    ((1900..=2200).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d)).then(|| days_from_civil(y, m, d))
+    let len = match m {
+        2 if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    ((1900..=2200).contains(&y) && (1..=12).contains(&m) && (1..=len).contains(&d)).then(|| days_from_civil(y, m, d))
 }
 
 fn val(v: Option<&serde_json::Value>) -> Option<f64> {
     v?.as_f64().filter(|x| (0.0..=CAP).contains(x))
 }
 
-/// Sets each day's TSB from the day before's CTL and ATL (the first from its own) and keeps the last [`DAYS`].
+/// A power: finite and not negative, clamped to [`WATTS_CAP`].
+fn watts(v: Option<&serde_json::Value>) -> Option<f64> {
+    v?.as_f64().filter(|x| x.is_finite() && *x >= 0.0).map(|x| x.min(WATTS_CAP))
+}
+
+/// Sets each day's TSB from the day before's CTL and ATL (the first, and a day after a gap, from its own) and keeps the last [`DAYS`].
 fn finish(mut days: Vec<(i64, f64, f64)>) -> Vec<FitnessDay> {
     days.sort_by_key(|d| d.0);
     days.dedup_by_key(|d| d.0);
@@ -103,7 +116,9 @@ fn finish(mut days: Vec<(i64, f64, f64)>) -> Vec<FitnessDay> {
         .iter()
         .enumerate()
         .map(|(i, &(day, ctl, atl))| {
-            let (pc, pa) = i.checked_sub(1).and_then(|k| days.get(k)).map_or((ctl, atl), |p| (p.1, p.2));
+            // yesterday's values only when the record before is yesterday's; after a gap the day's own
+            let prev = i.checked_sub(1).and_then(|k| days.get(k)).filter(|p| p.0 + 1 == day);
+            let (pc, pa) = prev.map_or((ctl, atl), |p| (p.1, p.2));
             FitnessDay { day, ctl, atl, tsb: pc - pa }
         })
         .collect();
@@ -123,7 +138,7 @@ pub fn wellness_parse(json: Vec<u8>) -> Result<Wellness, FitnessError> {
             .get("sportInfo")
             .and_then(|s| s.as_array())
             .and_then(|a| a.iter().find(|s| s.get("type").and_then(|t| t.as_str()) == Some("Ride")))
-            .and_then(|s| val(s.get("eftp")))
+            .and_then(|s| watts(s.get("eftp")))
             .filter(|e| *e > 0.0 && eftp.is_none_or(|(d, _)| day >= d))
         {
             eftp = Some((day, e));
@@ -146,7 +161,7 @@ pub fn power_curve_parse(json: Vec<u8>) -> Result<Vec<CurvePoint>, FitnessError>
         .iter()
         .zip(vals)
         .filter_map(|(s, w)| {
-            let (s, w) = (u32::try_from(s.as_u64()?).ok()?, val(Some(w))?);
+            let (s, w) = (u32::try_from(s.as_u64()?).ok()?, watts(Some(w))?);
             (CURVE_S.contains(&s) && w > 0.0).then_some(CurvePoint { secs: s, watts: w.round() as u16 })
         })
         .collect())

@@ -11,14 +11,16 @@
 //!   speed), the average power over those seconds and W/kg of the weight in the profile. The colour is
 //!   `ui::grade_color` of the average grade, as the unit colours its climbs.
 //! - **W' balance:** `power::wbal_step`, the differential model of the unit's `Power::second` (Froncioni and Clarke,
-//!   Golden Cheetah's "Differential"; see power.rs), second by second from a full W', CP taken as the FTP as the
-//!   unit does. A record counts for the seconds to the next one up to 5 s, then the power is 0 (a pause recovers).
-//! - **Aerobic decoupling (Pw:HR):** the moving seconds with power and heart rate cut in two halves of equal time;
-//!   per half the efficiency factor EF = normalized power / average heart rate; decoupling = (EF1 - EF2) / EF1 x 100,
-//!   positive when the second half costs more heart rate per watt. A forum reply on Intervals.icu says its decoupling
-//!   "uses NP as opposed to average power" (<https://forum.intervals.icu/t/21505>), the Pw:HR of Friel and of
-//!   TrainingPeaks; their help page was not read, and Intervals' exact cut (it can differ by the zero seconds it
-//!   keeps) is inferred. Under 20 minutes of moving time with both, no value is given (inferred: too short for drift).
+//!   Golden Cheetah's "Differential"; see power.rs), second by second from a full W', at most 3 days of it. CP = FTP is
+//!   the unit's own shortcut, not the rider's critical power: a W' from Intervals.icu belongs to its CP, so the two
+//!   differ when CP and FTP do. A record counts for the seconds to the next one up to 5 s, then the power is 0 (a pause
+//!   recovers).
+//! - **Aerobic decoupling (Pa:HR, here from power):** the moving seconds with power and a heart rate above 0 cut in two
+//!   halves of equal time; per half the efficiency EF = average power / average heart rate; decoupling = (EF1 - EF2) /
+//!   EF1 x 100, positive when the second half costs more heart rate per watt. Friel's Pw:Hr / Pa:Hr; Intervals.icu's
+//!   own cut is **unverified (one forum user's reply, <https://forum.intervals.icu/t/21505>)**: it is taken here to use
+//!   the average power of each half, not NP, for consistency with Intervals.icu, which the owner compares against.
+//!   Under 20 minutes of moving time with both, no value is given (inferred: too short for drift).
 //! - **DFA alpha1:** the file's `hrv` messages (global 78, field `time`, the strap's raw RR intervals, as the
 //!   firmware's `fit.rs` writes them) pushed beat by beat through the firmware's `hrv::Hrv` (5 % artifact rule, 2
 //!   minute window, boxes of 4 to 16 beats). The messages carry no time: the beats are laid end to end from the
@@ -31,7 +33,7 @@ use bryton_rustfw::{
     course::{CLIMBS, Course},
     hrv::{self, Hrv},
     hrvt::{A1_VT1, A1_VT2},
-    power::{Power, wbal_step},
+    power::wbal_step,
     ui::grade_color,
 };
 use fitparser::{Value, profile::MesgNum};
@@ -46,6 +48,10 @@ const GRADE_STEPS: usize = 10;
 const MAX_STEPS: usize = 100_000;
 /// A record counts for the time to the next, but at most this long, s (as `analyze_ride`).
 const HOLD_S: u32 = 5;
+/// The W' balance runs over at most this many seconds (3 days): a damaged timestamp cannot make it long.
+const WBAL_MAX_S: usize = 3 * 86_400;
+/// The largest distance offset of a profile taken as real, m.
+const BASE_MAX_M: f64 = 1.0e9;
 /// Points the W' balance and DFA lists keep.
 const MAX_POINTS: usize = 400;
 /// The least moving time with power and heart rate for a decoupling, s.
@@ -99,7 +105,7 @@ pub struct WbalPoint {
     pub wbal_j: i32,
 }
 
-/// Aerobic decoupling, Pw:HR.
+/// Aerobic decoupling, Pa:HR (average power over average heart rate).
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
 pub struct Decoupling {
     /// Efficiency factor of the first half, W per bpm.
@@ -128,7 +134,7 @@ pub struct RideInsight {
     pub wbal: Vec<WbalPoint>,
     /// The lowest W' balance of the ride, J.
     pub wbal_min_j: Option<i32>,
-    /// Pw:HR.
+    /// Pa:HR (average power over average heart rate).
     pub decoupling: Option<Decoupling>,
     /// DFA alpha1.
     pub dfa: Vec<DfaPoint>,
@@ -138,20 +144,34 @@ pub struct RideInsight {
     pub vt2: f64,
 }
 
-/// The altitude, dm, every [`STEP_M`] m from the start, smoothed; empty without a usable altitude and distance.
-fn profile(all: &[TrackSample]) -> Vec<i32> {
+/// The distance of each record as a running maximum: a record without one, or after a reset, stands at the farthest
+/// point so far, so the list is sorted for searching.
+fn reach(all: &[TrackSample]) -> Vec<f64> {
+    let mut far = 0.0f64;
+    all.iter()
+        .map(|s| {
+            if s.dist_m.is_finite() {
+                far = far.max(s.dist_m.min(BASE_MAX_M));
+            }
+            far
+        })
+        .collect()
+}
+
+/// The altitude, dm, every [`STEP_M`] m from the first altitude's distance (returned first), smoothed; empty without
+/// a usable altitude and distance.
+fn profile(all: &[TrackSample], reach: &[f64]) -> (f64, Vec<i32>) {
     let mut pts: Vec<(f64, f64)> = Vec::new();
     let mut far = f64::MIN;
-    for s in all {
-        if let Some(a) = s.alt_m.filter(|a| a.is_finite())
-            && s.dist_m.is_finite()
-            && s.dist_m > far
+    for (s, &d) in all.iter().zip(reach) {
+        if let Some(a) = s.alt_m.filter(|a| a.is_finite() && a.abs() < 1.0e5)
+            && d > far
         {
-            far = s.dist_m;
-            pts.push((s.dist_m, a));
+            far = d;
+            pts.push((d, a));
         }
     }
-    let (Some(&(d0, _)), Some(&(d1, _))) = (pts.first(), pts.last()) else { return Vec::new() };
+    let (Some(&(d0, _)), Some(&(d1, _))) = (pts.first(), pts.last()) else { return (0.0, Vec::new()) };
     let n = (((d1 - d0) / STEP_M as f64) as usize).min(MAX_STEPS);
     // linear interpolation at d0 + k x STEP_M; the points are increasing in distance
     let mut raw = Vec::with_capacity(n + 1);
@@ -164,12 +184,11 @@ fn profile(all: &[TrackSample]) -> Vec<i32> {
         let (a, b) = (pts.get(j).copied().unwrap_or_default(), pts.get(j + 1).copied().unwrap_or_default());
         raw.push(if b.0 > a.0 { a.1 + (b.1 - a.1) * ((d - a.0) / (b.0 - a.0)).clamp(0.0, 1.0) } else { a.1 });
     }
-    (0..raw.len())
-        .map(|i| {
-            let w = raw.get(i.saturating_sub(SMOOTH)..(i + SMOOTH + 1).min(raw.len())).unwrap_or(&[]);
-            (w.iter().sum::<f64>() / w.len().max(1) as f64 * 10.0).round() as i32
-        })
-        .collect()
+    let smooth = (0..raw.len()).map(|i| {
+        let w = raw.get(i.saturating_sub(SMOOTH)..(i + SMOOTH + 1).min(raw.len())).unwrap_or(&[]);
+        (w.iter().sum::<f64>() / w.len().max(1) as f64 * 10.0).round() as i32
+    });
+    (d0, smooth.collect())
 }
 
 fn rgb(c565: u16) -> u32 {
@@ -178,35 +197,35 @@ fn rgb(c565: u16) -> u32 {
 }
 
 fn climbs(all: &[TrackSample], weight_kg: u16) -> Vec<ClimbStat> {
-    let prof = profile(all);
-    let Some(first) = all.iter().find(|s| s.alt_m.is_some()) else { return Vec::new() };
+    let reach = reach(all);
+    let (base, prof) = profile(all, &reach);
     let total = u32::try_from(prof.len().saturating_sub(1) * STEP_M).unwrap_or(0);
     let alt_at = |d: u32| {
         let i = (d as usize / STEP_M).min(prof.len().saturating_sub(1));
         prof.get(i).copied()
     };
     let (found, n) = Course::climbs_of(total, alt_at);
-    // the profile starts at the first altitude's distance
-    let base = first.dist_m;
-    let at = |m: f64| all.partition_point(|s| s.dist_m < m).min(all.len().saturating_sub(1));
+    let at = |m: f64| reach.partition_point(|&d| d < m).min(all.len().saturating_sub(1));
     found
         .iter()
         .take(n.min(CLIMBS))
         .filter_map(|c| {
             let (a, b) = (at(base + f64::from(c.start_m)), at(base + f64::from(c.end_m())));
+            let start_m = c.start_m.saturating_add(base as u32);
             let (sa, sb) = (all.get(a)?, all.get(b)?);
             let time_s = sb.t_s.saturating_sub(sa.t_s);
-            let powers: Vec<u32> = all.get(a..=b)?.iter().filter_map(|s| s.power.map(u32::from)).collect();
+            let powers: Vec<u32> = all.get(a..=b.max(a))?.iter().filter_map(|s| s.power.map(u32::from)).collect();
             let avg_power = (!powers.is_empty()).then(|| (powers.iter().sum::<u32>() / powers.len() as u32) as u16);
             let step = |d: u32| alt_at(d);
-            let max_grade = (c.start_m..=c.end_m().saturating_sub(GRADE_STEPS as u32 * STEP_M as u32))
+            let span = (GRADE_STEPS * STEP_M) as u32;
+            let max_grade = (c.start_m..=c.end_m().saturating_sub(span))
                 .step_by(STEP_M)
-                .filter_map(|d| Some(step(d + (GRADE_STEPS * STEP_M) as u32)? - step(d)?))
+                .filter_map(|d| Some(step(d.saturating_add(span))? - step(d)?))
                 .max()
                 .unwrap_or(0)
                 .max(0) as u32;
             Some(ClimbStat {
-                start_m: c.start_m + base as u32,
+                start_m,
                 len_m: c.len_m,
                 gain_m: c.gain_m,
                 avg_grade_x10: c.grade_x10(),
@@ -240,7 +259,7 @@ fn wbal(all: &[TrackSample], cp: u16, wprime_j: u16) -> Vec<WbalPoint> {
     let (Some(last), true) = (all.last(), cp > 0 && wprime_j > 0 && all.iter().any(|s| s.power.is_some())) else {
         return Vec::new();
     };
-    let secs = last.t_s as usize + 1;
+    let secs = (last.t_s as usize + 1).min(WBAL_MAX_S);
     let bucket = secs.div_ceil(MAX_POINTS);
     let mut w = i64::from(wprime_j) * 1000;
     let (mut out, mut i) = (Vec::new(), 0usize);
@@ -249,7 +268,7 @@ fn wbal(all: &[TrackSample], cp: u16, wprime_j: u16) -> Vec<WbalPoint> {
         while all.get(i + 1).is_some_and(|n| n.t_s as usize <= t) {
             i += 1;
         }
-        let p = all.get(i).filter(|s| t as u32 - s.t_s < dt(all, i)).and_then(|s| s.power).unwrap_or(0);
+        let p = all.get(i).filter(|s| (t as u32).saturating_sub(s.t_s) < dt(all, i)).and_then(|s| s.power).unwrap_or(0);
         w = wbal_step(w, p, cp, wprime_j);
         low = low.min(w);
         if t % bucket == bucket - 1 || t + 1 == secs {
@@ -262,36 +281,37 @@ fn wbal(all: &[TrackSample], cp: u16, wprime_j: u16) -> Vec<WbalPoint> {
 
 fn decoupling(all: &[TrackSample]) -> Option<Decoupling> {
     let has_speed = all.iter().any(|s| s.speed_ms.is_some());
-    // (record, seconds) of the moving records with both
-    let mv: Vec<(&TrackSample, u32)> = all
+    // (power, heart rate, seconds) of the moving records with both; a heart rate of 0 is a dropout, not a value
+    let mv: Vec<(u64, u64, u32)> = all
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.power.is_some() && s.hr.is_some() && (!has_speed || s.speed_ms.unwrap_or(0.0) >= MOVING_MS))
-        .map(|(i, s)| (s, dt(all, i)))
+        .filter(|(_, s)| !has_speed || s.speed_ms.unwrap_or(0.0) >= MOVING_MS)
+        .filter_map(|(i, s)| Some((u64::from(s.power?), u64::from(s.hr.filter(|h| *h > 0)?), dt(all, i))))
         .collect();
-    let total: u32 = mv.iter().map(|x| x.1).sum();
+    let total = mv.iter().fold(0u32, |a, x| a.saturating_add(x.2));
     if total < DECOUPLING_MIN_S {
         return None;
     }
-    let (mut ef, mut done) = ([(Power::new(), 0u64, 0u64); 2], 0u32);
-    for (s, d) in mv {
-        let h = usize::from(done * 2 >= total);
-        done += d;
-        let slot = ef.get_mut(h)?;
-        for _ in 0..d {
-            slot.0.sample(s.power, true);
-        }
-        slot.1 += u64::from(s.hr?) * u64::from(d);
-        slot.2 += u64::from(d);
+    // per half: power x s, heart rate x s, s
+    let (mut half, mut done) = ([(0u64, 0u64, 0u64); 2], 0u32);
+    for (p, h, d) in mv {
+        let slot = half.get_mut(usize::from(u64::from(done) * 2 >= u64::from(total)))?;
+        done = done.saturating_add(d);
+        *slot = (slot.0 + p * u64::from(d), slot.1 + h * u64::from(d), slot.2 + u64::from(d));
     }
-    let f = |h: usize| {
-        let (p, hr, n) = ef.get(h)?;
-        let avg = (*hr as f64) / (*n).max(1) as f64;
-        (avg > 0.0).then_some(())?;
-        Some(f64::from(p.np()?) / avg)
+    let ef = |h: usize| {
+        let (p, hr, n) = half.get(h)?;
+        (*hr > 0).then(|| (*p as f64 / *n as f64) / (*hr as f64 / *n as f64))
     };
-    let (a, b) = (f(0)?, f(1)?);
+    let (a, b) = (ef(0)?, ef(1)?);
     (a > 0.0).then_some(Decoupling { ef_first: a, ef_second: b, percent: (a - b) / a * 100.0 })
+}
+
+/// One `hrv` value as ms: the file holds seconds (scale 1000), and a reader that returns the raw ms is accepted too;
+/// a value outside the strap's range (250 to 2000 ms) or not finite is dropped.
+fn rr_ms(x: f64) -> Option<u16> {
+    let ms = if x < 20.0 { x * 1000.0 } else { x };
+    (250.0..=2000.0).contains(&ms).then(|| ms.round() as u16)
 }
 
 /// The RR intervals of the `hrv` messages, ms, in order; a value outside the strap's range is dropped.
@@ -305,11 +325,7 @@ fn beats(msgs: &[fitparser::FitDataRecord]) -> Vec<u16> {
             };
             for v in vals {
                 let Ok(x): Result<f64, _> = v.clone().try_into() else { continue };
-                // the file holds seconds (scale 1000); a reader that returns the raw ms is accepted too
-                let ms = if x < 20.0 { x * 1000.0 } else { x };
-                if (250.0..=2000.0).contains(&ms) {
-                    out.push(ms.round() as u16);
-                }
+                out.extend(rr_ms(x));
             }
         }
     }
@@ -371,28 +387,46 @@ fn apart_m(a: (Option<f64>, Option<f64>), b: (Option<f64>, Option<f64>)) -> Opti
     Some(dx.hypot(dy))
 }
 
-/// The climbs two rides share: both ends within [`SAME_M`] of the other ride's (the same road in the same direction),
-/// each climb paired once.
+/// The climbs two rides share: both ends within max([`SAME_M`], a quarter of the shorter climb's length) of the other's
+/// (the same road in the same direction). Pairs are taken by the least summed distance of their ends, each climb once.
+/// (A shared-length test, 70 % of the length in common, is not done: it needs the tracks, not the climbs.)
 #[uniffi::export]
 pub fn match_climbs(first: Vec<ClimbStat>, second: Vec<ClimbStat>) -> Vec<ClimbPair> {
-    let mut used = vec![false; second.len()];
-    let mut out = Vec::new();
+    let mut cand: Vec<(f64, usize, usize)> = Vec::new();
     for (i, a) in first.iter().enumerate() {
-        let hit = second.iter().enumerate().find(|(j, b)| {
-            !used.get(*j).copied().unwrap_or(true)
-                && apart_m((a.start_lat, a.start_lon), (b.start_lat, b.start_lon)).is_some_and(|d| d <= SAME_M)
-                && apart_m((a.end_lat, a.end_lon), (b.end_lat, b.end_lon)).is_some_and(|d| d <= SAME_M)
-        });
-        if let Some((j, _)) = hit {
-            if let Some(u) = used.get_mut(j) {
-                *u = true;
+        for (j, b) in second.iter().enumerate() {
+            let tol = SAME_M.max(f64::from(a.len_m.min(b.len_m)) / 4.0);
+            let near = |x: Option<f64>| x.filter(|d| *d <= tol);
+            let ends = (
+                near(apart_m((a.start_lat, a.start_lon), (b.start_lat, b.start_lon))),
+                near(apart_m((a.end_lat, a.end_lon), (b.end_lat, b.end_lon))),
+            );
+            if let (Some(s), Some(e)) = ends {
+                cand.push((s + e, i, j));
+            }
+        }
+    }
+    cand.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let (mut used_a, mut used_b) = (vec![false; first.len()], vec![false; second.len()]);
+    let mut out = Vec::new();
+    for (_, i, j) in cand {
+        if used_a.get(i) == Some(&false) && used_b.get(j) == Some(&false) {
+            for (used, k) in [(&mut used_a, i), (&mut used_b, j)] {
+                if let Some(u) = used.get_mut(k) {
+                    *u = true;
+                }
             }
             out.push(ClimbPair { first: i as u32, second: j as u32 });
         }
     }
+    out.sort_by_key(|p| p.first);
     out
 }
 
 #[cfg(test)]
 #[path = "insight_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "insight_more_tests.rs"]
+mod more_tests;
