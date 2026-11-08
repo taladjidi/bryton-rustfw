@@ -108,7 +108,7 @@ have worked on the unit); where they differ, section 1 says so. The board's part
 | AXI SRAM | 0x24000000 | 512 KB | |
 | SRAM1 to 3 | 0x30000000 | 288 KB | |
 | SRAM4 | 0x38000000 | 64 KB | survives a reset, not standby |
-| SDRAM (FMC bank 2) | 0xd0000000 | 64 MB | Alliance Memory AS4C32M16MS, 16-bit mobile SDR SDRAM, 50 MHz; no remap |
+| SDRAM (FMC bank 2) | 0xd0000000 | 64 MB | Alliance Memory AS4C32M16MS-6BIN, 16-bit mobile SDR SDRAM, 50 MHz; no remap |
 
 - The image runs in place from SDRAM 0xd0000000, code and constants included.
 - This firmware's image is 1 MB at most (`link.x`). SDRAM from 0xd0800000 is its staging area for RAM-run.
@@ -119,8 +119,9 @@ have worked on the unit); where they differ, section 1 says so. The board's part
   not tried); the list is still to be checked against stm32h750xx.h.
 - **The SDRAM part** (AS4C32M16MS datasheet rev 1.0, June 2016, preliminary: features and table 2): 512 Mbit, 4
   banks of 8M x 16, 54-ball FBGA, VDD and VDDQ 1.8 V, CAS latency 2 or 3, 8192 refreshes per 64 ms, self refresh
-  with partial array (PASR) and temperature compensation, deep power-down. Grade -6BIN (166 MHz, -40 to 85 C) or
-  -7BCN (133 MHz, -25 to 85 C): which one is fitted is not known; 50 MHz is inside both. Currents (maxima, at its
+  with partial array (PASR) and temperature compensation, deep power-down. The part fitted is the **-6BIN**
+  (the owner's reading of the chip; table 2: 166 MHz, industrial, -40 to 85 C), so the FMC's 50 MHz is well inside
+  it. Currents (maxima, at its
   fastest clock): 10 mA precharged standby with CKE high (ICC2N), 20 mA with a bank open (ICC3N); self refresh 300 uA
   up to 45 C, 600 uA up to 85 C (ICC6, the whole array); deep power-down 10 uA, after which it needs a full
   initialisation (what the bootloader does).
