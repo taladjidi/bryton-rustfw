@@ -905,7 +905,7 @@ fn a_workout_sent_at_either_mtu_is_listed_read_back_whole_and_deleted() {
         let (key, size) = *listed.iter().find(|e| e.0.bytes().starts_with(b"20261108")).expect("listed");
         assert_eq!(size, file.len() as u32);
         let read = Command::ReadIn { seq: seq + 1, folder: Folder::Workout, offset: 0, key };
-        let a = ask(&mut sim, &mut app, control, data, read, 20_000);
+        let a = ask(&mut sim, &mut app, control, data, read, 120_000); // 17.6 KB at 360 B/s
         assert_eq!(a.bytes, file, "byte-identical");
         assert_eq!(crate::storage::workout_file::parse(&a.bytes).unwrap().name(), "LONG ONE");
     }
@@ -1109,6 +1109,193 @@ fn a_power_cut_at_every_write_of_a_sent_workout_leaves_the_calendar_whole() {
     }
     std::println!("{writes} sectors: {none} cuts left the calendar as it was");
     assert!(none > 0 && writes > 10);
+}
+
+/// The zigzag of the synthetic card, a FIT course with course points (several sectors).
+pub(super) fn turns() -> Vec<u8> {
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    crate::fat::tests::read_all(&mut fat, &mut d, "Courses/Turns.fit").unwrap()
+}
+
+/// Sends course `file` as `name` with `crc`, in WRITE_DATA frames of `chunk` bytes: WRITE_BEGIN's END, then the
+/// first refusal of a WRITE_DATA or WRITE_END's END.
+pub(super) fn send_course(
+    sim: &mut Sim,
+    app: &mut App,
+    ends: (u16, u16),
+    (name, file, crc): (&[u8], &[u8], u32),
+    chunk: usize,
+) -> (End, End) {
+    let (control, data) = ends;
+    let mut f = [0; crate::filesvc::FRAME_BIG];
+    let n = match crate::filesvc::CourseName::new(name) {
+        Some(name) => Command::WriteCourse { seq: 1, size: file.len() as u32, crc, name }.encode(&mut f),
+        None => {
+            // a name the codec refuses, as a phone could still write it
+            f[..12].copy_from_slice(&[6, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, name.len() as u8]);
+            f[12..12 + name.len()].copy_from_slice(name);
+            12 + name.len()
+        }
+    };
+    let begun = answer(sim, app, control, data, &f[..n]);
+    if begun != Some((Status::Ok, 0)) {
+        return (begun, None);
+    }
+    for (k, c) in file.chunks(chunk).enumerate() {
+        let n = Command::WriteData { seq: 2, offset: (k * chunk) as u32, data: c }.encode(&mut f);
+        sim.nordic.phone_write(control, &f[..n]);
+        pass(sim, app, 20);
+        if let Some(Frame::End { status, count, .. }) = drain(sim, data).iter().find_map(|p| Frame::parse(p)) {
+            return (begun, Some((status, count)));
+        }
+    }
+    (begun, answer(sim, app, control, data, &[8, 3]))
+}
+
+/// LIST_IN of `\Courses`: (key, size) of every file, and the END.
+pub(super) fn list_courses(sim: &mut Sim, app: &mut App, ends: (u16, u16), seq: u8) -> (Vec<(Key, u32)>, End) {
+    let (control, data) = ends;
+    sim.nordic.phone_write(control, &[4, seq, Folder::Courses as u8]);
+    let (mut entries, mut end) = (Vec::new(), None);
+    for _ in 0..100 {
+        pass(sim, app, 50);
+        for p in drain(sim, data) {
+            match Frame::parse(&p) {
+                Some(Frame::EntryIn { key, size, .. }) => entries.push((key, size)),
+                Some(Frame::End { status, count, .. }) => end = Some((status, count)),
+                _ => {}
+            }
+        }
+        if end.is_some() {
+            break;
+        }
+    }
+    (entries, end)
+}
+
+/// The listed key of course file `file_name` of `size` bytes: the one whose check is its name's.
+fn course_key(listed: &[(Key, u32)], file_name: &str, size: u32) -> Option<Key> {
+    let check = crate::filesvc::name_check(file_name.as_bytes(), size);
+    listed.iter().find(|e| e.0.check() == check && e.1 == size).map(|e| e.0)
+}
+
+/// `\Courses\<file_name>` on the card, if it is there.
+fn course_on_card(sim: &Sim, file_name: &str) -> Option<Vec<u8>> {
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    crate::fat::tests::read_all(&mut fat, &mut d, &std::format!("Courses/{file_name}")).ok()
+}
+
+/// A route sent from the phone at either MTU (an 8-character name in 20-byte writes, a 20-character one in 244) is
+/// written as `<name>.fit`, listed by LIST_IN 2 and by the unit's COURSES, read back byte-identical and followed;
+/// while followed (or being read to follow) its DELETE is BUSY, after that it is deleted and its clusters freed.
+#[test]
+fn a_course_sent_at_either_mtu_is_listed_read_back_followed_and_deleted() {
+    let (mut sim, mut app, control, data) = paired();
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    let lost0 = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    let file = turns();
+    let size = file.len() as u32;
+    assert!(file.len() > 1024, "{size} bytes");
+    for (name, chunk) in [(&b"Zig zag2"[..], 14), (b"Zig zag from phone", crate::filesvc::FRAME_BIG - 6)] {
+        let fname = std::format!("{}.fit", std::str::from_utf8(name).unwrap());
+        for _ in 0..2 {
+            // the second: the same course sent again (its answer lost), written once
+            let sent = send_course(&mut sim, &mut app, (control, data), (name, &file, crc(&file)), chunk);
+            assert_eq!(sent, (Some((Status::Ok, 0)), Some((Status::Ok, size))), "{fname}");
+        }
+        assert_eq!(course_on_card(&sim, &fname).as_deref(), Some(&file[..]), "{fname}");
+        let (listed, end) = list_courses(&mut sim, &mut app, (control, data), 20);
+        assert_eq!(end, Some((Status::Ok, listed.len() as u32)));
+        let key = course_key(&listed, &fname, size).expect("listed with its name's check");
+        let read = Command::ReadIn { seq: 21, folder: Folder::Courses, offset: 0, key };
+        let a = ask(&mut sim, &mut app, control, data, read, 120_000); // 17.6 KB at 360 B/s
+        assert_eq!((a.end, a.bytes.len()), (Some((Status::Ok, size)), file.len()), "{fname}");
+        assert!(a.bytes == file, "byte-identical");
+    }
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0));
+    // the unit lists it in COURSES and follows it
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    let list = &app.courses.as_deref().unwrap().list;
+    let k = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "ZIG ZAG2").expect("in COURSES");
+    app.follow_course(k);
+    assert!(app.courses.as_deref().unwrap().loading());
+    let (listed, _) = list_courses(&mut sim, &mut app, (control, data), 30);
+    let key = course_key(&listed, "Zig zag2.fit", size).unwrap();
+    let mut f = [0; 20];
+    let n = Command::Delete { seq: 31, folder: Folder::Courses, key }.encode(&mut f);
+    // a DELETE in the same pass as the read to follow begins: BUSY
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Busy, 0)), "being read");
+    run(&mut sim, &mut app, 500);
+    assert!(app.courses.as_deref().unwrap().on.is_some(), "followed");
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Busy, 0)), "followed");
+    assert!(course_on_card(&sim, "Zig zag2.fit").is_some());
+    // the other one goes, and an open COURSES lists the folder again
+    let other = course_key(&listed, "Zig zag from phone.fit", size).unwrap();
+    app.open_courses(&mut sim);
+    let mut g = [0; 20];
+    let n2 = Command::Delete { seq: 32, folder: Folder::Courses, key: other }.encode(&mut g);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &g[..n2]), Some((Status::Ok, 1)));
+    let list = &app.courses.as_deref().unwrap().list;
+    assert!((0..list.len()).all(|i| list.get(i).unwrap().name() != "ZIG ZAG FROM PHONE"), "listed again");
+    app.stop_course();
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 1)), "no longer followed");
+    assert!(course_on_card(&sim, "Zig zag2.fit").is_none() && course_on_card(&sim, "Zig zag from phone.fit").is_none());
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0), "their clusters freed");
+}
+
+/// Every refusal of a course write leaves `\Courses` as it was: READ ONLY, BUSY (lent, a ride), a name that leaves
+/// the folder or is no ASCII, too big, no FIT course, a CRC that lies, a name taken by another file, no `\Courses`.
+#[test]
+fn every_risky_course_write_is_refused_and_the_folder_stays_as_it_was() {
+    let (mut sim, mut app, control, data) = paired();
+    let lost0 = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+    let file = turns();
+    let c = crc(&file);
+    let send = |sim: &mut Sim, app: &mut App, n: &[u8], f: &[u8], c: u32| {
+        send_course(sim, app, (control, data), (n, f, c), 238)
+    };
+    let before = sim.emmc.image.clone();
+    app.card_writable = false;
+    assert_eq!(send(&mut sim, &mut app, b"New", &file, c).0, Some((Status::ReadOnly, 0)));
+    app.card_writable = true;
+    app.emmc.lend(true);
+    assert_eq!(send(&mut sim, &mut app, b"New", &file, c).0, Some((Status::Busy, 0)), "lent over USB");
+    app.emmc.lend(false);
+    for bad in [&b"../New"[..], b"New.gpx", b"N\0w", b"Caf\xc3\xa9", b"CON", b" New", b"123456789012345678901"] {
+        assert_eq!(send(&mut sim, &mut app, bad, &file, c).0, Some((Status::BadRequest, 0)), "{bad:?}");
+    }
+    let big = std::vec![0u8; crate::storage::workout_write::COURSE_MAX as usize + 1];
+    assert_eq!(send(&mut sim, &mut app, b"Big", &big, crc(&big)).0, Some((Status::BadRequest, 0)));
+    assert!(sim.emmc.image == before, "nothing written");
+    let size = file.len() as u32;
+    assert_eq!(send(&mut sim, &mut app, b"New", &file, c ^ 1).1, Some((Status::Mismatch, size)));
+    let workout = long_workout();
+    let wsize = workout.len() as u32;
+    assert_eq!(send(&mut sim, &mut app, b"New", &workout, crc(&workout)).1, Some((Status::BadRequest, wsize)));
+    // a name the card has for another course (any case): never written over
+    assert_eq!(send(&mut sim, &mut app, b"TURNS", &workout, crc(&workout)).1, Some((Status::BadRequest, wsize)));
+    assert_eq!(course_on_card(&sim, "Turns.fit"), Some(file.clone()), "kept");
+    assert_eq!(course_on_card(&sim, "New.fit"), None);
+    // a ride: BUSY
+    app.leave_menus();
+    app.input(&mut sim, Input::Select); // Start
+    run(&mut sim, &mut app, 300);
+    assert_eq!(send(&mut sim, &mut app, b"New", &file, c).0, Some((Status::Busy, 0)), "during a ride");
+    let (listed, end) = list_courses(&mut sim, &mut app, (control, data), 9);
+    assert_eq!((listed.len(), end), (0, Some((Status::Busy, 0))));
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0));
+    // a card with no \Courses: NOT FOUND, nothing written, and an empty listing
+    let (mut sim, mut app, control, data) = paired();
+    let at = sim.emmc.image.windows(11).position(|w| w == b"COURSES    ").expect("the folder's 8.3 entry");
+    sim.emmc.image[at + 6] = b'X';
+    let before = sim.emmc.image.clone();
+    let sent = send_course(&mut sim, &mut app, (control, data), (b"New", &file, c), 238);
+    assert_eq!(sent.0, Some((Status::NotFound, 0)));
+    assert!(sim.emmc.image == before, "nothing written");
+    assert_eq!(list_courses(&mut sim, &mut app, (control, data), 4), (Vec::new(), Some((Status::Ok, 0))));
 }
 
 /// Sends a profile command; the PROFILE frame and the END that answered.

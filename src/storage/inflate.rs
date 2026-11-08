@@ -237,7 +237,17 @@ const CRC_NIBBLE: [u32; 16] = {
 /// assert_eq!(bryton_rustfw::inflate::crc32(b"123456789".iter().copied()), 0xcbf4_3926);
 /// ```
 pub fn crc32(bytes: impl Iterator<Item = u8>) -> u32 {
-    !bytes.fold(!0u32, crc_byte)
+    crc32_more(0, bytes)
+}
+
+/// [`crc32`] of what gave `crc`, then `bytes`: a file's CRC-32 a read at a time.
+///
+/// ```
+/// use bryton_rustfw::inflate::{crc32, crc32_more};
+/// assert_eq!(crc32_more(crc32(b"1234".iter().copied()), b"56789".iter().copied()), 0xcbf4_3926);
+/// ```
+pub fn crc32_more(crc: u32, bytes: impl Iterator<Item = u8>) -> u32 {
+    !bytes.fold(!crc, crc_byte)
 }
 
 /// One byte into a running CRC-32 (start at `!0`, finish with `!`): computed as the bytes are written, so the

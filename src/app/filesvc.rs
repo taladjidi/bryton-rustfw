@@ -11,11 +11,16 @@
 //! workout walks at most [`LOCATE_MAX`] entries of its day. Two cursors, so
 //! `Job` holds two sectors while a workout listing runs.
 //!
-//! **Writes** (WRITE_BEGIN / WRITE_DATA / WRITE_END / DELETE, folder 1 only): done as the command arrives, in
+//! **Courses** (folder 2, `\Courses\`, 2026-11-08): listed as one folder's files (`.fit` and `.gpx`, a two-digit
+//! key and the same check), written and deleted as the workouts are (storage/workout_write.rs, [`Target`]); the
+//! course followed, or being read to follow, is never deleted (BUSY), and an open COURSES menu is listed again after
+//! a course is written or deleted, so it never offers a file that has gone.
+//!
+//! **Writes** (WRITE_BEGIN / WRITE_DATA / WRITE_END / DELETE, folders 1 and 2): done as the command arrives, in
 //! [`App::files_command`], since each is small: a WRITE_DATA buffers its bytes in the read block and writes the
-//! sectors it fills (two at most for the largest frame), WRITE_END reads the file back (8 KB at most) and moves it
-//! into the calendar (storage/workout_write.rs has the order and why a cut leaves the calendar whole). WRITE_BEGIN is
-//! answered once the temporary file is ready, a WRITE_DATA only when refused (out of order, past the size, a card
+//! sectors it fills (two at most for the largest frame), WRITE_END reads the file back (8 KB at most for a workout, 1 MB
+//! for a course, twice) and moves it into its folder (storage/workout_write.rs has the order and why a cut leaves the
+//! folder whole). WRITE_BEGIN is answered once the temporary file is ready, a WRITE_DATA only when refused (out of order, past the size, a card
 //! error: the write is dropped). Only in a build that may write the card (READ ONLY otherwise), and a write the phone
 //! leaves for [`STALL_MS`] is dropped. A failed card write makes the FAT copies suspect, as a screenshot's does.
 //!
@@ -57,7 +62,8 @@ use crate::ble::{self, Char};
 use crate::fat::write::Handle;
 use crate::fat::{self, Cursor, File, Seek};
 use crate::filesvc::{self as fs, Frame, Status};
-use crate::storage::{workout_file, workout_write};
+use crate::storage::workout_file;
+use crate::storage::workout_write::{self, Target};
 use crate::*;
 
 /// Frames tried in one pass.
@@ -186,11 +192,11 @@ enum Job {
         /// Bytes sent.
         count: u32,
     },
-    /// A workout being received: its day, CRC-32 and the bytes received so far into the temporary file `h` (its size
-    /// the file's). The bytes of the sector being filled wait in `blk`.
+    /// A workout or course being received: where it goes, its CRC-32 and the bytes received so far into the temporary
+    /// file `h` (its size the file's). The bytes of the sector being filled wait in `blk`.
     Write {
         seq: u8,
-        day: [u8; 8],
+        to: Target,
         crc: u32,
         got: u32,
         h: Handle,
@@ -375,7 +381,11 @@ impl FileSvc {
                 let mut fat = fat::Fat::mount(d).map_err(io)?;
                 if cur.is_none() {
                     // a card with no such folder has no files: an empty list, not an error
-                    let path = if *folder == fs::Folder::Activities { "Activities" } else { "Workout/calendar" };
+                    let path = match folder {
+                        fs::Folder::Activities => "Activities",
+                        fs::Folder::Workout => workout_write::CALENDAR,
+                        fs::Folder::Courses => workout_write::COURSES,
+                    };
                     match fat.open(d, path).and_then(|dir| fat.cursor(dir)) {
                         Ok(c) => *cur = Some(c),
                         Err(fat::Error::NotFound) => return Err(Status::Ok),
@@ -396,7 +406,7 @@ impl FileSvc {
                         *ord = ord.saturating_add(1);
                         let mut key = [0; 10];
                         key[..8].copy_from_slice(day);
-                        key[8..].copy_from_slice(&[b'0' + n / 10 % 10, b'0' + n % 10]);
+                        key[8..].copy_from_slice(&two(n));
                         if n < 100 && e.file.size as usize <= workout_file::FILE_MAX {
                             *pending = 1;
                             let check = fs::name_check(e.name(), e.file.size);
@@ -413,6 +423,19 @@ impl FileSvc {
                         {
                             *files = Some(fat.cursor(e.file).map_err(io)?);
                             (*day, *ord) = (dn, 0);
+                        }
+                    } else if *folder == fs::Folder::Courses {
+                        if e.file.dir || !workout_write::is_course(e.name()) {
+                            continue;
+                        }
+                        let n = *ord;
+                        *ord = ord.saturating_add(1);
+                        if n < 100 {
+                            *pending = 1;
+                            let check = fs::name_check(e.name(), e.file.size);
+                            *out_len = entry(seq, *legacy, *folder, &two(n), check, e.file.size, &mut f).unwrap_or(0);
+                            *out = f;
+                            return Ok(*out_len > 0);
                         }
                     } else if let (Some(name), false) = (fs::ride_name(e.name()), e.file.dir) {
                         *pending = 1;
@@ -452,6 +475,11 @@ impl FileSvc {
     }
 }
 
+/// `n` (below 100) as two digits: a file's number in a listed folder.
+fn two(n: u8) -> [u8; 2] {
+    [b'0' + n / 10 % 10, b'0' + n % 10]
+}
+
 /// The entry frame for `key`, in LIST's shape or LIST_IN's.
 fn entry(seq: u8, legacy: bool, folder: fs::Folder, key: &[u8], check: u16, size: u32, f: &mut [u8]) -> Option<usize> {
     Some(if legacy {
@@ -471,7 +499,7 @@ fn locate(fat: &mut fat::Fat, d: &mut impl fat::Disk, folder: fs::Folder, k: fs:
         let dir = fat.find(d, fat.root(), "Activities").map_err(found)?;
         fat.find(d, dir, n).map_err(found)?
     } else {
-        locate_workout(fat, d, k)?.1.file
+        locate_listed(fat, d, folder, k)?.1.file
     };
     if x.dir || (folder == fs::Folder::Workout && x.size as usize > workout_file::FILE_MAX) {
         return Err(Status::NotFound);
@@ -484,18 +512,32 @@ fn found(e: fat::Error) -> Status {
     if e == fat::Error::NotFound { Status::NotFound } else { Status::Io }
 }
 
-/// The workout of key `k` ([`locate`]): its day folder and its entry (a `.fit` file, never a folder), else NOT FOUND.
-fn locate_workout(fat: &mut fat::Fat, d: &mut impl fat::Disk, k: fs::Key) -> Result<(File, fat::Entry), Status> {
-    let (day, num) = k.bytes().split_at_checked(8).ok_or(Status::NotFound)?;
-    let day = core::str::from_utf8(day).map_err(|_| Status::NotFound)?;
+/// The workout or course of key `k` in `folder` ([`locate`]): its folder (a day's, or `\Courses`) and its entry (a
+/// file its listing counts, never a folder), else NOT FOUND.
+fn locate_listed(
+    fat: &mut fat::Fat,
+    d: &mut impl fat::Disk,
+    folder: fs::Folder,
+    k: fs::Key,
+) -> Result<(File, fat::Entry), Status> {
+    let (dir, num, lists): (_, _, fn(&[u8]) -> bool) = match folder {
+        fs::Folder::Workout => {
+            let (day, num) = k.bytes().split_at_checked(8).ok_or(Status::NotFound)?;
+            let day = core::str::from_utf8(day).map_err(|_| Status::NotFound)?;
+            let dir = fat.open(d, workout_write::CALENDAR).map_err(found)?;
+            (fat.find(d, dir, day).map_err(found)?, num, workout_write::is_fit)
+        }
+        fs::Folder::Courses => {
+            (fat.open(d, workout_write::COURSES).map_err(found)?, k.bytes(), workout_write::is_course)
+        }
+        fs::Folder::Activities => return Err(Status::NotFound),
+    };
     let num = num.iter().fold(0usize, |v, &c| v * 10 + usize::from(c.wrapping_sub(b'0')));
-    let dir = fat.open(d, workout_write::CALENDAR).map_err(found)?;
-    let dir = fat.find(d, dir, day).map_err(found)?;
     let mut c = fat.cursor(dir).map_err(found)?;
     let mut n = 0;
     for _ in 0..LOCATE_MAX {
         let Some(e) = fat.list(d, &mut c).map_err(found)? else { break };
-        if e.file.dir || !workout_write::is_fit(e.name()) {
+        if e.file.dir || !lists(e.name()) {
             continue;
         }
         if n == num {
@@ -583,6 +625,7 @@ impl App {
         let cmd = fs::Command::parse(written);
         if let Ok(
             c @ (fs::Command::WriteBegin { .. }
+            | fs::Command::WriteCourse { .. }
             | fs::Command::WriteData { .. }
             | fs::Command::WriteEnd { .. }
             | fs::Command::Delete { .. }),
@@ -739,7 +782,9 @@ impl App {
     #[inline(never)]
     fn files_write(&mut self, b: &mut impl Board, c: fs::Command, busy: bool) {
         let (seq, writes) = match c {
-            fs::Command::WriteBegin { seq, .. } | fs::Command::Delete { seq, .. } => (seq, true),
+            fs::Command::WriteBegin { seq, .. }
+            | fs::Command::WriteCourse { seq, .. }
+            | fs::Command::Delete { seq, .. } => (seq, true),
             fs::Command::WriteData { seq, .. } | fs::Command::WriteEnd { seq } => (seq, false),
             _ => return,
         };
@@ -760,8 +805,10 @@ impl App {
         let t = fat::write::dos_time(self.rec_time().0);
         let r = self.write_step(b, c, t);
         let svc = &mut self.phone.files;
+        let course = matches!(c, fs::Command::Delete { folder: fs::Folder::Courses, .. })
+            || matches!((c, &svc.job), (fs::Command::WriteEnd { .. }, Job::Write { to: Target::Course(_), .. }));
         match (r, c) {
-            (Ok(()), fs::Command::WriteBegin { .. }) => svc.reply(seq, Status::Ok, 0),
+            (Ok(()), fs::Command::WriteBegin { .. } | fs::Command::WriteCourse { .. }) => svc.reply(seq, Status::Ok, 0),
             (Ok(()), fs::Command::WriteData { .. }) => {}
             (Ok(()), fs::Command::WriteEnd { .. }) => {
                 let got = count_of(&svc.job, 0);
@@ -775,6 +822,15 @@ impl App {
                     self.fats_unsure(); // the next writes compare the FAT copies first
                 }
             }
+        }
+        // an open COURSES lists the folder again (a course read to follow keeps the list it was picked from)
+        if course
+            && r.is_ok()
+            && matches!(self.screen, Screen::Menu(Menu::Courses, _))
+            && let Some(cs) = self.courses.as_deref_mut().filter(|cs| !cs.loading())
+        {
+            let _ = cs.open(&mut emmc::Volume(&mut self.emmc, b));
+            self.show(b);
         }
     }
 
@@ -790,13 +846,18 @@ impl App {
         let mut d = emmc::Volume(&mut self.emmc, b);
         let mount = |d: &mut emmc::Volume<_>| fat::Fat::mount(d).map_err(|_| Status::Io);
         let svc = &mut self.phone.files;
+        let courses = self.courses.as_deref();
         match c {
-            fs::Command::WriteBegin { seq, day, size, crc, .. } => {
-                workout_file::folder_day(&day).ok_or(Status::BadRequest)?;
+            fs::Command::WriteBegin { seq, size, crc, .. } | fs::Command::WriteCourse { seq, size, crc, .. } => {
+                let to = match c {
+                    fs::Command::WriteCourse { name, .. } => Target::Course(name),
+                    fs::Command::WriteBegin { day, .. } if workout_file::folder_day(&day).is_some() => Target::Day(day),
+                    _ => return Err(Status::BadRequest),
+                };
                 svc.reset();
                 let mut fat = mount(&mut d)?;
-                let h = workout_write::begin(&mut fat, &mut d, size, t)?;
-                (svc.job, svc.blk) = (Job::Write { seq, day, crc, got: 0, h }, [0; BLOCK]);
+                let h = workout_write::begin(&mut fat, &mut d, &to, size, t)?;
+                (svc.job, svc.blk) = (Job::Write { seq, to, crc, got: 0, h }, [0; BLOCK]);
                 Ok(())
             }
             fs::Command::WriteData { offset, data, .. } => {
@@ -822,17 +883,20 @@ impl App {
                 Ok(())
             }
             fs::Command::WriteEnd { .. } => {
-                let Job::Write { day, crc, got, h, .. } = svc.job else { return Err(Status::BadRequest) };
+                let Job::Write { to, crc, got, h, .. } = svc.job else { return Err(Status::BadRequest) };
                 if got != h.size {
                     return Err(Status::Mismatch);
                 }
                 let mut fat = mount(&mut d)?;
-                workout_write::commit(&mut fat, &mut d, &h, &day, crc, t)
+                workout_write::commit(&mut fat, &mut d, &h, &to, crc, t)
             }
-            fs::Command::Delete { key, .. } => {
+            fs::Command::Delete { folder, key, .. } => {
                 svc.reset();
                 let mut fat = mount(&mut d)?;
-                let (dir, e) = locate_workout(&mut fat, &mut d, key)?;
+                let (dir, e) = locate_listed(&mut fat, &mut d, folder, key)?;
+                if folder == fs::Folder::Courses && courses.is_some_and(|cs| cs.uses(e.file)) {
+                    return Err(Status::Busy); // the course followed, or being read to follow
+                }
                 workout_write::delete(&mut fat, &mut d, dir, &e)
             }
             _ => Err(Status::BadRequest),

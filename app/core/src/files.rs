@@ -5,7 +5,9 @@
 //! Chunk sizes are never assumed: each CHUNK says its own length. The whole file is kept in memory, so a dropped
 //! READ (BUSY, a link drop, 5 s of silence) resumes with [`FileClient::resume_command`] from the bytes kept.
 
-use bryton_rustfw::filesvc::{Command, FRAME_BIG, FRAME_MAX, Folder, Frame, Key, NAME_LEN, Profile, Status};
+use bryton_rustfw::filesvc::{
+    COURSE_NAME, Command, CourseName, FRAME_BIG, FRAME_MAX, Folder, Frame, Key, NAME_LEN, Profile, Status,
+};
 use std::sync::Mutex;
 
 /// No frame for this long while an answer is awaited means the unit dropped it (filesvc.rs, "Dropped and moved").
@@ -15,6 +17,10 @@ const FILE_MAX: usize = 64 << 20;
 /// Most rides kept from one LIST.
 /// The largest workout the unit takes (src/storage/workout_write.rs, 8 KB).
 const WRITE_MAX: usize = bryton_rustfw::storage::workout_file::FILE_MAX;
+/// The largest course the unit takes (src/storage/workout_write.rs, 1 MB).
+const COURSE_MAX: usize = bryton_rustfw::storage::workout_write::COURSE_MAX as usize;
+/// WRITE_BEGIN of a course before its name: kind, seq, folder, size, CRC, the name's length.
+const COURSE_HEAD: usize = 12;
 /// WRITE_DATA's header: kind, seq, offset.
 const DATA_HEAD: usize = 6;
 const ENTRIES_MAX: usize = 4096;
@@ -35,6 +41,8 @@ pub enum UnitFolder {
     Activities,
     /// The planned workouts, `\Workout\calendar\<day>\`: the key is `YYYYMMDD` and the file's number.
     Workout,
+    /// The courses, `\Courses\`: the key is the file's two-digit number (`.fit` and `.gpx` files, directory order).
+    Courses,
 }
 
 impl From<UnitFolder> for Folder {
@@ -42,6 +50,7 @@ impl From<UnitFolder> for Folder {
         match f {
             UnitFolder::Activities => Folder::Activities,
             UnitFolder::Workout => Folder::Workout,
+            UnitFolder::Courses => Folder::Courses,
         }
     }
 }
@@ -116,8 +125,11 @@ pub enum FileError {
     Mismatch,
     /// WRITE_BEGIN found no `\Workout\calendar` on the card: the unit has no workout calendar yet.
     NoCalendar,
-    /// A write or delete was refused: the unit is riding or its card is lent to a computer.
+    /// A write or delete was refused: the unit is riding or its card is lent to a computer (or, for a course's
+    /// DELETE, the unit is following that course).
     Busy,
+    /// A course's WRITE_BEGIN found no `\Courses` on the card (the unit never makes it: copy one over USB).
+    NoCourses,
 }
 
 /// What a frame did.
@@ -208,8 +220,10 @@ struct Inner {
     first_ms: Option<u64>,
     first_bytes: usize,
     now_ms: u64,
-    /// A workout being written: its bytes and how many were handed out.
+    /// A workout or course being written: its bytes and how many were handed out.
     out: Vec<u8>,
+    /// The write under way is a course's (WRITE_BEGIN's NOT FOUND is then no `\Courses`).
+    course: bool,
     sent: usize,
     /// The last PROFILE the unit gave.
     profile: Option<UnitProfile>,
@@ -221,7 +235,7 @@ pub struct FileClient(Mutex<Inner>);
 
 impl Inner {
     fn encode(&self, c: Command) -> Vec<u8> {
-        let mut f = [0; FRAME_MAX];
+        let mut f = [0; FRAME_BIG];
         let n = c.encode(&mut f);
         f.get(..n).unwrap_or(&[]).to_vec()
     }
@@ -302,6 +316,7 @@ impl Inner {
                     self.mode = Mode::Sending;
                     FileEvent::WriteReady
                 }
+                Status::NotFound if self.course => self.fail(FileError::NoCourses),
                 Status::NotFound => self.fail(FileError::NoCalendar),
                 s => self.write_error(s),
             },
@@ -393,6 +408,7 @@ impl FileClient {
             now_ms: 0,
             out: Vec::new(),
             sent: 0,
+            course: false,
             profile: None,
         }))
     }
@@ -456,9 +472,31 @@ impl FileClient {
         s.seq = s.seq.wrapping_add(1);
         let size = u32::try_from(bytes.len()).ok()?;
         let crc = bryton_rustfw::inflate::crc32(bytes.iter().copied());
-        (s.mode, s.last_ms, s.sent, s.out) = (Mode::WriteBegin, now_ms, 0, bytes);
+        (s.mode, s.last_ms, s.sent, s.out, s.course) = (Mode::WriteBegin, now_ms, 0, bytes, false);
         let seq = s.seq;
         Some(s.encode(Command::WriteBegin { seq, folder: Folder::Workout, day, size, crc }))
+    }
+
+    /// Starts sending `bytes`, a FIT course, as `<name>.fit` in the unit's `\Courses` (WRITE_BEGIN, folder 2): the
+    /// bytes to write to Control, at most `max_write` (the link's write length). The name is cut to what fits (8
+    /// characters at the default 20, 20 at most), trailing spaces dropped. None when the cut name is not one the unit
+    /// takes (1 to 20 ASCII letters, digits, spaces, `-`, `_`, not a Windows device name: `filesvc::CourseName`) or the
+    /// file is empty or over 1 MB. Then as [`FileClient::write_command`]: [`FileClient::write_next_command`] after
+    /// [`FileEvent::WriteReady`]. A name the unit already has for other bytes is refused (BAD REQUEST): delete it first.
+    pub fn course_write_command(&self, name: String, bytes: Vec<u8>, max_write: u32, now_ms: u64) -> Option<Vec<u8>> {
+        let room = (max_write as usize).clamp(FRAME_MAX, FRAME_BIG) - COURSE_HEAD;
+        let cut = name.as_bytes().get(..name.len().min(room).min(COURSE_NAME))?;
+        let name = CourseName::new(cut.trim_ascii_end())?;
+        if bytes.is_empty() || bytes.len() > COURSE_MAX {
+            return None;
+        }
+        let mut s = self.lock();
+        s.seq = s.seq.wrapping_add(1);
+        let size = u32::try_from(bytes.len()).ok()?;
+        let crc = bryton_rustfw::inflate::crc32(bytes.iter().copied());
+        (s.mode, s.last_ms, s.sent, s.out, s.course) = (Mode::WriteBegin, now_ms, 0, bytes, true);
+        let seq = s.seq;
+        Some(s.encode(Command::WriteCourse { seq, size, crc, name }))
     }
 
     /// The next WRITE_DATA (then WRITE_END) of the write under way, for a Control write of at most `max_write` bytes

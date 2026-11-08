@@ -24,10 +24,11 @@
 //! READ_IN 05 seq folder off[4] len key[len] (check[2])   file `key` of `folder` from byte `off`, CHUNKs, then END
 //! WRITE_BEGIN 06 seq folder day[8] size[4] crc[4]     a workout of `size` bytes for day `day` (YYYYMMDD) and its
 //!                                                     CRC-32 (gzip's); END ok once the unit is ready for the data
+//! WRITE_BEGIN 06 seq 02 size[4] crc[4] len name[len]  a course of `size` bytes, its CRC-32 and its name (folder 2)
 //! WRITE_DATA  07 seq off[4] data[1..]                 the next bytes, in order (`off`: the bytes sent before); no
 //!                                                     answer unless refused (an END, and the write is dropped)
 //! WRITE_END   08 seq                                  checked (size, CRC, a FIT workout), then made visible; END
-//! DELETE      09 seq folder len key[len] check[2]     a listed workout removed; END (count 1)
+//! DELETE      09 seq folder len key[len] check[2]     a listed workout or course removed; END (count 1)
 //! PROFILE_GET 0A seq                      the training profile: one PROFILE frame (works during a ride)
 //! PROFILE_SET 0B seq profile[9]           the profile set as the menus set it; END (count 1 changed, 0 as held)
 //! ```
@@ -35,7 +36,15 @@
 //! (bpm), `weight` u8 (kg), `wprime` u16 (J), `flags` u8 (bit 0: zones from the LTHR, not the max; bit 1: female;
 //! the others 0). A SET with another version, a reserved bit or a value outside the menus' ranges is BAD REQUEST;
 //! BUSY during a ride or while the card is lent, READ ONLY in a build that may not write the card.
-//! **Writes** (2026-11-07): folder 1 only, and only a file the unit reads as a workout ([`crate::storage::workout_file::parse`],
+//! **Courses** (2026-11-08, folder 2, `\Courses\`): the key is the file's two-digit number among the folder's `.fit`
+//! and `.gpx` files, in directory order, with the check as a workout's. WRITE_BEGIN names the course ([`CourseName`]:
+//! 1 to 20 letters, digits, spaces, `-`, `_`), and the unit writes `<name>.fit`: 12 bytes and the name, so 8
+//! characters fit the default MTU's 20-byte write and all 20 any larger one. Only a FIT course the unit follows
+//! (`course_file::is_course`, checked on the read-back at WRITE_END), at most `workout_write::COURSE_MAX` bytes. A
+//! name taken by a file of other bytes is BAD REQUEST (never written over: the phone deletes it first), by the same
+//! bytes ok. The course being followed (or read to follow) is never deleted: BUSY. No `\Courses` on the card: NOT
+//! FOUND at WRITE_BEGIN (stock never makes it; the owner does, over USB).
+//! **Writes** (2026-11-07): folder 1 (and 2, above), and only a file the unit reads as a workout ([`crate::storage::workout_file::parse`],
 //! at most `FILE_MAX` bytes). The phone never names a path or a file: the unit names it `<CRC-32, 8 hex digits>.fit`
 //! in `\Workout\calendar\<day>\` (stock lists the `.fit` files of a day folder, inferred). A WRITE_DATA carries 14 bytes
 //! at the default MTU, up to 238 on the fast link. The same file sent again (its answer lost) answers ok, written once.
@@ -45,11 +54,11 @@
 //! `folder` 0 is `\Activities\` (key: the twelve digits, as above), 1 is `\Workout\calendar\<YYYYMMDD>\` (key: the
 //! day's eight digits then the file's two-digit number among that day's `.fit` files, in directory order, 10
 //! bytes: a workout's long name never travels, the phone reads the name from the file). More folders take the
-//! next numbers; an unknown one is BAD REQUEST. **The check** (u16 little endian, [`name_check`]: the FIT CRC of the
+//! next numbers (2 is `\Courses\`, below); an unknown one is BAD REQUEST. **The check** (u16 little endian, [`name_check`]: the FIT CRC of the
 //! file's name as listed, then of its size) is what ENTRY_IN saw and READ_IN gives back: a workout's key is a place in
 //! the directory order, so a folder that changed between the two (a file added or removed, one rewritten) would
 //! serve another file under the same key; the unit answers NOT FOUND when the file now at that place has another
-//! name or size, never another file. The check is on the wire for the workout folder only (a ride's frames
+//! name or size, never another file. The check is on the wire for the workout and course folders only (a ride's frames
 //! would pass the default MTU's 20 bytes with it): `\Activities\` has none, the key is the name. LIST and READ stay as they were, for `\Activities\` only.
 //! `name` is the twelve digits of a stock ride name, `YYMMDDhhmmss` (`YYMMDDhhmmss.fit` in `\Activities\`), as
 //! LIST gives them. Nothing else of the card is reachable: no path, no other folder.
@@ -112,6 +121,8 @@ pub enum Folder {
     Activities = 0,
     /// `\Workout\calendar\<day>\`: the planned workouts.
     Workout = 1,
+    /// `\Courses\`: the courses (routes) the unit follows.
+    Courses = 2,
 }
 
 impl Folder {
@@ -120,20 +131,24 @@ impl Folder {
         match v {
             0 => Some(Folder::Activities),
             1 => Some(Folder::Workout),
+            2 => Some(Folder::Courses),
             _ => None,
         }
     }
 
-    /// The bytes of check after a key on the wire: a workout's key is a place in the directory order, a ride's the name.
+    /// The bytes of check after a key on the wire: a workout's or a course's key is a place in the directory order, a
+    /// ride's the name.
     pub fn check_len(self) -> usize {
-        if self == Folder::Workout { 2 } else { 0 }
+        if self == Folder::Activities { 0 } else { 2 }
     }
 
-    /// Whether `k` is a key of this folder: twelve digits (a ride), or ten (a day and a number).
+    /// Whether `k` is a key of this folder: twelve digits (a ride), ten (a day and a number) or two (a course's
+    /// number).
     pub fn key_ok(self, k: &[u8]) -> bool {
         let want = match self {
             Folder::Activities => NAME_LEN,
             Folder::Workout => 10,
+            Folder::Courses => 2,
         };
         k.len() == want && k.iter().all(u8::is_ascii_digit)
     }
@@ -166,9 +181,9 @@ impl Key {
         self
     }
 
-    /// The bytes of check its folder carries on the wire (ten digits: a workout's).
+    /// The bytes of check its folder carries on the wire (all but a ride's twelve digits).
     fn check_len(&self) -> usize {
-        if self.len == 10 { 2 } else { 0 }
+        if usize::from(self.len) == NAME_LEN { 0 } else { 2 }
     }
 
     /// Its check (0 for a ride).
@@ -179,6 +194,66 @@ impl Key {
     /// Its bytes, ASCII digits.
     pub fn bytes(&self) -> &[u8] {
         self.b.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+}
+
+/// Characters of a course's name WRITE_BEGIN carries at most: what the COURSES menu shows
+/// (`crate::storage::course_file::NAME`).
+pub const COURSE_NAME: usize = 20;
+
+/// A course's name as WRITE_BEGIN carries it (folder 2), checked on creation: the file is `<name>.fit` in `\Courses\`.
+/// 1 to [`COURSE_NAME`] ASCII letters, digits, spaces, `-` and `_` (what the COURSES menu shows; it shows `_` as a
+/// space), neither first nor last a space, and none of Windows' reserved device names (CON, PRN, AUX, NUL, COM0 to
+/// COM9, LPT0 to LPT9, any case: `NUL.fit` is NUL there; learn.microsoft.com, "Naming Files, Paths, and Namespaces").
+/// No dot, separator, control character or byte past ASCII, so the name never leaves the folder nor makes another
+/// extension, and the FAT writer (its long names are ASCII) takes it whole.
+///
+/// ```
+/// use bryton_rustfw::filesvc::CourseName;
+/// assert_eq!(CourseName::new(b"Col du Galibier").unwrap().file_name(), "Col du Galibier.fit");
+/// for bad in [&b"../x"[..], b"a.fit", b"", b" a", b"nul", b"Com1", b"caf\xc3\xa9", b"a\tb", b"123456789012345678901"] {
+///     assert_eq!(CourseName::new(bad), None, "{bad:?}");
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CourseName {
+    len: u8,
+    /// The name, then `.fit`.
+    b: [u8; COURSE_NAME + 4],
+}
+
+impl CourseName {
+    /// The name `n`, None if it is not one (see the type).
+    pub fn new(n: &[u8]) -> Option<CourseName> {
+        let ok = (1..=COURSE_NAME).contains(&n.len())
+            && n.iter().all(|&c| c.is_ascii_alphanumeric() || b" -_".contains(&c))
+            && n.first() != Some(&b' ')
+            && n.last() != Some(&b' ')
+            && !reserved(n);
+        let mut b = [0; COURSE_NAME + 4];
+        b.get_mut(..n.len())?.copy_from_slice(n);
+        b.get_mut(n.len()..n.len() + 4)?.copy_from_slice(b".fit");
+        ok.then_some(CourseName { len: n.len() as u8, b })
+    }
+
+    /// The name, without `.fit`.
+    pub fn bytes(&self) -> &[u8] {
+        self.b.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+
+    /// The file's name, `<name>.fit`.
+    pub fn file_name(&self) -> &str {
+        core::str::from_utf8(self.b.get(..usize::from(self.len) + 4).unwrap_or(&[])).unwrap_or("")
+    }
+}
+
+/// A Windows device name (see [`CourseName`]), any case.
+fn reserved(n: &[u8]) -> bool {
+    let is = |w: &[u8]| n.get(..3).is_some_and(|p| p.eq_ignore_ascii_case(w));
+    match n.len() {
+        3 => is(b"CON") || is(b"PRN") || is(b"AUX") || is(b"NUL"),
+        4 => (is(b"COM") || is(b"LPT")) && n.get(3).is_some_and(u8::is_ascii_digit),
+        _ => false,
     }
 }
 
@@ -270,6 +345,17 @@ pub enum Command<'a> {
         /// CRC-32 of the whole file (gzip's, [`crate::inflate::crc32`]).
         crc: u32,
     },
+    /// A course of `size` bytes named `name` follows (folder 2).
+    WriteCourse {
+        /// Echoed by every frame of the answer.
+        seq: u8,
+        /// Bytes of the file.
+        size: u32,
+        /// CRC-32 of the whole file (gzip's, [`crate::inflate::crc32`]).
+        crc: u32,
+        /// Its name: the file is `<name>.fit` in `\Courses\`.
+        name: CourseName,
+    },
     /// The next bytes of the file being written.
     WriteData {
         /// Echoed by an END.
@@ -296,11 +382,11 @@ pub enum Command<'a> {
         /// The new values.
         profile: Profile,
     },
-    /// Deletes file `key` of `folder` (folder 1 only; the key carries its check).
+    /// Deletes file `key` of `folder` (folder 1 or 2; the key carries its check).
     Delete {
         /// Echoed by the END.
         seq: u8,
-        /// Where: [`Folder::Workout`], the only one parsed.
+        /// Where: [`Folder::Workout`] or [`Folder::Courses`], the only ones parsed.
         folder: Folder,
         /// The file, as listed.
         key: Key,
@@ -481,6 +567,14 @@ impl<'a> Command<'a> {
                     _ => bad,
                 }
             }
+            Some(&WRITE_BEGIN) if p.get(2) == Some(&(Folder::Courses as u8)) => {
+                let l = usize::from(p.get(11).copied().unwrap_or(0));
+                let name = p.get(12..).filter(|n| n.len() == l).and_then(CourseName::new);
+                match (u32_at(p, 3), u32_at(p, 7), name) {
+                    (Some(size), Some(crc), Some(name)) => Ok(Command::WriteCourse { seq, size, crc, name }),
+                    _ => bad,
+                }
+            }
             Some(&WRITE_DATA) if (7..=FRAME_BIG).contains(&p.len()) => match (u32_at(p, 2), p.get(6..)) {
                 (Some(offset), Some(data)) => Ok(Command::WriteData { seq, offset, data }),
                 _ => bad,
@@ -491,12 +585,13 @@ impl<'a> Command<'a> {
                 Some(profile) => Ok(Command::ProfileSet { seq, profile }),
                 None => bad,
             },
-            Some(&DELETE) if p.get(2) == Some(&(Folder::Workout as u8)) => {
+            Some(&DELETE) => {
+                let folder = p.get(2).copied().and_then(Folder::from_u8).filter(|&f| f != Folder::Activities);
                 let l = usize::from(p.get(3).copied().unwrap_or(0));
-                let key = p.get(4..4 + l).filter(|_| p.len() == 6 + l).and_then(|k| Key::new(Folder::Workout, k));
-                match (key, u16_at(p, 4 + l)) {
-                    (Some(key), Some(check)) => {
-                        Ok(Command::Delete { seq, folder: Folder::Workout, key: key.with_check(check) })
+                let key = p.get(4..4 + l).filter(|_| p.len() == 6 + l).zip(folder).and_then(|(k, f)| Key::new(f, k));
+                match (folder, key, u16_at(p, 4 + l)) {
+                    (Some(folder), Some(key), Some(check)) => {
+                        Ok(Command::Delete { seq, folder, key: key.with_check(check) })
                     }
                     _ => bad,
                 }
@@ -536,6 +631,13 @@ impl<'a> Command<'a> {
                 let n = put(out, n, day);
                 let n = put(out, n, &size.to_le_bytes());
                 put(out, n, &crc.to_le_bytes())
+            }
+            Command::WriteCourse { seq, size, crc, name } => {
+                let n = put(out, 0, &[WRITE_BEGIN, *seq, Folder::Courses as u8]);
+                let n = put(out, n, &size.to_le_bytes());
+                let n = put(out, n, &crc.to_le_bytes());
+                let n = put(out, n, &[name.len]);
+                put(out, n, name.bytes())
             }
             Command::WriteData { seq, offset, data } => {
                 let n = put(out, 0, &[WRITE_DATA, *seq]);
@@ -657,9 +759,13 @@ impl<'a> Frame<'a> {
                 is_name(&name).then_some(Frame::Entry { seq, name, size: u32_at(p, 2 + NAME_LEN)? })
             }
             ENTRY_IN if p.len() > 3 => {
-                // the key's length says which folder's: ten or twelve digits
+                // the key's length says which folder's: twelve, two or ten digits
                 let l = usize::from(*p.get(2)?);
-                let folder = if l == NAME_LEN { Folder::Activities } else { Folder::Workout };
+                let folder = match l {
+                    NAME_LEN => Folder::Activities,
+                    2 => Folder::Courses,
+                    _ => Folder::Workout,
+                };
                 let cl = folder.check_len();
                 if p.len() != 7 + l + cl {
                     return None;
@@ -682,6 +788,7 @@ impl<'a> Frame<'a> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
 
     const PROFILE_SAMPLE: Profile =
@@ -801,6 +908,73 @@ mod tests {
         for v in 5..=7 {
             assert_eq!(Status::from_u8(v).map(|s| s as u8), Some(v));
         }
+    }
+
+    /// Folder 2: LIST_IN, READ_IN, DELETE and an ENTRY_IN of a course round-trip; WRITE_BEGIN carries a name, 8
+    /// characters within the default MTU's 20 bytes and 20 within any larger one; names that leave the folder, make
+    /// another extension or are no ASCII are refused.
+    #[test]
+    fn course_commands_round_trip_and_refuse_bad_names() {
+        let key = Key::new(Folder::Courses, b"07").unwrap().with_check(0x1234);
+        let name = |n: &[u8]| CourseName::new(n).unwrap();
+        let mut f = [0; FRAME_BIG];
+        for (c, len) in [
+            (Command::ListIn { seq: 1, folder: Folder::Courses }, 3),
+            (Command::ReadIn { seq: 2, folder: Folder::Courses, offset: 5, key }, 12),
+            (Command::Delete { seq: 3, folder: Folder::Courses, key }, 8),
+            (Command::WriteCourse { seq: 4, size: 900, crc: 0xdead, name: name(b"Galibier") }, FRAME_MAX),
+            (Command::WriteCourse { seq: 5, size: 1, crc: 0, name: name(b"Col du Galibier 2-b_") }, 32),
+        ] {
+            let n = c.encode(&mut f);
+            assert_eq!((n, Command::parse(&f[..n])), (len, Ok(c)));
+        }
+        let n = Frame::EntryIn { seq: 1, key, size: 900 }.encode(&mut f);
+        assert_eq!(Frame::parse(&f[..n]), Some(Frame::EntryIn { seq: 1, key, size: 900 }));
+        assert_eq!(name(b"a b").file_name(), "a b.fit");
+        let bad = Err((7, Status::BadRequest));
+        let begin = |n: &[u8]| {
+            let mut v = std::vec![WRITE_BEGIN, 7, 2, 1, 0, 0, 0, 0, 0, 0, 0, n.len() as u8];
+            v.extend_from_slice(n);
+            v
+        };
+        assert!(Command::parse(&begin(b"ok")).is_ok());
+        for n in [
+            &b""[..],
+            b"../a",
+            b"a/b",
+            b"a\\b",
+            b"x.gpx",
+            b".",
+            b"a\0b",
+            b"a\nb",
+            b"caf\xc3\xa9",
+            b" lead",
+            b"trail ",
+            b"CON",
+            b"prn",
+            b"Aux",
+            b"nul",
+            b"COM1",
+            b"lpt9",
+            b"a:b",
+            b"a*b",
+            b"123456789012345678901",
+        ] {
+            assert_eq!(Command::parse(&begin(n)), bad, "{n:?}");
+        }
+        assert!(
+            CourseName::new(b"CONS").is_some()
+                && CourseName::new(b"COM").is_some()
+                && CourseName::new(b"LPTX").is_some()
+        );
+        let mut lies = begin(b"abc");
+        lies[11] = 4;
+        assert_eq!(Command::parse(&lies), bad, "the length lies");
+        assert_eq!(Command::parse(&lies[..11]), bad, "no name");
+        assert_eq!(Command::parse(b"\x09\x07\x02\x0a2026110101\0\0"), bad, "a workout's key in the course folder");
+        assert_eq!(Command::parse(b"\x09\x07\x03\x0207\0\0"), bad, "no folder 3");
+        assert_eq!(Command::parse(b"\x09\x07\x02\x0207\0"), bad, "DELETE without its check");
+        assert_eq!(Command::parse(b"\x05\x07\x02\0\0\0\0\x0207\0"), bad, "READ_IN without its check");
     }
 
     #[test]

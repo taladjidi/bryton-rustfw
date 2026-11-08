@@ -150,3 +150,53 @@ fn fuzz_write_paths() {
     }
     assert!(ready > 0 && written > 0 && deleted > 0 && failed > 0, "{ready} {written} {deleted} {failed}");
 }
+
+/// Sends course `bytes` as `name` in Control writes of at most `max_write` bytes: the last event.
+fn send_course(c: &FileClient, u: &mut FakeUnit, name: &str, bytes: &[u8], max_write: u32, t: &mut u64) -> FileEvent {
+    let cmd = c.course_write_command(name.into(), bytes.to_vec(), max_write, *t).expect("a valid course write");
+    assert!(cmd.len() <= max_write as usize, "{} bytes in a {max_write}-byte write", cmd.len());
+    let mut last = pump(c, u, &cmd, t);
+    if last != FileEvent::WriteReady {
+        return last;
+    }
+    while let Some(cmd) = c.write_next_command(max_write, *t) {
+        last = pump(c, u, &cmd, t);
+    }
+    last
+}
+
+/// A course goes to folder 2 at either write length (its name cut to fit the 20-byte write), is listed, read back
+/// and deleted; the same bytes again are written once, other bytes under the name refused; names the unit refuses,
+/// an empty or too big file give no command; a unit without `\Courses` says so.
+#[test]
+fn a_course_round_trips_at_both_write_lengths() {
+    let course = crate::demo::synthetic_ride(9, 600); // any bytes: the fake unit does not parse them
+    let (c, mut u, mut t) = (FileClient::new(), FakeUnit::new(Vec::new()), 0);
+    assert_eq!(send_course(&c, &mut u, "Col du Galibier", &course, 20, &mut t), FileEvent::Written);
+    assert_eq!(send_course(&c, &mut u, "Col du Galibier by the north", &course, 244, &mut t), FileEvent::Written);
+    let names: Vec<_> = u.courses.iter().map(|e| e.0.clone()).collect();
+    assert_eq!(names, ["Col du G.fit", "Col du Galibier by t.fit"], "cut to 8 at 20 bytes, to 20 at most");
+    assert_eq!(send_course(&c, &mut u, "Col du G", &course, 20, &mut t), FileEvent::Written, "again: once");
+    assert_eq!(u.courses.len(), 2);
+    let other = [&course[..], &[0]].concat();
+    let refused = send_course(&c, &mut u, "COL DU G", &other, 20, &mut t);
+    assert_eq!(refused, FileEvent::Failed { error: FileError::BadRequest }, "another file of that name");
+    let cmd = c.list_in_command(UnitFolder::Courses, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    let keys: Vec<_> = c.files_in().into_iter().map(|e| e.name).collect();
+    assert_eq!(keys, ["00", "01"]);
+    let cmd = c.read_in_command("01".into(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), course);
+    let cmd = c.delete_command("00".into(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Deleted);
+    assert_eq!(u.courses.len(), 1);
+    for bad in ["", " ", "../x", "a.fit", "CON", "caf\u{e9}", "a\tb"] {
+        assert_eq!(c.course_write_command(bad.into(), course.clone(), 244, t), None, "{bad:?}");
+    }
+    assert_eq!(c.course_write_command("x".into(), Vec::new(), 244, t), None, "empty");
+    assert_eq!(c.course_write_command("x".into(), vec![0; (1 << 20) + 1], 244, t), None, "over 1 MB");
+    u.faults.no_calendar = true;
+    let e = send_course(&c, &mut u, "x", &course, 244, &mut t);
+    assert_eq!(e, FileEvent::Failed { error: FileError::NoCourses });
+}

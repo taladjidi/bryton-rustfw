@@ -259,6 +259,16 @@ impl Stream {
     }
 }
 
+/// Whether `file` is a FIT course this unit follows: read whole as [`Courses::load`] reads it, two points at least
+/// (the file service's check of a course the phone sent, storage/workout_write.rs). An error is a read that failed
+/// ([`fat::Error::Corrupt`]: also a FIT that fails its checks or is cut short).
+pub fn is_course(fat: &mut Fat, d: &mut impl Disk, file: File) -> Result<bool, fat::Error> {
+    let mut s = Stream::new(&Entry { file, ..Entry::EMPTY });
+    let mut points = 0u32;
+    let done = s.step(fat, d, MAX_BYTES, &mut |it| points += u32::from(matches!(it, Item::Point(_))))?;
+    Ok(done && points >= 2)
+}
+
 /// The file being read across the main loop's passes.
 enum Job {
     /// None.
@@ -344,6 +354,11 @@ impl Courses {
         self.job = Job::Load { k, s: Stream::new(e) };
         self.on = None;
         self.course.clear();
+    }
+
+    /// Whether file `f` is the course followed or the one being read to follow: never deleted under them.
+    pub fn uses(&self, f: File) -> bool {
+        self.on == Some(f) || matches!(&self.job, Job::Load { s, .. } if s.file == f)
     }
 
     /// A course is being read to follow ([`Courses::load`]).

@@ -61,6 +61,22 @@ On the unit, with the owner present (it writes the card):
    purpose). Switch to stock: it lists the workout in its calendar for that day (stock reads `<name>.fit` of the day
    folder; that it needs no `.json` beside it is inferred).
 
+**Courses sent and deleted by the phone (folder 2, `\Courses\`, docs/app.md "Courses from the phone")**
+
+Seen: simulator only (both MTUs, the followed course refused, every refusal, a power cut after every sector of a write
+and of a delete, the fuzz) and the app core against its fake unit. Not seen on the unit, and the app has no route
+screen yet.
+
+On the unit, with the owner present (it writes the card; an `EMMC_WRITE` build, no ride, `\Courses` on the card):
+1. Send a FIT course (one the unit already follows when copied over USB) as WRITE_BEGIN `06 seq 02 size crc len name`,
+   WRITE_DATA, WRITE_END: END ok with the size. The route shows in the unit's COURSES menu under its name and is
+   followed (COURSE ON, the map draws it); LIST_IN 2 lists it and READ_IN gives the same bytes.
+2. While it is followed, DELETE of its key: BUSY, still in COURSES. Stop following, DELETE again: END ok, gone from
+   COURSES (an open COURSES menu lists again by itself).
+3. A 1 MB course: time WRITE_END's answer (the read-back twice in one pass; about 0.2 s expected) and check that the
+   phone link does not drop meanwhile.
+4. Over USB (`dev.py drive`) the volume passes the computer's fsck; switch to stock: nothing of it minds `\Courses`.
+
 **The fast phone link (2026-11-07, roadmap 3c; `nrf::CFG_FAST`, app/filesvc.rs)**
 
 Seen: simulator; Bryton's real radio app in the emulator (`src/sim/nrf_session_tests.rs`); unit 2026-11-07 (RAM run, iPhone 16 Pro), steps 1 to 3 done, speed measured twice. The chip-bytes wake build (main 7bd424c5) is not measured on the unit yet.

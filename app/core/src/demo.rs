@@ -3,7 +3,7 @@
 //! The rides are made by the firmware's FIT writer from invented samples: a made-up loop (a lap of about 5 km, a
 //! wobbling circle) around a public landmark, the Eiffel Tower in Paris; no real ride, nothing of the owner's.
 
-use bryton_rustfw::filesvc::{Command, FRAME_BIG, Folder, Frame, Key, Name, Profile, Status, name_check};
+use bryton_rustfw::filesvc::{Command, CourseName, FRAME_BIG, Folder, Frame, Key, Name, Profile, Status, name_check};
 use bryton_rustfw::menu;
 
 /// The largest CHUNK payload: the fast link's frame (the largest MTU less 3) less the CHUNK header (kind, seq). The
@@ -126,13 +126,16 @@ pub struct Faults {
     pub read_only: bool,
     /// Answer WRITE_BEGIN with END FULL (a day holding its limit).
     pub full: bool,
-    /// Answer WRITE_BEGIN with END NOT FOUND (no `\\Workout\\calendar` on the card).
+    /// Answer WRITE_BEGIN with END NOT FOUND (no `\\Workout\\calendar`, or no `\\Courses`, on the card).
     pub no_calendar: bool,
     /// Refuse a WRITE_DATA with this status (the write is dropped).
     pub refuse_data: Option<Status>,
     /// Answer WRITE_END with END MISMATCH.
     pub mismatch: bool,
 }
+
+/// Where a write goes: a workout's day, or a course's name.
+type Dest = Result<[u8; 8], CourseName>;
 
 /// The fake unit.
 pub struct FakeUnit {
@@ -142,8 +145,10 @@ pub struct FakeUnit {
     pub workouts: Vec<(Vec<u8>, Vec<u8>)>,
     /// What goes wrong next.
     pub faults: Faults,
-    /// The write under way: day, size, CRC and the bytes so far.
-    writing: Option<([u8; 8], u32, u32, Vec<u8>)>,
+    /// The courses, `(file name, FIT file)`, in directory order (a file's key is its place).
+    pub courses: Vec<(String, Vec<u8>)>,
+    /// The write under way: its day (a workout) or name (a course), size, CRC and the bytes so far.
+    writing: Option<(Dest, u32, u32, Vec<u8>)>,
     /// The training profile PROFILE_GET gives and PROFILE_SET replaces.
     pub profile: Profile,
 }
@@ -160,6 +165,7 @@ impl FakeUnit {
         FakeUnit {
             rides,
             workouts: Vec::new(),
+            courses: Vec::new(),
             faults: Faults { chunk: BIG_CHUNK, ..Faults::default() },
             writing: None,
             profile: Profile {
@@ -231,6 +237,27 @@ impl FakeUnit {
             Command::List { seq } if self.faults.busy => end(seq, Status::Busy, 0),
             Command::Read { seq, .. } if self.faults.busy => end(seq, Status::Busy, 0),
             Command::ListIn { seq, .. } | Command::ReadIn { seq, .. } if self.faults.busy => end(seq, Status::Busy, 0),
+            Command::ListIn { seq, folder: Folder::Courses } => {
+                let mut out: Vec<Vec<u8>> = self
+                    .courses
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (n, d))| {
+                        let size = u32::try_from(d.len()).ok()?;
+                        let key = Key::new(Folder::Courses, format!("{i:02}").as_bytes())?;
+                        Some(enc(Frame::EntryIn { seq, key: key.with_check(name_check(n.as_bytes(), size)), size }))
+                    })
+                    .collect();
+                out.push(enc(Frame::End { seq, status: Status::Ok, count: u32::try_from(out.len()).unwrap_or(0) }));
+                out
+            }
+            Command::ReadIn { seq, folder: Folder::Courses, offset, key } => match self.course_at(key) {
+                Some(i) => {
+                    let d = self.courses[i].1.clone();
+                    self.serve(seq, offset, &d)
+                }
+                None => end(seq, Status::NotFound, 0),
+            },
             Command::ListIn { seq, folder } => {
                 let files = if folder == Folder::Workout { &self.workouts } else { &Vec::new() };
                 let mut out: Vec<Vec<u8>> = files
@@ -301,16 +328,28 @@ impl FakeUnit {
                     end(seq, Status::Ok, 1)
                 }
             }
-            Command::WriteBegin { seq, .. } | Command::Delete { seq, .. } if self.faults.busy => {
+            Command::WriteBegin { seq, .. } | Command::WriteCourse { seq, .. } | Command::Delete { seq, .. }
+                if self.faults.busy =>
+            {
                 end(seq, Status::Busy, 0)
             }
-            Command::WriteBegin { seq, .. } | Command::Delete { seq, .. } if self.faults.read_only => {
+            Command::WriteBegin { seq, .. } | Command::WriteCourse { seq, .. } | Command::Delete { seq, .. }
+                if self.faults.read_only =>
+            {
                 end(seq, Status::ReadOnly, 0)
             }
-            Command::WriteBegin { seq, .. } if self.faults.no_calendar => end(seq, Status::NotFound, 0),
-            Command::WriteBegin { seq, .. } if self.faults.full => end(seq, Status::Full, 0),
+            Command::WriteBegin { seq, .. } | Command::WriteCourse { seq, .. } if self.faults.no_calendar => {
+                end(seq, Status::NotFound, 0)
+            }
+            Command::WriteBegin { seq, .. } | Command::WriteCourse { seq, .. } if self.faults.full => {
+                end(seq, Status::Full, 0)
+            }
             Command::WriteBegin { seq, folder: Folder::Workout, day, size, crc } => {
-                self.writing = Some((day, size, crc, Vec::new()));
+                self.writing = Some((Ok(day), size, crc, Vec::new()));
+                end(seq, Status::Ok, 0)
+            }
+            Command::WriteCourse { seq, size, crc, name } => {
+                self.writing = Some((Err(name), size, crc, Vec::new()));
                 end(seq, Status::Ok, 0)
             }
             Command::WriteBegin { seq, .. } => end(seq, Status::BadRequest, 0),
@@ -329,11 +368,26 @@ impl FakeUnit {
                 }
             },
             Command::WriteEnd { seq } => {
-                let Some((day, size, crc, buf)) = self.writing.take() else { return end(seq, Status::BadRequest, 0) };
+                let Some((to, size, crc, buf)) = self.writing.take() else { return end(seq, Status::BadRequest, 0) };
                 let sound = buf.len() == size as usize && crc == bryton_rustfw::inflate::crc32(buf.iter().copied());
                 if self.faults.mismatch || !sound {
                     return end(seq, Status::Mismatch, u32::try_from(buf.len()).unwrap_or(0));
                 }
+                let day = match to {
+                    Ok(day) => day,
+                    Err(name) => {
+                        // as the unit: the same bytes again are ok, other bytes under the name (any case) refused
+                        let n = name.file_name();
+                        return match self.courses.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)) {
+                            Some((_, d)) if *d != buf => end(seq, Status::BadRequest, size),
+                            Some(_) => end(seq, Status::Ok, size),
+                            None => {
+                                self.courses.push((n.to_string(), buf));
+                                end(seq, Status::Ok, size)
+                            }
+                        };
+                    }
+                };
                 // sending the same file again writes it once, as the unit does (it names the file by its CRC)
                 let same_day = |k: &Vec<u8>| k.starts_with(&day);
                 if !self.workouts.iter().any(|(k, d)| same_day(k) && *d == buf) {
@@ -345,6 +399,13 @@ impl FakeUnit {
                 }
                 end(seq, Status::Ok, size)
             }
+            Command::Delete { seq, folder: Folder::Courses, key } => match self.course_at(key) {
+                Some(i) => {
+                    self.courses.remove(i);
+                    end(seq, Status::Ok, 1)
+                }
+                None => end(seq, Status::NotFound, 0),
+            },
             Command::Delete { seq, folder, key } => {
                 let at = (folder == Folder::Workout)
                     .then(|| {
@@ -365,6 +426,13 @@ impl FakeUnit {
                 end(seq, Status::Ok, 1)
             }
         }
+    }
+
+    /// The course of `key` (its place, and the check of its name and size), if it is there.
+    fn course_at(&self, key: Key) -> Option<usize> {
+        let i: usize = std::str::from_utf8(key.bytes()).ok()?.parse().ok()?;
+        let (n, d) = self.courses.get(i)?;
+        (Some(key.check()) == u32::try_from(d.len()).ok().map(|s| name_check(n.as_bytes(), s))).then_some(i)
     }
 
     /// The frames of a READ of `data` from `offset`, with the faults applied.
