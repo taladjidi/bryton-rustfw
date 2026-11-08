@@ -1275,6 +1275,10 @@ Fully seen; kept here for the numbers. The partly seen ones stay in their area a
   earlier days (`Outcome::Kept`). On a card without atomic sector writes, a cut tearing that write would lose their
   names (their chains then lost clusters). This unit's card has enhanced reliable write (docs/journal.md,
   2026-10-24), so a sector write is all or nothing; a card without it needs the kept rides in their own folder.
+- **A damaged radio stream starves the GNSS reads past the 1.2 s budget** (simulator, src/sim/link_tests.rs
+  `DAMAGED_GAP_MS`): up to 1.46 s over 5 seeds, 1.32 s in the GNSS walk of radio failures after 2026-11-08's timing
+  shift (830 ms before, at the seed's whim), under the receiver's time-out and no epoch lost. A slow frame's put may
+  run 2x its bound to finish the frame: cap it in the pass so the GNSS read is not starved.
 - **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps

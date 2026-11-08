@@ -371,7 +371,7 @@ fn hour_ride(ride_stop: bool) -> RideOut {
     // the receiver read as often with Stops as without: no fix waits past its second (ride_radio_tests' bound, 816 ms),
     // but for a card stall landing in that gap (every 1024 sectors written, 300 ms: where it lands moves with the
     // writes, 2026-11-08 a folder's entry written twice; budget_tests.rs bounds the stalls)
-    let stall = sim.worst_gnss_gap.1[5] / 1_000_000;
+    let stall = (sim.worst_gnss_gap.1[5] / 1_000_000).min(sim.cost.stall_ms); // one stall at most
     sim.gnss.assert_reads(900 + stall, 0);
     let heard = app.radio_counts().1;
     let radio = (

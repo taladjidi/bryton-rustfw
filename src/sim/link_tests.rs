@@ -167,10 +167,7 @@ fn a_damaged_stream_is_recovered_from() {
             sim.nordic.channels[0].open
         );
         super::budget_tests::print_gap_breakdown(&sim, "damaged stream");
-        // measured 2026-11-02 after the radio time-out went to 250 ms, once a pass (Rx::stalled): longest gap 1462 ms
-        // over the 5 seeds (1751 before), no epoch lost; a frame the chip takes slowly on a damaged link (a put may run 2x its
-        // bound to finish a started frame, review of a719c1c), and the receiver's own time-out is 1.5 s: the bound is measured + 10 %
-        sim.gnss.assert_reads(1610, 0);
+        sim.gnss.assert_reads(DAMAGED_GAP_MS, 0);
         ride_ok(&app, t0, &sim);
     }
     assert!(resyncs > 20, "{resyncs} resyncs reached");
@@ -261,10 +258,18 @@ fn a_reset_during_pairing_goes_on_pairing() {
     sim.gnss.assert_reads(890, 0);
 }
 
+/// The longest GNSS gap a damaged radio stream may cause: measured 2026-11-02 after the radio time-out went to 250 ms,
+/// once a pass (Rx::stalled), 1462 ms over the 5 seeds of [`a_damaged_stream_is_recovered_from`] (1751 before), no
+/// epoch lost; a frame the chip takes slowly on a damaged link (a put may run 2x its bound to finish a started frame,
+/// review of a719c1c). Measured + 10 %, under the receiver's own time-out (1.5 s plus its second). Past the budget's
+/// 1.2 s: an open item (docs/status.md).
+const DAMAGED_GAP_MS: u64 = 1610;
+
 /// The owner, 2026-11-02: GNSS reads do not depend on the radio. A ride with a fix walks every radio failure (a
 /// hung chip reset while running, a dead chip, a damaged stream with broken-link resets, a 48-event phone burst, a
 /// 32-ANT resume, a flood of events); whatever the chip does, no pass keeps the receiver unread past the budget's
-/// limit (1.2 s, budget_tests.rs), no epoch is lost to its stream time-out, and the app's fix is never dropped.
+/// limit (1.2 s, budget_tests.rs), but for the damaged stream ([`DAMAGED_GAP_MS`], 1.61 s: under the receiver's
+/// time-out), no epoch is lost to its stream time-out, and the app's fix is never dropped.
 #[test]
 fn no_radio_failure_delays_the_gnss_reads_or_loses_the_fix() {
     type Fail = fn(&mut Sim);
@@ -302,9 +307,9 @@ fn no_radio_failure_delays_the_gnss_reads_or_loses_the_fix() {
             assert!(app.gps.pvt.is_some_and(|p| p.good()), "{name}: the fix was lost at {} ms", sim.ms);
         }
         std::eprintln!("{name}: longest GNSS gap {} ms", sim.gnss.longest_gap_ms);
-        // a damaged stream's bound is a_damaged_stream_is_recovered_from's (5 seeds, 1610 ms): its gaps move with any
-        // change of the pass's timing (2026-11-08: 830 ms, then 1322 ms with no card time in it)
-        let bound = if name == "damaged stream" { 1610 } else { 1200 };
+        // the damaged stream's gaps move with any change of the pass's timing (2026-11-08: 830 ms, then 1322 ms with
+        // no card time in it)
+        let bound = if name == "damaged stream" { DAMAGED_GAP_MS } else { 1200 };
         assert!(sim.gnss.longest_gap_ms <= bound, "{name}: longest unread gap {} ms", sim.gnss.longest_gap_ms);
         assert_eq!(sim.gnss.lost_epochs, 0, "{name}: epochs lost");
         if recovers {
