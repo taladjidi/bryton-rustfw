@@ -16,6 +16,7 @@ struct ContentView: View {
     @StateObject private var loop = IntervalsLoop()
     @State private var profile = false
     @State private var fitness = false
+    @State private var allRides = false
     @StateObject private var store = WorkoutStore()
     @State private var path = NavigationPath()
     @StateObject private var routes = RouteStore()
@@ -105,6 +106,7 @@ struct ContentView: View {
             .navigationDestination(item: $rides.saved) { s in RideDetail(url: s.url) }
             .sheet(isPresented: $profile) { ProfileSheet() }
             .navigationDestination(isPresented: $fitness) { FitnessView(library: library) }
+            .navigationDestination(isPresented: $allRides) { AllRidesList(rides: rides, library: library, loop: loop) }
             .toolbar {
                 Button { fitness = true } label: { Image(systemName: "chart.line.uptrend.xyaxis") }
                     .accessibilityLabel("Fitness")
@@ -147,6 +149,7 @@ struct ContentView: View {
                 }
                 if args.contains("-demo-scroll-intervals") { later(3) { scrollTo = "intervals" } }
                 if args.contains("-demo-scroll-rides") { later(3) { scrollTo = "rides" } }
+                if args.contains("-demo-all-rides") { later(3) { allRides = true } }  // the full list, pushed
                 if args.contains("-demo-scroll-unit") { later(3) { scrollTo = "unit" } }
                 if args.contains("-demo-fitness") {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { fitness = true }
@@ -171,16 +174,19 @@ struct ContentView: View {
 
     @ViewBuilder private var ridesSection: some View {
         Section {
-            ForEach(rides.rides, id: \.name) { r in
-                RideRow(
-                    rides: rides, ride: r, brief: library.briefs[r.name],
-                    downloaded: rides.downloaded.contains(r.name), uploaded: loop.uploaded[r.name] != nil,
-                    active: rides.phase == .downloading(r.name),
-                    locked: rides.phase == .listing || (rides.isDownloading && rides.phase != .downloading(r.name))
-                ).equatable()
-            }
+            RideRows(rides: rides, library: library, loop: loop, list: Array(rides.rides.prefix(1)))  // the latest only
             if rides.rides.isEmpty && rides.phase == .idle {
                 EmptyRides(state: link.state, demo: rides.demo) { link.refresh(); rides.refresh() }
+            }
+            if !rides.rides.isEmpty {
+                Button { allRides = true } label: {
+                    HStack {
+                        Text("All rides (\(rides.rides.count))")
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(Tok.accent)
             }
         } header: {
             HStack {
@@ -265,6 +271,38 @@ struct UnitHeader: View {
 
     private static func symbol(_ p: UInt8) -> String {
         p >= 88 ? "battery.100" : p >= 63 ? "battery.75" : p >= 38 ? "battery.50" : p >= 13 ? "battery.25" : "battery.0"
+    }
+}
+
+/// The rides of a list, one row each: the home screen's latest ride, or every ride on the full list.
+struct RideRows: View {
+    @ObservedObject var rides: RideBrowser
+    @ObservedObject var library: RideLibrary
+    @ObservedObject var loop: IntervalsLoop
+    let list: [RideEntry]
+
+    var body: some View {
+        ForEach(list, id: \.name) { r in
+            RideRow(
+                rides: rides, ride: r, brief: library.briefs[r.name],
+                downloaded: rides.downloaded.contains(r.name), uploaded: loop.uploaded[r.name] != nil,
+                active: rides.phase == .downloading(r.name),
+                locked: rides.phase == .listing || (rides.isDownloading && rides.phase != .downloading(r.name))
+            ).equatable()
+        }
+    }
+}
+
+/// The full ride list, pushed from the home screen's "All rides" row.
+struct AllRidesList: View {
+    @ObservedObject var rides: RideBrowser
+    @ObservedObject var library: RideLibrary
+    @ObservedObject var loop: IntervalsLoop
+
+    var body: some View {
+        List { RideRows(rides: rides, library: library, loop: loop, list: rides.rides) }
+            .navigationTitle("All rides")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 
