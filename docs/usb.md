@@ -5,10 +5,10 @@ This page has what is known, what was tried, and what to ask or try next. Last u
 
 ## The hardware
 
-- **MCU:** STM32H747 (Cortex-M7 at 200 MHz as the bootloader leaves it; the part allows 480). USB1 **OTG_HS** (0x40040000) with an **external ULPI PHY**. **The PHY
+- **MCU:** STM32H750 (BOARD.md 1; Cortex-M7 at 200 MHz as the bootloader leaves it; the part allows 480). USB1 **OTG_HS** (0x40040000) with an **external ULPI PHY**. **The PHY
   is a high-speed one** (2026-10-31, read over ULPI through OTG_GPVNDCTL, offset 0x34, from the dev link): vendor ID
-  0x0424 (SMSC, now Microchip), product ID 0x0007, Microchip's USB33x0 family (USB3300 / USB3320; the exact part is
-  inferred, they share the ID). Function Control (ULPI reg 4) read 0x40 with the high-speed build running: XcvrSelect
+  0x0424 (SMSC, now Microchip), product ID 0x0007: a USB3320 (the FCC filing's internal photos, BOARD.md 7; the
+  USB3300 shares the ID). Function Control (ULPI reg 4) read 0x40 with the high-speed build running: XcvrSelect
   00 (the high-speed transceiver), SuspendM set. macOS enumerates that build at 480 Mbit/s (ioreg Device Speed 2), which
   needs the PHY's chirp handshake. So high speed is supported by the board; the drops are something else.
 - **ULPI pins, all AF10, very high speed, push-pull, no pull** (BOARD.md 4 and 7; the same as stock's HAL_PCD_MspInit
@@ -19,7 +19,7 @@ This page has what is known, what was tried, and what to ask or try next. Last u
   | CK (60 MHz from the PHY) | PA5 | STP | PC0 |
   | D0 | PA3 | NXT | PH4 |
   | D1 D2 D7 | PB0 PB1 PB5 | DIR | PI11 |
-  | D3..D6 | PB10..PB13 | PHY enable / reset (high = running, inferred) | PA7 |
+  | D3..D6 | PB10..PB13 | the PHY's RESETB (high = running, inferred) | PA7 |
 
 - **Bring-up (src/board/usb.rs `power_up`, as stock):**
   - VOS1;
@@ -139,19 +139,23 @@ device that does not answer its polls for that long; the unit's side was not cap
 
 ## Questions for the board's designer
 
-- **Which ULPI PHY is it** (its ID says Microchip USB33x0, see The hardware), and what clocks it (its own crystal, the frequency)? Is its 60 MHz clock an output to
-  PA5 (input clock mode)?
+- **What clocks the PHY?** It is a USB3320 (BOARD.md 7). PA5 takes the ULPI clock in, so the PHY makes the 60 MHz
+  itself (its "ULPI output clock mode", USB3320 datasheet rev 1.0, table 2.1), from a crystal or an oscillator on its
+  REFCLK at one of 12 to 52 MHz, set by its REFSEL pins (table 5.10). Which frequency is not known.
 - **ULPI routing:** trace lengths and matching to the clock, series resistors, the reference plane. 60 MHz
   single data rate needs the data valid around the clock edge the STM32 samples on (RM0399, OTG_HS ULPI timing).
 - **D+/D- routing:** 90 ohm differential, any common-mode choke or ESD part, and the connector (micro-USB?) with its
   shield and ground.
-- **The PHY's supplies:** decoupling and the 1.8 V regulator, if any. A high-speed transmitter draws more current
-  than full speed: a supply sagging under sustained traffic would fit what was seen.
-- **Known errata** for this STM32 (ES0445 for the H745/H747/H755/H757) on OTG_HS with a ULPI PHY in device mode. The
-  closest found, ES0392 2.25.2 for the H743 (transmit FIFO corrupted when a FIFO write is interleaved with accesses to
-  certain OTG_HS registers), should not apply here: this firmware polls from one loop and never interleaves them.
+- **The PHY's supplies:** the USB3320 needs an external 1.8 V on VDD18 (1.6 to 2.0 V) besides VBAT; its decoupling
+  and that regulator are not known. At high speed it draws about 46 mA, 29.4 mA of it on VDD18, against about 34 mA
+  at full speed (table 4.1): a 1.8 V supply sagging under sustained traffic would fit what was seen.
+- **Known errata** for this STM32 (ES0392, the H742/H743/H750/H753 errata, which covers the unit's H750) on OTG_HS
+  with a ULPI PHY in device mode. The closest found, ES0392 2.25.2 (transmit FIFO corrupted when a FIFO write is
+  interleaved with accesses to certain OTG_HS registers), should not apply here: this firmware polls from one loop and never interleaves them.
   Stock uses interrupts, so it could.
-- **PA7:** is it the PHY's reset or its chip select / enable, and how long does the PHY need after it?
+- **PA7:** most likely the USB3320's RESETB (inferred, BOARD.md 7): low tri-states the ULPI outputs, 1 us low resets
+  its registers, and its clock is back within 3.49 ms at most of the release (tables 2.1, 4.2). To confirm on the
+  board: is PA7 wired to pin 27?
 
 ## Meanwhile
 

@@ -7,15 +7,17 @@ sheets, at their test conditions), none was measured on the unit.
 
 ## The battery
 
-- **Capacity: unknown.** Not in BOARD.md, the patch repository or the Ghidra notes, and retailers give only the
-  claim: "up to 30 hours" (bike24.com, sigmasports.com listings for the S510). The cell is read through a 1/1.5
-  divider on ADC3 (BOARD.md 12), the charge estimated from its voltage.
+- **Capacity: 1200 mAh**, 3.7 V, 4.4 Wh (the cell's label in the FCC filing's internal photos; BOARD.md 12).
+  Retailers give the claim "up to 30 hours" (bike24.com, sigmasports.com listings for the S510), so stock averages
+  about 40 mA (1200 / 30) at that claim. The cell is read through a 1/1.5 divider on ADC3 (BOARD.md 12), the
+  charge estimated from its voltage.
 - **So the effect of a saving is given as a share of the total draw.** With `I` the unit's average current and 30 h
-  the claim at that draw, a saving `dI` gives `30 x I / (I - dI)` hours. Example: if the unit draws 40 mA (then the
-  cell is about 1200 mAh), 4.5 mA saved is 33.8 h instead of 30, 10 mA saved is 40 h.
-- **The total is unknown** because the largest part is probably the STM32H747 itself: in WFI sleep its core clock
-  and the SDRAM keep running (16.5 to 47 mA for the MCU, DS12930 table 44, plus the SDRAM's). Stop mode between
-  passes is the plan below ("Stop mode: plan").
+  the claim at that draw, a saving `dI` gives `30 x I / (I - dI)` hours. At stock's 40 mA, 4.5 mA saved is 33.8 h
+  instead of 30, 10 mA saved is 40 h.
+- **This firmware's total is unknown** because the largest part is probably the STM32H750 itself: in WFI sleep its
+  core clock and the SDRAM keep running (15.5 mA for the MCU with every peripheral off, DS12556 table 23, more with
+  the ones this firmware keeps on, plus the SDRAM's). Stop mode between passes is the plan below ("Stop mode:
+  plan").
 
 ## Switched off
 
@@ -378,15 +380,17 @@ off first (`stop --usboff`, as on battery), to find what holds the system in Run
   registers before and after the WFI. The power key (WKUP1, EXTI 55) ends the sleep too. Not done in phase 1: RTS held high for the Nordic chip (the bench resets after), the
   wake on keys, touch, VBUS or the Nordic chip, the sleep's time for the profiler and the uptime.
 
-**Why.** In WFI (CSleep) the STM32H747 draws 16.5 mA at VOS3, 200 MHz with every peripheral clock off and 47.1 mA
-with all on (DS12930 Rev 1, table 44, LDO, typical at 25 C); this firmware keeps FMC, SDMMC1, the RAMs, USART2,
-LPTIM1, TIM1, SYSCFG and the RTC clocked in sleep (BOARD.md 1), so somewhere between. With D1, D2 and D3 in Stop
-it draws 2.78 mA at SVOS3, 1.96 at SVOS4, 1.27 at SVOS5 (flash off, no IWDG; table 42). The SDRAM is the other
-part: in sleep the FMC clocks it at 50 MHz with CKE high (its standby current, tens of mA for an SDR SDRAM, inferred:
-the part is not known), in self-refresh it keeps its data on its own at about 1 mA or less (mobile SDR, inferred).
-**Expected saving: 15 to 45 mA of the MCU and some of the SDRAM's, between passes**, so the idle drain could fall
-to a half or a third (an estimate; the cell's capacity and the unit's total current are not known: the battery
-history before and after is the measure).
+**Why.** In WFI (CSleep) the STM32H750 draws 15.5 mA at VOS3, 200 MHz with every peripheral clock off (DS12556
+Rev 8, table 23, silicon revision Y, typical at 25 C; the H747's DS12930 gave 47.1 mA with all on, a figure DS12556
+does not give); this firmware keeps FMC, SDMMC1, the RAMs, USART2, LPTIM1, TIM1, SYSCFG and the RTC clocked in
+sleep (BOARD.md 1), so more than that. With D1, D2 and D3 in Stop it draws 2.85 mA at SVOS3, 1.95 at SVOS4, 1.4 at
+SVOS5 (flash in low-power mode, no IWDG; table 24). The SDRAM (AS4C32M16MS, BOARD.md 3) is the other part: in sleep
+the FMC clocks it at 50 MHz with CKE high, up to 10 mA with its banks precharged and 20 mA with a bank open (ICC2N,
+ICC3N, datasheet maxima at its fastest clock; less at 50 MHz, inferred); in self-refresh it keeps its data on its
+own at 300 uA at most up to 45 C, 600 uA up to 85 C (ICC6, the whole array).
+**Expected saving: over 15 mA of the MCU and most of the SDRAM's, between passes**, against stock's average of about
+40 mA (the battery above), so the idle drain could fall to a half or a third (an estimate; this firmware's total
+current is not known: the battery history before and after is the measure).
 
 **Can it run with the image in SDRAM?** Not as is: in Stop the FMC has no clock, and the SDRAM must be put in
 self-refresh first (FMC_SDCMR MODE = 101, bank 2; RM0399 FMC, "Self-refresh mode"), and nothing may fetch from it
@@ -402,11 +406,9 @@ calls out of ITCM). The I-cache keeps its lines in Stop (D1 logic retained); the
 2. FMC: wait until not busy, self-refresh command, wait FMC_SDSR MODES2 = self-refresh.
 3. PWR_CPUCR PDDS_D1 / D2 / D3 = 0 (Stop, not Standby), PWR_CR1 SVOS (SVOS3 keeps the D3 peripherals that can wake
    the system running; SVOS5 is lower and still wakes on EXTI and the RTC: DS12930 3.5.3), RCC_CFGR STOPWUCK = HSI
-   (the wake clock), SCB_SCR.SLEEPDEEP = 1, DSB, WFI. On the dual-core H747, D3 is shared: it stops only when
-   neither CPU keeps it running, so CPU2's own register, PWR_CPU2CR (PDDS_D3 = 0, RUN_D3 = 0), must allow it too
-   (RM0399 PWR, "Power management", the domain and system low-power modes and PWR_CPU2CR; the M4 never started here
-   leaves it at reset, inferred). Read back before the first WFI.
-4. Wake: HSI at once (tWUSTOP 4.4 us typical at VOS3, 39 us at VOS5, table 49); the regulator back at the Run voltage
+   (the wake clock), SCB_SCR.SLEEPDEEP = 1, DSB, WFI. Written for a dual-core H747, where D3 stops only when the
+   M4's PWR_CPU2CR allows it too; the unit's STM32H750 has one CPU (BOARD.md 1), so that register does not apply.
+4. Wake: HSI at once (tWUSTOP 4.4 us typical at VOS3, 30 us at VOS5, flash in normal mode; DS12556 table 29); the regulator back at the Run voltage
    before any higher clock: wait PWR_D3CR.VOSRDY and PWR_CSR1.ACTVOSRDY (RM0399 PWR, "Voltage scaling" and the exit
    from Stop: from SVOS4 / SVOS5 the Run VOS is restored by hardware, and 200 MHz needs it there); HSE on and ready
    (tSU(HSE) 2 ms, table 52: the longest step, so PLL1 from HSI instead is worth trying), PLL1 on and locked (tLOCK 50

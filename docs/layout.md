@@ -419,6 +419,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/progress.py`: a progress bar when tqdm is installed, nothing otherwise (cosmetic).
 - `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
   SHA256SUMS before saving anything (then by rename); `selftest` (check.sh, a fake download).
+- `tools/datasheets.py`: fetches the parts' datasheets listed in docs/datasheets.md into `target/datasheets/` (their
+  licences keep them out of the repository) and checks each against the copy the docs cite; the sites that refuse
+  scripts get a link to open in a browser; `--check` without network; `selftest` (check.sh, a fake download).
 - `tools/real.sh`: the `#[ignore]` tests that read the owner's real data (rides, drive, tiles, routes, segments), with
   the variables from the gitignored `tools/real.env`; each panics when its variable is unset (docs/devloop.md).
 - `tools/stack_check.py [ELF]`: the firmware's stack frames against their budgets, the stack's size (from the canary

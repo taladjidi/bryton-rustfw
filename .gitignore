@@ -8,3 +8,4 @@ di2_key.bin
 mutants.out*
 check.log
 tools/real.env
+.venv/

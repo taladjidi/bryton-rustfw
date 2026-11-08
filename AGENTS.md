@@ -185,8 +185,8 @@ seconds, and the run ends with all of them and a total:
   `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python; on main or `--full` they and the fsck tool are required) and `tools/walk.py selftest`;
 - **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `sync.py`, `assist.py`, `segments.py`,
-  `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py`, `iaprecover.py`, `fetch_firmware.py` and
-  `theme.py selftest`, and
+  `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py`, `iaprecover.py`, `fetch_firmware.py`,
+  `datasheets.py` and `theme.py selftest`, and
   `tools/font.py` regenerating `src/ui/fonts.rs` into a temporary file with `cmp` failing on a diff (skipped without PIL);
 - **the live numbers**, after the lanes (they need the ELF and the test list): `tools/numbers.py --write` (each changed
   marker printed) **only on main** (or with `--full`), by the merge step. A branch runs `--check` and prints the stale
@@ -195,8 +195,8 @@ seconds, and the run ends with all of them and a total:
 
 **Skips, only on a branch** (never on main; each prints a `skip:` line and ends up in the `SKIPPED:` summary): the iOS app
 build when nothing under `app/` changed, and anywhere without full Xcode or the iOS Rust targets; the Python
-self-tests when nothing under `tools/`, `test-data/`, `renode/`, `docs/theming.md`, `src/ui/tiles.rs` or `check.sh`
-changed (the walk selftest: `src/sim/walk_tests.rs` instead of `src/ui/tiles.rs`); the font regeneration when
+self-tests when nothing under `tools/`, `test-data/`, `renode/`, `docs/theming.md`, `docs/datasheets.md`,
+`src/ui/tiles.rs` or `check.sh` changed (the walk selftest: `src/sim/walk_tests.rs` instead of `src/ui/tiles.rs`); the font regeneration when
 `tools/font.py`, `tools/pixel_font.py`, `tools/fonts/` and `src/ui/fonts.rs` are untouched; Renode when `src/main.rs`, `src/lib.rs`, `src/app/pass.rs`, `src/board/`, `src/drivers/`, `src/ui/strip.rs`,
 `src/ui/overview.rs`, `link.x`, `build.rs`, `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, `rust-toolchain.toml` and
 `renode/` are untouched. Renode runs after the lanes, only when they
@@ -281,6 +281,9 @@ Before writing a protocol, a format, an algorithm or a driver from memory, check
 (datasheets, reference manuals, the official spec, the reference implementation) and well-known crates or
 libraries that already do it; use or adapt them when they fit (no_std, no heap, small, safe). Cite what was used
 (URL and what was taken) in the module doc. Something that could not be checked is marked "inferred".
+
+The board's datasheets: docs/datasheets.md lists the parts; `tools/datasheets.py` fetches the PDFs into
+`target/datasheets/` (never into the repository: their licences forbid it). Read them there; a new one goes into both.
 
 ## Toolchain and dependencies
 
