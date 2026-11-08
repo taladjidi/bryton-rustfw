@@ -1158,7 +1158,7 @@ pub(super) fn list_courses(sim: &mut Sim, app: &mut App, ends: (u16, u16), seq: 
     let (control, data) = ends;
     sim.nordic.phone_write(control, &[4, seq, Folder::Courses as u8]);
     let (mut entries, mut end) = (Vec::new(), None);
-    for _ in 0..100 {
+    for _ in 0..400 {
         pass(sim, app, 50);
         for p in drain(sim, data) {
             match Frame::parse(&p) {
@@ -1387,4 +1387,35 @@ fn every_risky_profile_set_is_refused_and_a_get_always_works() {
     assert_eq!(set(&mut sim, &mut app, want), Some((Status::Busy, 0)), "during a ride");
     assert_eq!(profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 4 }).0, Some(ok), "a GET in a ride");
     assert_eq!(app.settings.ftp, ftp, "nothing changed");
+}
+
+/// A full `\Courses`: only its `.fit` and `.gpx` files are listed (a folder and a text file left out), 100 of them,
+/// numbered from 00 to 99 in directory order; a key past 9 reads and deletes its own file.
+#[test]
+fn courses_are_numbered_in_two_digits_and_only_course_files_count() {
+    let (mut sim, mut app, control, data) = paired();
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    {
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Courses").unwrap();
+        fat.mkdir(&mut d, dir, "Sub.fit", (0, 0)).unwrap();
+    }
+    put_file(&mut d, "Courses", "notes.txt", b"not a course");
+    for i in 0..110usize {
+        put_file(&mut d, "Courses", &std::format!("C{i:03}.{}", ["fit", "gpx"][i % 2]), &std::vec![i as u8; 1 + i]);
+    }
+    sim.emmc.image = d.0;
+    let (listed, end) = list_courses(&mut sim, &mut app, (control, data), 3);
+    assert_eq!((listed.len(), end), (100, Some((Status::Ok, 100))));
+    let keys: Vec<_> = listed.iter().map(|e| std::string::String::from_utf8(e.0.bytes().to_vec()).unwrap()).collect();
+    assert_eq!(keys, (0..100).map(|i| std::format!("{i:02}")).collect::<Vec<_>>());
+    // the card's four courses first, then C000...: C006 is the eleventh
+    let key = course_key(&listed, "C006.fit", 7).expect("C006 listed");
+    assert_eq!(key.bytes(), b"10");
+    let read = Command::ReadIn { seq: 4, folder: Folder::Courses, offset: 0, key };
+    assert_eq!(ask(&mut sim, &mut app, control, data, read, 5000).bytes, [6; 7]);
+    let mut f = [0; 20];
+    let n = Command::Delete { seq: 5, folder: Folder::Courses, key }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 1)));
+    assert!(course_on_card(&sim, "C006.fit").is_none() && course_on_card(&sim, "C007.gpx").is_some());
 }

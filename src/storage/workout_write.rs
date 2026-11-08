@@ -478,6 +478,19 @@ pub(crate) mod tests {
         assert!(d.0 == img, "nothing written");
     }
 
+    /// A file in the calendar with the day's name (no folder): refused, never written over nor beside.
+    #[test]
+    fn a_file_of_the_days_name_is_not_a_day_folder() {
+        let mut d = Ram(volume(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let cal = fat.open(&mut d, CALENDAR).unwrap();
+        fat.create(&mut d, cal, "20261108", T).unwrap();
+        assert_eq!(write_all(&mut d, &intervals(), DAY), Err(Status::BadRequest));
+        let mut fat = Fat::mount(&mut d).unwrap();
+        assert!(fat.open(&mut d, "Workout/calendar/20261108").is_ok_and(|f| !f.dir && f.size == 0), "left as it was");
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
     /// A day folder of more entries than [`WALK`] takes no more: the listing could not reach the new file.
     #[test]
     fn a_day_longer_than_the_walk_is_full() {
@@ -702,6 +715,17 @@ pub(crate) mod tests {
         assert_eq!(sent(&d.0, &to, &file).as_deref(), Some(&file[..]), "kept, once");
         // another case of the same name is the same name on FAT
         assert_eq!(send(&mut d, &other, &course("COL DU GALIBIER 2")), Err(Status::BadRequest));
+        // the same size, other bytes (a course still, its FIT CRC put right): another file too
+        let mut same_size = file.clone();
+        let at = same_size.len() - 3;
+        same_size[at] ^= 1;
+        let n = same_size.len() - 2;
+        let c = crate::fit::crc(0, &same_size[..n]).to_le_bytes();
+        same_size[n..].copy_from_slice(&c);
+        assert_eq!(send(&mut d, &same_size, &course("Other")), Ok(()), "a course");
+        assert_eq!(send(&mut d, &same_size, &to), Err(Status::BadRequest));
+        assert_eq!(sent(&d.0, &to, &file).as_deref(), Some(&file[..]), "kept");
+        delete_sent(&mut d, &course("Other"), &same_size).unwrap();
         assert_eq!(fsck(&d.0), Ok(0), "the refused sends left the temporary file, nothing lost");
         delete_sent(&mut d, &to, &file).unwrap();
         assert_eq!(sent(&d.0, &to, &file), None);

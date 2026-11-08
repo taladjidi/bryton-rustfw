@@ -975,6 +975,15 @@ mod tests {
         assert_eq!(Command::parse(b"\x09\x07\x03\x0207\0\0"), bad, "no folder 3");
         assert_eq!(Command::parse(b"\x09\x07\x02\x0207\0"), bad, "DELETE without its check");
         assert_eq!(Command::parse(b"\x05\x07\x02\0\0\0\0\x0207\0"), bad, "READ_IN without its check");
+        for folder in [0, 3] {
+            let mut other = begin(b"ok");
+            other[2] = folder;
+            assert_eq!(Command::parse(&other), bad, "a course's WRITE_BEGIN in folder {folder}");
+        }
+        // a ride's ENTRY_IN (twelve digits, no check) still parses as one
+        let ride = Key::new(Folder::Activities, b"251026093000").unwrap();
+        let n = Frame::EntryIn { seq: 1, key: ride, size: 9 }.encode(&mut f);
+        assert_eq!((n, Frame::parse(&f[..n])), (19, Some(Frame::EntryIn { seq: 1, key: ride, size: 9 })));
     }
 
     #[test]
