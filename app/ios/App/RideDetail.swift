@@ -20,6 +20,7 @@ struct ProfileSheet: View {
             }
             .navigationTitle("Profile")
             .toolbar { Button("Done") { dismiss() } }
+            .onDisappear { (ftp, maxHR) = (ftp, maxHR) }  // opening the sheet confirms the values: they are stored
         }
         .presentationDetents([.medium])
     }

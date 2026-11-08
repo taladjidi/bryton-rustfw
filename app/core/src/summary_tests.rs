@@ -3,7 +3,15 @@ use crate::ride::analyze_ride;
 use crate::summary::*;
 
 fn stat(t: i64, off: i32, load: u32) -> RideStat {
-    RideStat { start_unix: t, tz_offset_s: off, moving_s: 100, distance_m: 1000.0, load: Some(load) }
+    RideStat {
+        start_unix: t,
+        local_day: None,
+        load_from_hr: false,
+        tz_offset_s: off,
+        moving_s: 100,
+        distance_m: 1000.0,
+        load: Some(load),
+    }
 }
 
 #[test]
@@ -79,6 +87,8 @@ fn weekly_sums_hold_over_random_rides() {
                 let t = if rnd() % 5 == 0 { rnd() as i64 } else { now - (rnd() % (30 * 86_400)) as i64 };
                 RideStat {
                     start_unix: t,
+                    local_day: None,
+                    load_from_hr: false,
                     tz_offset_s: (rnd() % 100_000) as i32 - 50_000,
                     moving_s: (rnd() % 20_000) as u32,
                     distance_m: (rnd() % 200_000) as f64,
@@ -96,4 +106,95 @@ fn weekly_sums_hold_over_random_rides() {
     }
     assert!(kept > 500, "the fuzz reaches the buckets: {kept}");
     assert!(weekly_totals(vec![], 0, i64::MAX, i32::MAX, u32::MAX).len() <= 520);
+}
+
+#[test]
+fn decode_fuzz_round_trips_what_it_accepts() {
+    let mut x = 0x2545_f491u64;
+    let mut rnd = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let odd = ["NaN", "inf", "-5", "-0.5", "99999999999999999999", "", "1e400", "x", "300", "70000"];
+    let (mut some, mut none) = (0, 0);
+    for _ in 0..2000 {
+        let mut tok = |m: u64| {
+            let (valid, coin, pick) = (rnd() % m, rnd() % 6, (rnd() % 10) as usize);
+            if coin == 0 { odd[pick].to_string() } else { valid.to_string() }
+        };
+        let nbins = tok(8).parse::<u64>().unwrap_or(0);
+        let bins: Vec<String> = (0..nbins)
+            .map(|_| {
+                let (a, b) = (tok(256), tok(5000));
+                format!("{a}:{b}")
+            })
+            .collect();
+        let line = format!(
+            "1 {} {} {} {} {} {} {}",
+            tok(2_000_000_000),
+            tok(90_000),
+            tok(90_000),
+            tok(200_000),
+            tok(500),
+            tok(90_000),
+            bins.join(",")
+        );
+        match brief_decode(line) {
+            Some(b) => {
+                some += 1;
+                assert!(b.distance_m >= 0.0 && b.distance_m.is_finite());
+                assert_eq!(brief_decode(brief_encode(b.clone())), Some(b));
+            }
+            None => none += 1,
+        }
+    }
+    assert!(some > 100 && none > 100, "the fuzz reaches both sides: {some} / {none}");
+    // a repeated heart rate, and too many bins
+    assert_eq!(brief_decode("1 1 1 1 1 0 0 70:1,70:2".into()), None);
+    let many: Vec<String> = (0..=256).map(|i| format!("{}:1", i % 256)).collect();
+    assert_eq!(brief_decode(format!("1 1 1 1 1 0 0 {}", many.join(","))), None);
+    assert_eq!(brief_decode("1 1 1 -1 1 0 0 ".into()), None);
+}
+
+#[test]
+fn ride_brief_of_damaged_rides_never_panics() {
+    let good = synthetic_ride(9, 300);
+    let mut x = 0x1357_9bdfu32;
+    let mut rnd = || {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        x
+    };
+    let mut some = 0;
+    for _ in 0..600 {
+        let mut bad = good.clone();
+        for _ in 0..1 + rnd() % 4 {
+            let i = rnd() as usize % bad.len();
+            bad[i] ^= 1 << (rnd() % 8);
+        }
+        if rnd() % 4 == 0 {
+            bad.truncate(rnd() as usize % bad.len());
+        }
+        some += usize::from(ride_brief(bad).is_some());
+    }
+    assert!(some > 100 && some < 600, "{some}");
+}
+
+#[test]
+fn the_week_comes_from_the_file_name() {
+    // 2026-11-09 is a Monday: this instant is still Sunday in UTC, the name says Monday
+    let b = RideBrief { start_unix: 1_794_182_400 - 60, moving_s: 60, ..RideBrief::default() };
+    let mon = ride_stat(b.clone(), "261109000100".into(), 200, 190, 0);
+    assert_eq!(mon.local_day, name_day("261109000000"));
+    let sun = ride_stat(b.clone(), "261108235900".into(), 200, 190, 0);
+    let r = weekly_totals(vec![mon, sun], 0, 1_794_182_400 + 3600, 0, 2);
+    assert_eq!((r[0].rides, r[1].rides), (1, 1));
+    // a name that is not a date falls back to the instant
+    assert_eq!(name_day("261301000000"), None);
+    assert_eq!(name_day("260230000000"), None);
+    assert_eq!(name_day("26x109000100"), None);
+    assert_eq!(ride_stat(b, "tmp".into(), 200, 190, 0).local_day, None);
 }

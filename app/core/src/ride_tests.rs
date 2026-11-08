@@ -150,3 +150,49 @@ fn smart_recording_counts_seconds_not_records() {
     assert!((598..=600).contains(&b.power_zone_s.iter().sum::<u32>()), "the last record counts 1 s");
     assert_eq!((a.np, a.avg_power, a.avg_hr), (b.np, b.avg_power, b.avg_hr));
 }
+
+/// `n` records one second apart from `t0`, at `speed` m/s (None: no speed field).
+fn at_speed(t0: u32, n: u32, speed: Option<f64>) -> Vec<FitDataRecord> {
+    (0..n)
+        .map(|i| {
+            let mut f = vec![("timestamp", f64::from(t0 + i)), ("power", 200.0)];
+            f.extend(speed.map(|v| ("speed", v)));
+            rec(&f)
+        })
+        .collect()
+}
+
+#[test]
+fn moving_time_follows_the_auto_pause_speed() {
+    // 2 km/h = 0.556 m/s: 0.5 is a stop, 0.6 is riding
+    let moving = |msgs: Vec<FitDataRecord>| view(&msgs, 250, 190).unwrap().summary.moving_s;
+    assert_eq!(moving(at_speed(1000, 100, Some(0.5))), 0);
+    assert_eq!(moving(at_speed(1000, 100, Some(0.6))), 100);
+    // a gap of 51 s between two halves counts 5 s, not 51: 49 + 5 + 50 = 104
+    let mut gap = at_speed(1000, 50, Some(8.0));
+    gap.extend(at_speed(1100, 50, Some(8.0)));
+    assert_eq!(moving(gap), 104);
+    // no speed field at all (an indoor ride): all of it
+    assert_eq!(moving(at_speed(1000, 100, None)), 100);
+}
+
+#[test]
+fn the_viewer_and_the_units_ride_agree_on_tss() {
+    use bryton_rustfw::{
+        power::Power,
+        ride::{Input, Ride},
+    };
+    let v = analyze_ride(synthetic_ride(9, 1500), 250, 190).unwrap();
+    assert!(v.samples.len() == 1500, "undecimated");
+    let (mut ride, mut power) = (Ride::new(), Power::new());
+    ride.start_pause();
+    for s in &v.samples {
+        let i = Input { speed_x10: s.speed_ms.map(|m| (m * 36.0).round() as u16), power: s.power, ..Input::default() };
+        ride.second(&i);
+        power.sample(s.power, ride.moving());
+    }
+    assert_eq!(power.tss(250), v.summary.tss);
+    assert_eq!(power.np(), v.summary.np);
+    // the file's own average (its session message) wins over the one worked out here, which skips stopped seconds
+    assert!(v.summary.moving_s < 1500);
+}

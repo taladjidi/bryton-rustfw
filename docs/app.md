@@ -147,16 +147,23 @@ while it runs, and the panel says how many rides of the period are not on the ph
 opened. The cache keeps the NP, the seconds and the heart rate histogram, so a new FTP or max HR (the profile sheet, which
 says to keep the FTP equal to Intervals.icu's) recomputes every load at once without reading a file.
 
-Definitions, from Intervals.icu (`app/core/src/summary.rs` has the URLs; looked up 2026-11-08):
-- **Week:** Monday to Sunday, Intervals.icu's only choice; a ride counts in the week of its local start (inferred).
-- **Moving time:** speed of 0.05 m/s or more; a ride with no speed is all moving. Each record counts for the time to the
-  next, at most 5 s. The viewer uses the same number (it no longer reads the file's timer time).
+Definitions (`app/core/src/summary.rs` has the sources and what is inferred; looked up 2026-11-08). The numbers can
+differ from Intervals.icu's for the same file:
+- **Week:** Monday to Sunday, which a forum reply says is hardcoded in Intervals.icu. A ride counts in the week of the
+  local day in the unit's file name (`YYMMDDhhmmss` is the unit's local time), else of its start in the phone's zone
+  (inferred: Intervals shows an activity on its local start date).
+- **Moving time:** a second counts when the speed is at or above the unit's auto-pause speed (2 km/h), so the phone and
+  the unit agree (a test runs the same samples through the firmware's `Ride` and the viewer and compares TSS). Intervals'
+  own threshold is not confirmed (a staff post is reported to give 0.05 m/s: inferred, not confirmed by the cited page).
+  A ride with no speed field is all moving. Each record counts for the time to the next, at most 5 s. The viewer uses
+  the same number; it no longer reads the file's timer time. The viewer's average power and calories still prefer the
+  file's own values (which include stopped seconds); only when the file has none are they worked out, over moving seconds.
 - **Distance:** the file's total distance (inferred).
-- **Load with power:** TSS over the moving seconds with NP, as TrainingPeaks but without stopped time; the FTP is the
-  profile's.
-- **Load without power:** Intervals.icu's default is HRSS (normalised TRIMP). The app's version is inferred: Banister
-  TRIMP with a resting rate of 60 bpm, against an hour at 85 % of the max HR. Intervals uses its own resting and
-  threshold HR, so this load can differ more than a power one. NP can differ by a few percent too.
+- **Load with power:** TSS over the moving seconds with NP; a forum answer says Intervals' is TrainingPeaks' without
+  stopped time. Its NP method is not confirmed to match (inferred). The FTP is the profile's.
+- **Load without power:** Intervals' default is a regression on time in heart rate zones; the app approximates it with
+  Banister TRIMP (rest 60 bpm, against an hour at 85 % of the max HR). It is not a TSS: rows say "HR load" and a week
+  holding one says "TSS*".
 
 The Demo unit's ten rides are dated relative to today over the last three weeks (Paris time), so the panel has bars.
 

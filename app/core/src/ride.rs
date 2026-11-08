@@ -9,7 +9,7 @@
 //! Fields (FIT profile, Profile.xlsx of the Garmin SDK): record 253 timestamp, 0/1 position, 2/78 altitude,
 //! 3 heart_rate, 4 cadence, 5 distance, 6/73 speed, 7 power; session 18 and lap 19 as in the firmware's writer.
 
-use crate::summary::{HrBin, RideBrief, brief_load};
+use crate::summary::{HrBin, MOVING_MS, RideBrief, brief_load};
 use bryton_rustfw::{
     power::Power,
     power_curve::{DURATIONS, Rolling},
@@ -265,7 +265,7 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
     let (mut hr_z, mut p_z) = (vec![0u32; 5], vec![0u32; 7]);
     let (mut hr_sum, mut hr_n, mut cad_sum, mut cad_n) = (0u64, 0u64, 0u64, 0u64);
     let (mut hr_max, mut v_max, mut moving) = (0u16, 0f64, 0u32);
-    // Moving as Intervals.icu counts it: speed of 0.05 m/s or more; a ride with no speed at all is all moving.
+    // Moving as the unit counts it (auto-pause speed, see summary.rs); a ride with no speed at all is all moving.
     let has_speed = samples.iter().any(|s| s.speed_ms.is_some());
     let (mut hr_bins, mut heard, mut power_s) = (vec![0u32; 256], false, 0u32);
     let (mut up, mut down, mut anchor) = (0f64, 0f64, None::<f64>);
@@ -274,7 +274,7 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
         // 5 s is a pause, not riding), so the zones, the averages and NP count seconds, not records.
         let dt = samples.get(i + 1).map_or(1, |n| n.t_s.saturating_sub(s.t_s).clamp(1, 5));
         let v = s.speed_ms.unwrap_or(0.0);
-        let mv = !has_speed || v >= 0.05;
+        let mv = !has_speed || v >= MOVING_MS;
         heard |= s.power.is_some();
         for k in 0..dt {
             power.sample(s.power, mv);

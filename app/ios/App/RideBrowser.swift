@@ -63,6 +63,10 @@ final class RideBrowser: ObservableObject {
     private(set) var auto = false
     /// The rider cancelled a sync download: no more until they refresh.
     private var syncPaused = false
+    /// The unit was busy or its card unreadable during a sync: no more sync until the app restarts or reconnects.
+    private var syncOff = false
+    /// Rides whose sync download failed: not tried again until the app restarts.
+    private var syncFailed = Set<String>()
     /// How far back the sync goes, days (the last 8 weeks; older rides download when opened).
     static let syncDays = 56
 
@@ -92,11 +96,13 @@ final class RideBrowser: ObservableObject {
         t.onLost = { [weak self] in
             guard let self else { return }
             self.ready = false
+            self.syncOff = false  // a reconnect tries the sync again
             if case .downloading = self.phase { self.message = "Link lost, resuming..." }
             if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
         t.onError = { [weak self] m in self?.message = m }
         t.onDebug = { [weak self] m in self?.debug = m }
+        syncOff = false
         t.start()
         tick?.invalidate()
         tick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.silence() }
@@ -251,7 +257,8 @@ final class RideBrowser: ObservableObject {
 
     /// Nothing else going on: the newest ride of the last 8 weeks that is not on the phone yet.
     private func autoSync() {
-        guard ready, phase == .idle, !syncPaused, let r = rides.first(where: { Self.inWindow($0.name) && !downloaded.contains($0.name) })
+        guard ready, phase == .idle, !syncPaused, !syncOff,
+            let r = rides.first(where: { Self.inWindow($0.name) && !downloaded.contains($0.name) && !syncFailed.contains($0.name) })
         else { return }
         download(r, auto: true)
     }
@@ -279,7 +286,15 @@ final class RideBrowser: ObservableObject {
     }
 
     private func data(_ d: Data) {
-        switch client.onData(value: d, nowMs: Self.now) {
+        let event = client.onData(value: d, nowMs: Self.now)
+        // a read the rider or a yield cancelled: what was already on the way must not finish or resume it
+        if wanted == nil && workoutKey == nil && phase != .workouts {
+            switch event {
+            case .progress, .partial, .finished: return
+            default: break
+            }
+        }
+        switch event {
         case .ignored, .entry: break
         case .listed where listingWorkouts:
             listingWorkouts = false
@@ -314,6 +329,10 @@ final class RideBrowser: ObservableObject {
         case .finished:
             progress = client.progress()
             finish()
+        case .busy where auto:
+            stopSyncQuietly()
+        case .failed(.card) where auto:
+            stopSyncQuietly()
         case .busy:
             busyRetries += 1
             if busyRetries > 20 {
@@ -339,9 +358,19 @@ final class RideBrowser: ObservableObject {
 
     private var isWorkoutPhase: Bool { phase == .workouts }
 
+    /// A sync download ends without a word: the unit is busy or its card is not readable, so the sync stays off.
+    private func stopSyncQuietly() {
+        retry?.cancel()
+        transport?.write(client.cancelCommand())
+        syncOff = true
+        (auto, wanted, message, phase) = (false, nil, nil, .idle)
+    }
+
     private func fail(_ m: String) {
         retry?.cancel()
+        if auto, let w = wanted { syncFailed.insert(w) }
         auto = false
+        wanted = nil
         (listingWorkouts, workoutKey, workoutQueue) = (false, nil, [])
         message = m
         phase = .failed
@@ -354,6 +383,7 @@ final class RideBrowser: ObservableObject {
             try client.file().write(to: url, options: .atomic)
             downloaded.insert(name)
             if auto { auto = false } else { saved = SavedRide(url: url) }
+            wanted = nil
             message = nil
             phase = .idle
         } catch {

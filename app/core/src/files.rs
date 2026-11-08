@@ -461,9 +461,14 @@ impl FileClient {
         Some(s.read_cmd())
     }
 
-    /// The bytes that stop the answer under way; the download is kept for [`FileClient::resume_command`].
+    /// The bytes that stop the answer under way, and the download with it: chunks that were already on the way are
+    /// ignored, so a cancelled read cannot finish or count as progress later (the app's sync yields this way).
     pub fn cancel_command(&self) -> Vec<u8> {
-        self.lock().encode(Command::Cancel)
+        let mut s = self.lock();
+        if matches!(s.mode, Mode::Reading) {
+            s.mode = Mode::Idle;
+        }
+        s.encode(Command::Cancel)
     }
 
     /// One Data notification's value, at `now_ms` (any monotonic clock).
