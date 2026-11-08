@@ -74,7 +74,7 @@ struct ContentView: View {
                 library.catchUp(rides.rides, downloaded: d)
                 loop.uploadPass()  // a ride just synced goes up
             }
-            .onChange(of: intervals.hasKey) { _, has in loop.keyChanged(has) }
+            .onChange(of: intervals.keyVersion) { _, _ in loop.keyChanged(intervals.hasKey) }
             .onChange(of: rides.rides) { _, l in library.catchUp(l, downloaded: rides.downloaded) }
             .sheet(item: $editing) { WorkoutEditor(target: $0, store: store, rides: rides) }
             .navigationDestination(for: WorkoutRoute.self) { r in

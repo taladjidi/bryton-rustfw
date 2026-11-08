@@ -348,7 +348,11 @@ Looked up 2026-11-08 (OpenAPI spec https://intervals.icu/api/v1/docs; the core's
   10 minute clock for what is pending. One ride at a time, newest first. Only rides that started after the switch
   "Upload rides to Intervals.icu" was turned on (on by itself when the first key is stored); "Upload older rides (n)" in
   the profile sheet sends the others. A ride still being recorded is never listed by the unit.
-- **Kept:** name to activity id in UserDefaults (`ivUploaded`), rejected names (`ivRejected`).
+- **Kept:** name to activity id in UserDefaults (`ivUploaded`), rejected names (`ivRejected`), both tied to the athlete
+  id (another id starts them again). A refused key (401, 403) stops uploads and the calendar until a key is entered
+  again or an upload switch is turned on; it is not retried.
+- **Off the main thread:** the multipart body (`upload_body` in the core, tested) is built in a temp file in a detached
+  task and sent with `upload(for:fromFile:)`, then the file is deleted.
 - **Shown:** a green "Intervals.icu" check on the ride's row, "Open on Intervals.icu" on its page (the page URL
   `https://intervals.icu/activities/<id>` is inferred: the spec has no web URLs), a status line on the main screen
   (last upload, errors in words).
@@ -363,15 +367,27 @@ Looked up 2026-11-08 (OpenAPI spec https://intervals.icu/api/v1/docs; the core's
   over 64 items, 96 steps or 8 KB is shown in the list as "Not sent: <reason>" and not sent.
 - **Send:** each file goes to its day with the file service's write (WRITE_BEGIN ...), when the unit is connected and
   idle and the ride sync has nothing left to download (`RideBrowser.autoCalendar`, from the one-second tick). The rider's
-  actions come first: anything the rider starts puts a write under way back at the front of the queue. A failure drops the
-  rest; the loop plans again from its records.
+  actions come first: anything the rider starts (including a refresh) puts a write under way back at the front of the
+  queue. The unit's list is read first (one re-list when the queue empties; a delete after a send reads it again).
+- **Order and failures** (`calendar_settle`, `calendar_job_error`, `calendar_after`, all tested): sends run before deletes,
+  and the delete of a moved or edited event's old file waits for that event's send, so the unit never loses both. A failed
+  send drops only its job and the event shows "Not sent: <reason>", stamped with `updated`; BUSY, a lost link or silence
+  stop the pass (asked again in 15 minutes); NO CALENDAR and READ ONLY stop it for an hour. A delete is done only for
+  NOT FOUND; a MISMATCH reads the list again and tries once more, then drops the job. A record leaves the sent set only
+  for an exact match (event, day, file) once its delete is done.
+- **A rider's own file:** a send finds the same CRC already on that day in the unit's list, does not write it, and flags
+  the record `pre`; a `pre` file is never deleted (it also covers a send whose record was lost in a crash). Shortcut:
+  two events with the same file on one day share it.
+- **A short answer deletes nothing:** the events request has `limit=500`; a workout that left the calendar is deleted
+  only when a second read agrees, never when either read is empty while records exist (a calendar emptied on purpose is
+  not followed).
 - **Sent set** (`ivSent`): event id, day, the event's `updated` stamp and the CRC-32 of the file. An unchanged event is not
   downloaded again; a restamped one with the same file only gets its record refreshed; the unit also dedupes by CRC.
   `calendar_settle` decides: moved or edited means delete the old file, then send; deleted, out of the window or no
   longer holdable means delete from the unit. Only files this app sent are deleted (found in the unit's list by day and
   CRC, from a list read just before, with the key and check of that list); days before today are never touched.
-- **When:** at launch and pull to refresh, then at most hourly (a failure asks again in 15 minutes). Switch "Send planned
-  workouts to the unit" (on with the first key).
+- **When:** at launch and pull to refresh, then at most hourly counting empty calendars too (a failure asks again in
+  15 minutes). Switch "Send planned workouts to the unit" (on with the first key; the key screen says so).
 - **Shown:** the main screen's Intervals.icu section lists each planned workout (waiting, on the unit, or why not sent);
   the unit's own list marks the files this app sent "from Intervals.icu".
 - **Demo:** under `#if DEBUG` and `-demo`, a canned calendar (four workouts, the last with 70 steps) and upload answer,

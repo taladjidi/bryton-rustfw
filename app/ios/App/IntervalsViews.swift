@@ -56,8 +56,7 @@ struct IntervalsSection: View {
     private var calendar: String {
         if !loop.calendarOn { return "not sent to the unit" }
         guard let t = loop.lastCalendar else { return loop.calendarBusy ? "reading..." : "not read yet" }
-        let n = loop.planned.count
-        return "read \(stamp.string(from: t)), \(n) planned"
+        return "read \(stamp.string(from: t))" + (loop.calendarRead ? ", \(loop.planned.count) planned" : "")
     }
 
     private func row(_ k: String, _ v: String) -> some View {

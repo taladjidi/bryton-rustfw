@@ -46,7 +46,7 @@ struct ProfileSheet: View {
                 } header: {
                     Text("Intervals.icu")
                 } footer: {
-                    Text("The key is in Intervals.icu's Settings, Developer Settings. It is kept in the Keychain.")
+                    Text("The key is in Intervals.icu's Settings, Developer Settings. It is kept in the Keychain. Entering a key turns on ride uploads and sending planned workouts to the unit (the switches below).")
                 }
                 if intervals.hasKey { IntervalsOptions() }
             }

@@ -112,6 +112,8 @@ final class IntervalsSync: ObservableObject {
 
     /// A key is stored (read once: the Keychain is not asked on every redraw).
     @Published private(set) var hasKey = false
+    /// Counts every store or removal of the key, so a new key (hasKey unchanged) is noticed too.
+    @Published private(set) var keyVersion = 0
 
     init() { refreshKey() }
 
@@ -120,6 +122,7 @@ final class IntervalsSync: ObservableObject {
         if CommandLine.arguments.contains("-demo") { hasKey = true; return }
         #endif
         hasKey = Keychain.get("apikey") != nil
+        keyVersion += 1
     }
 
     var athlete: String { UserDefaults.standard.string(forKey: Self.athleteKey) ?? "" }
