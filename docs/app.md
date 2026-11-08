@@ -13,8 +13,10 @@ advertisement carries 0x180F is not verified.
 
 ## Look and feel
 
-Reviewed 2026-11-08 (docs/review-app-ui-2026-11-08.md); part A is done: the colours and the numeral face are the
-unit's, the numbers are formatted in one place, and the P1 findings are fixed.
+Reviewed 2026-11-08 (docs/review-app-ui-2026-11-08.md); parts A and B are done: the colours and the numeral
+face are the unit's, the numbers are formatted in one place (`Fmt`, metric or imperial), the P1, P2 and P3 findings are
+fixed or listed as left in the review's section 7. FTP, max HR and the units live in one `Profile` object (`Fmt.swift`),
+set in the profile sheet (the unit's own units setting is not in its PROFILE, so the phone cannot read it).
 
 - **Colour tokens**, one table in `app/core/src/theme.rs` (`TOKENS`), one Color Set per token in
   `app/ios/App/Assets.xcassets` (light and dark), read through `Tok` in `App/Theme.swift`. Tests fail when a colour
@@ -130,7 +132,8 @@ The numbers are right for rides of this firmware or Bryton's with a record every
 count seconds. Ascent and descent come from one method: the file's pair when it has a total_descent, else both from
 the altitude samples with 3 m of hysteresis (this firmware's files have no total_descent).
 
-The screen (`RideDetail.swift`, `RideMap.swift`): a grid of the metrics, the map, five Swift Charts graphs (altitude,
+The screen (`RideDetail.swift`, `RideMap.swift`): a hero card (distance, moving time, TSS, NP; average speed and heart rate
+when there is no power), the map (a button opens it full screen; dark mode dims the IGN tiles), a "Details" grid, five Swift Charts graphs (altitude,
 speed, HR, power, cadence) against distance or time, the laps, the zone bars and the power curve. Dragging on a graph
 puts a marker on the map. The map is an `MKMapView`: inside France the base is IGN's Plan IGN v2 (WMTS
 `https://data.geopf.fr/wmts`, layer `GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2`, matrix set `PM`, no key; checked 2026-11-07),
@@ -139,7 +142,7 @@ kept in memory and in a 200 MB disk cache: a pinch zoom asks again for every lev
 under the tiles it showed through until the zoom stopped (seen on the owner's iPhone, 2026-11-08). The map says "(c) IGN"
 in its corner (IGN's Plan IGN v2 is open data under the Etalab Open Licence 2.0, which asks for the source to be
 credited). The person icon opens FTP and max HR (UserDefaults, default 200 W and 190 bpm) until the unit's
-profile can be read. Launch arguments `-demo` and `-demo-scroll graphs|laps` (Debug builds only) drive the Simulator screenshots.
+profile can be read. Debug builds only: see "Screenshots" below.
 The viewer needs iOS 17 (`chartXSelection`, the two-argument `onChange`; the project's deployment target is 17.0).
 
 The static library the core builds into grew from 18.3 MB to 21.8 MB per target with `fitparser` (what the app
@@ -149,7 +152,7 @@ outside, so that stays until the crate changes or is replaced.
 
 | | | | |
 |:-:|:-:|:-:|:-:|
-| ![Summary and map](img/app-ride-summary.png) | ![Graphs](img/app-ride-graphs.png) | ![Laps, zones, power curve](img/app-ride-zones.png) | ![Graphs, dark mode](img/app-ride-dark.png) |
+| ![Summary and map](img/app-ride-summary.png) | ![Graphs](img/app-ride-graphs.png) | ![Laps, zones, power curve](img/app-ride-zones.png) | ![Summary and map, dark mode](img/app-ride-dark.png) |
 | Summary and track on IGN | Graphs | Laps, zones, curve | Dark mode |
 
 Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had no iPhone 16 Pro simulator):
@@ -227,12 +230,29 @@ when its last day is older than yesterday. TSB is the form the day starts with, 
 curve need Intervals.icu; the screen always says which source it shows. Launch argument `-demo-fitness` (Debug) opens it;
 `-demo-open` opens the first downloaded ride's page.
 
+## Screenshots
+
+Debug builds read launch arguments (all with `-demo`; `xcrun simctl launch <device> <bundle id> -demo ...`, then
+`xcrun simctl io <device> screenshot`): `-demo-dl` (download the first ride), `-demo-open` (with it: open the ride),
+`-demo-scroll graphs|laps|climbs` (a ride page position), `-demo-share` (the share sheet), `-demo-fitness`,
+`-demo-workout` (the first workout's page), `-demo-edit` (the editor; `-demo-saved` saves the copy, `-demo-send` opens the
+send sheet after 1.5 s, `-demo-send-go` presses Send), `-demo-profile` (the profile sheet), `-demo-delete` (the unit
+workout delete confirmation), `-demo-import` (the Files picker), and `-demo-scroll-rides|intervals|unit|phone` (a home
+list position). The images in `docs/img/app-*.png` are light mode shots of an iPhone 18 Pro Simulator at the default
+text size.
+
+| The profile sheet | The unit workouts (delete asked) | "On the phone", import | The Files picker |
+|---|---|---|---|
+| ![Profile](img/app-profile.png) | ![Delete](img/app-delete.png) | ![On the phone](img/app-phone.png) | ![Import](img/app-import.png) |
+
 ## Ride list and weekly totals
 
 ![Main screen: the weekly panel and the ride list](img/app-home.png)
 
 The main screen opens with this week's time, distance, load (TSS) and ride count, and the last 8 weeks as bars (load or
-time; touch a bar to read that week). Each ride row shows its start in the phone's zone and "2 h 31 · 68.4 km · TSS 112".
+time; touch a bar to read that week). Each ride row shows a bicycle glyph, its start in the phone's zone, "2 h 31 · TSS 112"
+("Load 80 (HR)" without power) and its distance in the numeral face. With no ride listed the list says why and offers
+"Try again".
 The numbers come from the ride's file, so the app **syncs by itself**: with the unit connected and nothing else going on
 it downloads the rides of the last 8 weeks, newest first, into the same Documents folder a manual download uses, then
 reads each once (`ride_brief`) and caches the result in `ride-summaries.txt` (name, list size and one text line per ride).

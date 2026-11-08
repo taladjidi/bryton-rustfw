@@ -113,8 +113,7 @@ struct WeeklyPanel: View, Equatable {
     /// Rides of the last 8 weeks the unit lists that are not on the phone yet.
     let missing: Int
     let openProfile: () -> Void
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
+    @EnvironmentObject private var profile: Profile
     @State private var byLoad = true
     @State private var selected: String?
     @Environment(\.dynamicTypeSize) private var type
@@ -123,10 +122,10 @@ struct WeeklyPanel: View, Equatable {
     static func == (a: WeeklyPanel, b: WeeklyPanel) -> Bool { a.missing == b.missing && a.library === b.library }
 
     var body: some View {
-        let weeks = library.weeks(ftp: ftp, maxHR: maxHR)
+        let weeks = library.weeks(ftp: profile.ftp, maxHR: profile.maxHR)
         let current = weeks.last ?? WeekTotal(firstDay: 0, movingS: 0, distanceM: 0, load: 0, rides: 0, hasHrLoad: false)
         let shown = selected.flatMap { s in weeks.first { Fmt.week($0.firstDay) == s } } ?? current
-        let unit = shown.hasHrLoad ? "TSS*" : "TSS"
+        let unit = shown.hasHrLoad ? "Load*" : "TSS"
         VStack(alignment: .leading, spacing: 10) {
             Text(shown.firstDay == current.firstDay ? "This week" : "Week of \(Fmt.week(shown.firstDay))")
                 .font(.subheadline).foregroundStyle(.secondary)
@@ -134,7 +133,7 @@ struct WeeklyPanel: View, Equatable {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline) { stats(shown, unit) }
                 Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
-                    GridRow { stat(Fmt.duration(shown.movingS), "time"); stat(Fmt.km(shown.distanceM), "distance") }
+                    GridRow { stat(Fmt.duration(shown.movingS), "time"); stat(Fmt.distance(shown.distanceM), "distance") }
                     GridRow { stat("\(shown.load)", unit); stat("\(shown.rides)", shown.rides == 1 ? "ride" : "rides") }
                 }
             }
@@ -143,9 +142,13 @@ struct WeeklyPanel: View, Equatable {
                 Text("Time").tag(false)
             }
             .pickerStyle(.segmented)
+            if weeks.allSatisfy({ $0.rides == 0 }) {
+                Text("No rides in the last 8 weeks.").font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: chartHeight / 2, alignment: .center)
+            } else {
             Chart(weeks, id: \.firstDay) { w in
                 BarMark(x: .value("Week", Fmt.week(w.firstDay)), y: .value(byLoad ? "TSS" : "Hours", value(w)))
-                    .foregroundStyle(w.firstDay == shown.firstDay ? Tok.accent : Tok.accent.opacity(0.4))
+                    .foregroundStyle(w.firstDay == shown.firstDay ? Tok.accent : Tok.accent.opacity(0.6))
             }
             .chartXSelection(value: $selected)
             .chartXAxis {
@@ -157,13 +160,21 @@ struct WeeklyPanel: View, Equatable {
             .frame(height: chartHeight)
             .accessibilityLabel("Weekly \(byLoad ? "load" : "time"), last 8 weeks")
             .accessibilityValue(weeks.map { "\(Fmt.week($0.firstDay)): \(byLoad ? "\($0.load)" : Fmt.duration($0.movingS))" }.joined(separator: ", "))
+            }
             if weeks.contains(where: \.hasHrLoad) {
-                Text("* includes loads worked out from heart rate (no power), which are not TSS.")
+                Text("* Load includes rides worked out from heart rate (no power), which are not TSS.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if UserDefaults.standard.object(forKey: "ftp") == nil {
-                Button("FTP not set: loads use 200 W. Open the profile.", action: openProfile)
-                    .font(.subheadline).frame(minHeight: 44, alignment: .leading)
+            if !profile.ftpSet {
+                Button(action: openProfile) {
+                    HStack {
+                        Text("FTP not set: loads use 200 W. Open the profile.").multilineTextAlignment(.leading)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right").font(.footnote.bold()).foregroundStyle(.tertiary)
+                    }
+                    .frame(minHeight: 44)
+                }
+                .font(.subheadline)
             }
             if missing > 0 {
                 Text("\(missing) ride\(missing == 1 ? "" : "s") of the last 8 weeks not on the phone yet.")
@@ -178,7 +189,7 @@ struct WeeklyPanel: View, Equatable {
     @ViewBuilder private func stats(_ shown: WeekTotal, _ unit: String) -> some View {
         stat(Fmt.duration(shown.movingS), "time")
         Spacer()
-        stat(Fmt.km(shown.distanceM), "distance")
+        stat(Fmt.distance(shown.distanceM), "distance")
         Spacer()
         stat("\(shown.load)", unit)
         Spacer()

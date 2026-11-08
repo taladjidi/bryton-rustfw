@@ -83,10 +83,14 @@ private func message(_ e: Error) -> String {
 struct PhoneWorkoutSection: View {
     @ObservedObject var store: WorkoutStore
     let onEdit: (EditorTarget) -> Void
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
     @State private var importing = false
     @State private var problem: String?
+    #if DEBUG
+    private let demoImport = CommandLine.arguments.contains("-demo-import")
+    #endif
 
     var body: some View {
         Section {
@@ -103,6 +107,7 @@ struct PhoneWorkoutSection: View {
                     }
                     .foregroundStyle(.primary)
                     .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
+                    .contextMenu { Button("Delete", systemImage: "trash", role: .destructive) { store.delete(f.file) } }
                 } else {
                     // a saved file the reader refuses stays listed, so it can be deleted
                     HStack {
@@ -134,9 +139,15 @@ struct PhoneWorkoutSection: View {
                 }
             if let problem { Notice(text: problem).font(.caption) }
         } header: {
+            #if DEBUG
+            Text("On the phone").onAppear {  // Simulator screenshot: -demo-import opens the Files picker
+                if demoImport { DispatchQueue.main.asyncAfter(deadline: .now() + 4) { importing = true } }
+            }
+            #else
             Text("On the phone")
+            #endif
         } footer: {
-            Text("Zwift (.zwo), .erg and .mrc files can be imported. Workouts made here wait for the unit's write support to be sent.")
+            Text("Zwift (.zwo), .erg and .mrc files can be imported. Send a workout to the unit from its editor.")
         }
     }
 }
@@ -169,8 +180,9 @@ struct WorkoutEditor: View {
     @ObservedObject var store: WorkoutStore
     @ObservedObject var rides: RideBrowser
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
     @State private var name: String
     @State private var items: [EditItem]
     @State private var saveError: String?
@@ -199,6 +211,7 @@ struct WorkoutEditor: View {
                     switch shown {
                     case .success(let w):
                         StepChart(steps: w.steps, ftp: ftp).frame(height: 150)
+                        ZoneLegend(ftp: ftp)
                         HStack {
                             Text(Fmt.duration(UInt64(w.totalS)))
                             Spacer()
@@ -210,7 +223,7 @@ struct WorkoutEditor: View {
                 } footer: {
                     Text("The chart is the unit's own reading of this file, for FTP \(ftp) W.")
                 }
-                Section("Steps") {
+                Section {
                     ForEach($items) { $it in
                         NavigationLink { StepForm(step: $it.step) } label: {
                             StepSummary(step: it.step, index: items.firstIndex { $0.id == it.id } ?? 0)
@@ -226,6 +239,8 @@ struct WorkoutEditor: View {
                         Label("Add a repeat", systemImage: "repeat")
                     }
                     .disabled(items.isEmpty)
+                } header: {
+                    HStack { Text("Steps"); Spacer(); EditButton().textCase(nil) }
                 }
                 Section {
                     Button("Send to the unit") { sending = true }
@@ -238,14 +253,17 @@ struct WorkoutEditor: View {
             .onChange(of: draft) { saveError = nil }
             .sheet(isPresented: $sending) { SendSheet(rides: rides, draft: draft) }
             #if DEBUG
-            .onAppear { if CommandLine.arguments.contains("-demo-send") { sending = true } }  // Simulator screenshots
+            .onAppear {  // Simulator screenshots: the sheet cannot open while the editor's own sheet is still coming up
+                if CommandLine.arguments.contains("-demo-send") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { sending = true }
+                }
+            }
             #endif
-            .navigationTitle(target.file == nil ? "New workout" : "Edit workout")
+            .navigationTitle(target.draft.name.isEmpty ? "New workout" : target.draft.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    EditButton()
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }.disabled({ if case .failure = shown { true } else { false } }())
                 }
             }
@@ -273,7 +291,7 @@ private struct StepSummary: View {
     var body: some View {
         if step.repeatBack > 0 {
             VStack(alignment: .leading, spacing: 2) {
-                Label("Repeat the \(step.repeatBack) items above, \(step.repeatTimes) times in all", systemImage: "repeat")
+                Label("Repeat the last \(step.repeatBack) \(step.repeatBack == 1 ? "step" : "steps"), \(step.repeatTimes) times", systemImage: "repeat")
                 if Int(step.repeatBack) > index {
                     Notice(text: "Reaches past the start").font(.caption)
                 }
@@ -294,7 +312,7 @@ private struct StepSummary: View {
 private func length(_ s: DraftStep) -> String {
     switch s.duration {
     case .time: Fmt.mmss(UInt32(clamping: s.amount))
-    case .distance: Fmt.km(Double(s.amount))
+    case .distance: Fmt.distance(Double(s.amount))
     case .lap: "Until Lap"
     }
 }
@@ -344,7 +362,7 @@ private struct StepForm: View {
                         Stepper("\(step.amount % 60) s", value: Binding(
                             get: { Int(step.amount % 60) }, set: { step.amount = step.amount / 60 * 60 + UInt32($0) }), in: 0...55, step: 5)
                     case .distance:
-                        Stepper(Fmt.km(Double(step.amount)), value: int($step.amount), in: 100...1_000_000, step: 100)
+                        Stepper(Fmt.distance(Double(step.amount)), value: int($step.amount), in: 100...1_000_000, step: 100)
                     case .lap:
                         Text("The step lasts until you press Lap.").foregroundStyle(.secondary)
                     }

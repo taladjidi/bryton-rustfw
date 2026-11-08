@@ -14,6 +14,10 @@ struct RideMap: UIViewRepresentable {
     let selected: CLLocationCoordinate2D?
     /// The climbs, drawn over the track in their grade colour.
     var climbs: [ClimbLine.Spec] = []
+    @Environment(\.colorScheme) private var scheme
+
+    /// The credit's link: IGN's geoservices page.
+    static let creditURL = URL(string: "https://geoservices.ign.fr/") ?? URL(fileURLWithPath: "/")
 
     static let ign =
         "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
@@ -56,6 +60,8 @@ struct RideMap: UIViewRepresentable {
         func mapView(_ map: MKMapView, viewFor a: MKAnnotation) -> MKAnnotationView? {
             guard let a = a as? MKPointAnnotation else { return nil }
             let v = MKMarkerAnnotationView(annotation: a, reuseIdentifier: nil)
+            // the marker's own label is dark text on the dimmed dark map; the glyph (S, E) says it already
+            v.titleVisibility = .hidden
             switch a.title {
             case "Start": v.markerTintColor = Tok.ui("ok"); v.glyphText = "S"
             case "End": v.markerTintColor = Tok.uiZone(7); v.glyphText = "E"
@@ -77,6 +83,7 @@ struct RideMap: UIViewRepresentable {
             // no Apple map under it: it showed through while a zoom level's tiles loaded (the whole track is in France)
             t.canReplaceMapContent = true
             t.maximumZ = 18
+            t.dark = scheme == .dark
             m.addOverlay(t, level: .aboveLabels)
         }
         let line = MKPolyline(coordinates: points, count: points.count)
@@ -94,6 +101,10 @@ struct RideMap: UIViewRepresentable {
 
     func updateUIView(_ m: MKMapView, context: Context) {
         let c = context.coordinator
+        if let t = m.overlays.compactMap({ $0 as? IGNOverlay }).first, t.dark != (scheme == .dark) {
+            t.dark = scheme == .dark
+            m.renderer(for: t)?.setNeedsDisplay()
+        }
         let ids = climbs.map(\.coords.count)
         if ids != c.shownClimbs {
             m.removeOverlays(m.overlays.filter { $0 is ClimbLine })
@@ -137,6 +148,8 @@ final class IGNOverlay: MKTileOverlay {
         c.requestCachePolicy = .returnCacheDataElseLoad
         return URLSession(configuration: c)
     }()
+    /// Dark mode: the white map is dimmed (drawn by the renderer; the track lines are other overlays, above).
+    var dark = false
     private let lock = NSLock()
     private var loading = Set<String>()
 
@@ -188,10 +201,17 @@ final class IGNRenderer: MKOverlayRenderer {
         }
     }
 
+    private func dim(_ r: CGRect) {
+        guard ign.dark else { return }
+        UIColor.black.withAlphaComponent(0.55).setFill()
+        UIRectFillUsingBlendMode(r, .normal)
+    }
+
     private func draw(_ z: Int, _ x: Int, _ y: Int, in r: CGRect, tile: MKMapRect, zoomScale: MKZoomScale) {
         let top = ign.maximumZ
         if z <= top, let i = ign.image(z, x, y) {
             i.draw(in: r)
+            dim(r)
             return
         }
         if z <= top {
@@ -206,6 +226,7 @@ final class IGNRenderer: MKOverlayRenderer {
             let w = CGFloat(cg.width) / CGFloat(n), h = CGFloat(cg.height) / CGFloat(n)
             let part = CGRect(x: CGFloat(x % n) * w, y: CGFloat(y % n) * h, width: w, height: h)
             if let c = cg.cropping(to: part) { UIImage(cgImage: c).draw(in: r) }
+            dim(r)
             return
         }
     }

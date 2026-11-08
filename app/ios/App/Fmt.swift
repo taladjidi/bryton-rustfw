@@ -2,17 +2,49 @@
 // (a decimal comma in French); clock-style durations come from the Rust core (app/core/src/fmt.rs, tested there).
 
 import Foundation
+import SwiftUI
+
+/// The rider's profile and units: the one place for the keys and the defaults (the sheets, rows and charts read it from
+/// the environment, so a change redraws them). The unit's own units setting is not part of its PROFILE, so the
+/// metric / imperial choice is made on the phone (the profile sheet).
+final class Profile: ObservableObject {
+    @AppStorage("ftp") var ftp = 200
+    @AppStorage("maxHR") var maxHR = 190
+    @AppStorage("lthr") var lthr = 0
+    @AppStorage("weight") var weight = 0
+    @AppStorage("wPrime") var wPrime = 0
+    @AppStorage(Fmt.imperialKey) var imperial = false
+    /// False until the rider (or Intervals.icu) has set an FTP: the loads then use the default.
+    var ftpSet: Bool { UserDefaults.standard.object(forKey: "ftp") != nil }
+}
 
 enum Fmt {
+    static let imperialKey = "imperial"
+    /// Read from the defaults, so any view that formats follows the profile's switch when it redraws.
+    static var imperial: Bool { UserDefaults.standard.bool(forKey: imperialKey) }
+    static var distUnit: String { imperial ? "mi" : "km" }
+    static var speedUnit: String { imperial ? "mph" : "km/h" }
+    static var heightUnit: String { imperial ? "ft" : "m" }
+    /// Metres in the distance unit (a chart's x axis).
+    static func toDist(_ m: Double) -> Double { imperial ? m / 1609.344 : m / 1000 }
+    /// m/s in the speed unit.
+    static func toSpeed(_ ms: Double) -> Double { imperial ? ms * 2.236_936 : ms * 3.6 }
+    /// Metres in the height unit.
+    static func toHeight(_ m: Double) -> Double { imperial ? m * 3.280_84 : m }
+
     /// A decimal number with `digits` places, in the phone's region, no thousands separator.
     static func dec(_ v: Double, _ digits: Int = 1) -> String {
         v.formatted(.number.precision(.fractionLength(digits)).grouping(.never))
     }
 
-    /// "12,4 km" from metres.
-    static func km(_ m: Double, _ digits: Int = 1) -> String { "\(dec(m / 1000, digits)) km" }
-    /// "28,8 km/h" from m/s.
-    static func kmh(_ ms: Double) -> String { "\(dec(ms * 3.6)) km/h" }
+    /// "12,4 km" (or "7.7 mi") from metres.
+    static func distance(_ m: Double, _ digits: Int = 1) -> String { "\(dec(toDist(m), digits)) \(distUnit)" }
+    /// "28,8 km/h" (or mph) from m/s.
+    static func speed(_ ms: Double) -> String { "\(dec(toSpeed(ms))) \(speedUnit)" }
+    /// "152 m" (or ft) from metres: an ascent, a climb's gain.
+    static func height<T: BinaryInteger>(_ m: T) -> String { "\(dec(toHeight(Double(m)), 0)) \(heightUnit)" }
+    /// "72 kg" (or lb).
+    static func weight<T: BinaryInteger>(_ kg: T) -> String { imperial ? "\(dec(Double(kg) * 2.204_62, 0)) lb" : "\(kg) kg" }
     /// "0,77" from a hundredths value.
     static func ifx<T: BinaryInteger>(_ x100: T) -> String { dec(Double(x100) / 100, 2) }
     /// "187 W".

@@ -22,13 +22,14 @@ func pretty(_ name: String) -> String { name.prefix(1) + name.dropFirst().lowerc
 
 struct WorkoutSection: View {
     @ObservedObject var rides: RideBrowser
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
     @State private var deleting: WorkoutFile?
     @EnvironmentObject private var loop: IntervalsLoop
 
     var body: some View {
-        Section("Workouts") {
+        Section("On the unit") {
             ForEach(rides.workouts) { f in
                 if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
                     NavigationLink(value: WorkoutRoute(key: f.key)) {
@@ -47,10 +48,9 @@ struct WorkoutSection: View {
                             .foregroundStyle(.secondary)
                         }
                     }
-                    .swipeActions {
-                        // only when nothing else uses the link: the same guard as a download
-                        Button("Delete", role: .destructive) { deleting = f }.disabled(rides.phase != .idle)
-                    }
+                    // only when nothing else uses the link: the same guard as a download
+                    .swipeActions { Button("Delete", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
+                    .contextMenu { Button("Delete from the unit", systemImage: "trash", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
                 }
             }
             if rides.workouts.isEmpty {
@@ -58,6 +58,13 @@ struct WorkoutSection: View {
                     .foregroundStyle(.secondary)
             }
         }
+        #if DEBUG
+        .onAppear {  // Simulator screenshot: -demo-delete asks to delete the first workout
+            if CommandLine.arguments.contains("-demo-delete") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { deleting = rides.workouts.first }
+            }
+        }
+        #endif
         .confirmationDialog("Delete this workout from the unit?", isPresented: Binding(
             get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible
         ) {
@@ -74,9 +81,10 @@ struct WorkoutSection: View {
 struct WorkoutDetail: View {
     let file: WorkoutFile
     var onEdit: (WorkoutDraft) -> Void = { _ in }
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
-    @State private var profile = false
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
+    @State private var showProfile = false
 
     var body: some View {
         let w = decodeWorkout(bytes: file.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR))
@@ -84,24 +92,23 @@ struct WorkoutDetail: View {
             if let w {
                 Section {
                     StepChart(steps: w.steps, ftp: ftp)
+                    ZoneLegend(ftp: ftp)
                     HStack {
                         Text(Fmt.duration(UInt64(w.totalS)))
                         Spacer()
                         if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)) }
                     }
                     if w.cut { Notice(text: "Longer than the unit keeps: the end is cut.").font(.caption) }
-                }
-                Section {
-                    Button { profile = true } label: {
-                        HStack { Text("FTP \(ftp) W, max heart rate \(maxHR)"); Spacer(); Image(systemName: "person.crop.circle") }
+                    Button { showProfile = true } label: {
+                        HStack {
+                            Label("FTP \(ftp) W, max heart rate \(maxHR) bpm", systemImage: "person.crop.circle")
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.bold()).foregroundStyle(.tertiary)
+                        }
+                        .font(.subheadline).frame(minHeight: 44)
                     }
                 } footer: {
                     Text("Targets follow your profile. IF and TSS are estimates from power steps with a time; they are left out when other steps are mixed in.")
-                }
-                Section {
-                    Button { onEdit(draftFromView(view: w)) } label: { Label("Edit a copy", systemImage: "square.and.pencil") }
-                } footer: {
-                    Text("The copy stays on the phone; the workout on the unit is not changed.")
                 }
                 Section("Steps") {
                     ForEach(Array(w.steps.enumerated()), id: \.offset) { i, s in StepRow(index: i + 1, step: s) }
@@ -112,7 +119,44 @@ struct WorkoutDetail: View {
         }
         .navigationTitle(w.map { pretty($0.name) } ?? "Workout")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $profile) { ProfileSheet() }
+        .toolbar {
+            if let w {
+                Button { onEdit(draftFromView(view: w)) } label: { Label("Edit a copy", systemImage: "square.and.pencil") }
+            }
+        }
+        .sheet(isPresented: $showProfile) { ProfileSheet() }
+    }
+}
+
+/// Zone chips under a step chart: the colour of each zone with its watt range, and the grey of a step with no power target.
+struct ZoneLegend: View {
+    let ftp: Int
+    @ScaledMetric(relativeTo: .caption) private var dot: CGFloat = 10
+
+    var body: some View {
+        let up = zoneUpper(ftp: UInt16(clamping: ftp), maxHr: 190).dropFirst(4)
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), alignment: .leading)], alignment: .leading, spacing: 4) {
+            ForEach(1...7, id: \.self) { z in
+                HStack(spacing: 4) {
+                    Circle().fill(Tok.zone(z)).frame(width: dot, height: dot)
+                    Text("Z\(z) \(range(z, Array(up)))")
+                }
+            }
+            HStack(spacing: 4) {
+                Circle().fill(Color.secondary.opacity(0.5)).frame(width: dot, height: dot)
+                Text("No power target")
+            }
+        }
+        .font(.caption2).foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Zone colours, Z1 to Z7, and grey for a step with no power target")
+    }
+
+    /// "0 to 111", "152 to 205", "over 300".
+    private func range(_ z: Int, _ upper: [UInt16]) -> String {
+        let lo = z == 1 ? 0 : Int(upper[safe: z - 2] ?? 0) + 1
+        guard let hi = upper[safe: z - 1] else { return "over \(lo - 1) W" }
+        return "\(lo) to \(hi) W"
     }
 }
 
@@ -190,7 +234,7 @@ struct StepRow: View {
 
     private var length: String {
         if step.seconds > 0 { return Fmt.mmss(step.seconds) }
-        if step.distanceM > 0 { return Fmt.km(Double(step.distanceM)) }
+        if step.distanceM > 0 { return Fmt.distance(Double(step.distanceM)) }
         return "Until Lap"
     }
 

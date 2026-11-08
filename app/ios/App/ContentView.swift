@@ -20,14 +20,17 @@ struct ContentView: View {
     @State private var path: [WorkoutRoute] = []
     @State private var editing: EditorTarget?
     @State private var lastSync: Date?
+    @StateObject private var profileValues = Profile()
+    @State private var scrollTo: String?
 
     // the environment objects sit outside the stack: the sheets and the pushed pages are presented from inside it
     var body: some View {
-        stack.environmentObject(rides).environmentObject(intervals).environmentObject(loop)
+        stack.environmentObject(rides).environmentObject(intervals).environmentObject(loop).environmentObject(profileValues)
     }
 
     private var stack: some View {
         NavigationStack(path: $path) {
+            ScrollViewReader { proxy in
             List {
                 Section {
                     UnitHeader(
@@ -37,7 +40,7 @@ struct ContentView: View {
                         Button("Demo") { rides.use(DemoTransport(), demo: true) }
                     }
                     #if DEBUG
-                    if !rides.debug.isEmpty {
+                    if !rides.debug.isEmpty && !rides.demo {
                         Text(rides.debug).font(.caption2.monospaced()).foregroundStyle(.secondary)
                     }
                     #endif
@@ -45,31 +48,17 @@ struct ContentView: View {
                 Section {
                     WeeklyPanel(library: library, missing: missing, openProfile: { profile = true }).equatable()
                 }
-                IntervalsSection(loop: loop)
+                IntervalsSection(loop: loop).id("intervals")
                 if let m = rides.message ?? library.error {
                     Section { Notice(text: m) }
                 }
-                Section {
-                    ForEach(rides.rides, id: \.name) { r in
-                        RideRow(
-                            rides: rides, ride: r, brief: library.briefs[r.name],
-                            downloaded: rides.downloaded.contains(r.name), uploaded: loop.uploaded[r.name] != nil,
-                            active: rides.phase == .downloading(r.name),
-                            locked: rides.phase == .listing || (rides.isDownloading && rides.phase != .downloading(r.name))
-                        ).equatable()
-                    }
-                    if rides.rides.isEmpty && rides.phase == .idle {
-                        Text("No rides listed").foregroundStyle(.secondary)
-                    }
-                } header: {
-                    HStack {
-                        Text("Rides")
-                        Spacer()
-                        if let line = rides.syncLine { Text(line).textCase(nil) }
-                    }
-                }
-                WorkoutSection(rides: rides)
-                PhoneWorkoutSection(store: store) { editing = $0 }
+                ridesSection
+                WorkoutSection(rides: rides).id("unit")
+                PhoneWorkoutSection(store: store) { editing = $0 }.id("phone")
+            }
+            .onChange(of: scrollTo) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .top) } }
+            }
             }
             .onChange(of: rides.downloaded) { _, d in
                 library.catchUp(rides.rides, downloaded: d)
@@ -88,7 +77,8 @@ struct ContentView: View {
                     editing = EditorTarget(draft: d, file: nil)
                 } }
             }
-            .navigationTitle("Bike computer")
+            .navigationTitle("Rides")
+            .navigationBarTitleDisplayMode(.inline)
             .task {
                 loop.attach(rides)
                 loop.keyChanged(intervals.hasKey)
@@ -130,6 +120,13 @@ struct ContentView: View {
                         else { editing = EditorTarget(draft: d, file: nil) }
                     }
                 }
+                // a sheet or a scroll position of the home list, for the screenshots (docs/app.md, "Screenshots")
+                let later: (Double, @escaping () -> Void) -> Void = { s, f in DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: f) }
+                if args.contains("-demo-profile") { later(2) { profile = true } }
+                if args.contains("-demo-scroll-phone") { later(3) { scrollTo = "phone" } }
+                if args.contains("-demo-scroll-intervals") { later(3) { scrollTo = "intervals" } }
+                if args.contains("-demo-scroll-rides") { later(3) { scrollTo = "rides" } }
+                if args.contains("-demo-scroll-unit") { later(3) { scrollTo = "unit" } }
                 if args.contains("-demo-fitness") {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { fitness = true }
                 }
@@ -149,6 +146,29 @@ struct ContentView: View {
                 if s == .connected && !rides.demo && !rides.hasTransport { rides.use(BleFileTransport()) }
             }
         }
+    }
+
+    @ViewBuilder private var ridesSection: some View {
+        Section {
+            ForEach(rides.rides, id: \.name) { r in
+                RideRow(
+                    rides: rides, ride: r, brief: library.briefs[r.name],
+                    downloaded: rides.downloaded.contains(r.name), uploaded: loop.uploaded[r.name] != nil,
+                    active: rides.phase == .downloading(r.name),
+                    locked: rides.phase == .listing || (rides.isDownloading && rides.phase != .downloading(r.name))
+                ).equatable()
+            }
+            if rides.rides.isEmpty && rides.phase == .idle {
+                EmptyRides(state: link.state, demo: rides.demo) { link.refresh(); rides.refresh() }
+            }
+        } header: {
+            HStack {
+                Text("Rides")
+                Spacer()
+                if let line = rides.syncLine { Text(line).textCase(nil) }
+            }
+        }
+        .id("rides")
     }
 
     /// Rides of the last 8 weeks the unit lists that are not on the phone yet.
@@ -214,7 +234,8 @@ struct UnitHeader: View {
         switch (demo, state) {
         case (true, _): Label("Demo", systemImage: "play.circle")
         case (_, .connected): Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(Tok.ok)
-        case (_, .searching): Label("Searching", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.secondary)
+        case (_, .searching):
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Searching") }.foregroundStyle(.secondary)
         case (_, .notFound): Label("Not found", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Tok.warn)
         case (_, .failed): Label("Failed", systemImage: "xmark.octagon.fill").foregroundStyle(Tok.alarm)
         default: Label("Unavailable", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Tok.warn)
@@ -235,8 +256,7 @@ struct RideRow: View, Equatable {
     let uploaded: Bool
     let active: Bool
     let locked: Bool
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
+    @EnvironmentObject private var profile: Profile
 
     init(rides: RideBrowser, ride: RideEntry, brief: RideBrief?, downloaded: Bool, uploaded: Bool, active: Bool, locked: Bool) {
         (self.rides, self.ride, self.brief, self.downloaded, self.uploaded, self.active, self.locked) =
@@ -257,13 +277,18 @@ struct RideRow: View, Equatable {
                 rides.download(ride)
             }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
-                Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
-                if uploaded {
-                    Label("Intervals.icu", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Tok.ok)
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "bicycle").font(.title3).foregroundStyle(Tok.accent).frame(width: 28).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
+                    Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
+                    if uploaded {
+                        Label("Intervals.icu", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Tok.ok)
+                    }
+                    if active { RideProgress(rides: rides) }
                 }
-                if active { RideProgress(rides: rides) }
+                Spacer(minLength: 4)
+                if let b = brief { Text(Fmt.distance(b.distanceM)).numeral(.title3).fixedSize() }
             }
         }
         .foregroundStyle(.primary)
@@ -288,14 +313,15 @@ struct RideProgress: View {
 }
 
 extension RideRow {
-    /// "2 h 31 · 68.4 km · TSS 112" ("HR load 80" without power), or why there is no such line yet.
+    /// "2 h 31 · TSS 112" ("Load 80 (HR)" without power; the distance is the row's big number), or why there is no
+    /// such line yet.
     func subtitle(_ b: RideBrief?) -> String {
         guard let b else {
             return downloaded ? "Reading the ride…" : locked ? "Waiting for the sync" : "Not on the phone yet"
         }
-        var parts = [Fmt.duration(UInt64(b.movingS)), Fmt.km(b.distanceM)]
-        let s = rideStat(b: b, name: ride.name, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR), tzOffsetS: 0)
-        if let l = s.load { parts.append("\(s.loadFromHr ? "HR load" : "TSS") \(l)") }
+        var parts = [Fmt.duration(UInt64(b.movingS))]
+        let s = rideStat(b: b, name: ride.name, ftp: UInt16(clamping: profile.ftp), maxHr: UInt16(clamping: profile.maxHR), tzOffsetS: 0)
+        if let l = s.load { parts.append(s.loadFromHr ? "Load \(l) (HR)" : "TSS \(l)") }
         return parts.joined(separator: " · ")
     }
 }
@@ -306,4 +332,41 @@ struct ShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: [url], applicationActivities: nil)
     }
     func updateUIViewController(_ c: UIActivityViewController, context: Context) {}
+}
+
+/// No ride listed: why, and what to do (Retry, the pairing step).
+struct EmptyRides: View {
+    let state: LinkState
+    let demo: Bool
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            Text(help).font(.subheadline).foregroundStyle(.secondary)
+            if state != .searching || demo {
+                Button(action: retry) { Label("Try again", systemImage: "arrow.clockwise") }
+                    .buttonStyle(.bordered).frame(minHeight: 44)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var title: String {
+        switch state {
+        case .connected: "No rides on the unit"
+        case .searching: "Looking for your unit"
+        case .notFound, .failed: "Unit not found"
+        default: "Bluetooth is not available"
+        }
+    }
+
+    private var help: String {
+        switch state {
+        case .connected: "A ride appears here once the unit has saved one. Pull down to ask again."
+        case .searching: "Wake the unit and keep it close."
+        case .notFound, .failed: "Wake the unit. The first time, pair it in Settings, Bluetooth, then try again."
+        default: "Allow Bluetooth for this app in Settings, or use the Demo."
+        }
+    }
 }

@@ -47,8 +47,9 @@ struct FitnessData {
 
 struct FitnessView: View {
     @ObservedObject var library: RideLibrary
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
     /// Intervals.icu's answer, fetched once per key and athlete (a change of FTP or a new ride does not ask again).
     @State private var remote: FitnessData?
     @State private var note: String?

@@ -7,12 +7,9 @@ import SwiftUI
 
 /// FTP and max HR for IF / TSS and the zones; filled from Intervals.icu when a key is set, and given to the unit.
 struct ProfileSheet: View {
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
-    @AppStorage("lthr") private var lthr = 0
-    @AppStorage("weight") private var weight = 0
-    @AppStorage("wPrime") private var wPrime = 0
+    @EnvironmentObject private var profile: Profile
     @EnvironmentObject private var rides: RideBrowser
+    @FocusState private var typing: Bool
     @EnvironmentObject private var intervals: IntervalsSync
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""
@@ -23,17 +20,36 @@ struct ProfileSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Stepper("FTP: \(ftp) W", value: $ftp, in: 50...600, step: 5)
-                    Stepper("Max heart rate: \(maxHR) bpm", value: $maxHR, in: 120...230)
-                    if lthr > 0 { LabeledContent("Threshold heart rate", value: "\(lthr) bpm") }
-                    if weight > 0 { LabeledContent("Weight", value: "\(weight) kg") }
-                    if wPrime > 0 { LabeledContent("W'", value: "\(wPrime) J") }
+                    numberRow("FTP", $profile.ftp, "W", 50...600, step: 5)
+                    numberRow("Max heart rate", $profile.maxHR, "bpm", 120...230, step: 1)
                     if let l = rides.profileLine { Text(l).font(.footnote).foregroundStyle(.secondary) }
                 } footer: {
                     Text("Keep the FTP equal to Intervals.icu's so the loads match. A change here is also given to the unit.")
                 }
+                if profile.lthr > 0 || profile.weight > 0 || profile.wPrime > 0 {
+                    Section {
+                        if profile.lthr > 0 { LabeledContent("Threshold heart rate", value: Fmt.bpm(profile.lthr)) }
+                        if profile.weight > 0 { LabeledContent("Weight", value: Fmt.weight(profile.weight)) }
+                        if profile.wPrime > 0 { LabeledContent("W'", value: "\(profile.wPrime) J") }
+                    } header: {
+                        Text("From Intervals.icu")
+                    } footer: {
+                        Text("Read only here: change them in Intervals.icu and sync.")
+                    }
+                }
                 Section {
-                    TextField("Athlete id (0 or i12345)", text: $athlete)
+                    Picker("Units", selection: $profile.imperial) {
+                        Text("Metric").tag(false)
+                        Text("Imperial").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Units")
+                } footer: {
+                    Text("Distance, speed, height and weight on this phone. The unit keeps its own setting, which the phone cannot read.")
+                }
+                Section {
+                    TextField("Athlete id (like i12345, or 0)", text: $athlete)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField(intervals.hasKey ? "API key stored (type to replace)" : "API key", text: $key)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -47,24 +63,45 @@ struct ProfileSheet: View {
                     Text("Intervals.icu")
                 } footer: {
                     Text("The key is in Intervals.icu's Settings, Developer Settings. It is kept in the Keychain. Entering a key turns on ride uploads and sending planned workouts to the unit (the switches below).")
+                    if let u = URL(string: "https://intervals.icu/settings") {
+                        Link("Open Intervals.icu settings", destination: u)
+                    }
                 }
                 if intervals.hasKey { IntervalsOptions() }
                 Section { NavigationLink("Licences") { LicencesView() } }
             }
             .navigationTitle("Profile")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { typing = false; dismiss() } }
+                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { typing = false } }
+            }
             .onAppear {
-                opened = (ftp, maxHR)
+                opened = (profile.ftp, profile.maxHR)
                 athlete = intervals.athlete
             }
             .onDisappear {
                 // a change typed here goes to the unit too (the stepper steps are all in range)
-                guard let o = opened, o != (ftp, maxHR) else { return }
-                rides.pushProfile(IntervalsProfile(name: nil, ftp: UInt32(clamping: ftp), maxHr: UInt32(clamping: maxHR),
+                // a typed number can be out of range: clamp it as the steppers would
+                profile.ftp = min(max(profile.ftp, 50), 600)
+                profile.maxHR = min(max(profile.maxHR, 120), 230)
+                guard let o = opened, o != (profile.ftp, profile.maxHR) else { return }
+                rides.pushProfile(IntervalsProfile(name: nil, ftp: UInt32(clamping: profile.ftp), maxHr: UInt32(clamping: profile.maxHR),
                     lthr: nil, weightKg: nil, wprimeJ: nil), source: "this phone")
             }
         }
         .presentationDetents([.large])
+    }
+
+    /// A typed value with a stepper beside it (13 taps from 200 W to 265 W is too many).
+    private func numberRow(_ label: String, _ value: Binding<Int>, _ unit: String, _ range: ClosedRange<Int>, step: Int) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            TextField(unit, value: value, format: .number.grouping(.never))
+                .keyboardType(.numberPad).multilineTextAlignment(.trailing).focused($typing).frame(width: 64)
+            Text(unit).foregroundStyle(.secondary)
+            Stepper(label, value: value, in: range, step: step).labelsHidden()
+        }
     }
 }
 
@@ -77,6 +114,7 @@ struct Pt: Identifiable {
 
 struct Series: Identifiable {
     let id: String
+    let unit: String
     let color: Color
     let area: Bool
     let pts: [Pt]
@@ -86,8 +124,8 @@ struct Series: Identifiable {
     let hi: Double
     let mean: Double
 
-    init(id: String, color: Color, area: Bool, pts: [Pt]) {
-        (self.id, self.color, self.area, self.pts) = (id, color, area, pts)
+    init(id: String, unit: String, color: Color, area: Bool, pts: [Pt]) {
+        (self.id, self.unit, self.color, self.area, self.pts) = (id, unit, color, area, pts)
         let ys = pts.map(\.y)
         lo = ys.min() ?? 0
         hi = ys.max() ?? 0
@@ -122,23 +160,25 @@ struct Prep {
     }
 
     init(_ r: RideView, byTime: Bool) {
-        let xf: (TrackSample) -> Double = { byTime ? Double($0.tS) / 60 : $0.distM / 1000 }
+        let xf: (TrackSample) -> Double = { byTime ? Double($0.tS) / 60 : Fmt.toDist($0.distM) }
         for s in r.samples {
             guard let a = s.lat, let o = s.lon, abs(a) <= 90, abs(o) <= 180 else { continue }
             let c = CLLocationCoordinate2D(latitude: a, longitude: o)
             coords.append(c)
             geo.append((xf(s), c))
         }
-        let defs: [(String, Color, Bool, (TrackSample) -> Double?)] = [
-            ("Altitude (m)", .secondary, true, { $0.altM }),
-            ("Speed (km/h)", Tok.speed, false, { $0.speedMs.map { $0 * 3.6 } }),
-            ("Heart rate (bpm)", Tok.heartRate, false, { $0.hr.map(Double.init) }),
-            ("Power (W)", Tok.power, false, { $0.power.map(Double.init) }),
-            ("Cadence (rpm)", Tok.cadence, false, { $0.cadence.map(Double.init) }),
+        // power and cadence are left out while stopped (speed 0): a stop is not a dip to zero, the line joins over it
+        let moving: (TrackSample) -> Bool = { ($0.speedMs ?? 1) >= 0.5 }
+        let defs: [(String, String, Color, Bool, (TrackSample) -> Double?)] = [
+            ("Altitude", Fmt.heightUnit, .secondary, true, { $0.altM.map(Fmt.toHeight) }),
+            ("Speed", Fmt.speedUnit, Tok.speed, false, { $0.speedMs.map(Fmt.toSpeed) }),
+            ("Heart rate", "bpm", Tok.heartRate, false, { $0.hr.map(Double.init) }),
+            ("Power", "W", Tok.power, false, { moving($0) ? $0.power.map(Double.init) : nil }),
+            ("Cadence", "rpm", Tok.cadence, false, { moving($0) ? $0.cadence.map(Double.init) : nil }),
         ]
         series = defs.compactMap { d in
-            let pts = r.samples.enumerated().compactMap { i, s in d.3(s).map { Pt(id: i, x: xf(s), y: $0) } }
-            return pts.count > 1 ? Series(id: d.0, color: d.1, area: d.2, pts: pts) : nil
+            let pts = r.samples.enumerated().compactMap { i, s in d.4(s).map { Pt(id: i, x: xf(s), y: $0) } }
+            return pts.count > 1 ? Series(id: "\(d.0) (\(d.1))", unit: d.1, color: d.2, area: d.3, pts: pts) : nil
         }
     }
 
@@ -156,10 +196,8 @@ struct Prep {
 
 struct RideDetail: View {
     let url: URL
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
-    @AppStorage("weight") private var weight = 0
-    @AppStorage("wPrime") private var wPrime = 0
+    @EnvironmentObject private var profileValues: Profile
+    @State private var fullMap = false
     @State private var insight: RideInsight?
     @State private var ride: RideView?
     @State private var prep = Prep()
@@ -171,6 +209,11 @@ struct RideDetail: View {
     @ScaledMetric private var mapHeight: CGFloat = 280
 
     /// The start in the phone's time zone: the title and the summary's date are both this one value.
+    private var ftp: Int { profileValues.ftp }
+    private var maxHR: Int { profileValues.maxHR }
+    private var weight: Int { profileValues.weight }
+    private var wPrime: Int { profileValues.wPrime }
+
     private var startDate: Date? { ride.map { Date(timeIntervalSince1970: TimeInterval($0.summary.startUnix)) } }
 
     var body: some View {
@@ -178,25 +221,31 @@ struct RideDetail: View {
         ScrollView {
             if let r = ride {
                 VStack(alignment: .leading, spacing: 20) {
-                    SummaryGrid(s: r.summary)
+                    RideHero(s: r.summary)
                     IntervalsRideLink(url: url)
                     if !prep.coords.isEmpty {
-                        RideMap(
-                            points: prep.coords, selected: selX.flatMap { x in Prep.nearest(prep.geo, x) { $0.x }?.c },
-                            climbs: (insight?.climbs ?? []).map {
-                                ClimbLine.Spec(coords: $0.coords(in: r.samples), color: Tok.uiGrade(Int($0.avgGradeX10)))
-                            })
+                        map(r, selected: selX.flatMap { x in Prep.nearest(prep.geo, x) { $0.x }?.c })
                             .frame(height: mapHeight)
                             .accessibilityElement()
-                            .accessibilityLabel("Route map, \(Fmt.km(r.summary.distanceM))")
+                            .accessibilityLabel("Route map, \(Fmt.distance(r.summary.distanceM))")
                             .overlay(alignment: .bottomTrailing) {
                                 if RideMap.usesIGN(prep.coords) {
-                                    Text("© IGN").font(.caption2).padding(.horizontal, 4)
+                                    Link("© IGN", destination: RideMap.creditURL).font(.caption2).padding(.horizontal, 4)
                                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 4)).padding(4)
                                 }
                             }
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(alignment: .topTrailing) {
+                                Button { fullMap = true } label: {
+                                    Image(systemName: "arrow.up.left.and.arrow.down.right").padding(10)
+                                        .background(.thinMaterial, in: Circle())
+                                }
+                                .frame(minWidth: 44, minHeight: 44)
+                                .accessibilityLabel("Full screen map")
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: Tok.radiusCard))
+                            .fullScreenCover(isPresented: $fullMap) { FullMap(map: map(r, selected: nil)) }
                     }
+                    SummaryGrid(s: r.summary)
                     graphs.id("graphs")
                     if let i = insight { insightSections(r, i) }
                     if !r.summary.laps.isEmpty { LapList(laps: r.summary.laps).id("laps") }
@@ -224,6 +273,7 @@ struct RideDetail: View {
         .onChange(of: ride != nil) { _, _ in
             // launch argument for the Simulator screenshots: -demo-scroll graphs|laps
             let a = CommandLine.arguments
+            if a.contains("-demo-share") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { sharing = true } }
             if let i = a.firstIndex(of: "-demo-scroll"), i + 1 < a.count {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { proxy.scrollTo(a[i + 1], anchor: .top) }
             }
@@ -241,7 +291,7 @@ struct RideDetail: View {
         }
         .sheet(isPresented: $sharing) { ShareSheet(url: url) }
         .sheet(isPresented: $profile) { ProfileSheet() }
-        .task(id: "\(ftp) \(maxHR)") { await load() }
+        .task(id: "\(ftp) \(maxHR) \(profileValues.imperial)") { await load() }
         // off the main thread and cached for the session; CP is the FTP, as the unit takes it
         .task(id: "\(ftp) \(weight) \(wPrime)") {
             insight = await InsightCache.shared.insight(
@@ -255,6 +305,14 @@ struct RideDetail: View {
             }
         }
         .onChange(of: insight) { _, i in prep.attach(i?.climbs ?? [], byTime: byTime) }
+    }
+
+    private func map(_ r: RideView, selected: CLLocationCoordinate2D?) -> RideMap {
+        RideMap(
+            points: prep.coords, selected: selected,
+            climbs: (insight?.climbs ?? []).map {
+                ClimbLine.Spec(coords: $0.coords(in: r.samples), color: Tok.uiGrade(Int($0.avgGradeX10)))
+            })
     }
 
     private func load() async {
@@ -299,6 +357,7 @@ struct RideDetail: View {
 }
 
 struct MetricChart: View {
+    @EnvironmentObject private var profile: Profile
     let series: Series
     let byTime: Bool
     @Binding var selX: Double?
@@ -312,7 +371,9 @@ struct MetricChart: View {
                 Text(series.id).font(.subheadline.bold())
                 Spacer()
                 if let sx = selX, let p = Prep.nearest(series.pts, sx, { $0.x }) {
-                    Text(Fmt.dec(p.y, 0)).numeral(.subheadline).foregroundStyle(series.color)
+                    // "12.4 km · 187 W": where, and the value
+                    Text("\(Fmt.dec(p.x, byTime ? 0 : 1)) \(byTime ? "min" : Fmt.distUnit) · \(Fmt.dec(p.y, 0)) \(series.unit)")
+                        .numeral(.subheadline).foregroundStyle(series.color)
                 }
             }
             Chart {
@@ -332,7 +393,7 @@ struct MetricChart: View {
                 }
             }
             .chartXSelection(value: $selX)
-            .chartXAxisLabel(byTime ? "min" : "km")
+            .chartXAxisLabel(byTime ? "min" : Fmt.distUnit, position: .bottom, alignment: .trailing)
             .chartYScale(domain: series.domain)
             .chartOverlay { proxy in
                 // the cursor line, drawn here so the chart's 2000 marks are not rebuilt on every drag tick
@@ -340,6 +401,9 @@ struct MetricChart: View {
                     if let sx = selX, let px = proxy.position(forX: sx), let pf = proxy.plotFrame {
                         let f = g[pf]
                         Rectangle().fill(.secondary).frame(width: 1, height: f.height).position(x: f.minX + px, y: f.midY)
+                        if let p = Prep.nearest(series.pts, sx, { $0.x }), let py = proxy.position(forY: p.y) {
+                            Circle().fill(series.color).frame(width: 8, height: 8).position(x: f.minX + px, y: f.minY + py)
+                        }
                     }
                 }
                 .allowsHitTesting(false)
@@ -352,41 +416,98 @@ struct MetricChart: View {
     }
 }
 
+/// The ride's numbers as (label, value), in the grid's order.
+private func summaryCells(_ s: RideSummary) -> [(String, String)] {
+    let cells: [(String, String)?] = [
+        ("Distance", Fmt.distance(s.distanceM)),
+        ("Moving", Fmt.clock(s.movingS)),
+        ("Elapsed", Fmt.clock(s.elapsedS)),
+        s.avgSpeedMs.map { ("Avg speed", Fmt.speed($0)) },
+        s.maxSpeedMs.map { ("Max speed", Fmt.speed($0)) },
+        s.ascentM.map { ("Ascent", Fmt.height($0)) },
+        s.descentM.map { ("Descent", Fmt.height($0)) },
+        s.avgHr.map { ("Avg HR", Fmt.bpm($0)) },
+        s.maxHr.map { ("Max HR", Fmt.bpm($0)) },
+        s.avgPower.map { ("Avg power", Fmt.watts($0)) },
+        s.maxPower.map { ("Max power", Fmt.watts($0)) },
+        s.np.map { ("NP", Fmt.watts($0)) },
+        s.ifX100.map { ("IF", Fmt.ifx($0)) },
+        s.tss.map { ("TSS", "\($0)") },
+        s.avgCadence.map { ("Avg cadence", "\($0) rpm") },
+        s.kcal.map { ("Energy", "\($0) kcal") },
+    ]
+    return cells.compactMap { $0 }
+}
+
+/// What a rider looks for first (Garmin, Wahoo: distance, time, load): four of these, the ones the ride has.
+private func heroCells(_ all: [(String, String)]) -> [(String, String)] {
+    let order = ["Distance", "Moving", "TSS", "NP", "Avg power", "Avg speed", "Avg HR"]
+    return order.compactMap { l in all.first { $0.0 == l } }.prefix(4).map { $0 }
+}
+
+/// The headline numbers in the numeral face, above the map.
+struct RideHero: View {
+    let s: RideSummary
+    @EnvironmentObject private var profile: Profile
+    @ScaledMetric(relativeTo: .headline) private var tileMin: CGFloat = 130
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: tileMin), spacing: 12)], alignment: .leading, spacing: 12) {
+            ForEach(heroCells(summaryCells(s)), id: \.0) { c in
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(c.0).font(.caption).foregroundStyle(.secondary)
+                    Text(c.1).numeral(.title).lineLimit(1).minimumScaleFactor(0.6)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: Tok.radiusCard))
+    }
+}
+
+/// The other numbers, under the map.
 struct SummaryGrid: View {
     let s: RideSummary
+    @EnvironmentObject private var profile: Profile
     /// A tile's least width grows with the type, so a label never breaks mid-word and a value is not clipped.
     @ScaledMetric(relativeTo: .headline) private var tileMin: CGFloat = 100
 
     var body: some View {
-        let cells: [(String, String)?] = [
-            ("Distance", Fmt.km(s.distanceM)),
-            ("Moving", Fmt.clock(s.movingS)),
-            ("Elapsed", Fmt.clock(s.elapsedS)),
-            s.avgSpeedMs.map { ("Avg speed", Fmt.kmh($0)) },
-            s.maxSpeedMs.map { ("Max speed", Fmt.kmh($0)) },
-            s.ascentM.map { ("Ascent", "\($0) m") },
-            s.descentM.map { ("Descent", "\($0) m") },
-            s.avgHr.map { ("Avg HR", Fmt.bpm($0)) },
-            s.maxHr.map { ("Max HR", Fmt.bpm($0)) },
-            s.avgPower.map { ("Avg power", Fmt.watts($0)) },
-            s.maxPower.map { ("Max power", Fmt.watts($0)) },
-            s.np.map { ("NP", Fmt.watts($0)) },
-            s.ifX100.map { ("IF", Fmt.ifx($0)) },
-            s.tss.map { ("TSS", "\($0)") },
-            s.avgCadence.map { ("Avg cadence", "\($0) rpm") },
-            s.kcal.map { ("Energy", "\($0) kcal") },
-        ]
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: tileMin), spacing: 8)], spacing: 8) {
-            ForEach(cells.compactMap { $0 }, id: \.0) { c in
-                VStack(alignment: .leading) {
-                    Text(c.0).font(.caption).foregroundStyle(.secondary)
-                    Text(c.1).numeral(.title3).lineLimit(1).minimumScaleFactor(0.7)
+        let all = summaryCells(s)
+        let hero = Set(heroCells(all).map(\.0))
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Details").font(.subheadline.bold())
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: tileMin), spacing: 8)], spacing: 8) {
+                ForEach(all.filter { !hero.contains($0.0) }, id: \.0) { c in
+                    VStack(alignment: .leading) {
+                        Text(c.0).font(.caption).foregroundStyle(.secondary)
+                        Text(c.1).numeral(.title3).lineLimit(1).minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .tile()
+                    .accessibilityElement(children: .combine)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .tile()
-                .accessibilityElement(children: .combine)
             }
         }
+    }
+}
+
+/// The map on the whole screen.
+struct FullMap: View {
+    let map: RideMap
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        map.ignoresSafeArea()
+            .overlay(alignment: .topTrailing) {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").padding(12).background(.thinMaterial, in: Circle())
+                }
+                .frame(minWidth: 44, minHeight: 44).padding()
+                .accessibilityLabel("Close map")
+            }
     }
 }
 
@@ -405,10 +526,11 @@ struct LapList: View {
 struct LapRow: View {
     let index: Int
     let lap: RideLap
+    @EnvironmentObject private var profile: Profile
 
     var body: some View {
         let rest = [
-            Fmt.km(lap.distM, 2), lap.avgSpeedMs.map(Fmt.kmh), lap.avgPower.map { Fmt.watts($0) }, lap.avgHr.map { Fmt.bpm($0) },
+            Fmt.distance(lap.distM, 2), lap.avgSpeedMs.map(Fmt.speed), lap.avgPower.map { Fmt.watts($0) }, lap.avgHr.map { Fmt.bpm($0) },
         ].compactMap { $0 }
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {

@@ -88,7 +88,7 @@ extension ClimbStat {
 
     /// The chart x range of the climb on the chosen axis.
     func xRange(byTime: Bool) -> ClosedRange<Double> {
-        byTime ? Double(startS) / 60...Double(max(endS, startS)) / 60 : (Double(startM) / 1000)...((Double(startM) + Double(lenM)) / 1000)
+        byTime ? Double(startS) / 60...Double(max(endS, startS)) / 60 : Fmt.toDist(Double(startM))...Fmt.toDist(Double(startM) + Double(lenM))
     }
 }
 
@@ -103,7 +103,7 @@ struct ClimbsSection: View {
                 HStack(alignment: .top, spacing: 8) {
                     RoundedRectangle(cornerRadius: 2).fill(Tok.grade(Int(c.avgGradeX10))).frame(width: 6)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(i + 1)  \(Fmt.km(Double(c.lenM))) at \(Fmt.dec(Double(c.avgGradeX10) / 10)) %, +\(c.gainM) m")
+                        Text("\(i + 1)  \(Fmt.distance(Double(c.lenM))) at \(Fmt.dec(Double(c.avgGradeX10) / 10)) %, +\(Fmt.height(c.gainM))")
                             .font(.subheadline.bold())
                         Text(detail(c)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -199,8 +199,9 @@ struct CompareSection: View {
     let weight: UInt16
     let cp: UInt16
     let wPrime: UInt16
-    @AppStorage("ftp") private var ftp = 200
-    @AppStorage("maxHR") private var maxHR = 190
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
     @State private var other: (name: String, view: RideView, climbs: [ClimbStat])?
     @State private var loading = false
     @State private var picking: Task<Void, Never>?
@@ -276,7 +277,7 @@ struct CompareSection: View {
                 if let a = climbs[safe: Int(pairs[k].first)], let b = o.climbs[safe: Int(pairs[k].second)] {
                     let d = Int(a.timeS) - Int(b.timeS)
                     HStack {
-                        Text("\(Int(pairs[k].first) + 1)  \(Fmt.km(Double(a.lenM)))")
+                        Text("\(Int(pairs[k].first) + 1)  \(Fmt.distance(Double(a.lenM)))")
                         Spacer()
                         Text("\(Fmt.mmss(a.timeS)) vs \(Fmt.mmss(b.timeS))")
                         Text(d == 0 ? "same" : "\(d < 0 ? "-" : "+")\(Fmt.mmss(UInt32(abs(d))))")

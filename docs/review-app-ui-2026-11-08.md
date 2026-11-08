@@ -343,3 +343,40 @@ tokens for sizes, `#if DEBUG` on IntervalsClient demo checks (verify).
 1. `Theme.swift` with the asset colours, `Fmt` (locale, units), `Font.figure`; replace every literal colour and `String(format:)`.
 2. P1 items 1, 3, 5, 6, 7 (small, visible), then 2 and 8 (a pass over layouts with `ViewThatFits` and labels).
 3. Re-shoot with the same arguments, light, dark, XXL, AX, and re-run contrast on the final asset values.
+
+## 7. Status after part B (2026-11-08)
+
+Part A did the P1 items, the tokens, `.numeral()` and `Fmt`. Part B did the P2 and P3 items below, seen in the
+Simulator (light, dark, XXL; the demo hooks are in docs/app.md, "Screenshots").
+
+Done:
+- **H4** the title is "Rides", inline. **H5** the empty weekly chart says "No rides in the last 8 weeks"; an empty list
+  says why (searching, not found, Bluetooth, connected) with a "Try again" button; the header shows a spinner while
+  searching. **H8** unselected bars are accent at 0.6 (tap or drag selects). **H9** "TSS" or "Load n (HR)", "Load*" in
+  the weekly panel. **H10** each row has the bicycle glyph and its distance in the numeral face. **H11** the FTP row
+  is a full-width 44 pt button with a chevron. H7 and H12 were done in part A.
+- **R4** the ride page opens on a hero card (distance, moving time, TSS, NP; with no power the average speed and heart
+  rate fill in), then the map, then "Details". **R5** one `Fmt.when` everywhere (part A). **R6** the readout is
+  "12.4 km · 187 W" on all five charts with a marker dot. **R7** series tokens (part A). **R8** one profile icon
+  (`person.crop.circle`) on home, ride and workout pages. **R10** a full-screen map button, the credit is a link,
+  IGN tiles are dimmed in dark mode, the Start / End marker labels are hidden (the S and E glyphs say it; the system
+  label was dark on dark). **R11** power and cadence skip stopped samples (speed under 0.5 m/s), so a stop is not a dip
+  to zero. **R12** the axis unit sits at the right end, in the unit chosen. R9 was part A.
+- **W2** the stale footer is gone. **W3** "On the unit" / "On the phone". **W4** zone tokens (part A). **W5** a zone
+  legend (colour, watt range, grey for no power target) under the chart on the detail page and in the editor. **W6** a
+  long press menu with Delete on the unit and phone rows (beside the swipe), and the editor's steps keep Edit and
+  swipe. **W7** the profile line moved into the chart card, "Edit a copy" is a toolbar button. **W8** the editor's title
+  is the workout's name. **W9** Edit (reorder) is in the Steps header. **W10** "Repeat the last 2 steps, 3 times".
+- **P-1** FTP and max HR are typed in a number pad field with the stepper beside it (clamped to the range when the
+  sheet closes). **P-2** read-only values have their own "From Intervals.icu" section. **P-3** a link to Intervals.icu's
+  settings and a clearer athlete id hint. **P-4** done in part A.
+- **Section 2 and 4:** one `Profile` object holds ftp, maxHR, lthr, weight, wPrime and the units (the nine
+  `@AppStorage` declarations are gone); units: `Fmt` reads a metric / imperial switch (km, mi; km/h, mph; m, ft; kg,
+  lb) set in the profile sheet; the unit's own setting is not part of its PROFILE, so it cannot be read from it.
+
+Not done:
+- **H6** (saved rides while the unit is away) needs the library to scan Documents at launch: a behaviour change, left.
+- **R13** the axis picker stays with the content (the review said fine for five charts). **W6's Edit mode** on the
+  home lists: the context menu was taken instead.
+- **Hard-coded sizes** (`width: 24`, `28`, 8 pt tile padding): left, they track Dynamic Type through their text.
+- **IntervalsClient `#if DEBUG`:** checked, the three `-demo` reads are all inside `#if DEBUG` (lines 58, 121, 161).
