@@ -136,11 +136,8 @@ impl Power {
     pub fn second(&mut self, p: Option<u16>, ride: &Ride, cp: u16, wprime_j: u16) {
         self.sample(p, ride.moving());
         if ride.state() != State::Idle {
-            let full = i64::from(wprime_j.max(1)) * 1000;
-            let (cp, p) = (i64::from(cp), i64::from(p.unwrap_or(0)));
-            let w = self.wbal_mj.unwrap_or(full);
-            let w = if p > cp { w - (p - cp) * 1000 } else { w + (full - w) * (cp - p) / i64::from(wprime_j.max(1)) };
-            self.wbal_mj = Some(w.clamp(-full, full));
+            let w = self.wbal_mj.unwrap_or(i64::from(wprime_j.max(1)) * 1000);
+            self.wbal_mj = Some(wbal_step(w, p.unwrap_or(0), cp, wprime_j));
         } else {
             self.wbal_mj = None; // "None before a ride": an ended or discarded ride's value is not the next one's
         }
@@ -282,6 +279,20 @@ impl Power {
     pub fn wbal_j(&self) -> Option<i32> {
         self.wbal_mj.map(|w| (w / 1000) as i32)
     }
+}
+
+/// One second of the W' balance model (module doc): the balance `w_mj` (mJ) after one second at power `p`, given CP and
+/// W' (J), clamped to +-W'. Shared with the phone app, which replays a ride file with it.
+///
+/// ```
+/// // one second 100 W over CP takes 100 J off a full 20 kJ W'
+/// assert_eq!(bryton_rustfw::power::wbal_step(20_000_000, 300, 200, 20_000), 19_900_000);
+/// ```
+pub fn wbal_step(w_mj: i64, p: u16, cp: u16, wprime_j: u16) -> i64 {
+    let full = i64::from(wprime_j.max(1)) * 1000;
+    let (cp, p) = (i64::from(cp), i64::from(p));
+    let w = if p > cp { w_mj - (p - cp) * 1000 } else { w_mj + (full - w_mj) * (cp - p) / i64::from(wprime_j.max(1)) };
+    w.clamp(-full, full)
 }
 
 /// Training stress score of `secs` seconds with power at normalized power `np`: s x NP^2 x 100 / (FTP^2 x 3600).

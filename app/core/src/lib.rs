@@ -12,15 +12,20 @@
 //!   peripherals bonded by the system is reported by third-party apps, not stated by Apple (AirBattery PR 2,
 //!   LucasStop/LogiBattery issue 121): to be confirmed on the phone.
 
+pub mod calendar;
 pub mod demo;
 pub mod draft;
 pub mod files;
 #[cfg(test)]
 mod files_tests;
+pub mod fitness;
 pub mod import;
+pub mod insight;
 pub mod intervals;
 pub mod ride;
+pub mod fmt;
 pub mod summary;
+pub mod theme;
 #[cfg(test)]
 mod summary_tests;
 pub mod workout;

@@ -4,6 +4,10 @@
 <dict>
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>BarlowSemiCondensed-Bold.ttf</string>
+	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 </dict>

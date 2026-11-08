@@ -40,11 +40,17 @@ enum Keychain {
     }
 }
 
-struct IntervalsFailure: Error { let text: String }
+struct IntervalsFailure: Error {
+    let text: String
+    /// The key was refused: retrying without a new key is pointless.
+    var auth = false
+    /// Worth trying again later (network, 429, 5xx); false for a file or request Intervals.icu will always refuse.
+    var retry = true
+}
 
 enum IntervalsClient {
     /// No cache or cookies on disk: the athlete's data is not kept by the system.
-    private static let session = URLSession(configuration: .ephemeral)
+    static let session = URLSession(configuration: .ephemeral)
 
 
     /// The athlete with its Ride settings, or why not, in plain words. The key is never put in a message.
@@ -106,6 +112,8 @@ final class IntervalsSync: ObservableObject {
 
     /// A key is stored (read once: the Keychain is not asked on every redraw).
     @Published private(set) var hasKey = false
+    /// Counts every store or removal of the key, so a new key (hasKey unchanged) is noticed too.
+    @Published private(set) var keyVersion = 0
 
     init() { refreshKey() }
 
@@ -114,6 +122,7 @@ final class IntervalsSync: ObservableObject {
         if CommandLine.arguments.contains("-demo") { hasKey = true; return }
         #endif
         hasKey = Keychain.get("apikey") != nil
+        keyVersion += 1
     }
 
     var athlete: String { UserDefaults.standard.string(forKey: Self.athleteKey) ?? "" }

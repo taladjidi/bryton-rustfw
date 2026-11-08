@@ -62,6 +62,18 @@ final class RideBrowser: ObservableObject {
     private var workoutFiles: [WorkoutFile] = []
     /// The write under way is a send (not a delete).
     private var sending = false
+    /// Calendar changes waiting for an idle link (after the ride sync), and the one under way. They never block the
+    /// rider: anything the rider starts puts the one under way back at the front. `onCalendarJob` hears how each ended:
+    /// the job, the error in words, the core's verdict (`calendarJobError`), and whether the unit already held the file
+    /// (a rider's own copy: never deleted later). A failure drops only its job unless the verdict stops the pass.
+    private var calendarJobs: [CalendarJob] = []
+    private var calendarJob: CalendarJob?
+    private var calendarRetried = false
+    var onCalendarJob: ((CalendarJob, String?, JobNext, Bool) -> Void)?
+    /// `workouts` is what the unit's folder holds now (a delete needs the keys of a list read just before); `workoutsListed`:
+    /// it was read at all on this connection (a send only checks it for the same file).
+    private var workoutsFresh = false
+    private var workoutsListed = false
     /// The profile to give the unit, kept until the unit took it (or refused for good); `merged` is what was sent.
     /// A push that arrives while an exchange is in flight waits in `queuedProfile` and replaces the pending one after.
     private struct ProfilePush { let iv: IntervalsProfile; let source: String; let at: Date }
@@ -103,6 +115,8 @@ final class RideBrowser: ObservableObject {
         }
         tick?.invalidate()
         retry?.cancel()
+        workoutsFresh = false
+        workoutsListed = false
         transport = t
         self.demo = demo
         ready = false
@@ -112,8 +126,10 @@ final class RideBrowser: ObservableObject {
         t.onLost = { [weak self] in
             guard let self else { return }
             self.ready = false
+            self.workoutsFresh = false
+            self.workoutsListed = false
             self.syncOff = false  // a reconnect tries the sync again
-            if case .downloading = self.phase { self.message = "Link lost, resuming..." }
+            if case .downloading = self.phase { self.message = "Link lost, resuming…" }
             self.dropProfileExchange()  // the pending profile goes on the next connection
             if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
@@ -131,6 +147,12 @@ final class RideBrowser: ObservableObject {
             client.abort()
             dropProfileExchange()
         }
+        if let job = calendarJob, phase == .writing {  // the unit drops a write nobody feeds after 5 s
+            client.abort()
+            calendarJob = nil
+            phase = .idle
+            calendarJobs.insert(job, at: 0)
+        }
         if auto && isDownloading {
             auto = false
             cancel()
@@ -142,6 +164,7 @@ final class RideBrowser: ObservableObject {
         syncPaused = false
         guard ready, let t = transport, !isDownloading, phase != .writing else { return }
         message = nil
+        workoutsFresh = false
         listingWorkouts = false
         workoutKey = nil
         phase = .listing
@@ -153,6 +176,7 @@ final class RideBrowser: ObservableObject {
         yieldAuto()
         guard ready, let t = transport, phase == .idle || phase == .workouts else { return }
         message = nil
+        workoutsFresh = false
         phase = .workouts
         listingWorkouts = true
         workoutQueue = []
@@ -165,6 +189,7 @@ final class RideBrowser: ObservableObject {
         guard let t = transport else { return }
         guard let key = workoutQueue.first else {
             workouts = workoutFiles.sorted { $0.key < $1.key }
+            (workoutsFresh, workoutsListed) = (true, true)
             workoutKey = nil
             phase = .idle
             return
@@ -231,6 +256,8 @@ final class RideBrowser: ObservableObject {
 
     private func endWrite(_ error: String?, isSend: Bool) {
         phase = .idle
+        // the loop's change: its own outcome, not the editor's sendError or the main message (here: done, or the link went)
+        if calendarJob != nil { return finishCalendar(error: error, next: error == nil ? .done : .stop) }
         if isSend {
             sendError = error
             sendDone = error == nil
@@ -246,6 +273,7 @@ final class RideBrowser: ObservableObject {
         if !isAuto { yieldAuto() }
         guard ready, phase == .idle || phase == .failed, let t = transport, let cmd = client.readCommand(name: r.name, nowMs: Self.now) else { return }
         message = nil
+        workoutsFresh = false
         retry?.cancel()
         busyRetries = 0
         (listingWorkouts, workoutKey, workoutQueue) = (false, nil, [])
@@ -279,10 +307,87 @@ final class RideBrowser: ObservableObject {
 
     /// Nothing else going on: the newest ride of the last 8 weeks that is not on the phone yet.
     private func autoSync() {
-        guard ready, phase == .idle, !syncPaused, !syncOff,
-            let r = rides.first(where: { Self.inWindow($0.name) && !downloaded.contains($0.name) && !syncFailed.contains($0.name) })
-        else { return }
+        guard ready, phase == .idle, !syncPaused, !syncOff, let r = nextSyncRide() else { return }
         download(r, auto: true)
+    }
+
+    private func nextSyncRide() -> RideEntry? {
+        rides.first { Self.inWindow($0.name) && !downloaded.contains($0.name) && !syncFailed.contains($0.name) }
+    }
+
+    /// Replaces the waiting calendar changes (the loop plans them again from its records each time).
+    func setCalendarJobs(_ jobs: [CalendarJob]) { calendarJobs = jobs }
+
+    private func unitHolds(_ r: Sent) -> WorkoutFile? {
+        workouts.first { $0.key.hasPrefix(r.day) && fileCrc(bytes: $0.bytes) == r.hash }
+    }
+
+    static func jobError(_ e: FileError) -> JobError {
+        switch e {
+        case .notFound: .notFound
+        case .mismatch: .mismatch
+        case .busy: .busy
+        case .noCalendar: .noCalendar
+        case .readOnly: .readOnly
+        default: .refused
+        }
+    }
+
+    /// The next calendar change, once the link is idle and the ride sync has nothing left to download. The unit's list is
+    /// read first (a delete needs its keys, a send checks the file is not there already) and once more when the queue
+    /// empties; a delete after a send reads it again, since the send changed the folder.
+    private func autoCalendar() {
+        guard ready, phase == .idle, calendarJob == nil, let job = calendarJobs.first, let t = transport else { return }
+        if !syncPaused && !syncOff && nextSyncRide() != nil { return }
+        guard workoutsFresh || (job.bytes != nil && workoutsListed) else { return refreshWorkouts() }
+        calendarJobs.removeFirst()
+        calendarJob = job
+        if let bytes = job.bytes {
+            // the same file on that day already (a rider's own copy, or a send whose record was lost): not written again,
+            // and flagged so it is never deleted
+            if unitHolds(job.record) != nil {
+                calendarJob = nil
+                onCalendarJob?(job, nil, .done, true)
+                return
+            }
+            guard let cmd = client.writeCommand(day: job.record.day, bytes: bytes, nowMs: Self.now) else {
+                return finishCalendar(error: "That workout has a date or a size the unit cannot take.", next: .drop)
+            }
+            (sending, phase) = (false, .writing)
+            progress = Progress(received: 0, total: UInt32(clamping: bytes.count), bytesPerS: 0)
+            t.write(cmd)
+        } else {
+            // not in the list: already gone, so the job is done
+            guard let f = unitHolds(job.record) else {
+                calendarJob = nil
+                onCalendarJob?(job, nil, .done, false)
+                return
+            }
+            guard let cmd = client.deleteCommand(key: f.key, nowMs: Self.now) else {
+                return finishCalendar(error: "The unit's list changed.", next: .drop)
+            }
+            (sending, phase) = (false, .writing)
+            t.write(cmd)
+        }
+    }
+
+    /// One calendar change ended. `calendarAfter` says what is left of the queue; a retry reads the list again first.
+    private func finishCalendar(error: String?, next: JobNext) {
+        guard let job = calendarJob else { return }
+        calendarJob = nil
+        phase = .idle
+        if next == .retry {
+            client.abort()
+            (calendarRetried, workoutsFresh) = (true, false)
+            calendarJobs.insert(job, at: 0)
+        } else {
+            calendarRetried = false
+            if next != .done { client.abort() }
+            if job.bytes != nil && next == .done { workoutsFresh = false }  // the send changed the folder
+            calendarJobs = calendarAfter(queue: calendarJobs, failed: job, next: next)
+        }
+        onCalendarJob?(job, error, next, false)
+        if next == .retry || calendarJobs.isEmpty { refreshWorkouts() }  // once per queue
     }
 
     /// "Syncing 3 of 7" while the background sync downloads.
@@ -328,9 +433,7 @@ final class RideBrowser: ObservableObject {
 
     private func profileDone(_ p: UnitProfile) {
         guard let pend = pendingProfile else { return endProfileExchange() }
-        let f = DateFormatter()
-        f.dateFormat = "d MMM HH:mm"
-        var line = "Unit profile: FTP \(p.ftp) W (from \(pend.source), \(f.string(from: pend.at)))"
+        var line = "Unit profile: FTP \(p.ftp) W (from \(pend.source), \(Fmt.when(pend.at)))"
         if let m = merged, !m.skipped.isEmpty { line += ". Not sent: " + m.skipped.joined(separator: "; ") }
         (profileLine, pendingProfile) = (line, nil)
         endProfileExchange()
@@ -351,7 +454,7 @@ final class RideBrowser: ObservableObject {
             }
         case .readOnly?:
             pendingProfile = nil
-            profileLine = "Unit profile: READ ONLY, this unit's software does not save settings from the phone yet"
+            profileLine = "Unit profile: read only, this unit's software does not save settings from the phone yet"
         case let e?:
             pendingProfile = nil
             profileLine = "Unit profile: " + Self.text(e)
@@ -362,10 +465,11 @@ final class RideBrowser: ObservableObject {
     private func silence() {
         startProfile()
         autoSync()
+        autoCalendar()
         guard ready, client.silent(nowMs: Self.now) else { return }
         if profileInFlight { client.abort(); profileFailed(nil); return }
         if case .downloading = phase {
-            message = "No answer, resuming..."
+            message = "No answer, resuming…"
             resume()
         } else if phase == .workouts {
             if listingWorkouts { refreshWorkouts() } else { resume() }
@@ -415,6 +519,9 @@ final class RideBrowser: ObservableObject {
             profileFailed(e)
         case .profile, .profileSet:
             break  // a late answer
+        case .failed(let e) where phase == .writing && calendarJob != nil:
+            let next = calendarJobError(isSend: calendarJob?.bytes != nil, e: Self.jobError(e), retried: calendarRetried)
+            finishCalendar(error: next == .done ? nil : Self.text(e), next: next)
         case .failed(let e) where phase == .writing:
             if !sending && (e == .notFound || e == .mismatch) {
                 endWrite("That workout is no longer on the unit. The list was refreshed.", isSend: false)
@@ -440,7 +547,7 @@ final class RideBrowser: ObservableObject {
             if busyRetries > 20 {
                 fail("The unit is busy (riding or on USB). Try again later.")
             } else {
-                message = "The unit is busy (riding or on USB). Waiting..."
+                message = "The unit is busy (riding or on USB). Waiting…"
                 retry?.cancel()
                 let item = DispatchWorkItem { [weak self] in self?.resume() }
                 retry = item
@@ -529,7 +636,7 @@ final class RideBrowser: ObservableObject {
 
     /// "1 Nov 2026, 09:00" from `YYMMDDhhmmss`.
     static func title(_ name: String) -> String {
-        date(name)?.formatted(date: .abbreviated, time: .shortened) ?? name
+        date(name).map(Fmt.when) ?? name
     }
 }
 

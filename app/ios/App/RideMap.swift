@@ -12,6 +12,8 @@ struct RideMap: UIViewRepresentable {
     let points: [CLLocationCoordinate2D]
     /// The point the chart selection is on.
     let selected: CLLocationCoordinate2D?
+    /// The climbs, drawn over the track in their grade colour.
+    var climbs: [ClimbLine.Spec] = []
 
     static let ign =
         "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
@@ -34,11 +36,18 @@ struct RideMap: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         var marker: MKPointAnnotation?
+        /// The climbs now on the map (redrawn only when they change: the insight arrives after the map).
+        var shownClimbs: [Int] = []
 
         func mapView(_ map: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let t = overlay as? IGNOverlay { return IGNRenderer(overlay: t) }
+            if let c = overlay as? ClimbLine {
+                let r = MKPolylineRenderer(polyline: c)
+                (r.strokeColor, r.lineWidth, r.lineJoin) = (c.color, 6, .round)
+                return r
+            }
             let r = MKPolylineRenderer(overlay: overlay)
-            r.strokeColor = .systemOrange
+            r.strokeColor = Tok.ui("AccentColor")
             r.lineWidth = 4
             r.lineJoin = .round
             return r
@@ -48,9 +57,9 @@ struct RideMap: UIViewRepresentable {
             guard let a = a as? MKPointAnnotation else { return nil }
             let v = MKMarkerAnnotationView(annotation: a, reuseIdentifier: nil)
             switch a.title {
-            case "Start": v.markerTintColor = .systemGreen; v.glyphText = "S"
-            case "End": v.markerTintColor = .systemRed; v.glyphText = "E"
-            default: v.markerTintColor = .systemBlue; v.glyphText = nil
+            case "Start": v.markerTintColor = Tok.ui("ok"); v.glyphText = "S"
+            case "End": v.markerTintColor = Tok.uiZone(7); v.glyphText = "E"
+            default: v.markerTintColor = Tok.uiZone(1); v.glyphText = nil
             }
             return v
         }
@@ -85,6 +94,12 @@ struct RideMap: UIViewRepresentable {
 
     func updateUIView(_ m: MKMapView, context: Context) {
         let c = context.coordinator
+        let ids = climbs.map(\.coords.count)
+        if ids != c.shownClimbs {
+            m.removeOverlays(m.overlays.filter { $0 is ClimbLine })
+            for k in climbs { m.addOverlay(ClimbLine(spec: k), level: .aboveLabels) }
+            c.shownClimbs = ids
+        }
         guard let s = selected else {
             if let old = c.marker { m.removeAnnotation(old) }
             c.marker = nil
@@ -193,5 +208,19 @@ final class IGNRenderer: MKOverlayRenderer {
             if let c = cg.cropping(to: part) { UIImage(cgImage: c).draw(in: r) }
             return
         }
+    }
+}
+
+/// A climb's stretch of the track, with its colour.
+final class ClimbLine: MKPolyline {
+    struct Spec {
+        let coords: [CLLocationCoordinate2D]
+        let color: UIColor
+    }
+    var color = Tok.uiZone(5)
+
+    convenience init(spec: Spec) {
+        self.init(coordinates: spec.coords, count: spec.coords.count)
+        color = spec.color
     }
 }

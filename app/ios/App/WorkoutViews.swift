@@ -14,34 +14,18 @@ struct WorkoutFile: Identifiable {
 /// The navigation value of a workout page (its own type, beside the ride viewer's String destinations).
 struct WorkoutRoute: Hashable { let key: String }
 
-/// The power zones' colours (Coggan zones 1 to 7, as the unit's ride pages draw them).
-private let zoneColors: [Color] = [.gray, .blue, .green, .yellow, .orange, .red, .purple]
-
-func zoneColor(_ z: UInt8) -> Color { z >= 1 && z <= 7 ? zoneColors[Int(z) - 1] : .secondary }
+/// A power zone's colour: the shared tokens, as the unit's workout page draws them.
+func zoneColor(_ z: UInt8) -> Color { z >= 1 && z <= 7 ? Tok.zone(Int(z)) : .secondary }
 
 /// The unit keeps names in capitals: "SWEET SPOT 3X10" as "Sweet spot 3x10".
 func pretty(_ name: String) -> String { name.prefix(1) + name.dropFirst().lowercased() }
-
-/// "1 h 05" or "45 min".
-func duration(_ s: UInt32) -> String {
-    let m = (s + 30) / 60
-    return m >= 60 ? String(format: "%d h %02d", m / 60, m % 60) : "\(m) min"
-}
-
-/// "9 Nov" from `YYYYMMDDnn`.
-private func day(_ key: String) -> String {
-    let n = key.compactMap { $0.wholeNumberValue }
-    guard n.count >= 8 else { return key }
-    let c = DateComponents(year: n[0] * 1000 + n[1] * 100 + n[2] * 10 + n[3], month: n[4] * 10 + n[5], day: n[6] * 10 + n[7])
-    guard let d = Calendar.current.date(from: c) else { return key }
-    return d.formatted(.dateTime.day().month(.abbreviated).weekday(.abbreviated))
-}
 
 struct WorkoutSection: View {
     @ObservedObject var rides: RideBrowser
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
     @State private var deleting: WorkoutFile?
+    @EnvironmentObject private var loop: IntervalsLoop
 
     var body: some View {
         Section("Workouts") {
@@ -50,10 +34,13 @@ struct WorkoutSection: View {
                     NavigationLink(value: WorkoutRoute(key: f.key)) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pretty(w.name))
+                            if loop.sentHashes.contains(fileCrc(bytes: f.bytes)) {
+                                Text("from Intervals.icu").font(.caption).foregroundStyle(Tok.ok)
+                            }
                             HStack {
-                                Text(day(f.key))
+                                Text(Fmt.dayKey(f.key))
                                 Spacer()
-                                Text(duration(w.totalS))
+                                Text(Fmt.duration(UInt64(w.totalS)))
                                 if w.tss > 0 { Text("TSS \(w.tss)") }
                             }
                             .font(.caption)
@@ -67,7 +54,7 @@ struct WorkoutSection: View {
                 }
             }
             if rides.workouts.isEmpty {
-                Text(rides.phase == .workouts ? "Reading workouts..." : "No workouts planned")
+                Text(rides.phase == .workouts ? "Reading workouts…" : "No workouts planned")
                     .foregroundStyle(.secondary)
             }
         }
@@ -96,17 +83,17 @@ struct WorkoutDetail: View {
         List {
             if let w {
                 Section {
-                    StepChart(steps: w.steps, ftp: ftp).frame(height: 180)
+                    StepChart(steps: w.steps, ftp: ftp)
                     HStack {
-                        Text(duration(w.totalS))
+                        Text(Fmt.duration(UInt64(w.totalS)))
                         Spacer()
-                        if w.tss > 0 { Text("IF \(Double(w.intensityX100) / 100, specifier: "%.2f")   TSS \(w.tss)") }
+                        if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)) }
                     }
-                    if w.cut { Text("Longer than the unit keeps: the end is cut.").font(.caption).foregroundStyle(.orange) }
+                    if w.cut { Notice(text: "Longer than the unit keeps: the end is cut.").font(.caption) }
                 }
                 Section {
                     Button { profile = true } label: {
-                        HStack { Text("FTP \(ftp) W, max heart rate \(maxHR)"); Spacer(); Image(systemName: "gearshape") }
+                        HStack { Text("FTP \(ftp) W, max heart rate \(maxHR)"); Spacer(); Image(systemName: "person.crop.circle") }
                     }
                 } footer: {
                     Text("Targets follow your profile. IF and TSS are estimates from power steps with a time; they are left out when other steps are mixed in.")
@@ -144,6 +131,7 @@ private struct Bar: Identifiable {
 struct StepChart: View {
     let steps: [StepView]
     let ftp: Int
+    @ScaledMetric private var height: CGFloat = 180
 
     /// Power steps at their target's middle in watts; the others a quarter of the FTP, grey.
     private var bars: [Bar] {
@@ -175,30 +163,34 @@ struct StepChart: View {
                 .foregroundStyle(.secondary)
         }
         .chartXAxisLabel("min")
-        .chartYAxis { AxisMarks(position: .leading) }
+        .chartYAxis { AxisMarks(position: .trailing) }
+        .frame(height: height)
+        .accessibilityLabel("Workout steps")
+        .accessibilityValue("\(steps.count) steps, \(Fmt.mmss(UInt32(clamping: Int(steps.reduce(0.0) { $0 + shown($1) })))) in all")
     }
 }
 
 struct StepRow: View {
     let index: Int
     let step: StepView
+    @ScaledMetric(relativeTo: .caption) private var dot: CGFloat = 10
 
     var body: some View {
         HStack {
-            Text("\(index)").foregroundStyle(.secondary).frame(width: 28, alignment: .leading)
+            Text("\(index)").numeral(.subheadline).foregroundStyle(.secondary).frame(minWidth: 28, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(length)
                 Text(target).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if step.kind == .power { Circle().fill(zoneColor(step.powerZone)).frame(width: 10, height: 10) }
+            if step.kind == .power { Circle().fill(zoneColor(step.powerZone)).frame(width: dot, height: dot) }
             Text(intensity).font(.caption).foregroundStyle(.secondary)
         }
     }
 
     private var length: String {
-        if step.seconds > 0 { return String(format: "%d:%02d", step.seconds / 60, step.seconds % 60) }
-        if step.distanceM > 0 { return String(format: "%.1f km", Double(step.distanceM) / 1000) }
+        if step.seconds > 0 { return Fmt.mmss(step.seconds) }
+        if step.distanceM > 0 { return Fmt.km(Double(step.distanceM)) }
         return "Until Lap"
     }
 

@@ -96,7 +96,7 @@ struct PhoneWorkoutSection: View {
                         HStack {
                             Text(pretty(w.name))
                             Spacer()
-                            Text(duration(w.totalS))
+                            Text(Fmt.duration(UInt64(w.totalS)))
                             if w.tss > 0 { Text("TSS \(w.tss)") }
                         }
                         .font(.body)
@@ -108,7 +108,7 @@ struct PhoneWorkoutSection: View {
                     HStack {
                         Text(f.file)
                         Spacer()
-                        Text("Unreadable").foregroundStyle(.orange)
+                        Notice(text: "Unreadable")
                     }
                     .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
                 }
@@ -132,7 +132,7 @@ struct PhoneWorkoutSection: View {
                     case .failure(let e): problem = e.localizedDescription
                     }
                 }
-            if let problem { Text(problem).font(.caption).foregroundStyle(.orange) }
+            if let problem { Notice(text: problem).font(.caption) }
         } header: {
             Text("On the phone")
         } footer: {
@@ -200,12 +200,12 @@ struct WorkoutEditor: View {
                     case .success(let w):
                         StepChart(steps: w.steps, ftp: ftp).frame(height: 150)
                         HStack {
-                            Text(duration(w.totalS))
+                            Text(Fmt.duration(UInt64(w.totalS)))
                             Spacer()
-                            if w.tss > 0 { Text("IF \(Double(w.intensityX100) / 100, specifier: "%.2f")   TSS \(w.tss)") }
+                            if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)) }
                         }
                     case .failure(let e):
-                        Text(message(e)).foregroundStyle(.orange)
+                        Notice(text: message(e))
                     }
                 } footer: {
                     Text("The chart is the unit's own reading of this file, for FTP \(ftp) W.")
@@ -216,7 +216,7 @@ struct WorkoutEditor: View {
                             StepSummary(step: it.step, index: items.firstIndex { $0.id == it.id } ?? 0)
                         }
                             .swipeActions(edge: .leading) {
-                                Button("Duplicate") { duplicate(it.id) }.tint(.blue)
+                                Button("Duplicate") { duplicate(it.id) }.tint(Tok.zone(1))
                             }
                     }
                     .onMove { items.move(fromOffsets: $0, toOffset: $1) }
@@ -233,7 +233,7 @@ struct WorkoutEditor: View {
                 } footer: {
                     Text("Save keeps the workout on the phone; Send puts a copy on the unit for a day you pick.")
                 }
-                if let saveError { Section { Text(saveError).foregroundStyle(.orange) } }
+                if let saveError { Section { Notice(text: saveError, level: .alarm) } }
             }
             .onChange(of: draft) { saveError = nil }
             .sheet(isPresented: $sending) { SendSheet(rides: rides, draft: draft) }
@@ -275,7 +275,7 @@ private struct StepSummary: View {
             VStack(alignment: .leading, spacing: 2) {
                 Label("Repeat the \(step.repeatBack) items above, \(step.repeatTimes) times in all", systemImage: "repeat")
                 if Int(step.repeatBack) > index {
-                    Text("Reaches past the start").font(.caption).foregroundStyle(.orange)
+                    Notice(text: "Reaches past the start").font(.caption)
                 }
             }
         } else {
@@ -293,8 +293,8 @@ private struct StepSummary: View {
 
 private func length(_ s: DraftStep) -> String {
     switch s.duration {
-    case .time: String(format: "%d:%02d", s.amount / 60, s.amount % 60)
-    case .distance: String(format: "%.1f km", Double(s.amount) / 1000)
+    case .time: Fmt.mmss(UInt32(clamping: s.amount))
+    case .distance: Fmt.km(Double(s.amount))
     case .lap: "Until Lap"
     }
 }
@@ -344,7 +344,7 @@ private struct StepForm: View {
                         Stepper("\(step.amount % 60) s", value: Binding(
                             get: { Int(step.amount % 60) }, set: { step.amount = step.amount / 60 * 60 + UInt32($0) }), in: 0...55, step: 5)
                     case .distance:
-                        Stepper(String(format: "%.1f km", Double(step.amount) / 1000), value: int($step.amount), in: 100...1_000_000, step: 100)
+                        Stepper(Fmt.km(Double(step.amount)), value: int($step.amount), in: 100...1_000_000, step: 100)
                     case .lap:
                         Text("The step lasts until you press Lap.").foregroundStyle(.secondary)
                     }
@@ -436,8 +436,8 @@ private struct SendSheet: View {
                     if rides.phase == .writing {
                         ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
                     }
-                    if started, rides.sendDone { Label("Sent", systemImage: "checkmark.circle").foregroundStyle(.green) }
-                    if let e = encodeError ?? (started ? rides.sendError : nil) { Text(e).foregroundStyle(.orange) }
+                    if started, rides.sendDone { Label("Sent", systemImage: "checkmark.circle").foregroundStyle(Tok.ok) }
+                    if let e = encodeError ?? (started ? rides.sendError : nil) { Notice(text: e, level: .alarm) }
                 }
             }
             .navigationTitle("Send to the unit")

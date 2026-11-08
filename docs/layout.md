@@ -458,6 +458,12 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   iOS targets, bindings, XCFramework into the ignored `Generated/`). `Icon/icon.svg` (the icon's source: Ferris on a
   bike computer screen), `Icon/ferris-rustacean.svg` (Ferris as downloaded, CC0), `Icon/render.py` (renders the
   light, dark and tinted 1024 px PNGs into `App/Assets.xcassets/AppIcon.appiconset`).
+  `App/Theme.swift` (colour tokens `Tok`, `Notice`, the numeral modifier), `App/Fmt.swift` (the one formatting helper),
+  `App/LicencesView.swift`, `App/Fonts/` (Barlow Semi Condensed Bold and its OFL.txt, copied from `tools/fonts/`),
+  `App/Assets.xcassets/*.colorset` (the colour tokens).
+- `app/core/src/theme.rs`: the colour token table and its tests against the colour sets, the firmware's constants and
+  the contrast rules; `zone_upper` for the viewer's zone ranges. `app/core/src/fmt.rs`: clock-style durations.
+- `docs/review-app-ui-2026-11-08.md`: the UI review of the iPhone app (findings P1 to P3, tokens); part A is done.
 - `link.x`, `tools/pack.py`: memory map and the update file. `tools/pack.py` re-checks what the stock updater checks.
 - `app/core/src/files.rs`: the phone's file service client (`FileClient`, sans-IO, UniFFI): LIST / READ commands from the
   firmware's own `filesvc` encoder, Data frames in, resume from the bytes kept, progress and speed. `files_tests.rs`: its
@@ -474,5 +480,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `app/ios/App/RideDetail.swift`: the viewer (summary grid, graphs, laps, zones, curve, the FTP / max HR sheet).
   `RideMap.swift`: the track on an `MKMapView` with IGN Plan v2 tiles inside France.
 - `app/core/src/intervals.rs`: the Intervals.icu athlete JSON parsed (`intervals_parse`, serde_json) and merged into the unit's profile (`merge_unit_profile`), with its tests and fuzz. `app/ios/App/IntervalsClient.swift`: the Keychain, the URLSession call and the sync rules.
+- `app/core/src/calendar.rs`: Intervals.icu's calendar events parsed and settled against what this app sent (`calendar_parse`, `calendar_to_fetch`, `calendar_settle`), a ZWO converted to the unit's file (`plan_workout`), the upload answer (`upload_outcome`). `app/ios/App/IntervalsLoop.swift`: the network calls, the uploaded and sent sets, the loop; `IntervalsViews.swift`: its section, switches and ride link.
+- `app/core/src/insight.rs`: `ride_insight`, the deeper analysis of a ride (climbs, W' balance, decoupling, DFA alpha1) on the firmware's code, and `match_climbs`; `insight_tests.rs`: its tests. `app/core/src/fitness.rs`: the Intervals.icu wellness and power-curve parsers and CTL / ATL from ride loads; `fitness_tests.rs`: its tests and fuzz. `app/ios/App/RideInsights.swift`: the cache and the ride page's insight sections (climbs, W' balance, decoupling, DFA, Compare with...). `app/ios/App/FitnessView.swift`: the Fitness screen and the added Intervals.icu GET.
 - `app/core/src/summary.rs`: the ride brief the list caches, the load (Intervals.icu's definitions), `weekly_totals`; `summary_tests.rs`: its tests and fuzz. `demo_tests.rs`: the demo unit's dates.
   `app/ios/App/RideLibrary.swift`: the summary cache, the weekly panel and the row texts.

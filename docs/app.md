@@ -11,6 +11,34 @@ otherwise. It looks for the name "S510". Confirmed on the owner's iPhone (2026-1
 the battery, through `retrieveConnectedPeripherals`. The scan's filter on 0x180F is inferred: whether the unit's
 advertisement carries 0x180F is not verified.
 
+## Look and feel
+
+Reviewed 2026-11-08 (docs/review-app-ui-2026-11-08.md); part A is done: the colours and the numeral face are the
+unit's, the numbers are formatted in one place, and the P1 findings are fixed.
+
+- **Colour tokens**, one table in `app/core/src/theme.rs` (`TOKENS`), one Color Set per token in
+  `app/ios/App/Assets.xcassets` (light and dark), read through `Tok` in `App/Theme.swift`. Tests fail when a colour
+  set differs from the table, when a token that must equal the firmware's colour does not, or when a contrast falls
+  under its rule (4.5:1 for text tokens, 3:1 for the zones, against the iOS card and background, light and dark):
+  - light: `Theme::LIGHT` (src/ui/theme.rs): accent #B04000, zones #2F6259 #2F6223 #947D31 #8F572A #7C203B #442D7C
+    #3C3748, ok #007000, warn #8A6400, alarm #D00000;
+  - dark: accent `ACCENT` #FFA600, zones 1 to 4 `ZONE_COLORS` (src/training/ride.rs) #4A9284 #4A9231 #DEBA4A #D68242,
+    zones 6 and 7 from `Theme::OUTDOOR` #885AF8 #786E90 (DARK's own are 3.1 and 2.8 on black), zone 5 lifted to
+    #E0486F (DARK's #BD315A is 3.0); ok, warn and alarm are iOS's green, yellow and red (#30D158 #FFD60A #FF453A), the
+    firmware's neon ones being too hard on a phone;
+  - derived: `Tok.grade` = zones 2 to 5 by `grade_color`'s bands, `Tok.hrZone` = zones 1 to 5, `Tok.form` as
+    `form_color` (ok, secondary, warn, alarm). Series: speed zone 1, heart rate zone 5, power the accent, cadence
+    zone 2; red is never a series. Errors and warnings are a `Notice` (icon and text in warn or alarm).
+- **Numerals** in Barlow Semi Condensed Bold, the unit's SMOOTH face (`App/Fonts/`, copied from `tools/fonts/`, SIL OFL
+  1.1, text in Profile > Licences). `.numeral(.title3)` (`Theme.swift`) scales with Dynamic Type and turns on tabular
+  figures (`tnum`; the font's default digits differ in width). Used for big numbers only (tiles, weekly panel, lap
+  numbers, readouts, fitness); all text stays SF. The pixel font is not used: a 1 bit face at 2x is blurred on a Retina
+  screen and does not scale.
+- **Formatting** is `App/Fmt.swift`: decimals and dates follow the phone's region (French reads "28,8 km/h"),
+  clock-style durations come from `app/core/src/fmt.rs` (tested there). No `String(format:)` for display anywhere.
+- **Accessibility:** icon buttons, the map, the charts (label, lowest, highest, average) and the zone rows carry
+  VoiceOver text; the viewer's tiles, laps and the weekly panel reflow at large Dynamic Type sizes.
+
 ## Build
 
 Needs Xcode 16 or later, Rust (the pinned toolchain, with `aarch64-apple-ios` and `aarch64-apple-ios-sim`).
@@ -133,6 +161,71 @@ Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had 
 
 Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
 itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
+
+## Deeper analysis (roadmap 10)
+
+`app/core/src/insight.rs` `ride_insight(bytes, weight_kg, cp, wprime_j)` reads the file again (all records) and gives
+the climbs, the W' balance, the decoupling and DFA alpha1. The app runs it once per ride off the main thread
+(`InsightCache`, in memory for the session, keyed by file, size and profile) so the page opens at once and the sections
+appear when it is done. The firmware's code does the maths (two small visibility changes: `Course::climbs_of` and
+`power::wbal_step`, the W' step `Power::second` now calls too).
+
+- **Climbs:** `course::Course::climbs_of`, the unit's one definition (Garmin ClimbPro's rule, 500 m at 3 % or more, found
+  on the profile in 50 m steps; docs on the road ahead say the same). The ride's altitude is resampled every 10 m and
+  smoothed by a 100 m moving average first, since the finder was made for the smooth profile of a planned course.
+  Per climb: length and gain from the finder, average grade (gain / length), maximum grade over 100 m of the smoothed
+  profile, time (first to last record in it, stops included), VAM (gain / time, m/h), average power and W/kg (the
+  profile's weight). Colour: `ui::grade_color` of the average grade, the unit's bands. The climb is drawn in that colour
+  on the map (`ClimbLine`) and over the altitude graph.
+- **W' balance:** `power::wbal_step`, the differential model (Froncioni and Clarke, Golden Cheetah "Differential"; the
+  unit's `Power::second`), second by second from a full W' (at most 3 days of it, so a damaged timestamp cannot make it
+  long), a record counting for up to 5 s and then 0 W. CP = FTP is the unit's own shortcut, not the rider's critical power:
+  a W' from Intervals.icu belongs to its CP, so the two differ when CP and FTP do. Graph of the lowest value per bucket;
+  "lowest" is the ride's minimum.
+- **Aerobic decoupling (Pa:HR from power):** moving seconds with power and a heart rate above 0 (0 is a dropout) cut in
+  two halves of equal time; EF = average power / average HR per half; decoupling = (EF1 - EF2) / EF1 x 100. This is
+  Friel's Pw:Hr / Pa:Hr with the average power of each half. Intervals.icu's own definition is **unverified (one forum
+  user's reply, <https://forum.intervals.icu/t/21505>)**; average power is taken for consistency with Intervals.icu,
+  which the owner compares against (NP would differ by the variability of each half). Under 20 minutes of moving time
+  no value is shown (inferred). Under 5 % is shown green, the usual mark of aerobic fitness (inferred, not a diagnosis).
+- **DFA alpha1:** the file's `hrv` messages (global 78, `time`; the raw RR the firmware writes in the full copy) through
+  the firmware's `hrv::Hrv` (5 % artifact rule, 2 minute window, boxes of 4 to 16 beats), the beats laid end to end from
+  the first record (the messages carry no time). Dashed lines at `hrvt::A1_VT1` 0.75 and `A1_VT2` 0.5. A ride without
+  the beats shows no DFA chart. The demo ride has made-up beats from its heart rate with 3 % of variation, so its alpha1
+  is not physiological.
+- **Compare with...:** a menu of the other downloaded rides; the two power curves side by side (durations the
+  ride held), and the climbs both share: `match_climbs` pairs climbs whose start and end are each within the larger of 150 m
+  (`climbs_ahead::SNAP_M`) and a quarter of the shorter climb's length of the other's, the pairs with the least summed
+  distance first, each climb once, with both times and the difference. (A "70 % of the length in common" test is not
+  done: it needs the tracks.) The curve chart's x axis is every duration either ride held, in order. Two quick picks
+  cancel the first. The cache keeps the last 8 rides, and two askers of one ride share one run.
+
+Core tests: the demo hill ride (a 3 km climb at 5 %) gives one climb with its numbers, W' balance against a hand case
+(100 s at 300 W over a CP of 200 W with a 20 kJ W' is 10 000 J, then 50 J back in the next second at 100 W), decoupling of a
+constructed ride (1 - 140/147), DFA from the file's beats, climb matching (at the tolerance's edge), a noisy hill (one
+climb), a noisy flat and a reversed ride (none), and a fuzz of the analysis (records with missing, NaN, huge, repeated
+and backwards values, files with flipped bytes) that counts it reaches climbs, W' balance, decoupling and DFA. The demo's first ride is now this hill ride.
+
+| | |
+|:-:|:-:|
+| ![Climbs on the altitude graph and the list](img/app-climbs.png) | ![Fitness](img/app-fitness.png) |
+| Climbs, coloured by grade | Fitness (demo) |
+
+## Fitness (roadmap 11)
+
+The chart icon on the main screen opens `FitnessView`. With an Intervals.icu key (the profile's) it fetches, through
+`IntervalsClient.get`, `GET /api/v1/athlete/{id}/wellness.json?oldest&newest` (CTL, ATL, `sportInfo[].eftp`) and
+`.../power-curves.json?curves=90d&type=Ride` (OpenAPI spec, <https://intervals.icu/api/v1/docs>, looked up 2026-11-08;
+that "90d" names the last 90 days is **inferred** from the site's curve names, as are the units of eftp). The parsers
+(`fitness.rs`, tested with synthetic answers with missing and wrong fields, and fuzzed) skip a day without id, CTL or
+ATL; a day is checked against its month's length; powers (eFTP, the curve) are clamped to 3000 W, not dropped; TSB uses the
+day before only if it is the previous calendar day. Without a key, or when Intervals.icu cannot be reached (the screen says so), CTL and ATL come from the loads of the
+rides this phone holds: the firmware's model (`load.rs`, Coggan's PMC) with exponential averages of the daily load,
+`x[d] = x[d-1] + (load[d] - x[d-1]) / N`, N = 42 and 7, starting at 0 on the first ride (so it needs about 6 weeks of rides), and the screen is labelled "From
+this phone's rides". The fetch is keyed on the key and athlete only, so a new ride or FTP does not ask again; the screen says
+when its last day is older than yesterday. TSB is the form the day starts with, yesterday's CTL minus ATL, for both sources. eFTP and the power
+curve need Intervals.icu; the screen always says which source it shows. Launch argument `-demo-fitness` (Debug) opens it;
+`-demo-open` opens the first downloaded ride's page.
 
 ## Ride list and weekly totals
 
@@ -361,6 +454,70 @@ forum guide https://forum.intervals.icu/t/api-access-to-intervals-icu/609):
   settings from the phone yet.
 - **Without a key** the sheet's FTP and max HR still work, and changing them is also pushed to the unit (source "this phone").
 - **Demo:** under `#if DEBUG` and `-demo` the answer is a made-up athlete (FTP 265), no network.
+
+## Rides up to Intervals.icu
+
+Looked up 2026-11-08 (OpenAPI spec https://intervals.icu/api/v1/docs; the core's `calendar.rs` cites the same pages):
+- **Request:** `POST /api/v1/athlete/{id}/activities`, multipart field `file` (a FIT). The spec: "Activities are de-duped
+  using a hash of the file. Response code is 201 if at least one new activity was created and 200 otherwise (all dups)".
+  So 201 and 200 both count as uploaded (`upload_outcome`); the activity id is `activities[0].id`, and that a duplicate
+  answer may have none is inferred. 400, 413, 415 and 422 mean the file itself is refused: that ride is marked rejected and
+  not tried again; 401 and 403, 429, 5xx and a network error are retried with a backoff (2, 4, 8 minutes, an hour at most),
+  never in a loop.
+- **When:** after a ride reaches the phone (the background sync or a tap), at launch, on pull to refresh, and on a
+  10 minute clock for what is pending. One ride at a time, newest first. Only rides that started after the switch
+  "Upload rides to Intervals.icu" was turned on (on by itself when the first key is stored); "Upload older rides (n)" in
+  the profile sheet sends the others. A ride still being recorded is never listed by the unit.
+- **Kept:** name to activity id in UserDefaults (`ivUploaded`), rejected names (`ivRejected`), both tied to the athlete
+  id (another id starts them again). A refused key (401, 403) stops uploads and the calendar until a key is entered
+  again or an upload switch is turned on; it is not retried.
+- **Off the main thread:** the multipart body (`upload_body` in the core, tested) is built in a temp file in a detached
+  task and sent with `upload(for:fromFile:)`, then the file is deleted.
+- **Shown:** a green "Intervals.icu" check on the ride's row, "Open on Intervals.icu" on its page (the page URL
+  `https://intervals.icu/activities/<id>` is inferred: the spec has no web URLs), a status line on the main screen
+  (last upload, errors in words).
+
+## Planned workouts from Intervals.icu to the unit
+
+- **Read:** `GET /api/v1/athlete/{id}/events?oldest=&newest=&category=WORKOUT` for today and the next 7 days (the spec
+  lists the route as `events{format}`, `.csv` being the alternative; the plain form is inferred). `calendar_parse` keeps
+  WORKOUT events with an integer id and a date in the window; the rest is dropped.
+- **Convert:** `GET .../events/{eventId}/download.zwo` ("Download a planned workout in zwo, mrc, erg or fit format"; the
+  dot of `{ext}` is inferred), then the editor's `import_workout` and `encode_workout`, so the unit's limits apply:
+  over 64 items, 96 steps or 8 KB is shown in the list as "Not sent: <reason>" and not sent.
+- **Send:** each file goes to its day with the file service's write (WRITE_BEGIN ...), when the unit is connected and
+  idle and the ride sync has nothing left to download (`RideBrowser.autoCalendar`, from the one-second tick). The rider's
+  actions come first: anything the rider starts (including a refresh) puts a write under way back at the front of the
+  queue. The unit's list is read first (one re-list when the queue empties; a delete after a send reads it again).
+- **Order and failures** (`calendar_settle`, `calendar_job_error`, `calendar_after`, all tested): sends run before deletes,
+  and the delete of a moved or edited event's old file waits for that event's send, so the unit never loses both. A failed
+  send drops only its job and the event shows "Not sent: <reason>", stamped with `updated`; BUSY, a lost link or silence
+  stop the pass (asked again in 15 minutes); NO CALENDAR and READ ONLY stop it for an hour. A delete is done only for
+  NOT FOUND; a MISMATCH reads the list again and tries once more, then drops the job. A record leaves the sent set only
+  for an exact match (event, day, file) once its delete is done.
+- **A rider's own file:** a send finds the same CRC already on that day in the unit's list, does not write it, and flags
+  the record `pre`; a `pre` file is never deleted (it also covers a send whose record was lost in a crash). Shortcut:
+  two events with the same file on one day share it.
+- **A short answer deletes nothing:** the events request has `limit=500`; a workout that left the calendar is deleted
+  only when a second read agrees, never when either read is empty while records exist (a calendar emptied on purpose is
+  not followed).
+- **Sent set** (`ivSent`): event id, day, the event's `updated` stamp and the CRC-32 of the file. An unchanged event is not
+  downloaded again; a restamped one with the same file only gets its record refreshed; the unit also dedupes by CRC.
+  `calendar_settle` decides: moved or edited means delete the old file, then send; deleted, out of the window or no
+  longer holdable means delete from the unit. Only files this app sent are deleted (found in the unit's list by day and
+  CRC, from a list read just before, with the key and check of that list); days before today are never touched.
+- **When:** at launch and pull to refresh, then at most hourly counting empty calendars too (a failure asks again in
+  15 minutes). Switch "Send planned workouts to the unit" (on with the first key; the key screen says so).
+- **Shown:** the main screen's Intervals.icu section lists each planned workout (waiting, on the unit, or why not sent);
+  the unit's own list marks the files this app sent "from Intervals.icu".
+- **Demo:** under `#if DEBUG` and `-demo`, a canned calendar (four workouts, the last with 70 steps) and upload answer,
+  no network; the demo unit takes the writes.
+
+![The Intervals.icu section](img/app-intervals.png)
+
+Tests (`cargo test` in `app/core`, no network): the events JSON (missing fields, wrong types, the window and category), the
+sent set (a re-run sends nothing, moved, edited, deleted, past days), a sample Intervals ZWO through import and encode into
+the unit's limits, the upload answers, and a fuzz over events and settle.
 
 ## Fast link: the chip app's layer and the speed model
 
