@@ -2500,7 +2500,12 @@ pub(crate) mod tests {
             let lost0 = fsck(&base).unwrap();
             assert_eq!(make_in(&mut Ram(base.clone(), 0), parent, "x").map(|f| f.dir), Ok(true));
             let mut whole = Torn { ram: Ram(base.clone(), 0), budget: u32::MAX, keep: 0, cut_at: 0 };
-            make_in(&mut whole, parent, name).unwrap();
+            let made = make_in(&mut whole, parent, name).unwrap();
+            if more == 1 {
+                // FSInfo's next free hint past the folder's cluster (a new piece of its parent moves it on again)
+                let fat = Fat::mount(&mut whole.ram).unwrap();
+                assert_eq!(fat.hint(&mut whole.ram), Ok(made.cluster + 1), "{name}");
+            }
             let writes = u32::MAX - whole.budget;
             assert_eq!(fsck(&whole.ram.0), Ok(lost0), "{name}");
             // the parent's sectors (its new cluster's too) torn every 8 bytes; the others (the FATs, FSInfo, the new
