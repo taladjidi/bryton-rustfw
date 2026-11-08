@@ -42,8 +42,10 @@
 //! characters fit the default MTU's 20-byte write and all 20 any larger one. Only a FIT course the unit follows
 //! (`course_file::is_course`, checked on the read-back at WRITE_END), at most `workout_write::COURSE_MAX` bytes. A
 //! name taken by a file of other bytes is BAD REQUEST (never written over: the phone deletes it first), by the same
-//! bytes ok. The course being followed (or read to follow) is never deleted: BUSY. No `\Courses` on the card: NOT
-//! FOUND at WRITE_BEGIN (stock never makes it; the owner does, over USB).
+//! bytes ok; so is a name COURSES shows for another course (a `.gpx`, a `\PlanTrip` route, `_` for a space), and
+//! COURSES full (64 courses) is FULL, both answered at WRITE_BEGIN. The course being followed (or read to follow) is
+//! never deleted: BUSY. The first course makes `\Courses`. LIST_IN numbers the first 200 entries of the folder only,
+//! as READ_IN and DELETE reach no further.
 //! **Writes** (2026-11-07): folder 1 (and 2, above), and only a file the unit reads as a workout ([`crate::storage::workout_file::parse`],
 //! at most `FILE_MAX` bytes). The phone never names a path or a file: the unit names it `<CRC-32, 8 hex digits>.fit`
 //! in `\Workout\calendar\<day>\` (stock lists the `.fit` files of a day folder, inferred). A WRITE_DATA carries 14 bytes

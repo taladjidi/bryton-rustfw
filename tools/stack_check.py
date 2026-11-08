@@ -27,9 +27,10 @@ import pathlib, re, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ELF = ROOT / 'target/thumbv7em-none-eabihf/release/bryton-rustfw'
 # frames allowed, bytes: the app's start (one temporary copy of App, once at boot), the course memory's (part of it
-# built on the stack, once at boot, after the app's; 41,000 since pushes count: 39,956 B on 2026-10-29), main,
+# built on the stack, once at boot, after the app's; 39,956 B on 2026-10-29; 42,000 since COURSES lists 64: 41,236 B on
+# 2026-11-08, still below make_app's, its sibling under main), main,
 # anything else
-BUDGET = {'make_app': 64_000, 'make_courses': 41_000, 'main': 16_384}
+BUDGET = {'make_app': 64_000, 'make_courses': 42_000, 'main': 16_384}
 OTHER = 20_480
 MARGIN = 8_192  # the stack the longest static chain must leave free
 

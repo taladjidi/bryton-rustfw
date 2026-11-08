@@ -2171,7 +2171,7 @@ fn make_past() -> &'static mut bryton_rustfw::history::Past {
 }
 
 /// The course memory (about 70 KB: the course followed, its list), beside the app in AXI SRAM (link.x `.axibss`).
-/// Built once on the stack and moved in, as the app is: this frame is about 36 KB (tools/stack_check.py budgets it;
+/// Built once on the stack and moved in, as the app is: this frame is about 41 KB (tools/stack_check.py budgets it;
 /// review 2 found the old "cleared in place" untrue).
 #[inline(never)]
 fn make_courses() -> &'static mut bryton_rustfw::storage::course_file::Courses {

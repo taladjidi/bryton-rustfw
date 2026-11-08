@@ -615,7 +615,6 @@ final class RideBrowser: ObservableObject {
         case .mismatch: "The unit received other bytes than were sent. Send it again."
         case .busy: "The unit is riding or its card is lent to a computer. Try again later."
         case .noCalendar: "The unit has no workout calendar yet. Plan a workout on the unit or with the Bryton app first."
-        case .noCourses: "The unit has no Courses folder. Make one at the top of its drive over USB first."
         }
     }
 

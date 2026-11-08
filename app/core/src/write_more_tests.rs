@@ -167,7 +167,7 @@ fn send_course(c: &FileClient, u: &mut FakeUnit, name: &str, bytes: &[u8], max_w
 
 /// A course goes to folder 2 at either write length (its name cut to fit the 20-byte write), is listed, read back
 /// and deleted; the same bytes again are written once, other bytes under the name refused; names the unit refuses,
-/// an empty or too big file give no command; a unit without `\Courses` says so.
+/// an empty or too big file give no command.
 #[test]
 fn a_course_round_trips_at_both_write_lengths() {
     let course = crate::demo::synthetic_ride(9, 600); // any bytes: the fake unit does not parse them
@@ -196,7 +196,4 @@ fn a_course_round_trips_at_both_write_lengths() {
     }
     assert_eq!(c.course_write_command("x".into(), Vec::new(), 244, t), None, "empty");
     assert_eq!(c.course_write_command("x".into(), vec![0; (1 << 20) + 1], 244, t), None, "over 1 MB");
-    u.faults.no_calendar = true;
-    let e = send_course(&c, &mut u, "x", &course, 244, &mut t);
-    assert_eq!(e, FileEvent::Failed { error: FileError::NoCourses });
 }

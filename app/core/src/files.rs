@@ -128,8 +128,6 @@ pub enum FileError {
     /// A write or delete was refused: the unit is riding or its card is lent to a computer (or, for a course's
     /// DELETE, the unit is following that course).
     Busy,
-    /// A course's WRITE_BEGIN found no `\Courses` on the card (the unit never makes it: copy one over USB).
-    NoCourses,
 }
 
 /// What a frame did.
@@ -222,8 +220,6 @@ struct Inner {
     now_ms: u64,
     /// A workout or course being written: its bytes and how many were handed out.
     out: Vec<u8>,
-    /// The write under way is a course's (WRITE_BEGIN's NOT FOUND is then no `\Courses`).
-    course: bool,
     sent: usize,
     /// The last PROFILE the unit gave.
     profile: Option<UnitProfile>,
@@ -316,7 +312,6 @@ impl Inner {
                     self.mode = Mode::Sending;
                     FileEvent::WriteReady
                 }
-                Status::NotFound if self.course => self.fail(FileError::NoCourses),
                 Status::NotFound => self.fail(FileError::NoCalendar),
                 s => self.write_error(s),
             },
@@ -408,7 +403,6 @@ impl FileClient {
             now_ms: 0,
             out: Vec::new(),
             sent: 0,
-            course: false,
             profile: None,
         }))
     }
@@ -472,7 +466,7 @@ impl FileClient {
         s.seq = s.seq.wrapping_add(1);
         let size = u32::try_from(bytes.len()).ok()?;
         let crc = bryton_rustfw::inflate::crc32(bytes.iter().copied());
-        (s.mode, s.last_ms, s.sent, s.out, s.course) = (Mode::WriteBegin, now_ms, 0, bytes, false);
+        (s.mode, s.last_ms, s.sent, s.out) = (Mode::WriteBegin, now_ms, 0, bytes);
         let seq = s.seq;
         Some(s.encode(Command::WriteBegin { seq, folder: Folder::Workout, day, size, crc }))
     }
@@ -482,7 +476,9 @@ impl FileClient {
     /// characters at the default 20, 20 at most), trailing spaces dropped. None when the cut name is not one the unit
     /// takes (1 to 20 ASCII letters, digits, spaces, `-`, `_`, not a Windows device name: `filesvc::CourseName`) or the
     /// file is empty or over 1 MB. Then as [`FileClient::write_command`]: [`FileClient::write_next_command`] after
-    /// [`FileEvent::WriteReady`]. A name the unit already has for other bytes is refused (BAD REQUEST): delete it first.
+    /// [`FileEvent::WriteReady`]. Refused (BAD REQUEST): a name the unit has for other bytes (delete it first), or one its
+    /// COURSES menu shows for another course (a `.gpx`, a Bryton route, `_` against a space); FULL: COURSES holds 64.
+    /// The unit makes `\Courses` for the first one.
     pub fn course_write_command(&self, name: String, bytes: Vec<u8>, max_write: u32, now_ms: u64) -> Option<Vec<u8>> {
         let room = (max_write as usize).clamp(FRAME_MAX, FRAME_BIG) - COURSE_HEAD;
         let cut = name.as_bytes().get(..name.len().min(room).min(COURSE_NAME))?;
@@ -494,7 +490,7 @@ impl FileClient {
         s.seq = s.seq.wrapping_add(1);
         let size = u32::try_from(bytes.len()).ok()?;
         let crc = bryton_rustfw::inflate::crc32(bytes.iter().copied());
-        (s.mode, s.last_ms, s.sent, s.out, s.course) = (Mode::WriteBegin, now_ms, 0, bytes, true);
+        (s.mode, s.last_ms, s.sent, s.out) = (Mode::WriteBegin, now_ms, 0, bytes);
         let seq = s.seq;
         Some(s.encode(Command::WriteCourse { seq, size, crc, name }))
     }

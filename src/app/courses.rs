@@ -84,6 +84,23 @@ impl App {
         self.open(Screen::Menu(Menu::Courses, 0));
     }
 
+    /// The course list again once the phone wrote or deleted a course ([`storage::course_file::Courses::stale`]),
+    /// unless a course is being read to follow (its place in the list finds it): lengths measured only while COURSES
+    /// shows (a measure pending elsewhere would hold the steps after it in [`App::step_courses`]), and its cursor
+    /// kept within a list that shrank.
+    pub(crate) fn relist_courses(&mut self, b: &mut impl Board) {
+        let shown = matches!(self.screen, Screen::Menu(Menu::Courses, _));
+        let lent = self.emmc.lent();
+        let Some(c) = self.courses.as_deref_mut().filter(|c| c.stale && !c.loading() && !lent) else { return };
+        let d = &mut emmc::Volume(&mut self.emmc, b);
+        let _ = if shown { c.open(d) } else { c.relist(d) };
+        if let Screen::Menu(Menu::Courses, row) = self.screen {
+            let last = self.rows(Menu::Courses).saturating_sub(1);
+            self.screen = Screen::Menu(Menu::Courses, row.min(last));
+            self.show(b);
+        }
+    }
+
     /// Select on course `k`: reads it to follow it ([`App::step_courses`]), or stops following it.
     pub(crate) fn follow_course(&mut self, k: usize) {
         let Some(c) = self.courses.as_deref_mut() else { return };
@@ -228,6 +245,9 @@ impl App {
                 self.say("NOT A COURSE")
             }
             _ => {}
+        }
+        if self.courses.as_deref().is_some_and(|c| c.stale && !c.loading()) {
+            self.relist_courses(b); // a load that ended: the list it held can be read again
         }
         // the named points along the course: a bounded step of a scan, once the course is on (an extra)
         // never while the recorder has card work (a start, a checkpoint, a save)

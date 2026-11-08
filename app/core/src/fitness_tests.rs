@@ -44,7 +44,8 @@ fn a_sprint_is_clamped_not_dropped() {
     let j = r#"{"list":[{"secs":[1,5],"values":[2500,1e9]}]}"#;
     let c = power_curve_parse(j.as_bytes().to_vec()).unwrap();
     assert_eq!(c, vec![CurvePoint { secs: 1, watts: 2500 }, CurvePoint { secs: 5, watts: 3000 }]);
-    let w = wellness_parse(br#"[{"id":"2026-11-01","ctl":1,"atl":1,"sportInfo":[{"type":"Ride","eftp":5000}]}]"#.to_vec());
+    let w =
+        wellness_parse(br#"[{"id":"2026-11-01","ctl":1,"atl":1,"sportInfo":[{"type":"Ride","eftp":5000}]}]"#.to_vec());
     assert_eq!(w.unwrap().eftp, Some(3000.0));
 }
 
@@ -76,7 +77,11 @@ fn the_power_curve_is_read() {
     let c = power_curve_parse(j.as_bytes().to_vec()).unwrap();
     assert_eq!(
         c,
-        vec![CurvePoint { secs: 1, watts: 900 }, CurvePoint { secs: 5, watts: 800 }, CurvePoint { secs: 60, watts: 400 }]
+        vec![
+            CurvePoint { secs: 1, watts: 900 },
+            CurvePoint { secs: 5, watts: 800 },
+            CurvePoint { secs: 60, watts: 400 }
+        ]
     );
     assert!(power_curve_parse(b"{\"list\":[]}".to_vec()).is_err());
     assert!(power_curve_parse(b"{\"list\":[{\"secs\":[1]}]}".to_vec()).is_err());
@@ -105,7 +110,8 @@ fn fuzz_the_answers() {
                 _ => format!("\"{name}\":{good},"),
             };
             let id = field("id", format!("\"2026-0{}-1{}\"", 1 + next(9), next(9)), next(7));
-            let (c, a) = (field("ctl", format!("{}", next(120)), next(7)), field("atl", format!("{}.5", next(120)), next(7)));
+            let (c, a) =
+                (field("ctl", format!("{}", next(120)), next(7)), field("atl", format!("{}.5", next(120)), next(7)));
             let s = field("sportInfo", format!("[{{\"type\":\"Ride\",\"eftp\":{}}}]", 100 + next(200)), next(7));
             doc += &format!("{}{{{id}{c}{a}{s}\"z\":0}}", if k > 0 { "," } else { "" });
         }

@@ -185,7 +185,7 @@ pub struct Faults {
     pub read_only: bool,
     /// Answer WRITE_BEGIN with END FULL (a day holding its limit).
     pub full: bool,
-    /// Answer WRITE_BEGIN with END NOT FOUND (no `\\Workout\\calendar`, or no `\\Courses`, on the card).
+    /// Answer a workout's WRITE_BEGIN with END NOT FOUND (no `\\Workout\\calendar` on the card).
     pub no_calendar: bool,
     /// Refuse a WRITE_DATA with this status (the write is dropped).
     pub refuse_data: Option<Status>,
@@ -397,9 +397,7 @@ impl FakeUnit {
             {
                 end(seq, Status::ReadOnly, 0)
             }
-            Command::WriteBegin { seq, .. } | Command::WriteCourse { seq, .. } if self.faults.no_calendar => {
-                end(seq, Status::NotFound, 0)
-            }
+            Command::WriteBegin { seq, .. } if self.faults.no_calendar => end(seq, Status::NotFound, 0),
             Command::WriteBegin { seq, .. } | Command::WriteCourse { seq, .. } if self.faults.full => {
                 end(seq, Status::Full, 0)
             }

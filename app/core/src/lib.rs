@@ -19,15 +19,15 @@ pub mod files;
 #[cfg(test)]
 mod files_tests;
 pub mod fitness;
+pub mod fmt;
 pub mod import;
 pub mod insight;
 pub mod intervals;
 pub mod ride;
-pub mod fmt;
 pub mod summary;
-pub mod theme;
 #[cfg(test)]
 mod summary_tests;
+pub mod theme;
 pub mod workout;
 #[cfg(test)]
 mod write_more_tests;

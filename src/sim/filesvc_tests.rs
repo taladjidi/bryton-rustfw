@@ -1275,8 +1275,10 @@ fn every_risky_course_write_is_refused_and_the_folder_stays_as_it_was() {
     let workout = long_workout();
     let wsize = workout.len() as u32;
     assert_eq!(send(&mut sim, &mut app, b"New", &workout, crc(&workout)).1, Some((Status::BadRequest, wsize)));
-    // a name the card has for another course (any case): never written over
-    assert_eq!(send(&mut sim, &mut app, b"TURNS", &workout, crc(&workout)).1, Some((Status::BadRequest, wsize)));
+    // a name the card has for another course (any case), or one COURSES shows for another: refused at WRITE_BEGIN
+    for n in [&b"TURNS"[..], b"zigzag", b"Hill Garmin"] {
+        assert_eq!(send(&mut sim, &mut app, n, &workout, crc(&workout)).0, Some((Status::BadRequest, 0)), "{n:?}");
+    }
     assert_eq!(course_on_card(&sim, "Turns.fit"), Some(file.clone()), "kept");
     assert_eq!(course_on_card(&sim, "New.fit"), None);
     // a ride: BUSY
@@ -1287,15 +1289,15 @@ fn every_risky_course_write_is_refused_and_the_folder_stays_as_it_was() {
     let (listed, end) = list_courses(&mut sim, &mut app, (control, data), 9);
     assert_eq!((listed.len(), end), (0, Some((Status::Busy, 0))));
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0));
-    // a card with no \Courses: NOT FOUND, nothing written, and an empty listing
+    // a card with no \Courses: an empty listing, and the first course sent makes the folder
     let (mut sim, mut app, control, data) = paired();
     let at = sim.emmc.image.windows(11).position(|w| w == b"COURSES    ").expect("the folder's 8.3 entry");
     sim.emmc.image[at + 6] = b'X';
-    let before = sim.emmc.image.clone();
-    let sent = send_course(&mut sim, &mut app, (control, data), (b"New", &file, c), 238);
-    assert_eq!(sent.0, Some((Status::NotFound, 0)));
-    assert!(sim.emmc.image == before, "nothing written");
     assert_eq!(list_courses(&mut sim, &mut app, (control, data), 4), (Vec::new(), Some((Status::Ok, 0))));
+    let sent = send_course(&mut sim, &mut app, (control, data), (b"New", &file, c), 238);
+    assert_eq!(sent, (Some((Status::Ok, 0)), Some((Status::Ok, size))));
+    assert_eq!(course_on_card(&sim, "New.fit"), Some(file));
+    assert_eq!(list_courses(&mut sim, &mut app, (control, data), 5).0.len(), 1);
 }
 
 /// Sends a profile command; the PROFILE frame and the END that answered.
@@ -1418,4 +1420,55 @@ fn courses_are_numbered_in_two_digits_and_only_course_files_count() {
     let n = Command::Delete { seq: 5, folder: Folder::Courses, key }.encode(&mut f);
     assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 1)));
     assert!(course_on_card(&sim, "C006.fit").is_none() && course_on_card(&sim, "C007.gpx").is_some());
+}
+
+/// LIST_IN 2 numbers only what a READ_IN or DELETE can reach: a course past the first 200 entries of `\Courses` is
+/// not listed (and the commit would answer FULL).
+#[test]
+fn courses_past_the_walk_are_not_listed() {
+    let (mut sim, mut app, control, data) = paired();
+    let (before, _) = list_courses(&mut sim, &mut app, (control, data), 2);
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    for i in 0..crate::storage::workout_write::WALK {
+        put_file(&mut d, "Courses", &std::format!("n{i:03}.txt"), b"x");
+    }
+    put_file(&mut d, "Courses", "Late.fit", b"far");
+    sim.emmc.image = d.0;
+    let (listed, end) = list_courses(&mut sim, &mut app, (control, data), 3);
+    assert_eq!((listed, end), (before.clone(), Some((Status::Ok, before.len() as u32))));
+}
+
+/// The COURSES menu after the phone deleted or sent a course: listed again at once when it shows (its cursor kept
+/// within the shorter list); while a course is read to follow, once that read ends.
+#[test]
+fn the_courses_menu_follows_what_the_phone_does() {
+    let (mut sim, mut app, control, data) = paired();
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    let file = turns();
+    let ends = (control, data);
+    let sent = send_course(&mut sim, &mut app, ends, (b"Late", &file, crc(&file)), 238);
+    assert_eq!(sent.1, Some((Status::Ok, file.len() as u32)));
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    let names = |app: &App| {
+        let l = &app.courses.as_deref().unwrap().list;
+        (0..l.len()).map(|i| std::string::String::from(l.get(i).unwrap().name())).collect::<Vec<_>>()
+    };
+    let n = names(&app).len();
+    assert_eq!(names(&app).last().map(|s| s.as_str()), Some("LATE"));
+    app.screen = Screen::Menu(Menu::Courses, n - 1); // the cursor on the last course
+    let (listed, _) = list_courses(&mut sim, &mut app, ends, 4);
+    let key = course_key(&listed, "Late.fit", file.len() as u32).unwrap();
+    let mut f = [0; 20];
+    let k = Command::Delete { seq: 5, folder: Folder::Courses, key }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..k]), Some((Status::Ok, 1)));
+    assert!(!names(&app).contains(&"LATE".into()), "listed again");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Courses, n - 2), "the cursor on the new last row");
+    // while a course is read to follow: the list stays as it was until the read ends
+    app.follow_course(0);
+    let sent = send_course(&mut sim, &mut app, ends, (b"Later", &file, crc(&file)), 238);
+    assert_eq!(sent.1, Some((Status::Ok, file.len() as u32)));
+    run(&mut sim, &mut app, 1000);
+    assert!(!app.courses.as_deref().unwrap().loading() && !app.courses.as_deref().unwrap().stale);
+    assert!(names(&app).contains(&"LATER".into()), "listed once the read ended");
 }

@@ -174,7 +174,14 @@ lane_H() {  # the host
         for img in target/fat/*.img; do
             [ -f "$img" ] || continue
             n=$((n + 1))
-            $fs "$img" > "$C/fsck.out" 2>&1 || { cat "$C/fsck.out"; echo "fsck: $fs failed on $img"; return 1; }
+            if $fs "$img" > "$C/fsck.out" 2>&1; then continue; fi
+            # *_lost.img: a cut the tests made on purpose that leaves a lost chain (a course's, between the remove and
+            # the link, or a delete's entry marked before its chain freed): orphan clusters and nothing else allowed
+            case "$img" in *_lost.img)
+                if ! grep -viE 'orphan|unused|lost|free cluster summary|^\*\*|^fix\?|^: no|files, .* free|^fsck\.fat|^/|^$' \
+                    "$C/fsck.out" | grep -q .; then continue; fi;;
+            esac
+            cat "$C/fsck.out"; echo "fsck: $fs failed on $img"; return 1
         done
         [ $n -ge 5 ] || { echo "fsck: only $n images in target/fat (5 expected: the tests write them)"; return 1; }
         echo "fsck: $n images clean"

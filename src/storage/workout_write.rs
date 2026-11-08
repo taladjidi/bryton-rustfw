@@ -7,11 +7,17 @@
 //! **Courses** ([`Target::Course`]): FIT files the unit follows ([`course_file::is_course`] on the read-back: the
 //! phone converts GPX), at most [`COURSE_MAX`] bytes, named `<name>.fit` by the phone ([`CourseName`]: no dot nor
 //! separator, so never outside `\Courses`, and the FAT writer gives it its long name and a hashed 8.3 alias).
-//! `\Courses` itself must exist (NOT FOUND otherwise): stock never makes it (STORAGE_AND_MAPS.md section 3, in the
-//! bryton repository's reverse engineering notes, names `\PlanTrip` for the app's routes and no `\Courses`); it is
-//! the folder the owner copies courses into over USB (course_file.rs). A name taken by a file of the same size and
-//! CRC-32 is the same course sent again (ok, written once); by any other, BAD REQUEST (never written over: the phone
-//! deletes it first). The course being followed is the app's to protect (app/filesvc.rs: BUSY).
+//! `\Courses` is made by the first course sent, at the commit's step 2 as a day folder is (so a refused send leaves
+//! the root as it was), with [`Fat::ensure_dir`] and never `ensure_own_dir`, whose repair would empty a torn
+//! `\Courses` and orphan the courses copied into it over USB. Stock never reads it (STORAGE_AND_MAPS.md section 3, in
+//! the bryton repository's reverse engineering notes, names `\PlanTrip` for the app's routes: Bryton's own format,
+//! which the Bryton app manages, so never written here). A name taken by a file of the same size and CRC-32 is the
+//! same course sent again (ok, written once); by any other, BAD REQUEST (never written over: the phone deletes it
+//! first); so is a name COURSES would show for another course (a `.gpx` of the same stem, a `\PlanTrip` route, `_`
+//! against a space: [`course_file::survey`]); and COURSES full ([`course_file::LIST`] of `\PlanTrip` and `\Courses`
+//! together) is FULL, so a sent course never misses from the unit's menu. These checks read nothing of the course and
+//! run at [`begin`] too, before the temporary file is touched. The course being followed is the app's to protect
+//! (app/filesvc.rs: BUSY).
 //!
 //! **Where the bytes go first:** `\Rustfw\Inbox\WORKOUT.TMP`, this firmware's own folder (AGENTS.md, "Share the storage
 //! with stock": stock never reads it), sized at [`begin`] (the chain taken, then the size set), then each 512-byte
@@ -45,7 +51,10 @@
 //!
 //! Why no recovery record (as `trash.rs` keeps for a ride's move): the workout is not a ride, the phone still holds it,
 //! and a record would have to tell a lost chain from one a computer's fsck named meanwhile (trash.rs `named_on_top`);
-//! one lost chain (the file's clusters) after a cut in a two-write window costs less than that code.
+//! one lost chain (the file's clusters) after a cut in a two-write window costs less than that code. For a course
+//! that chain is up to 64 clusters (1 MB in 16 KB clusters), and the same after a cut inside a delete (its entry
+//! marked, its chain not yet freed). The firmware never reclaims it; a computer's fsck frees it (or keeps it as a
+//! `.CHK`), and the card's room check counts it as taken meanwhile.
 //!
 //! **Names:** `<CRC-32 as 8 hex digits>.fit` (12 characters, a valid 8.3 name too), so the same file sent twice gets
 //! the same name and two different files in a day almost never share one (a clash answers BAD REQUEST). Stock names
@@ -91,8 +100,8 @@ impl Target {
 }
 
 /// The largest course taken, bytes: 1 MB, a quarter of what the unit reads ([`course_file::MAX_BYTES`]). WRITE_END
-/// reads it back twice in one pass of the loop (the CRC, then the course), about 0.2 s at the card's 10.5 MB/s
-/// (docs/status.md), and it is some 40,000 FIT records (25 bytes each, inferred), a point every 10 m over 400 km:
+/// reads up to three times that in one pass of the loop (the CRC, then the course, and on a name already taken the
+/// file there's CRC), about 0.3 s at the card's 10.5 MB/s (docs/status.md), and it is some 40,000 FIT records (25 bytes each, inferred), a point every 10 m over 400 km:
 /// more than the model keeps ([`crate::course::POINTS`]), so a longer route only costs the transfer.
 pub const COURSE_MAX: u32 = 1 << 20;
 /// The courses' folder, at the root.
@@ -138,6 +147,52 @@ fn folder(fat: &mut Fat, d: &mut impl DiskWrite, path: &str) -> Result<File, Sta
         Err(e) => Err(card(e)),
     }
 }
+
+/// Folder `name` in `parent`, None if there is none; a file of that name is BAD REQUEST (never written over).
+fn find_dir(fat: &mut Fat, d: &mut impl DiskWrite, parent: File, name: &str) -> Result<Option<File>, Status> {
+    match fat.find(d, parent, name) {
+        Ok(f) if f.dir => Ok(Some(f)),
+        Ok(_) => Err(Status::BadRequest),
+        Err(Error::NotFound) => Ok(None),
+        Err(e) => Err(card(e)),
+    }
+}
+
+/// The checks of course `c` of `size` bytes that read nothing of it, at [`begin`] (so a refusal touches no
+/// temporary file) and again at [`commit`]: a file of its name in `\Courses` (`dir`; None: not made yet) of another
+/// size is BAD REQUEST, of the same size it may be the same course sent again (the commit compares the CRC); a name
+/// COURSES shows for another course (a `.gpx` of the same stem, a `\PlanTrip` route, `_` against a space) is BAD
+/// REQUEST; `\Courses` at [`DAY_MAX`], or COURSES at its [`course_file::LIST`], is FULL: a sent course never misses
+/// from the unit's menu.
+fn course_room(
+    fat: &mut Fat,
+    d: &mut impl DiskWrite,
+    dir: Option<File>,
+    c: &CourseName,
+    size: u32,
+) -> Result<(), Status> {
+    let n = c.file_name();
+    if let Some(dir) = dir {
+        match fat.find(d, dir, n) {
+            Ok(f) if !f.dir && f.size == size => return Ok(()),
+            Ok(_) => return Err(Status::BadRequest),
+            Err(Error::NotFound) => {}
+            Err(e) => return Err(card(e)),
+        }
+    }
+    let (count, clash) = course_file::survey(fat, d, n).map_err(card)?;
+    if clash {
+        return Err(Status::BadRequest);
+    }
+    let here = match dir {
+        Some(dir) => listed(fat, d, dir, &Target::Course(*c))?,
+        None => 0,
+    };
+    if here >= DAY_MAX || count >= course_file::LIST {
+        return Err(Status::Full);
+    }
+    Ok(())
+}
 /// Stock's calendar, which holds a folder a day.
 pub const CALENDAR: &str = "Workout/calendar";
 
@@ -159,9 +214,12 @@ pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, to: &Target, size: u32, t: (
     }
     // nothing written for a card that cannot take the file
     match to {
-        Target::Day(_) => calendar(fat, d)?,
-        Target::Course(_) => folder(fat, d, COURSES)?,
-    };
+        Target::Day(_) => drop(calendar(fat, d)?),
+        Target::Course(c) => {
+            let dir = find_dir(fat, d, fat.root(), COURSES)?;
+            course_room(fat, d, dir, c, size)?;
+        }
+    }
     let own = fat.ensure_own_dir(d, fat.root(), DIR, t).map_err(card)?;
     let own = fat.ensure_own_dir(d, own, INBOX, t).map_err(card)?;
     let mut h = match fat.locate(d, own, TMP) {
@@ -212,15 +270,24 @@ pub fn commit(
             let day = core::str::from_utf8(day).map_err(|_| Status::BadRequest)?;
             workout_file::folder_day(day.as_bytes()).ok_or(Status::BadRequest)?;
             let cal = calendar(fat, d)?;
-            let dir = match fat.find(d, cal, day) {
-                Ok(f) if f.dir => f,
-                Ok(_) => return Err(Status::BadRequest), // a file of the day's name: never written over
-                Err(Error::NotFound) => fat.ensure_dir(d, cal, day, t).map_err(card)?,
-                Err(e) => return Err(card(e)),
+            let dir = match find_dir(fat, d, cal, day)? {
+                Some(dir) => dir,
+                None => fat.ensure_dir(d, cal, day, t).map_err(card)?,
             };
             (dir, core::str::from_utf8(&by_crc).map_err(|_| Status::Io)?)
         }
-        Target::Course(c) => (folder(fat, d, COURSES)?, c.file_name()),
+        Target::Course(c) => {
+            let root = fat.root();
+            let dir = find_dir(fat, d, root, COURSES)?;
+            course_room(fat, d, dir, c, h.size)?;
+            // the first course makes `\Courses` (never `ensure_own_dir`: its repair would empty a torn one, the
+            // courses copied over USB with it)
+            let dir = match dir {
+                Some(dir) => dir,
+                None => fat.ensure_dir(d, root, COURSES, t).map_err(card)?,
+            };
+            (dir, c.file_name())
+        }
     };
     match fat.find(d, dir, n) {
         // sent again after a lost answer: there whole
@@ -327,7 +394,7 @@ pub(crate) mod tests {
     extern crate std;
     use super::*;
     use crate::fat::tests::{Ram, read_all};
-    use crate::fat::write::tests::{Cut, fsck, fsck_cut};
+    use crate::fat::write::tests::{Cut, fsck, fsck_cut, fsck_torn};
     use crate::storage::workout_file::tests::intervals;
     use std::vec::Vec;
 
@@ -533,7 +600,7 @@ pub(crate) mod tests {
     /// lost chain at most, between the entry's delete and the chain freed), and a second delete or a re-send goes through.
     #[test]
     fn a_cut_at_every_write_of_a_delete() {
-        cut_every_delete(&intervals(), &W);
+        cut_every_delete(volume(), &intervals(), &W, None);
     }
 
     /// The file `to` names for `file` on volume `img`, if it is there: the workout's CRC name in its day, or the course's.
@@ -554,6 +621,34 @@ pub(crate) mod tests {
         }
     }
 
+    /// The files of the folder `to` writes into, sorted by name: (name, bytes).
+    fn folder_files(img: &[u8], to: &Target) -> Vec<(std::string::String, Vec<u8>)> {
+        let p = path(to, b"");
+        let dir = p.rsplit_once('/').unwrap().0;
+        let mut d = Ram(img.to_vec(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let Ok(f) = fat.open(&mut d, dir) else { return Vec::new() };
+        let mut c = fat.cursor(f).unwrap();
+        let mut out = Vec::new();
+        while let Some(e) = fat.list(&mut d, &mut c).unwrap() {
+            let n = std::string::String::from_utf8(e.name().to_vec()).unwrap();
+            if !e.file.dir {
+                out.push((n.clone(), read_all(&mut fat, &mut d, &std::format!("{dir}/{n}")).unwrap()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// `files` with `(name, file)` added, sorted.
+    fn plus(files: &[(std::string::String, Vec<u8>)], to: &Target, file: &[u8]) -> Vec<(std::string::String, Vec<u8>)> {
+        let p = path(to, file);
+        let mut v = files.to_vec();
+        v.push((p.rsplit_once('/').unwrap().1.into(), file.to_vec()));
+        v.sort();
+        v
+    }
+
     /// The clusters of `file` on the test volume: what one lost chain of it holds.
     fn chain(file: &[u8]) -> u32 {
         Fat::mount(&mut Ram(volume(), 0)).unwrap().clusters_for(file.len() as u32)
@@ -570,17 +665,23 @@ pub(crate) mod tests {
         delete(&mut fat, d, dir, &e.ok_or(Status::NotFound)?)
     }
 
-    /// A power cut after every sector the delete of `file` (sent for `to`) writes: the file whole or gone, fsck passes
-    /// (a lost chain at most), and a second delete or a re-send goes through.
-    fn cut_every_delete(file: &[u8], to: &Target) {
-        let mut d = Ram(volume(), 0);
+    /// A power cut after every sector the delete of `file` (sent for `to` on volume `base`) writes: the folder as it
+    /// was with the file whole, or as it was without it; fsck passes (a lost chain at most, the file's clusters); and a
+    /// second delete or a re-send goes through. `dump`: the volume a cut left between the entry marked deleted and its
+    /// chain freed is written for check.sh's fsck_msdos / fsck.vfat under that name.
+    fn cut_every_delete(base: Vec<u8>, file: &[u8], to: &Target, dump: Option<&str>) {
+        let mut d = Ram(base, 0);
         send(&mut d, file, to).unwrap();
+        let with = folder_files(&d.0, to);
         let base = d.0;
+        let without: Vec<_> = with.iter().filter(|f| plus(&[], to, file)[0].0 != f.0).cloned().collect();
+        assert_eq!(without.len() + 1, with.len());
         let mut full = Cut(Ram(base.clone(), 0), u32::MAX);
         delete_sent(&mut full, to, file).unwrap();
         let writes = u32::MAX - full.1;
         assert!(writes >= 3, "{writes}");
-        assert_eq!(sent(&full.0.0, to, file), None);
+        assert_eq!(folder_files(&full.0.0, to), without);
+        let mut dumped = dump.is_none();
         for at in 0..writes {
             let mut c = Cut(Ram(base.clone(), 0), at);
             assert_eq!(delete_sent(&mut c, to, file), Err(Status::Io), "cut at {at}");
@@ -591,27 +692,37 @@ pub(crate) mod tests {
                 scan.lost,
                 scan.past
             );
-            let left = sent(&c.0.0, to, file);
-            assert!(left.as_deref().is_none_or(|l| l == file), "cut at {at}");
+            let left = folder_files(&c.0.0, to);
+            assert!(left == with || left == without, "cut at {at}");
+            if !dumped && scan.lost == chain(file) {
+                crate::fat::tests::dump(dump.unwrap_or_default(), &c.0.0);
+                dumped = true;
+            }
             c.1 = u32::MAX;
-            if left.is_none() {
+            if left == without {
                 send(&mut c, file, to).unwrap_or_else(|e| panic!("re-send after a cut at {at}: {e:?}"));
+                assert_eq!(folder_files(&c.0.0, to), with, "cut at {at}");
             } else {
                 delete_sent(&mut c, to, file).unwrap_or_else(|e| panic!("again after a cut at {at}: {e:?}"));
+                assert_eq!(folder_files(&c.0.0, to), without, "cut at {at}");
             }
         }
+        assert!(dumped, "a cut between the entry and its chain");
     }
 
-    /// A power cut after every sector sending `file` for `to` writes (and before the first): the folder holds nothing
-    /// new or the whole file, the volume passes fsck (a lost chain only between the remove and the link), and the
-    /// next send, over what the cut left, goes through and leaves the volume clean but for that lost chain. The last
-    /// write is the one that shows the file: every cut before it leaves the folder as it was.
-    fn cut_every_write(file: &[u8], to: &Target) -> Vec<u8> {
-        let base = volume();
+    /// A power cut after every sector sending `file` for `to` on volume `base` writes (and before the first): the
+    /// target folder exactly as it was, the volume passes fsck (a lost chain only between the remove and the link,
+    /// the file's clusters), and the next send, over what the cut left, goes through and leaves the folder as it was
+    /// plus the file, the volume clean but for that lost chain. The last write is the one that shows the file: every
+    /// cut before it leaves the folder as it was. `dump`: the volume cut between the remove and the link is written
+    /// for check.sh's fsck_msdos / fsck.vfat under that name. The writes of the whole send, for a torn cut.
+    fn cut_every_write(base: Vec<u8>, file: &[u8], to: &Target, dump: Option<&str>) -> u32 {
+        let before = folder_files(&base, to);
         let mut full = Cut(Ram(base.clone(), 0), u32::MAX);
         send(&mut full, file, to).unwrap();
         let writes = u32::MAX - full.1;
         assert!(writes > 5, "{writes} writes");
+        assert_eq!(folder_files(&full.0.0, to), plus(&before, to, file));
         let (mut none, mut lost_seen) = (0, 0);
         for at in 0..writes {
             let mut c = Cut(Ram(base.clone(), 0), at);
@@ -626,18 +737,22 @@ pub(crate) mod tests {
             );
             assert!(scan.apart <= 1, "cut at {at}: FATs apart in one sector at most");
             lost_seen += scan.lost;
+            assert_eq!(folder_files(&img, to), before, "cut at {at}: the folder as it was");
             none += usize::from(sent(&img, to, file).is_none());
+            if let (Some(name), true) = (dump, at + 2 == writes) {
+                assert_eq!(scan.lost, chain(file), "between the remove and the link: the chain lost");
+                crate::fat::tests::dump(name, &img);
+            }
             // the boot's FAT sync, then the phone sends again: written, nothing more lost
             let mut d = Ram(img, 0);
             Fat::mount(&mut d).unwrap().sync_fats(&mut d).unwrap();
             send(&mut d, file, to).unwrap_or_else(|e| panic!("again after a cut at {at}: {e:?}"));
-            assert_eq!(sent(&d.0, to, file).as_deref(), Some(file), "cut at {at}");
+            assert_eq!(folder_files(&d.0, to), plus(&before, to, file), "cut at {at}");
             assert_eq!(fsck(&d.0), Ok(scan.lost), "cut at {at}");
         }
         std::println!("{writes} writes: {none} cuts left nothing, {lost_seen} a lost chain");
         assert!(none == writes as usize && lost_seen > 0, "{none} {lost_seen}");
-        assert_eq!(sent(&full.0.0, to, file).as_deref(), Some(file));
-        full.0.0
+        writes
     }
 
     /// An empty `.fit` (no chain) is deleted by its name; a workout's chain is freed.
@@ -658,13 +773,10 @@ pub(crate) mod tests {
     }
 
     /// A power cut after every sector the whole write makes: the calendar as it was or with the whole workout
-    /// ([`cut_every_write`]), and nothing else in the day.
+    /// ([`cut_every_write`]).
     #[test]
     fn a_cut_at_every_write_leaves_the_old_calendar_or_the_whole_workout() {
-        let file = intervals();
-        let img = cut_every_write(&file, &W);
-        let n = std::string::String::from_utf8(name(crate::inflate::crc32(file.iter().copied())).to_vec()).unwrap();
-        assert_eq!(day_files(&img, "20261108"), [(n, file)]);
+        cut_every_write(volume(), &intervals(), &W, None);
     }
 
     /// A FIT course of the synthetic card (tools/fat_image.py): the zigzag, with its course points.
@@ -678,16 +790,77 @@ pub(crate) mod tests {
         Target::Course(CourseName::new(n.as_bytes()).unwrap())
     }
 
-    /// The same for a course: `\Courses` as it was or with the whole course.
+    /// The longest name, two long name pieces with its `.fit`.
+    const LONG: &str = "Col du Galibier 2-b_";
+
+    /// The test volume with `\Courses` filled with text files (no course) until its end marker sits at slot 15 of a
+    /// sector: the next entry of more than one slot goes into the next sector, the slots left marked deleted.
+    fn courses_at_slot_15() -> Vec<u8> {
+        let mut d = Ram(volume(), 0);
+        for i in 0..64 {
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let dir = fat.open(&mut d, COURSES).unwrap();
+            let h = fat.chain(&mut d, dir.cluster).unwrap();
+            let per = fat.cluster_bytes() / SECTOR as u32;
+            let mut end = None;
+            for k in 0..h.clusters * per {
+                let mut s = [0u8; SECTOR];
+                fat.read_sector(&mut d, &h, k, &mut s).unwrap();
+                if let Some(i) = s.chunks(32).position(|e| e[0] == 0) {
+                    end = Some(i);
+                    break;
+                }
+            }
+            match end {
+                Some(15) => return d.0,
+                // a name of one long name piece takes 2 slots, of two pieces 3
+                Some(e) if (15 - e % 16) % 2 == 1 => {
+                    crate::fat::tests::put_file(&mut d, COURSES, &std::format!("note {i:02} long.txt"), b"x")
+                }
+                _ => crate::fat::tests::put_file(&mut d, COURSES, &std::format!("n{i:02}.txt"), b"x"),
+            }
+        }
+        panic!("slot 15 never reached");
+    }
+
+    /// The same for a course, a short name and the longest one, then the longest into a folder whose end marker is at
+    /// slot 15 (its entry in the next sector): `\Courses` exactly as it was or with the whole course.
     #[test]
     fn a_cut_at_every_write_of_a_course_leaves_the_folder_as_it_was_or_with_the_whole_course() {
-        cut_every_write(&turns(), &course("Zig zag"));
+        cut_every_write(volume(), &turns(), &course("Zig zag"), Some("course_cut_unlinked_lost"));
+        cut_every_write(volume(), &turns(), &course(LONG), None);
+        cut_every_write(courses_at_slot_15(), &turns(), &course(LONG), None);
     }
 
     /// And for its delete.
     #[test]
     fn a_cut_at_every_write_of_a_course_delete() {
-        cut_every_delete(&turns(), &course("Zig zag"));
+        cut_every_delete(volume(), &turns(), &course("Zig zag"), Some("course_cut_mid_delete_lost"));
+        cut_every_delete(volume(), &turns(), &course(LONG), None);
+        cut_every_delete(courses_at_slot_15(), &turns(), &course(LONG), None);
+    }
+
+    /// The link's sectors torn (a card without reliable write keeps the first bytes of the sector it was writing): the
+    /// longest name into a folder at slot 15, its last three writes (the entries in the next sector, the slots left
+    /// marked, the entries made live) torn every 8 bytes: fsck passes without the orphan check, the course is whole or
+    /// absent, and sent again it is there.
+    #[test]
+    fn a_torn_link_leaves_the_course_whole_or_absent() {
+        let (base, file, to) = (courses_at_slot_15(), turns(), course(LONG));
+        let writes = cut_every_write(base.clone(), &file, &to, None);
+        let mut torn = 0;
+        for at in writes - 3..writes {
+            for keep in (1..SECTOR).step_by(8) {
+                let mut t = crate::fat::write::tests::Torn { ram: Ram(base.clone(), 0), budget: at, keep, cut_at: 0 };
+                assert_eq!(send(&mut t, &file, &to), Err(Status::Io), "write {at}, {keep} bytes");
+                let lost = fsck_torn(&t.ram.0).unwrap_or_else(|e| panic!("write {at}, {keep} bytes: {e}"));
+                assert!(lost <= chain(&file), "write {at}, {keep} bytes: {lost} lost");
+                let got = sent(&t.ram.0, &to, &file);
+                assert!(got.as_deref().is_none_or(|g| g == file), "write {at}, {keep} bytes: a part of it");
+                torn += 1;
+            }
+        }
+        assert!(torn > 100, "{torn}");
     }
 
     /// A course is written as `<name>.fit` in `\Courses`, listed by the unit's COURSES (its long name, capitals) and
@@ -711,10 +884,15 @@ pub(crate) mod tests {
         send(&mut d, &file, &to).unwrap();
         let mut other = file.clone();
         other.push(0); // a byte more: another file of that name
+        let img = d.0.clone();
+        let mut fat = Fat::mount(&mut d).unwrap();
+        assert_eq!(begin(&mut fat, &mut d, &to, other.len() as u32, T).err(), Some(Status::BadRequest), "at once");
+        assert!(d.0 == img, "the temporary file untouched");
         assert_eq!(send(&mut d, &other, &to), Err(Status::BadRequest));
         assert_eq!(sent(&d.0, &to, &file).as_deref(), Some(&file[..]), "kept, once");
-        // another case of the same name is the same name on FAT
+        // another case of the same name is the same name on FAT; `_` for a space is the same name in COURSES
         assert_eq!(send(&mut d, &other, &course("COL DU GALIBIER 2")), Err(Status::BadRequest));
+        assert_eq!(send(&mut d, &file, &course("Col_du Galibier_2")), Err(Status::BadRequest));
         // the same size, other bytes (a course still, its FIT CRC put right): another file too
         let mut same_size = file.clone();
         let at = same_size.len() - 3;
@@ -733,7 +911,31 @@ pub(crate) mod tests {
         crate::fat::tests::dump("course_written", &d.0);
     }
 
-    /// Courses that are not, too big, a CRC that lies, a full card, no `\Courses`: refused, the folder unchanged.
+    /// Names COURSES would show for another course: a `.gpx` of the same stem in `\Courses`, a `\PlanTrip` route,
+    /// `_` against a space, any case, or the first 20 characters of a longer name. Refused at once, nothing written.
+    #[test]
+    fn a_course_shown_under_another_ones_name_is_refused() {
+        let file = turns();
+        let mut d = Ram(volume(), 0);
+        crate::fat::tests::put_file(&mut d, "PlanTrip", "Route du Col de la Croix.fit", b"route");
+        let img = d.0.clone();
+        // the card's own: Courses/Hill.gpx, Hill_Garmin.fit, Zigzag.gpx; PlanTrip/Hill.fit
+        for n in ["hill", "Zigzag", "Hill Garmin", "HILL_GARMIN", "Route du Col de la C", "Route_du Col de la C"] {
+            let mut fat = Fat::mount(&mut d).unwrap();
+            assert_eq!(
+                begin(&mut fat, &mut d, &course(n), file.len() as u32, T).err(),
+                Some(Status::BadRequest),
+                "{n}"
+            );
+            assert_eq!(send(&mut d, &file, &course(n)), Err(Status::BadRequest), "{n}");
+        }
+        assert!(d.0 == img, "nothing written");
+        send(&mut d, &file, &course("Route du Col de la")).unwrap();
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// Courses that are not, too big, a CRC that lies, a full card: refused, the folder unchanged. A card without
+    /// `\Courses`: a refused send leaves the root as it was; the first good one makes the folder.
     #[test]
     fn refused_courses_never_reach_the_folder() {
         let (file, to) = (turns(), course("Turns again"));
@@ -769,35 +971,59 @@ pub(crate) mod tests {
         let mut full = d.0.clone();
         full[SECTOR + 488..SECTOR + 492].copy_from_slice(&0u32.to_le_bytes());
         assert_eq!(send(&mut Ram(full, 0), &file, &to), Err(Status::Full));
-        // no \Courses on the card: NOT FOUND, nothing written
+        // no \Courses on the card: a refused send leaves the root as it was, the first course makes the folder
         let at = d.0.windows(11).position(|w| w == b"COURSES    ").expect("the folder's 8.3 entry");
         d.0[at + 6] = b'X'; // its long name no longer matches: not found
-        let img = d.0.clone();
-        assert_eq!(send(&mut d, &file, &to), Err(Status::NotFound));
-        assert!(d.0 == img, "nothing written");
+        let root = |img: &[u8]| {
+            let mut d = Ram(img.to_vec(), 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let mut c = fat.cursor(fat.root()).unwrap();
+            core::iter::from_fn(|| fat.list(&mut d, &mut c).unwrap()).map(|e| e.name().to_vec()).collect::<Vec<_>>()
+        };
+        let before = root(&d.0);
+        assert_eq!(send(&mut d, &one_point, &to), Err(Status::BadRequest));
+        assert_eq!(root(&d.0), before, "the root as it was");
+        send(&mut d, &file, &to).unwrap();
+        assert_eq!(sent(&d.0, &to, &file).as_deref(), Some(&file[..]));
+        assert_eq!(root(&d.0).len(), before.len() + 1, "\\Courses made");
+        assert_eq!(fsck_torn(&d.0), Ok(0), "the old folder's long name an orphan: this test's doing");
+        // a file called Courses: never written over
+        let mut d = Ram(volume(), 0);
+        d.0[at + 6] = b'X';
+        let mut fat = Fat::mount(&mut d).unwrap();
+        fat.create(&mut d, fat.root(), COURSES, T).unwrap();
+        assert_eq!(send(&mut d, &file, &to), Err(Status::BadRequest));
     }
 
-    /// `\Courses` holds [`DAY_MAX`] course files at most (`.fit` and `.gpx` count, other files do not), and takes no
-    /// more once longer than [`WALK`] entries: FULL, nothing written; the same file sent again is still ok.
+    /// COURSES lists [`course_file::LIST`] courses of `\PlanTrip` and `\Courses` together: a course past them is FULL
+    /// at once (it would never show), the same one sent again still ok. `\Courses` takes [`DAY_MAX`] course files at
+    /// most (empty ones count there, not in COURSES) and none once longer than [`WALK`] entries.
     #[test]
-    fn a_full_course_folder_refuses_one_more() {
+    fn a_full_course_list_or_folder_refuses_one_more() {
         let file = turns();
         let mut d = Ram(volume(), 0);
-        let have = {
+        let mut have = || {
             let mut fat = Fat::mount(&mut d).unwrap();
-            let dir = fat.open(&mut d, COURSES).unwrap();
-            listed(&mut fat, &mut d, dir, &course("x")).unwrap()
+            course_file::survey(&mut fat, &mut d, "x.fit").unwrap().0
         };
-        for i in have..DAY_MAX - 1 {
+        for i in have()..course_file::LIST - 1 {
             crate::fat::tests::put_file(&mut d, COURSES, &std::format!("C{i}.{}", ["fit", "gpx"][i % 2]), b"x");
         }
         crate::fat::tests::put_file(&mut d, COURSES, "notes.txt", b"x");
         send(&mut d, &file, &course("Last")).unwrap();
+        let img = d.0.clone();
+        let mut fat = Fat::mount(&mut d).unwrap();
+        assert_eq!(begin(&mut fat, &mut d, &course("One more"), 100, T).err(), Some(Status::Full), "at once");
+        assert!(d.0 == img, "the temporary file untouched");
         assert_eq!(send(&mut d, &file, &course("One more")), Err(Status::Full));
-        assert_eq!(sent(&d.0, &course("One more"), &file), None);
-        assert_eq!(fsck(&d.0), Ok(0), "the temporary file kept, nothing lost");
-        send(&mut d, &file, &course("Last")).unwrap();
         assert_eq!(fsck(&d.0), Ok(0));
+        send(&mut d, &file, &course("Last")).unwrap();
+        // empty course files: not in COURSES, but numbered by the listing
+        let mut d = Ram(volume(), 0);
+        for i in 0..DAY_MAX {
+            crate::fat::tests::put_file(&mut d, COURSES, &std::format!("E{i}.fit"), b"");
+        }
+        assert_eq!(send(&mut d, &file, &course("Late")), Err(Status::Full));
         // past WALK entries: FULL whatever the count
         let mut d = Ram(volume(), 0);
         for i in 0..=WALK {

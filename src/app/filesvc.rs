@@ -19,7 +19,7 @@
 //! **Writes** (WRITE_BEGIN / WRITE_DATA / WRITE_END / DELETE, folders 1 and 2): done as the command arrives, in
 //! [`App::files_command`], since each is small: a WRITE_DATA buffers its bytes in the read block and writes the
 //! sectors it fills (two at most for the largest frame), WRITE_END reads the file back (8 KB at most for a workout, 1 MB
-//! for a course, twice) and moves it into its folder (storage/workout_write.rs has the order and why a cut leaves the
+//! for a course, up to three passes) and moves it into its folder (storage/workout_write.rs has the order and why a cut leaves the
 //! folder whole). WRITE_BEGIN is answered once the temporary file is ready, a WRITE_DATA only when refused (out of order, past the size, a card
 //! error: the write is dropped). Only in a build that may write the card (READ ONLY otherwise), and a write the phone
 //! leaves for [`STALL_MS`] is dropped. A failed card write makes the FAT copies suspect, as a screenshot's does.
@@ -179,6 +179,9 @@ enum Job {
         files: Option<Cursor>,
         day: [u8; 8],
         ord: u8,
+        /// Entries of the numbered folder walked (a day's, or `\Courses`): past [`LOCATE_MAX`] none is listed, since
+        /// [`locate`] would not reach it (nor the commit's count, storage/workout_write.rs).
+        walked: u8,
         count: u32,
     },
     Read {
@@ -205,7 +208,7 @@ enum Job {
 
 impl Job {
     fn list(seq: u8, folder: fs::Folder, legacy: bool) -> Job {
-        Job::List { seq, folder, legacy, cur: None, files: None, day: [0; 8], ord: 0, count: 0 }
+        Job::List { seq, folder, legacy, cur: None, files: None, day: [0; 8], ord: 0, walked: 0, count: 0 }
     }
 
     fn read(seq: u8, folder: fs::Folder, key: fs::Key, offset: u32) -> Job {
@@ -377,7 +380,7 @@ impl FileSvc {
         let io = |_| Status::Io;
         match job {
             Job::Idle | Job::Write { .. } => Ok(false),
-            Job::List { folder, legacy, cur, files, day, ord, .. } => {
+            Job::List { folder, legacy, cur, files, day, ord, walked, .. } => {
                 let mut fat = fat::Fat::mount(d).map_err(io)?;
                 if cur.is_none() {
                     // a card with no such folder has no files: an empty list, not an error
@@ -395,7 +398,9 @@ impl FileSvc {
                 let Some(c) = cur else { return Ok(false) };
                 for _ in 0..SCAN {
                     if let Some(fc) = files {
-                        let Some(e) = fat.list(d, fc).map_err(io)? else {
+                        *walked = walked.saturating_add(1);
+                        let e = fat.list(d, fc).map_err(io)?.filter(|_| usize::from(*walked) <= LOCATE_MAX);
+                        let Some(e) = e else {
                             *files = None;
                             continue;
                         };
@@ -422,9 +427,13 @@ impl FileSvc {
                             && workout_file::folder_day(&dn).is_some()
                         {
                             *files = Some(fat.cursor(e.file).map_err(io)?);
-                            (*day, *ord) = (dn, 0);
+                            (*day, *ord, *walked) = (dn, 0, 0);
                         }
                     } else if *folder == fs::Folder::Courses {
+                        *walked = walked.saturating_add(1);
+                        if usize::from(*walked) > LOCATE_MAX {
+                            return Err(Status::Ok);
+                        }
                         if e.file.dir || !workout_write::is_course(e.name()) {
                             continue;
                         }
@@ -823,14 +832,12 @@ impl App {
                 }
             }
         }
-        // an open COURSES lists the folder again (a course read to follow keeps the list it was picked from)
-        if course
-            && r.is_ok()
-            && matches!(self.screen, Screen::Menu(Menu::Courses, _))
-            && let Some(cs) = self.courses.as_deref_mut().filter(|cs| !cs.loading())
-        {
-            let _ = cs.open(&mut emmc::Volume(&mut self.emmc, b));
-            self.show(b);
+        // the course list is out of date: listed again now, or once the course being read to follow is
+        if course && r.is_ok() {
+            if let Some(cs) = self.courses.as_deref_mut() {
+                cs.stale = true;
+            }
+            self.relist_courses(b);
         }
     }
 
