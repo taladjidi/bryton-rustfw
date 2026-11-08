@@ -181,7 +181,7 @@ seconds, and the run ends with all of them and a total:
 - **lane H, the host:** clippy on the tests and the simulator, `cargo test-host` (unit tests, simulator tests and doc
   tests on the Mac; writes `target/sim/preview.bmp`), `RUSTDOCFLAGS="-D warnings" cargo doc` (no broken or private
   links), `cargo deny check` (when installed; `--offline` when the advisory database cannot be fetched, on a branch), then what the
-  tests wrote: `fsck_msdos -n` / `fsck.vfat -n` (an independent FAT checker) on the volumes in `target/fat/*.img`,
+  tests wrote: `fsck_msdos -n` / `fsck.vfat -n` (an independent FAT checker) on the volumes in `target/fat/*.img` (`*_lost.img`: a cut that leaves a lost chain on purpose, orphan clusters allowed and nothing else),
   `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python; on main or `--full` they and the fsck tool are required) and `tools/walk.py selftest`;
 - **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `sync.py`, `assist.py`, `segments.py`,

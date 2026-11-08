@@ -394,6 +394,41 @@ a 20 B write length ends in "Sent"); its `Faults` can answer each status.
 |:-:|
 | ![The send sheet](img/app-workout-send.png) |
 
+## Courses from the phone
+
+The unit's side (2026-11-08; the app's route screen and its GPX to FIT encoder are the next step). Folder 2 of the file
+service is `\Courses\`, the folder the unit's COURSES menu lists after stock's `\PlanTrip` (src/link/filesvc.rs,
+src/app/filesvc.rs, src/storage/workout_write.rs):
+- LIST_IN `04 seq 02` lists its `.fit` and `.gpx` files, ENTRY_IN `84 seq 02 key[2] check[2] size[4]`: the key is the
+  file's two-digit number in directory order, the check the one a workout's has (the FIT CRC of the file's name, then
+  of its size), so a phone that knows the name it sent finds its course in the list. READ_IN `05 seq 02 off[4] 02
+  key[2] check[2]` reads one.
+- WRITE_BEGIN `06 seq 02 size[4] crc[4] len name[len]`: the name is 1 to 20 ASCII letters, digits, spaces, `-` and `_`
+  (what COURSES shows), not first or last a space, not a Windows device name (CON, NUL, COM1...); the unit writes
+  `<name>.fit` with a long name. 12 bytes and the name: 8 characters fit the default MTU's 20-byte write, the 20 any
+  larger one (the core's `course_write_command` cuts the name to the write length). Then WRITE_DATA and WRITE_END as for
+  a workout. The file must be a FIT course the unit follows (two points at least, read back from the card and parsed
+  at WRITE_END: BAD REQUEST otherwise; the phone converts GPX), 1 MB at most (WRITE_END reads up to three times that
+  in one pass, about 0.3 s; more points than the unit keeps).
+- The same course sent again (same name, size and CRC-32) answers ok, written once; another file of that name (any
+  case) is BAD REQUEST, never written over: delete it first. So is a name the COURSES menu would show for another
+  course (a `.gpx` of the same name, a Bryton route in `\PlanTrip`, `_` for a space); and COURSES holding its 64
+  courses (`\PlanTrip` and `\Courses` together) is FULL, so a sent course never misses from the menu. Both are
+  answered at WRITE_BEGIN, before any byte is sent. A card without `\Courses` gets it made by the first course
+  (never `\PlanTrip`: Bryton's own format, which its app manages).
+- LIST_IN numbers the first 200 entries of `\Courses` only (READ_IN and DELETE reach no further), and up to 100
+  files.
+- DELETE `09 seq 02 02 key[2] check[2]` removes a listed course (entry marked deleted, then its clusters freed). The
+  course being followed, or being read to follow, answers BUSY.
+- Same rules as the workouts: the bond, BUSY during a ride or while the card is lent, READ ONLY in a build that may not
+  write the card, a power cut anywhere leaves `\Courses` as it was or with the whole course (at most one lost chain,
+  the course's clusters: up to 64 for 1 MB, never reclaimed by the unit, freed by a computer's fsck).
+- The unit's COURSES menu lists the folder again after a course is written or deleted (at once when it shows, its
+  cursor kept within the list; otherwise when it opens or a course read to follow ends).
+- The core: `UnitFolder::Courses` for `list_in_command`, `read_in_command` and `delete_command`;
+  `course_write_command(name, bytes, max_write)`; the fake unit keeps `courses`. COURSES holds 64 courses since
+  2026-11-08 (`course_file::LIST`, was 32).
+
 ## Seen on the unit, 2026-11-07
 
 On the owner's iPhone 16 Pro (iOS 27):

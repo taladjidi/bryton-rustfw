@@ -72,7 +72,11 @@ fn the_same_climb_is_found_in_the_other_ride() {
     // 0.01 degrees of latitude (1.1 km) away is another hill
     let far: Vec<ClimbStat> = a
         .iter()
-        .map(|c| ClimbStat { start_lat: c.start_lat.map(|l| l + 0.01), end_lat: c.end_lat.map(|l| l + 0.01), ..c.clone() })
+        .map(|c| ClimbStat {
+            start_lat: c.start_lat.map(|l| l + 0.01),
+            end_lat: c.end_lat.map(|l| l + 0.01),
+            ..c.clone()
+        })
         .collect();
     assert!(match_climbs(a.clone(), far).is_empty());
     // a climb with no position matches nothing

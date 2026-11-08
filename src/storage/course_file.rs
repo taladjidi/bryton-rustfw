@@ -58,8 +58,9 @@ use crate::fat::{self, Disk, Fat, File};
 use crate::fitread::{Msg, Reader};
 use crate::history::degrees_e7;
 
-/// Courses listed at most.
-pub const LIST: usize = 32;
+/// Courses listed at most, `\PlanTrip` and `\Courses` together (64 since 2026-11-08: the owner keeps about 14 routes
+/// in `\PlanTrip`, and the phone sends to `\Courses`, which refuses a course this list could not show).
+pub const LIST: usize = 64;
 /// Characters of a course's name kept.
 pub const NAME: usize = 20;
 /// Bytes read from the card per disk read.
@@ -146,20 +147,10 @@ impl List {
             let Ok(dir) = fat.open(d, dir) else { continue };
             let mut c = fat.cursor(dir)?;
             while let Some(f) = fat.list(d, &mut c)? {
-                let n = f.name();
-                let ext = |e: &[u8]| n.len() > 4 && n.get(n.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(e));
-                let gpx = ext(b".gpx");
-                if f.file.dir || f.file.size == 0 || !(gpx || ext(b".fit")) || self.len >= LIST {
-                    continue;
-                }
+                let (Some(gpx), true) = (kind(&f), self.len < LIST) else { continue };
                 let mut e = Entry { file: f.file, gpx, ..Entry::EMPTY };
-                for (slot, &b) in e.name.iter_mut().zip(n.get(..n.len() - 4).unwrap_or(&[])) {
-                    *slot = match b {
-                        b'a'..=b'z' => b.to_ascii_uppercase(),
-                        b'A'..=b'Z' | b'0'..=b'9' | b' ' | b'-' | b'.' => b,
-                        b'_' => b' ',
-                        _ => b'?',
-                    };
+                for (slot, &b) in e.name.iter_mut().zip(stem(f.name())) {
+                    *slot = shown(b);
                     e.name_len += 1;
                 }
                 if let Some(o) =
@@ -259,6 +250,64 @@ impl Stream {
     }
 }
 
+/// A course file COURSES lists: Some(whether GPX) for a `.fit` or `.gpx` file with bytes, else None.
+fn kind(f: &fat::Entry) -> Option<bool> {
+    let n = f.name();
+    let ext = |e: &[u8]| n.len() > 4 && n.get(n.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(e));
+    let gpx = ext(b".gpx");
+    (!f.file.dir && f.file.size > 0 && (gpx || ext(b".fit"))).then_some(gpx)
+}
+
+/// A file name without its 4-byte extension.
+fn stem(n: &[u8]) -> &[u8] {
+    n.get(..n.len().saturating_sub(4)).unwrap_or(&[])
+}
+
+/// A name's byte as COURSES shows it: capitals (the pixel font's), `_` as a space, `?` for what it cannot draw.
+fn shown(b: u8) -> u8 {
+    match b {
+        b'a'..=b'z' => b.to_ascii_uppercase(),
+        b'A'..=b'Z' | b'0'..=b'9' | b' ' | b'-' | b'.' => b,
+        b'_' => b' ',
+        _ => b'?',
+    }
+}
+
+/// The course files COURSES would list (both folders, every one: not cut at [`LIST`]), and whether one of them
+/// other than `\Courses\<file>` itself shows under the same name as `file` does (its first [`NAME`] characters as
+/// COURSES draws them: `Col_du` and `COL DU` are one name there). For the file service's course writes
+/// (storage/workout_write.rs): a course the menu could not show, or could not tell from another, is refused.
+pub fn survey(fat: &mut Fat, d: &mut impl Disk, file: &str) -> Result<(usize, bool), fat::Error> {
+    let same = |n: &[u8]| {
+        let (a, b) = (stem(n).iter().take(NAME).map(|&c| shown(c)), stem(file.as_bytes()).iter().map(|&c| shown(c)));
+        a.eq(b.take(NAME))
+    };
+    let (mut count, mut clash) = (0, false);
+    for (k, dir) in DIRS.iter().enumerate() {
+        let Ok(dir) = fat.open(d, dir) else { continue };
+        let mut c = fat.cursor(dir)?;
+        while let Some(f) = fat.list(d, &mut c)? {
+            if kind(&f).is_none() {
+                continue;
+            }
+            count += 1;
+            let itself = k == 1 && f.name().eq_ignore_ascii_case(file.as_bytes());
+            clash |= !itself && same(f.name());
+        }
+    }
+    Ok((count, clash))
+}
+
+/// Whether `file` is a FIT course this unit follows: read whole as [`Courses::load`] reads it, two points at least
+/// (the file service's check of a course the phone sent, storage/workout_write.rs). An error is a read that failed
+/// ([`fat::Error::Corrupt`]: also a FIT that fails its checks or is cut short).
+pub fn is_course(fat: &mut Fat, d: &mut impl Disk, file: File) -> Result<bool, fat::Error> {
+    let mut s = Stream::new(&Entry { file, ..Entry::EMPTY });
+    let mut points = 0u32;
+    let done = s.step(fat, d, MAX_BYTES, &mut |it| points += u32::from(matches!(it, Item::Point(_))))?;
+    Ok(done && points >= 2)
+}
+
 /// The file being read across the main loop's passes.
 enum Job {
     /// None.
@@ -295,6 +344,9 @@ pub struct Courses {
     pub on: Option<File>,
     /// RIDE A COURSE was chosen: the next course loaded starts a trainer ride on it (app/courses.rs).
     pub ride_it: bool,
+    /// The list may miss a course the phone sent or still show one it deleted: listed again when COURSES opens or a
+    /// load ends (app/courses.rs).
+    pub stale: bool,
     /// Some: a virtual ride on the course, from this ride distance (m); the trainer's distance places the rider.
     pub base_m: Option<u32>,
     job: Job,
@@ -315,6 +367,7 @@ impl Courses {
             at: Tracker::new(),
             on: None,
             ride_it: false,
+            stale: false,
             base_m: None,
             job: Job::Idle,
         }
@@ -322,11 +375,21 @@ impl Courses {
 
     /// Lists the course files (their folders only: quick); their lengths are measured by the next steps.
     pub fn open(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
+        self.relist(d)?;
+        self.next_job();
+        Ok(())
+    }
+
+    /// Lists the course files again, measuring nothing (lengths already measured are kept): after the phone wrote or
+    /// deleted one while COURSES was not shown. Never while a course is read to follow: its place in the list is how
+    /// it is found when it ends.
+    pub fn relist(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
+        // a length being measured: its place in the list may now be another file's
         if matches!(self.job, Job::Measure { .. }) {
             self.job = Job::Idle;
         }
         self.list.read(d)?;
-        self.next_job();
+        self.stale = false;
         Ok(())
     }
 
@@ -344,6 +407,11 @@ impl Courses {
         self.job = Job::Load { k, s: Stream::new(e) };
         self.on = None;
         self.course.clear();
+    }
+
+    /// Whether file `f` is the course followed or the one being read to follow: never deleted under them.
+    pub fn uses(&self, f: File) -> bool {
+        self.on == Some(f) || matches!(&self.job, Job::Load { s, .. } if s.file == f)
     }
 
     /// A course is being read to follow ([`Courses::load`]).
@@ -720,6 +788,19 @@ pub(crate) mod tests {
         let k = (0..c.list.len()).find(|&i| c.list.get(i).unwrap().name() == "CUT").unwrap();
         assert_eq!(load(&mut c, &mut d, k), Progress::Loaded(false));
         assert_eq!(c.on, None);
+    }
+
+    /// A list read again measures nothing: a length being measured is dropped (its place may be another file's).
+    #[test]
+    fn a_relist_drops_a_measure() {
+        let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut c = Courses::new();
+        c.open(&mut d).unwrap();
+        assert!(c.measuring());
+        c.stale = true;
+        c.relist(&mut d).unwrap();
+        assert!(!c.measuring() && !c.stale);
+        assert_eq!(c.step(&mut d, 4096), Progress::Idle);
     }
 
     /// A long file name is listed (its extension kept), and a second open keeps the lengths measured.

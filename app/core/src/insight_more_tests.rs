@@ -124,7 +124,8 @@ fn fuzz_insight() {
         }
         let w = [0u16, 70][r(2) as usize];
         with_climbs += usize::from(!climbs(&all, w).is_empty());
-        with_wbal += usize::from(!wbal(&all, [0u16, 200, 250][r(3) as usize], [0u16, 20_000][r(2) as usize]).is_empty());
+        with_wbal +=
+            usize::from(!wbal(&all, [0u16, 200, 250][r(3) as usize], [0u16, 20_000][r(2) as usize]).is_empty());
         with_dec += usize::from(decoupling(&all).is_some());
         // beats: a slow wander with now and then a wild one
         let mut b = 800u16;

@@ -7975,6 +7975,170 @@ fn file_service_writes() {
     assert!(reached.iter().all(|&n| n > 0), "{reached:?}");
 }
 
+/// The file service's courses (folder 2, app/filesvc.rs, storage/workout_write.rs): WRITE_BEGINs whose names are made
+/// as a phone or a hostile one could (good ones, ones that escape the folder or make another extension, too long,
+/// UTF-8, control characters, Windows device names, a length byte that lies), with a course, a workout or junk behind
+/// them, CRCs and sizes that lie, chunks of 1 to 238 bytes mutated on the way; DELETEs of listed, stale and made-up
+/// keys; LIST_IN 2 and READ_IN of what is listed. No panic, every notification parses, `\Courses` only ever gains
+/// whole courses under a good name, fsck finds nothing new, and over the seeds each path is reached.
+#[test]
+fn file_service_courses() {
+    use super::filesvc_tests::{End, ask_raw, drain, list_courses, long_workout, paired, turns};
+    use super::run;
+    use crate::filesvc::{CourseName, FRAME_BIG, Folder, Frame, Key, Status};
+    let files = [turns(), turns(), long_workout(), std::vec![0x5a; 700]];
+    let base: Vec<std::string::String> = {
+        let (sim, ..) = paired();
+        course_names(&sim.emmc.image)
+    };
+    // commits, deletes, bad names refused, mismatches, not a course, READ_IN whole, listed entries, good names begun
+    let mut reached = [0u32; 8];
+    for seed in 1..=scaled(16) {
+        let mut next = xorshift(seed);
+        let (mut sim, mut app, control, data) = paired();
+        let lost0 = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap();
+        let mut ends: Vec<End> = Vec::new();
+        for _ in 0..6 {
+            let mut f = [0u8; FRAME_BIG];
+            match next() % 6 {
+                0 | 1 => {
+                    // a DELETE, or a READ_IN, of a listed key, a stale one or one made up
+                    let (listed, _) = list_courses(&mut sim, &mut app, (control, data), 200);
+                    reached[6] += listed.len() as u32;
+                    let key = match (listed.is_empty(), next() % 3) {
+                        (false, 0 | 1) => listed[next() as usize % listed.len()].0,
+                        (false, _) => {
+                            let k = listed[next() as usize % listed.len()].0;
+                            Key::new(Folder::Courses, k.bytes()).unwrap().with_check(next() as u16)
+                        }
+                        (true, _) => Key::new(Folder::Courses, b"42").unwrap().with_check(next() as u16),
+                    };
+                    let n = if next().is_multiple_of(2) {
+                        crate::filesvc::Command::Delete { seq: 9, folder: Folder::Courses, key }.encode(&mut f)
+                    } else {
+                        let read = crate::filesvc::Command::ReadIn { seq: 8, folder: Folder::Courses, offset: 0, key };
+                        let n = read.encode(&mut f);
+                        let a = ask_raw(&mut sim, &mut app, control, data, &f[..n], 200_000);
+                        let size = listed.iter().find(|e| e.0 == key).map(|e| e.1);
+                        if let (Some((Status::Ok, got)), Some(size)) = (a.end, size) {
+                            assert_eq!((got, a.bytes.len() as u32), (size, size), "seed {seed}");
+                            reached[5] += 1;
+                        }
+                        continue;
+                    };
+                    sim.nordic.phone_write(control, &f[..n]);
+                }
+                _ => {
+                    let name = course_name(&mut next);
+                    let good = CourseName::new(&name).is_some();
+                    let file = &files[next() as usize % files.len()];
+                    let crc = crate::inflate::crc32(file.iter().copied()) ^ u32::from(next().is_multiple_of(7));
+                    let size = (file.len() as u32).wrapping_add([0, 0, 0, 0, 0, 0, 1, u32::MAX][next() as usize % 8]);
+                    let mut begin = std::vec![6, 1, 2];
+                    begin.extend_from_slice(&size.to_le_bytes());
+                    begin.extend_from_slice(&crc.to_le_bytes());
+                    let lie = u8::from(next().is_multiple_of(15));
+                    begin.push((name.len() as u8).wrapping_add(lie));
+                    begin.extend_from_slice(&name);
+                    begin.truncate(FRAME_BIG);
+                    let a = ask_raw(&mut sim, &mut app, control, data, &begin, 2000);
+                    ends.push(a.end);
+                    match a.end {
+                        Some((Status::BadRequest, _)) if !good || lie > 0 => reached[2] += 1,
+                        Some((Status::Ok, _)) => {
+                            assert!(good && lie == 0, "seed {seed}: {name:?} begun");
+                            reached[7] += 1;
+                        }
+                        _ => {}
+                    }
+                    let chunk = 1 + next() as usize % 238;
+                    // one chunk in four sends sent out of order or with a byte flipped
+                    let (spoil, how) = (next() as usize % (4 * file.len().div_ceil(chunk)), next() % 2);
+                    for (k, c) in file.chunks(chunk).enumerate() {
+                        let mut c = c.to_vec();
+                        let mut off = (k * chunk) as u32;
+                        match (k == spoil, how) {
+                            (true, 0) => off = off.wrapping_add(1),
+                            (true, _) => c[0] ^= 1,
+                            _ => {}
+                        }
+                        let n = crate::filesvc::Command::WriteData { seq: 2, offset: off, data: &c }.encode(&mut f);
+                        sim.nordic.phone_write(control, &f[..n]);
+                        run(&mut sim, &mut app, 20);
+                    }
+                    sim.nordic.phone_write(control, &[8, 3]);
+                }
+            }
+            run(&mut sim, &mut app, 200);
+            for p in drain(&mut sim, data) {
+                match Frame::parse(&p).unwrap_or_else(|| panic!("seed {seed}: {p:?} does not parse")) {
+                    Frame::End { status, count, seq } => {
+                        ends.push(Some((status, count)));
+                        match (status, seq) {
+                            (Status::Ok, 3) => reached[0] += 1,
+                            (Status::Ok, 9) => reached[1] += 1,
+                            (Status::Mismatch, _) => reached[3] += 1,
+                            (Status::BadRequest, 3) => reached[4] += 1,
+                            _ => {}
+                        }
+                    }
+                    other => panic!("seed {seed}: {other:?} for a write"),
+                }
+            }
+            for n in course_names(&sim.emmc.image).iter().filter(|n| !base.contains(n)) {
+                let stem = n.strip_suffix(".fit").unwrap_or_else(|| panic!("seed {seed}: {n} written"));
+                assert!(CourseName::new(stem.as_bytes()).is_some(), "seed {seed}: {n:?}");
+                let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
+                let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+                let got = crate::fat::tests::read_all(&mut fat, &mut d, &std::format!("Courses/{n}")).unwrap();
+                assert!(got == files[0], "seed {seed}: {n} is not the course sent whole");
+            }
+            let lost = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            assert_eq!(lost, lost0, "seed {seed}");
+        }
+        assert!(!ends.is_empty(), "seed {seed}: no answer");
+    }
+    std::println!("file service courses: {reached:?}");
+    assert!(reached.iter().all(|&n| n > 0), "{reached:?}");
+}
+
+/// The names of the files of `\Courses` on volume `img`.
+fn course_names(img: &[u8]) -> Vec<std::string::String> {
+    let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let dir = fat.open(&mut d, "Courses").unwrap();
+    let mut c = fat.cursor(dir).unwrap();
+    core::iter::from_fn(|| fat.list(&mut d, &mut c).unwrap())
+        .map(|e| std::string::String::from_utf8_lossy(e.name()).into_owned())
+        .collect()
+}
+
+/// A course name as a phone, or a hostile one, could send it: good (letters, digits, spaces, `-`, `_`), with a path
+/// or an extension, too long, UTF-8, a control character, a Windows device name.
+fn course_name(next: &mut impl FnMut() -> u32) -> Vec<u8> {
+    const GOOD: &[u8] = b"abcXYZ019 -_";
+    let good = |n: usize, next: &mut dyn FnMut() -> u32| -> Vec<u8> {
+        let mut v: Vec<u8> = (0..n).map(|_| GOOD[next() as usize % GOOD.len()]).collect();
+        if let Some(c) = v.first_mut() {
+            *c = b'R';
+        }
+        v
+    };
+    let len = 1 + next() as usize % 20;
+    let mut v = good(len, next);
+    match next() % 9 {
+        0..=4 => {}
+        5 => v = [[&b"../"[..], b"..\\", b"/", b"\\"][next() as usize % 4], &v].concat(),
+        6 => v.extend_from_slice([&b".gpx"[..], b".", b".fit", b":x"][next() as usize % 4]),
+        7 => v.extend(good(21, next)),
+        _ => v.extend_from_slice(["\u{e9}", "\u{1f6b2}", "\u{0}", "\n"][next() as usize % 4].as_bytes()),
+    }
+    if next().is_multiple_of(9) {
+        v = [&b"CON"[..], b"nul", b"Com3", b"LPT1", b"aux"][next() as usize % 5].to_vec();
+    }
+    v
+}
+
 /// The file service's Control (app/filesvc.rs): commands of real shapes (LIST, READ of a ride at an offset inside, at
 /// and past its end, READ of a name that is not there, CANCEL) and their mutations (bytes flipped, cut, lengthened,
 /// pure noise, and names with separators) written to Control of a bonded unit, between passes that stream the

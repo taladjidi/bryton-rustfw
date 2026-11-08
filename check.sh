@@ -164,6 +164,23 @@ lane_H() {  # the host
     # An independent FAT checker on the volumes the tests wrote (target/fat/*.img, raw images: a recorded and saved
     # ride after a cut and its resume, a HISTORY delete, a full card's refusal, a create and move, a cut right after a
     # create): fsck_msdos on macOS, fsck.vfat on Linux, read only (-n). Any error it reports fails.
+    # *_lost<N>.img: a cut the tests made on purpose that leaves a lost chain of N clusters (a course's, between the
+    # remove and the link, or a delete's entry marked before its chain freed). Passes only on the exit code the tool
+    # gives for orphan clusters alone (fsck_msdos 206; fsck.fat 1, inferred), every output line one of that tool's
+    # (an allow-list, each pattern anchored; fsck.fat's inferred from dosfstools' messages, not seen here), and N
+    # orphans counted. fsck_msdos does not compare the two FAT copies: the tests' own fsck does (fat/write.rs).
+    fsck_lost() {
+        want=$(echo "$1" | sed -E 's/.*_lost([0-9]+)\.img$/\1/')
+        case "$fs" in
+            fsck_msdos*) ok=206
+                allow='^\*\* |^Warning: Found orphan cluster\(s\)$|^Fix\?$|^: no$|^Warning: Found [0-9]+ orphaned clusters$|^Warning: [0-9]+ files, .* free \([0-9]+ clusters\)$'
+                got=$(sed -nE 's/^Warning: Found ([0-9]+) orphaned clusters$/\1/p' "$3");;
+            *) ok=1
+                allow='^fsck\.fat |^Reclaimed [0-9]+ unused clusters .* in 1 chain\.$|^Free cluster summary wrong .*$|^  Auto-correcting\.$|^Leaving filesystem unchanged\.$|: [0-9]+ files, [0-9]+/[0-9]+ clusters$'
+                got=$(sed -nE 's/^Reclaimed ([0-9]+) unused clusters .*/\1/p' "$3");;
+        esac
+        [ "$2" = "$ok" ] && [ "$got" = "$want" ] && ! grep -vE "$allow" "$3" | grep -q .
+    }
     fat_check() {
         PATH="$PATH:/sbin:/usr/sbin"
         if command -v fsck_msdos >/dev/null 2>&1; then fs="fsck_msdos -n"
@@ -174,7 +191,9 @@ lane_H() {  # the host
         for img in target/fat/*.img; do
             [ -f "$img" ] || continue
             n=$((n + 1))
-            $fs "$img" > "$C/fsck.out" 2>&1 || { cat "$C/fsck.out"; echo "fsck: $fs failed on $img"; return 1; }
+            if $fs "$img" > "$C/fsck.out" 2>&1; then continue; else code=$?; fi
+            case "$img" in *_lost[0-9]*.img) fsck_lost "$img" "$code" "$C/fsck.out" && continue;; esac
+            cat "$C/fsck.out"; echo "fsck: $fs failed on $img"; return 1
         done
         [ $n -ge 5 ] || { echo "fsck: only $n images in target/fat (5 expected: the tests write them)"; return 1; }
         echo "fsck: $n images clean"
