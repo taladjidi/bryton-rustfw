@@ -28,7 +28,7 @@ struct SavedRide: Identifiable, Hashable {
 }
 
 final class RideBrowser: ObservableObject {
-    enum Phase: Equatable { case idle, listing, downloading(String), workouts, writing, profile, failed }
+    enum Phase: Equatable { case idle, listing, downloading(String), workouts, routes, writing, profile, failed }
 
     @Published var rides: [RideEntry] = []
     @Published var phase = Phase.idle
@@ -43,6 +43,15 @@ final class RideBrowser: ObservableObject {
     @Published var workouts: [WorkoutFile] = []
     /// How the last send ended: the text of its error, or `sendDone`.
     @Published var sendError: String?
+    /// The courses of the unit's `\Courses` folder, as of the last list (`routesListed`: it was read at all); the
+    /// words of a failed delete in `routeMessage`.
+    @Published var unitRoutes: [UnitRoute] = []
+    @Published var routesListed = false
+    @Published var routeMessage: String?
+    /// Why the unit's courses are not listed (its software has no folder 2 list, or it is riding), or nil.
+    @Published var routeListError: String?
+    /// Told when the unit took a route, with the name it has there.
+    var onRouteSent: ((SentRoute) -> Void)?
     @Published var sendDone = false
     /// The unit's profile after the last sync or push ("Unit profile: FTP 265 W (from Intervals.icu, 8 Nov 14:02)"), or
     /// why the unit did not take it.
@@ -62,6 +71,12 @@ final class RideBrowser: ObservableObject {
     private var workoutFiles: [WorkoutFile] = []
     /// The write under way is a send (not a delete).
     private var sending = false
+    /// Routes: the LIST_IN of `\Courses` under way; the write under way is a route's (and what it sends); the last
+    /// LIST_IN was `\Courses` (a delete names a key of the last list).
+    private var listingRoutes = false
+    private var routeWrite = false
+    private var routeSending: SentRoute?
+    private var routesFresh = false
     /// Calendar changes waiting for an idle link (after the ride sync), and the one under way. They never block the
     /// rider: anything the rider starts puts the one under way back at the front. `onCalendarJob` hears how each ended:
     /// the job, the error in words, the core's verdict (`calendarJobError`), and whether the unit already held the file
@@ -131,6 +146,7 @@ final class RideBrowser: ObservableObject {
             self.syncOff = false  // a reconnect tries the sync again
             if case .downloading = self.phase { self.message = "Link lost, resuming…" }
             self.dropProfileExchange()  // the pending profile goes on the next connection
+            if self.phase == .routes { (self.listingRoutes, self.phase) = (false, .idle) }
             if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
         t.onError = { [weak self] m in self?.message = m }
@@ -157,6 +173,10 @@ final class RideBrowser: ObservableObject {
             auto = false
             cancel()
         }
+        if phase == .routes {  // a short background list: the rider's action goes first
+            client.abort()
+            (listingRoutes, phase) = (false, .idle)
+        }
     }
 
     func refresh() {
@@ -176,7 +196,7 @@ final class RideBrowser: ObservableObject {
         yieldAuto()
         guard ready, let t = transport, phase == .idle || phase == .workouts else { return }
         message = nil
-        workoutsFresh = false
+        (workoutsFresh, routesFresh) = (false, false)
         phase = .workouts
         listingWorkouts = true
         workoutQueue = []
@@ -192,6 +212,7 @@ final class RideBrowser: ObservableObject {
             (workoutsFresh, workoutsListed) = (true, true)
             workoutKey = nil
             phase = .idle
+            refreshRoutes()  // the courses follow the workouts
             return
         }
         workoutKey = key
@@ -245,6 +266,66 @@ final class RideBrowser: ObservableObject {
         t.write(cmd)
     }
 
+    /// Lists the unit's `\Courses` (LIST_IN of folder 2): names are not in it, only keys, sizes and checks.
+    func refreshRoutes() {
+        guard ready, phase == .idle, let t = transport else { return }
+        phase = .routes
+        listingRoutes = true
+        routeMessage = nil
+        t.write(client.listInCommand(folder: .courses, nowMs: Self.now))
+    }
+
+    /// What a rider's route action takes from the background lists (the workouts' reads or the courses' list).
+    private func yieldBackground() {
+        yieldAuto()
+        if phase == .workouts {
+            client.abort()
+            (listingWorkouts, workoutKey, workoutQueue, workoutsFresh, phase) = (false, nil, [], false, .idle)
+        }
+    }
+
+    /// Sends a FIT course to the unit as `name` (1 to 20 characters of its alphabet), then lists the courses again.
+    /// `source` is the phone route it comes from.
+    func sendRoute(name: String, source: String, bytes: Data) {
+        sendError = nil
+        sendDone = false
+        yieldBackground()
+        guard ready, phase == .idle || phase == .failed, let t = transport else {
+            sendError = "Not connected to the unit, or it is busy with another transfer. Try again in a moment."
+            return
+        }
+        guard let cmd = client.courseWriteCommand(name: name, bytes: bytes, maxWrite: UInt32(t.writeLength), nowMs: Self.now)
+        else {
+            sendError = "The name is not one the unit takes (1 to 20 letters, digits, spaces, - and _; up to 8 on a slow link), or the file is over 1 MB."
+            return
+        }
+        message = nil
+        (sending, routeWrite) = (true, true)
+        routeSending = SentRoute(unitName: name, size: UInt32(clamping: bytes.count), route: source)
+        phase = .writing
+        progress = Progress(received: 0, total: UInt32(clamping: bytes.count), bytesPerS: 0)
+        t.write(cmd)
+    }
+
+    /// Removes a course of the last list from the unit, then lists again. The unit refuses the one it follows (BUSY).
+    func deleteRoute(_ r: UnitRoute) {
+        routeMessage = nil
+        yieldBackground()
+        guard ready, phase == .idle, let t = transport else {
+            routeMessage = "The unit is busy with another transfer. Try again in a moment."
+            return
+        }
+        guard routesFresh, unitRoutes.contains(r), let cmd = client.deleteCommand(key: r.key, nowMs: Self.now) else {
+            routeMessage = "The unit's list changed. Look again."
+            refreshRoutes()
+            return
+        }
+        message = nil
+        (sending, routeWrite) = (false, true)
+        phase = .writing
+        t.write(cmd)
+    }
+
     /// The next WRITE_DATA (or WRITE_END) goes once the stack confirmed the last write.
     private func writeDone() {
         guard phase == .writing, let t = transport else { return }
@@ -256,6 +337,20 @@ final class RideBrowser: ObservableObject {
 
     private func endWrite(_ error: String?, isSend: Bool) {
         phase = .idle
+        if routeWrite {  // a course sent or deleted: its own outcome, then the courses are listed again
+            routeWrite = false
+            if isSend {
+                sendError = error
+                sendDone = error == nil
+                if error == nil, let s = routeSending { onRouteSent?(s) }
+            } else {
+                routeMessage = error
+            }
+            routeSending = nil
+            if error != nil { client.abort() }
+            routesFresh = false
+            return refreshRoutes()  // not ready (a drop): becameReady lists again
+        }
         // the loop's change: its own outcome, not the editor's sendError or the main message (here: done, or the link went)
         if calendarJob != nil { return finishCalendar(error: error, next: error == nil ? .done : .stop) }
         if isSend {
@@ -475,6 +570,9 @@ final class RideBrowser: ObservableObject {
             if listingWorkouts { refreshWorkouts() } else { resume() }
         } else if phase == .listing {
             refresh()
+        } else if phase == .routes {
+            client.abort()
+            (listingRoutes, phase) = (false, .idle)  // the courses are not worth a wait
         } else if phase == .writing {
             endWrite("The unit did not answer. Look at its list before sending again.", isSend: sending)
         }
@@ -491,6 +589,19 @@ final class RideBrowser: ObservableObject {
         }
         switch event {
         case .ignored, .entry: break
+        case .listed where listingRoutes:
+            listingRoutes = false
+            let list = client.filesIn(), checks = client.filesInChecks()
+            unitRoutes = zip(list, checks).map { UnitRoute(key: $0.name, size: $0.size, check: $1) }
+            (routesListed, routesFresh, phase, routeListError) = (true, true, .idle, nil)
+        case .busy where phase == .routes:
+            // a background list refused (riding, USB): the old list stays; the section says why
+            (listingRoutes, phase) = (false, .idle)
+            routeListError = "The unit is riding or its card is lent to a computer: the list of routes comes later."
+        case .failed(let e) where phase == .routes:
+            (listingRoutes, phase) = (false, .idle)
+            routeListError = e == .badRequest
+                ? "This unit's software does not list routes yet." : "The unit could not list its routes: \(Self.text(e))"
         case .listed where listingWorkouts:
             listingWorkouts = false
             workoutQueue = client.filesIn().map(\.name)
@@ -522,6 +633,12 @@ final class RideBrowser: ObservableObject {
         case .failed(let e) where phase == .writing && calendarJob != nil:
             let next = calendarJobError(isSend: calendarJob?.bytes != nil, e: Self.jobError(e), retried: calendarRetried)
             finishCalendar(error: next == .done ? nil : Self.text(e), next: next)
+        case .failed(let e) where phase == .writing && routeWrite:
+            if !sending && (e == .notFound || e == .mismatch) {
+                endWrite("That route is no longer on the unit. The list was refreshed.", isSend: false)
+            } else {
+                endWrite(Self.routeText(e, deleting: !sending), isSend: sending)
+            }
         case .failed(let e) where phase == .writing:
             if !sending && (e == .notFound || e == .mismatch) {
                 endWrite("That workout is no longer on the unit. The list was refreshed.", isSend: false)
@@ -602,6 +719,20 @@ final class RideBrowser: ObservableObject {
 
     static func path(_ name: String) -> URL { documents.appendingPathComponent("\(name).fit") }
 
+    /// A route's send or delete refused, in words.
+    static func routeText(_ e: FileError, deleting: Bool) -> String {
+        switch e {
+        case .full: "The unit's course list is full (64). Delete a route from the unit first."
+        case .badRequest: "A route with that name exists on the unit: rename or delete it first."
+        case .busy:
+            deleting
+                ? "The unit is following this route, or is riding, or its card is lent to a computer. Stop following it on the unit, then try again."
+                : "The unit is riding or its card is lent to a computer. Try again later."
+        case .readOnly: "This unit's software cannot receive routes from the phone yet."
+        default: text(e)
+        }
+    }
+
     static func text(_ e: FileError) -> String {
         switch e {
         case .notFound: "The ride is not on the unit any more."
@@ -654,7 +785,7 @@ final class DemoTransport: FileTransport {
     private var timer: Timer?
 
     func start() {
-        onDebug?("Demo: fake unit, write length 20 B")
+        onDebug?("Demo: fake unit, write length \(writeLength) B")
         DispatchQueue.main.async { self.onReady?() }
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -665,7 +796,12 @@ final class DemoTransport: FileTransport {
         }
     }
 
-    var writeLength: Int { 20 }
+    /// The default MTU's 20 bytes; `-demo-mtu 244` is what the owner's phone negotiated (docs/app.md), where a course
+    /// name of 20 characters fits.
+    var writeLength: Int {
+        let a = CommandLine.arguments
+        return a.firstIndex(of: "-demo-mtu").flatMap { a[safe: $0 + 1] }.flatMap { Int($0) } ?? 20
+    }
 
     func write(_ d: Data) {
         queue = unit.handle(command: d)

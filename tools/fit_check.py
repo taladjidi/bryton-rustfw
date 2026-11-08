@@ -19,6 +19,10 @@ a ride with auto-pauses: its timer events alternate start and stop_all, the auto
 each lap's and the session's total_timer_time is its time less the stops in it, read by both decoders.
 A workout the phone editor encodes (app/core, `cargo test the_encoded_workout_is_written_for_fit_check`):
     fit_check.py --workout app/core/target/workout.fit
+A route the phone encodes from a GPX (app/core, `cargo test the_encoded_route_is_written_for_fit_check`):
+    fit_check.py --course app/core/target/course.fit
+file_id (course), course (cycling, a name), a lap, timer events start and stop, records with position, altitude and
+a distance that never goes back, and the course points (turn types), read by both decoders.
 file_id (workout, with manufacturer, product, time_created), a cycling workout with the step count it has and a name,
 and workout_step messages numbered in order, read by both decoders.
 """
@@ -249,8 +253,32 @@ def check_workout(path):
     print(f"{path}: file_id {fid}, workout {w}, {len(msgs) - 2} steps, CRC ok")
 
 
+def check_course(path):
+    garmin(path)
+    msgs = read(path)
+    names = [m.name for m in msgs]
+    assert names[0] == "file_id" and names[1] == "course" and names[2] == "lap", names[:4]
+    fid, c, lap = values(msgs[0]), values(msgs[1]), values(msgs[2])
+    assert fid["type"] == "course" and c["sport"] == "cycling" and c["name"], (fid, c)
+    recs = [values(m) for m in msgs if m.name == "record"]
+    assert len(recs) >= 2 and all({"position_lat", "position_long", "distance"} <= set(r) for r in recs)
+    dist = [r["distance"] for r in recs]
+    assert dist == sorted(dist) and abs(lap["total_distance"] - dist[-1]) < 1, (lap, dist[-1])
+    alts = [r.get("altitude") for r in recs]
+    assert all(a is None for a in alts) or all(a is not None for a in alts), "altitude in some records only"
+    events = [values(m) for m in msgs if m.name == "event"]
+    assert [e["event_type"] for e in events] == ["start", "stop_disable_all"], events
+    cps = [values(m) for m in msgs if m.name == "course_point"]
+    assert [p["message_index"] for p in cps] == list(range(len(cps)))
+    assert [p["distance"] for p in cps] == sorted(p["distance"] for p in cps)
+    print(f"{path}: course {c['name']!r}, {len(recs)} records, {dist[-1] / 1000:.1f} km, {len(cps)} course points "
+          f"{[p.get('type') for p in cps]}, CRC ok")
+
+
 args = sys.argv[1:]
-if args[:1] == ["--workout"]:
+if args[:1] == ["--course"]:
+    check_course(args[1])
+elif args[:1] == ["--workout"]:
     check_workout(args[1])
 elif args[:1] == ["--pair"]:
     check_pair(args[1], args[2])

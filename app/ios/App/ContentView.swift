@@ -17,7 +17,8 @@ struct ContentView: View {
     @State private var profile = false
     @State private var fitness = false
     @StateObject private var store = WorkoutStore()
-    @State private var path: [WorkoutRoute] = []
+    @State private var path = NavigationPath()
+    @StateObject private var routes = RouteStore()
     @State private var editing: EditorTarget?
     @State private var lastSync: Date?
     @StateObject private var profileValues = Profile()
@@ -55,6 +56,8 @@ struct ContentView: View {
                 ridesSection
                 WorkoutSection(rides: rides).id("unit")
                 PhoneWorkoutSection(store: store) { editing = $0 }.id("phone")
+                RoutesSection(store: routes, rides: rides).id("routes")
+                UnitRoutesSection(store: routes, rides: rides).id("unitroutes")
             }
             .onChange(of: scrollTo) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .top) } }
@@ -77,10 +80,18 @@ struct ContentView: View {
                     editing = EditorTarget(draft: d, file: nil)
                 } }
             }
+            .navigationDestination(for: RouteRoute.self) { r in
+                if let p = routes.items.first(where: { $0.name == r.name }) { RoutePage(route: p, rides: rides, store: routes) }
+            }
+            .onOpenURL { url in  // "Open in Bryton" from Files or the share sheet
+                guard url.pathExtension.lowercased() == "gpx" else { return }
+                routes.importGpx(url) { path.append(RouteRoute(name: $0.name)) }
+            }
             .navigationTitle("Rides")
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 loop.attach(rides)
+                rides.onRouteSent = { routes.remember($0) }
                 loop.keyChanged(intervals.hasKey)
                 await intervals.sync(rides: rides, force: false)
             }
@@ -108,7 +119,7 @@ struct ContentView: View {
                 rides.use(DemoTransport(), demo: true)
                 if args.contains("-demo-workout") {  // open the first workout's page
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        if let f = rides.workouts.first { path = [WorkoutRoute(key: f.key)] }
+                        if let f = rides.workouts.first { path.append(WorkoutRoute(key: f.key)) }
                     }
                 }
                 if args.contains("-demo-edit") {  // the editor on a copy of the first workout (after a saved one)
@@ -124,6 +135,16 @@ struct ContentView: View {
                 let later: (Double, @escaping () -> Void) -> Void = { s, f in DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: f) }
                 if args.contains("-demo-profile") { later(2) { profile = true } }
                 if args.contains("-demo-scroll-phone") { later(3) { scrollTo = "phone" } }
+                if args.contains("-demo-routes") {  // the demo GPX imported, its page opened with -demo-route-open
+                    if let r = try? routes.add(gpx: Data(demoRouteGpx()), fallback: "Eiffel loop"), args.contains("-demo-route-open") {
+                        later(3) { path.append(RouteRoute(name: r.name)) }
+                    }
+                    if args.contains("-demo-route-sent") {  // sent without the sheet, once the demo unit is ready
+                        later(2.5) { if let r = routes.items.first { rides.sendRoute(name: r.name, source: r.name, bytes: r.view.fit) } }
+                    }
+                    if args.contains("-demo-scroll-routes") { later(3) { scrollTo = "routes" } }
+                    if args.contains("-demo-scroll-unitroutes") { later(3) { scrollTo = "unitroutes" } }
+                }
                 if args.contains("-demo-scroll-intervals") { later(3) { scrollTo = "intervals" } }
                 if args.contains("-demo-scroll-rides") { later(3) { scrollTo = "rides" } }
                 if args.contains("-demo-scroll-unit") { later(3) { scrollTo = "unit" } }

@@ -449,6 +449,12 @@ impl FileClient {
         self.lock().files_in.iter().map(|e| e.0.clone()).collect()
     }
 
+    /// The check the unit gave each file of the last LIST_IN, in the same order: for a course it is
+    /// [`crate::route::course_check`] of its name and size, so the phone can name the courses it sent.
+    pub fn files_in_checks(&self) -> Vec<u16> {
+        self.lock().files_in.iter().map(|e| e.1).collect()
+    }
+
     /// Starts sending `bytes` as a workout for `day` (`YYYYMMDD`, WRITE_BEGIN): the bytes to write to Control; None
     /// when the day is not eight digits or the file is empty or over the unit's 8 KB. After [`FileEvent::WriteReady`]
     /// call [`FileClient::write_next_command`] until it gives None.
