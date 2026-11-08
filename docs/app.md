@@ -296,6 +296,8 @@ BLE_GATTS_EVT_SC_CONFIRM (0x54) after every indication, and Bryton's chip app ha
 
 ## Workouts
 
+The home screen shows the next planned workout on the unit (today's or the soonest later one, else the latest), the most recently saved workout on the phone and the next planned Intervals.icu workout, each with an "All ... (N)" row that pushes the full list.
+
 The planned workouts on the unit, seen from the phone (roadmap 9), and since 2026-11-07 sent and deleted from it
 (the firmware's side; the app's editor is the next step).
 Stock keeps them in `\Workout\calendar\<YYYYMMDD>\<name>.fit`, long names and one folder a day, so the file service

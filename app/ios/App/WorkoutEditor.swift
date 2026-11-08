@@ -34,9 +34,14 @@ final class WorkoutStore: ObservableObject {
 
     func reload() {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: Self.dir.path)) ?? []
-        items = names.filter { $0.hasSuffix(".fit") }.sorted().compactMap { n in
-            (try? Data(contentsOf: Self.dir.appendingPathComponent(n))).map { LocalWorkout(file: n, bytes: $0) }
+        // newest saved first: the phone section shows the first one
+        let dated = names.filter { $0.hasSuffix(".fit") }.compactMap { n -> (LocalWorkout, Date)? in
+            let url = Self.dir.appendingPathComponent(n)
+            guard let bytes = try? Data(contentsOf: url) else { return nil }
+            let saved = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return (LocalWorkout(file: n, bytes: bytes), saved)
         }
+        items = dated.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.file < $1.0.file }.map(\.0)
     }
 
     /// Encodes and writes the draft; throws the core's refusal. A renamed workout leaves its old file.
@@ -79,13 +84,10 @@ private func message(_ e: Error) -> String {
     return "\(e)"
 }
 
-/// The "On the phone" section: the saved workouts, a new one, an import.
+/// The "On the phone" section: the most recently saved workout, the full list, a new one, an import.
 struct PhoneWorkoutSection: View {
     @ObservedObject var store: WorkoutStore
     let onEdit: (EditorTarget) -> Void
-    @EnvironmentObject private var profile: Profile
-    private var ftp: Int { profile.ftp }
-    private var maxHR: Int { profile.maxHR }
     @State private var importing = false
     @State private var problem: String?
     #if DEBUG
@@ -94,28 +96,10 @@ struct PhoneWorkoutSection: View {
 
     var body: some View {
         Section {
-            ForEach(store.items) { f in
-                if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
-                    Button { onEdit(EditorTarget(draft: draftFromView(view: w).named(pretty(w.name)), file: f.file)) } label: {
-                        HStack {
-                            Text(pretty(w.name))
-                            Spacer()
-                            Text(Fmt.duration(UInt64(w.totalS)))
-                            if w.tss > 0 { Text("TSS \(w.tss)") }
-                        }
-                        .font(.body)
-                    }
-                    .foregroundStyle(.primary)
-                    .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
-                    .contextMenu { Button("Delete", systemImage: "trash", role: .destructive) { store.delete(f.file) } }
-                } else {
-                    // a saved file the reader refuses stays listed, so it can be deleted
-                    HStack {
-                        Text(f.file)
-                        Spacer()
-                        Notice(text: "Unreadable")
-                    }
-                    .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
+            PhoneWorkoutRows(store: store, list: Array(store.items.prefix(1)), onEdit: onEdit)
+            if !store.items.isEmpty {
+                NavigationLink { AllPhoneWorkouts(store: store, onEdit: onEdit) } label: {
+                    Text("All workouts on the phone (\(store.items.count))").foregroundStyle(Tok.accent)
                 }
             }
             Button { onEdit(EditorTarget(draft: .blank, file: nil)) } label: { Label("New workout", systemImage: "plus") }
@@ -149,6 +133,55 @@ struct PhoneWorkoutSection: View {
         } footer: {
             Text("Zwift (.zwo), .erg and .mrc files can be imported. Send a workout to the unit from its editor.")
         }
+    }
+}
+
+/// The saved workouts as rows: a tap edits a copy, swipe and long press delete the saved file.
+struct PhoneWorkoutRows: View {
+    @ObservedObject var store: WorkoutStore
+    let list: [LocalWorkout]
+    let onEdit: (EditorTarget) -> Void
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
+
+    var body: some View {
+        ForEach(list) { f in
+            if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
+                Button { onEdit(EditorTarget(draft: draftFromView(view: w).named(pretty(w.name)), file: f.file)) } label: {
+                    HStack {
+                        Text(pretty(w.name))
+                        Spacer()
+                        Text(Fmt.duration(UInt64(w.totalS)))
+                        if w.tss > 0 { Text("TSS \(w.tss)") }
+                    }
+                    .font(.body)
+                }
+                .foregroundStyle(.primary)
+                .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
+                .contextMenu { Button("Delete", systemImage: "trash", role: .destructive) { store.delete(f.file) } }
+            } else {
+                // a saved file the reader refuses stays listed, so it can be deleted
+                HStack {
+                    Text(f.file)
+                    Spacer()
+                    Notice(text: "Unreadable")
+                }
+                .swipeActions { Button("Delete", role: .destructive) { store.delete(f.file) } }
+            }
+        }
+    }
+}
+
+/// Every workout saved on the phone, pushed from the "On the phone" section's row.
+struct AllPhoneWorkouts: View {
+    @ObservedObject var store: WorkoutStore
+    let onEdit: (EditorTarget) -> Void
+
+    var body: some View {
+        List { PhoneWorkoutRows(store: store, list: store.items, onEdit: onEdit) }
+            .navigationTitle("All workouts")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 

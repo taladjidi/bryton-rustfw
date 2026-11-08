@@ -20,37 +20,25 @@ func zoneColor(_ z: UInt8) -> Color { z >= 1 && z <= 7 ? Tok.zone(Int(z)) : .sec
 /// The unit keeps names in capitals: "SWEET SPOT 3X10" as "Sweet spot 3x10".
 func pretty(_ name: String) -> String { name.prefix(1) + name.dropFirst().lowercased() }
 
+/// The next of a list by its YYYYMMDD day (today or later, the soonest), else the latest.
+func nextWorkout<T>(_ items: [T], day: (T) -> Int) -> T? {
+    let c = Calendar.current.dateComponents([.year, .month, .day], from: .now)
+    let today = (c.year ?? 0) * 10000 + (c.month ?? 0) * 100 + (c.day ?? 0)
+    return items.filter { day($0) >= today }.min { day($0) < day($1) } ?? items.max { day($0) < day($1) }
+}
+
+/// The home screen's "On the unit": the next planned workout, then the row that pushes all of them.
 struct WorkoutSection: View {
     @ObservedObject var rides: RideBrowser
-    @EnvironmentObject private var profile: Profile
-    private var ftp: Int { profile.ftp }
-    private var maxHR: Int { profile.maxHR }
-    @State private var deleting: WorkoutFile?
-    @EnvironmentObject private var loop: IntervalsLoop
+
+    private var next: [WorkoutFile] { nextWorkout(rides.workouts, day: { Int($0.key.prefix(8)) ?? 0 }).map { [$0] } ?? [] }
 
     var body: some View {
         Section("On the unit") {
-            ForEach(rides.workouts) { f in
-                if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
-                    NavigationLink(value: WorkoutRoute(key: f.key)) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(pretty(w.name))
-                            if loop.sentHashes.contains(fileCrc(bytes: f.bytes)) {
-                                Text("from Intervals.icu").font(.caption).foregroundStyle(Tok.ok)
-                            }
-                            HStack {
-                                Text(Fmt.dayKey(f.key))
-                                Spacer()
-                                Text(Fmt.duration(UInt64(w.totalS)))
-                                if w.tss > 0 { Text("TSS \(w.tss)") }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    // only when nothing else uses the link: the same guard as a download
-                    .swipeActions { Button("Delete", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
-                    .contextMenu { Button("Delete from the unit", systemImage: "trash", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
+            WorkoutRows(rides: rides, list: next)
+            if !rides.workouts.isEmpty {
+                NavigationLink { AllWorkoutsList(rides: rides) } label: {
+                    Text("All workouts on the unit (\(rides.workouts.count))").foregroundStyle(Tok.accent)
                 }
             }
             if rides.workouts.isEmpty {
@@ -58,10 +46,47 @@ struct WorkoutSection: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// The unit's workouts as rows: a tap opens the page, swipe and long press ask to delete (a copy on the phone stays).
+struct WorkoutRows: View {
+    @ObservedObject var rides: RideBrowser
+    let list: [WorkoutFile]
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
+    @State private var deleting: WorkoutFile?
+    @EnvironmentObject private var loop: IntervalsLoop
+
+    var body: some View {
+        ForEach(list) { f in
+            if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
+                NavigationLink(value: WorkoutRoute(key: f.key)) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pretty(w.name))
+                        if loop.sentHashes.contains(fileCrc(bytes: f.bytes)) {
+                            Text("from Intervals.icu").font(.caption).foregroundStyle(Tok.ok)
+                        }
+                        HStack {
+                            Text(Fmt.dayKey(f.key))
+                            Spacer()
+                            Text(Fmt.duration(UInt64(w.totalS)))
+                            if w.tss > 0 { Text("TSS \(w.tss)") }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                // only when nothing else uses the link: the same guard as a download
+                .swipeActions { Button("Delete", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
+                .contextMenu { Button("Delete from the unit", systemImage: "trash", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
+            }
+        }
         #if DEBUG
         .onAppear {  // Simulator screenshot: -demo-delete asks to delete the first workout
             if CommandLine.arguments.contains("-demo-delete") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { deleting = rides.workouts.first }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { deleting = list.first }
             }
         }
         #endif
@@ -75,6 +100,17 @@ struct WorkoutSection: View {
         } message: {
             Text("A copy kept on the phone stays.")
         }
+    }
+}
+
+/// Every workout on the unit, pushed from the home screen's "All workouts on the unit" row.
+struct AllWorkoutsList: View {
+    @ObservedObject var rides: RideBrowser
+
+    var body: some View {
+        List { WorkoutRows(rides: rides, list: rides.workouts) }
+            .navigationTitle("All workouts")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 
