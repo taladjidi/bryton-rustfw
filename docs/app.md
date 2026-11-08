@@ -134,6 +134,71 @@ Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had 
 Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
 itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
 
+## Deeper analysis (roadmap 10)
+
+`app/core/src/insight.rs` `ride_insight(bytes, weight_kg, cp, wprime_j)` reads the file again (all records) and gives
+the climbs, the W' balance, the decoupling and DFA alpha1. The app runs it once per ride off the main thread
+(`InsightCache`, in memory for the session, keyed by file, size and profile) so the page opens at once and the sections
+appear when it is done. The firmware's code does the maths (two small visibility changes: `Course::climbs_of` and
+`power::wbal_step`, the W' step `Power::second` now calls too).
+
+- **Climbs:** `course::Course::climbs_of`, the unit's one definition (Garmin ClimbPro's rule, 500 m at 3 % or more, found
+  on the profile in 50 m steps; docs on the road ahead say the same). The ride's altitude is resampled every 10 m and
+  smoothed by a 100 m moving average first, since the finder was made for the smooth profile of a planned course.
+  Per climb: length and gain from the finder, average grade (gain / length), maximum grade over 100 m of the smoothed
+  profile, time (first to last record in it, stops included), VAM (gain / time, m/h), average power and W/kg (the
+  profile's weight). Colour: `ui::grade_color` of the average grade, the unit's bands. The climb is drawn in that colour
+  on the map (`ClimbLine`) and over the altitude graph.
+- **W' balance:** `power::wbal_step`, the differential model (Froncioni and Clarke, Golden Cheetah "Differential"; the
+  unit's `Power::second`), second by second from a full W' (at most 3 days of it, so a damaged timestamp cannot make it
+  long), a record counting for up to 5 s and then 0 W. CP = FTP is the unit's own shortcut, not the rider's critical power:
+  a W' from Intervals.icu belongs to its CP, so the two differ when CP and FTP do. Graph of the lowest value per bucket;
+  "lowest" is the ride's minimum.
+- **Aerobic decoupling (Pa:HR from power):** moving seconds with power and a heart rate above 0 (0 is a dropout) cut in
+  two halves of equal time; EF = average power / average HR per half; decoupling = (EF1 - EF2) / EF1 x 100. This is
+  Friel's Pw:Hr / Pa:Hr with the average power of each half. Intervals.icu's own definition is **unverified (one forum
+  user's reply, <https://forum.intervals.icu/t/21505>)**; average power is taken for consistency with Intervals.icu,
+  which the owner compares against (NP would differ by the variability of each half). Under 20 minutes of moving time
+  no value is shown (inferred). Under 5 % is shown green, the usual mark of aerobic fitness (inferred, not a diagnosis).
+- **DFA alpha1:** the file's `hrv` messages (global 78, `time`; the raw RR the firmware writes in the full copy) through
+  the firmware's `hrv::Hrv` (5 % artifact rule, 2 minute window, boxes of 4 to 16 beats), the beats laid end to end from
+  the first record (the messages carry no time). Dashed lines at `hrvt::A1_VT1` 0.75 and `A1_VT2` 0.5. A ride without
+  the beats shows no DFA chart. The demo ride has made-up beats from its heart rate with 3 % of variation, so its alpha1
+  is not physiological.
+- **Compare with...:** a menu of the other downloaded rides; the two power curves side by side (durations the
+  ride held), and the climbs both share: `match_climbs` pairs climbs whose start and end are each within the larger of 150 m
+  (`climbs_ahead::SNAP_M`) and a quarter of the shorter climb's length of the other's, the pairs with the least summed
+  distance first, each climb once, with both times and the difference. (A "70 % of the length in common" test is not
+  done: it needs the tracks.) The curve chart's x axis is every duration either ride held, in order. Two quick picks
+  cancel the first. The cache keeps the last 8 rides, and two askers of one ride share one run.
+
+Core tests: the demo hill ride (a 3 km climb at 5 %) gives one climb with its numbers, W' balance against a hand case
+(100 s at 300 W over a CP of 200 W with a 20 kJ W' is 10 000 J, then 50 J back in the next second at 100 W), decoupling of a
+constructed ride (1 - 140/147), DFA from the file's beats, climb matching (at the tolerance's edge), a noisy hill (one
+climb), a noisy flat and a reversed ride (none), and a fuzz of the analysis (records with missing, NaN, huge, repeated
+and backwards values, files with flipped bytes) that counts it reaches climbs, W' balance, decoupling and DFA. The demo's first ride is now this hill ride.
+
+| | |
+|:-:|:-:|
+| ![Climbs on the altitude graph and the list](img/app-climbs.png) | ![Fitness](img/app-fitness.png) |
+| Climbs, coloured by grade | Fitness (demo) |
+
+## Fitness (roadmap 11)
+
+The chart icon on the main screen opens `FitnessView`. With an Intervals.icu key (the profile's) it fetches, through
+`IntervalsClient.get`, `GET /api/v1/athlete/{id}/wellness.json?oldest&newest` (CTL, ATL, `sportInfo[].eftp`) and
+`.../power-curves.json?curves=90d&type=Ride` (OpenAPI spec, <https://intervals.icu/api/v1/docs>, looked up 2026-11-08;
+that "90d" names the last 90 days is **inferred** from the site's curve names, as are the units of eftp). The parsers
+(`fitness.rs`, tested with synthetic answers with missing and wrong fields, and fuzzed) skip a day without id, CTL or
+ATL; a day is checked against its month's length; powers (eFTP, the curve) are clamped to 3000 W, not dropped; TSB uses the
+day before only if it is the previous calendar day. Without a key, or when Intervals.icu cannot be reached (the screen says so), CTL and ATL come from the loads of the
+rides this phone holds: the firmware's model (`load.rs`, Coggan's PMC) with exponential averages of the daily load,
+`x[d] = x[d-1] + (load[d] - x[d-1]) / N`, N = 42 and 7, starting at 0 on the first ride (so it needs about 6 weeks of rides), and the screen is labelled "From
+this phone's rides". The fetch is keyed on the key and athlete only, so a new ride or FTP does not ask again; the screen says
+when its last day is older than yesterday. TSB is the form the day starts with, yesterday's CTL minus ATL, for both sources. eFTP and the power
+curve need Intervals.icu; the screen always says which source it shows. Launch argument `-demo-fitness` (Debug) opens it;
+`-demo-open` opens the first downloaded ride's page.
+
 ## Ride list and weekly totals
 
 ![Main screen: the weekly panel and the ride list](img/app-home.png)

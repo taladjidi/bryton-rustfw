@@ -15,6 +15,7 @@ struct ContentView: View {
     @StateObject private var intervals = IntervalsSync()
     @StateObject private var loop = IntervalsLoop()
     @State private var profile = false
+    @State private var fitness = false
     @StateObject private var store = WorkoutStore()
     @State private var path: [WorkoutRoute] = []
     @State private var editing: EditorTarget?
@@ -99,7 +100,9 @@ struct ContentView: View {
             }
             .navigationDestination(item: $rides.saved) { s in RideDetail(url: s.url) }
             .sheet(isPresented: $profile) { ProfileSheet() }
+            .navigationDestination(isPresented: $fitness) { FitnessView(library: library) }
             .toolbar {
+                Button { fitness = true } label: { Image(systemName: "chart.line.uptrend.xyaxis") }
                 Button { profile = true } label: { Image(systemName: "gearshape") }
             }
             #if DEBUG
@@ -122,9 +125,17 @@ struct ContentView: View {
                         else { editing = EditorTarget(draft: d, file: nil) }
                     }
                 }
+                if args.contains("-demo-fitness") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { fitness = true }
+                }
                 if args.contains("-demo-dl") {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         if let r = rides.rides.first { rides.download(r) }
+                    }
+                    if args.contains("-demo-open") {  // then the viewer on it (screenshots of the ride page)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                            if let r = rides.rides.first { rides.saved = SavedRide(url: RideBrowser.path(r.name)) }
+                        }
                     }
                 }
             }

@@ -105,6 +105,65 @@ fn ride_from(t0: u32, seconds: u32) -> Vec<u8> {
     m.0
 }
 
+/// A straight ride east from the landmark whose altitude, speed (m/s), power (W) and heart rate (bpm) at second `i` are
+/// `at(i)`; with `rr`, the full copy's raw RR intervals (the beats of the heart rate, a little varied) as `hrv`
+/// messages. For the tests' known climbs and the Demo's hill.
+pub(crate) fn profile_ride(t0: u32, seconds: u32, rr: bool, at: impl Fn(u32) -> (f64, f64, u16, u8)) -> Vec<u8> {
+    let mut m = Mem(Vec::new());
+    let Ok(mut w) = Writer::begin_with(&mut m, t0, rr) else { return Vec::new() };
+    let (mut dist, mut beat_ms, mut next_beat, mut beats) = (0.0f64, 0.0f64, 0.0f64, Vec::new());
+    for i in 0..seconds {
+        let (alt_m, speed, power, hr) = at(i);
+        let lon = 2.2945 + dist / (111_320.0 * 48.8584f64.to_radians().cos());
+        let s = Sample {
+            time: t0 + i,
+            pos: Some(((48.8584f64 * 1e7) as i32, (lon * 1e7) as i32)),
+            alt_mm: Some((alt_m * 1000.0) as i32),
+            speed_mm_s: Some((speed * 1000.0) as u32),
+            hr: Some(hr),
+            power: Some(power),
+            ..Sample::default()
+        };
+        // truncated like the writer's distance: the sum of the speeds in mm/s
+        dist += f64::from(s.speed_mm_s.unwrap_or(0)) / 1000.0;
+        if w.record(&mut m, &s).is_err() {
+            return Vec::new();
+        }
+        // the beats of this second, 3 % of breathing in their length
+        beat_ms += 1000.0;
+        while rr && next_beat < beat_ms {
+            let len = 60_000.0 / f64::from(hr.max(40)) * (1.0 + 0.03 * (next_beat / 4000.0).sin());
+            next_beat += len;
+            beats.push(len.round() as u16);
+            if beats.len() == 5 {
+                if w.hrv(&mut m, &beats).is_err() {
+                    return Vec::new();
+                }
+                beats.clear();
+            }
+        }
+    }
+    if w.end(&mut m, t0 + seconds).is_err() || w.checkpoint(&mut m).is_err() {
+        return Vec::new();
+    }
+    m.0
+}
+
+/// The Demo's hill ride, 50 minutes: flat, a 3 km climb of 5 % at about 280 W (a heart rate that drifts up), a plateau,
+/// then the descent.
+pub(crate) fn hill_ride(t0: u32) -> Vec<u8> {
+    profile_ride(t0, 3000, true, |i| {
+        let x = f64::from(i);
+        let (alt, speed, power) = match i {
+            0..600 => (100.0, 6.0, 150.0),
+            600..1200 => (100.0 + (x - 600.0) * 0.25, 5.0, 280.0),
+            1200..2400 => (250.0, 6.0, 170.0),
+            _ => (250.0 - (x - 2400.0) * 0.25, 8.0, 150.0),
+        };
+        (alt, speed, power as u16, (118.0 + power * 0.1 + x * 0.004) as u8)
+    })
+}
+
 #[cfg(test)]
 #[path = "demo_tests.rs"]
 mod tests;
@@ -201,7 +260,7 @@ impl FakeUnit {
             ) else {
                 continue;
             };
-            rides.push((n, ride_from(t0, secs)));
+            rides.push((n, if rides.is_empty() { hill_ride(t0) } else { ride_from(t0, secs) }));
         }
         let mut u = FakeUnit::new(rides);
         u.workouts = crate::workout::demo_workouts();
