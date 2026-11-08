@@ -24,6 +24,10 @@ names). A feature not listed here was seen on the unit. What was fully seen is i
 
 ### Phone and phone app
 
+**Profile from Intervals.icu (docs/app.md "Profile from Intervals.icu")**
+
+Seen: app core tests (parse, merge, fuzz, a fake unit round trip) and the Simulator build with the Demo answer. Seen on the unit? No, and not against the real Intervals.icu API: with an EMMC_WRITE build, a real key and the unit connected, "Sync from Intervals.icu" must change the FTP in the unit's menu, and it must still be there after a restart; during a ride the line must say it will try again, and on a build without card writes it must say READ ONLY.
+
 **Training profile over the phone (PROFILE_GET / PROFILE_SET, docs/app.md "Training profile")**
 
 Seen: simulator (get, set, read back, kept after a restart, each refusal, a ride, fuzz), app core tests. Seen on the unit? No: a RAM run with an EMMC_WRITE build, the phone bonded, sets the FTP from the phone; check that the unit's menu shows it and that it survives a restart.

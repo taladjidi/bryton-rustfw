@@ -12,6 +12,7 @@ struct ContentView: View {
     @StateObject private var link = UnitLink()
     @StateObject private var rides = RideBrowser()
     @StateObject private var library = RideLibrary()
+    @StateObject private var intervals = IntervalsSync()
     @State private var profile = false
     @StateObject private var store = WorkoutStore()
     @State private var path: [WorkoutRoute] = []
@@ -72,9 +73,13 @@ struct ContentView: View {
                 } }
             }
             .navigationTitle("Bike computer")
+            .environmentObject(rides)
+            .environmentObject(intervals)
+            .task { await intervals.sync(rides: rides, force: false) }
             .refreshable {
                 link.refresh()
                 rides.refresh()
+                await intervals.sync(rides: rides, force: false)
                 try? await Task.sleep(nanoseconds: 800_000_000)
             }
             .navigationDestination(item: $rides.saved) { s in RideDetail(url: s.url) }

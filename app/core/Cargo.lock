@@ -103,6 +103,7 @@ version = "0.1.0"
 dependencies = [
  "bryton-rustfw",
  "fitparser",
+ "serde_json",
  "uniffi",
 ]
 

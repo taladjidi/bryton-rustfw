@@ -5,24 +5,64 @@ import Charts
 import CoreLocation
 import SwiftUI
 
-/// FTP and max HR for IF / TSS and the zones, until the unit's profile can be read.
+/// FTP and max HR for IF / TSS and the zones; filled from Intervals.icu when a key is set, and given to the unit.
 struct ProfileSheet: View {
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
+    @AppStorage("lthr") private var lthr = 0
+    @AppStorage("weight") private var weight = 0
+    @AppStorage("wPrime") private var wPrime = 0
+    @EnvironmentObject private var rides: RideBrowser
+    @EnvironmentObject private var intervals: IntervalsSync
     @Environment(\.dismiss) private var dismiss
+    @State private var key = ""
+    @State private var athlete = ""
+    @State private var opened: (ftp: Int, maxHR: Int)?
 
     var body: some View {
         NavigationStack {
             Form {
-                Stepper("FTP: \(ftp) W", value: $ftp, in: 50...600, step: 5)
-                Stepper("Max heart rate: \(maxHR) bpm", value: $maxHR, in: 120...230)
-                Text("Keep it equal to your FTP on Intervals.icu so the loads match.").font(.footnote).foregroundStyle(.secondary)
+                Section {
+                    Stepper("FTP: \(ftp) W", value: $ftp, in: 50...600, step: 5)
+                    Stepper("Max heart rate: \(maxHR) bpm", value: $maxHR, in: 120...230)
+                    if lthr > 0 { LabeledContent("Threshold heart rate", value: "\(lthr) bpm") }
+                    if weight > 0 { LabeledContent("Weight", value: "\(weight) kg") }
+                    if wPrime > 0 { LabeledContent("W'", value: "\(wPrime) J") }
+                    if let l = rides.profileLine { Text(l).font(.footnote).foregroundStyle(.secondary) }
+                } footer: {
+                    Text("Keep the FTP equal to Intervals.icu's so the loads match. A change here is also given to the unit.")
+                }
+                Section {
+                    TextField("Athlete id (0 or i12345)", text: $athlete)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField(intervals.hasKey ? "API key stored (type to replace)" : "API key", text: $key)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("Test") { Task { await intervals.test(key: key, athlete: athlete); key = "" } }
+                        .disabled(intervals.busy)
+                    Button("Sync from Intervals.icu") { Task { await intervals.sync(rides: rides, force: true) } }
+                        .disabled(intervals.busy || !intervals.hasKey)
+                    if intervals.hasKey && !intervals.busy { Button("Forget the key", role: .destructive) { intervals.forget() } }
+                    if let s = intervals.status { Text(s).font(.footnote).foregroundStyle(.secondary) }
+                } header: {
+                    Text("Intervals.icu")
+                } footer: {
+                    Text("The key is in Intervals.icu's Settings, Developer Settings. It is kept in the Keychain.")
+                }
             }
             .navigationTitle("Profile")
             .toolbar { Button("Done") { dismiss() } }
-            .onDisappear { (ftp, maxHR) = (ftp, maxHR) }  // opening the sheet confirms the values: they are stored
+            .onAppear {
+                opened = (ftp, maxHR)
+                athlete = intervals.athlete
+            }
+            .onDisappear {
+                // a change typed here goes to the unit too (the stepper steps are all in range)
+                guard let o = opened, o != (ftp, maxHR) else { return }
+                rides.pushProfile(IntervalsProfile(name: nil, ftp: UInt32(clamping: ftp), maxHr: UInt32(clamping: maxHR),
+                    lthr: nil, weightKg: nil, wprimeJ: nil), source: "this phone")
+            }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.large])
     }
 }
 

@@ -18,6 +18,7 @@ pub mod files;
 #[cfg(test)]
 mod files_tests;
 pub mod import;
+pub mod intervals;
 pub mod ride;
 pub mod summary;
 #[cfg(test)]

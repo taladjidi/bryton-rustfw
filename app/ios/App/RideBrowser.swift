@@ -28,7 +28,7 @@ struct SavedRide: Identifiable, Hashable {
 }
 
 final class RideBrowser: ObservableObject {
-    enum Phase: Equatable { case idle, listing, downloading(String), workouts, writing, failed }
+    enum Phase: Equatable { case idle, listing, downloading(String), workouts, writing, profile, failed }
 
     @Published var rides: [RideEntry] = []
     @Published var phase = Phase.idle
@@ -44,6 +44,9 @@ final class RideBrowser: ObservableObject {
     /// How the last send ended: the text of its error, or `sendDone`.
     @Published var sendError: String?
     @Published var sendDone = false
+    /// The unit's profile after the last sync or push ("Unit profile: FTP 265 W (from Intervals.icu, 8 Nov 14:02)"), or
+    /// why the unit did not take it.
+    @Published var profileLine: String?
 
     private let client = FileClient()
     private var transport: FileTransport?
@@ -59,6 +62,11 @@ final class RideBrowser: ObservableObject {
     private var workoutFiles: [WorkoutFile] = []
     /// The write under way is a send (not a delete).
     private var sending = false
+    /// The profile to give the unit, kept until the unit took it (or refused for good); `merged` is what was sent.
+    private var pendingProfile: (iv: IntervalsProfile, source: String, at: Date)?
+    private var merged: ProfileMerge?
+    /// Not before this uptime (ms): a busy unit is asked again quietly.
+    private var profileRetryAt: UInt64 = 0
     /// The download under way is the background sync's, not the rider's: anything the rider starts cancels it.
     private(set) var auto = false
     /// The rider cancelled a sync download: no more until they refresh.
@@ -98,6 +106,7 @@ final class RideBrowser: ObservableObject {
             self.ready = false
             self.syncOff = false  // a reconnect tries the sync again
             if case .downloading = self.phase { self.message = "Link lost, resuming..." }
+            if self.phase == .profile { self.phase = .idle }  // the pending profile goes on the next connection
             if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
         t.onError = { [weak self] m in self?.message = m }
@@ -119,7 +128,7 @@ final class RideBrowser: ObservableObject {
     func refresh() {
         yieldAuto()
         syncPaused = false
-        guard ready, let t = transport, !isDownloading, phase != .writing else { return }
+        guard ready, let t = transport, !isDownloading, phase != .writing, phase != .profile else { return }
         message = nil
         listingWorkouts = false
         workoutKey = nil
@@ -270,9 +279,52 @@ final class RideBrowser: ObservableObject {
         return "Syncing \(inWindow.filter { downloaded.contains($0.name) }.count + 1) of \(inWindow.count)"
     }
 
+    /// Gives the unit the profile Intervals.icu (or the profile sheet) set, when nothing else uses the link: PROFILE_GET,
+    /// then PROFILE_SET with the unit's other fields kept. The unit answers during a ride; the sync yields to it.
+    func pushProfile(_ iv: IntervalsProfile, source: String) {
+        pendingProfile = (iv, source, Date())
+        profileRetryAt = 0
+        if !ready { profileLine = "Unit profile: waiting for the unit" }
+        startProfile()
+    }
+
+    private func startProfile() {
+        guard pendingProfile != nil, ready, phase == .idle, Self.now >= profileRetryAt, let t = transport else { return }
+        phase = .profile
+        t.write(client.profileGetCommand(nowMs: Self.now))
+    }
+
+    private func profileDone(_ p: UnitProfile) {
+        guard let pend = pendingProfile else { return }
+        let f = DateFormatter()
+        f.dateFormat = "d MMM HH:mm"
+        var line = "Unit profile: FTP \(p.ftp) W (from \(pend.source), \(f.string(from: pend.at)))"
+        if let m = merged, !m.skipped.isEmpty { line += ". Not sent: " + m.skipped.joined(separator: "; ") }
+        (profileLine, pendingProfile, merged, phase) = (line, nil, nil, .idle)
+    }
+
+    /// The unit refused or went quiet: busy and silence are asked again in a minute, anything else ends the push.
+    private func profileFailed(_ e: FileError?) {
+        phase = .idle
+        merged = nil
+        switch e {
+        case .busy?, nil:
+            profileRetryAt = Self.now + 60_000
+            profileLine = "Unit profile: the unit is busy or did not answer, trying again later"
+        case .readOnly?:
+            pendingProfile = nil
+            profileLine = "Unit profile: READ ONLY, this unit's software does not save settings from the phone yet"
+        case let e?:
+            pendingProfile = nil
+            profileLine = "Unit profile: " + Self.text(e)
+        }
+    }
+
     private func silence() {
+        startProfile()
         autoSync()
         guard ready, client.silent(nowMs: Self.now) else { return }
+        if phase == .profile { profileFailed(nil); return }
         if case .downloading = phase {
             message = "No answer, resuming..."
             resume()
@@ -313,8 +365,17 @@ final class RideBrowser: ObservableObject {
             endWrite(nil, isSend: sending)
         case .written, .deleted:
             break  // a late answer of a write that was given up
+        case .profile where phase == .profile:
+            guard let pend = pendingProfile, let unit = client.profile() else { return profileFailed(.card) }
+            let m = mergeUnitProfile(unit: unit, iv: pend.iv)
+            merged = m
+            if m.changed { transport?.write(client.profileSetCommand(profile: m.profile, nowMs: Self.now)) } else { profileDone(unit) }
+        case .profileSet where phase == .profile:
+            if let m = merged { profileDone(m.profile) } else { profileFailed(.card) }
+        case .failed(let e) where phase == .profile:
+            profileFailed(e)
         case .profile, .profileSet:
-            break  // the profile (a later task's screen)
+            break  // a late answer
         case .failed(let e) where phase == .writing:
             if !sending && (e == .notFound || e == .mismatch) {
                 endWrite("That workout is no longer on the unit. The list was refreshed.", isSend: false)

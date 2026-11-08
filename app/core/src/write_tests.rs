@@ -146,7 +146,15 @@ fn the_profile_is_read_set_and_refused_by_the_unit() {
 #[test]
 fn the_fake_unit_checks_each_field_like_the_firmware() {
     let (c, mut u, mut t) = (FileClient::new(), FakeUnit::demo(), 0);
-    let p = UnitProfile { ftp: 250, max_hr: 185, lthr: 168, weight_kg: 70, wprime_j: 20_000, zones_lthr: false, female: false };
+    let p = UnitProfile {
+        ftp: 250,
+        max_hr: 185,
+        lthr: 168,
+        weight_kg: 70,
+        wprime_j: 20_000,
+        zones_lthr: false,
+        female: false,
+    };
     let bad = FileEvent::Failed { error: FileError::BadRequest };
     for q in [
         UnitProfile { ftp: 49, ..p },

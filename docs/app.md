@@ -304,6 +304,32 @@ write the card). It is applied as the menus do (the same `save_misc`, so the fil
 backup registers hold it until then). The phone core: `FileClient.profile_get_command` / `profile_set_command`, the
 events `profile` and `profileSet`, `profile()`. The flow: Intervals.icu gives the FTP to the phone, the phone sets it.
 
+## Profile from Intervals.icu
+
+The flow is Intervals.icu, then the phone, then the unit. Looked up 2026-11-08 (OpenAPI spec https://intervals.icu/api/v1/docs,
+forum guide https://forum.intervals.icu/t/api-access-to-intervals-icu/609):
+- **Request:** `GET https://intervals.icu/api/v1/athlete/{id}` with HTTP basic auth, user `API_KEY`, password the key from
+  Intervals.icu's Settings, Developer Settings. `{id}` is `0` (the key's own athlete) or `i<number>` (the second form is
+  from the forum guide, inferred from memory of it).
+- **Used:** the `sportSettings` entry whose `types` holds `Ride`: `ftp`, `max_hr`, `lthr`, `w_prime`; the athlete's
+  `weight` (kg, float) and `name`. Every field is optional: a missing, null, string, negative or absurd value is "not
+  given" (`app/core/src/intervals.rs`, which parses and merges; the Swift side only does the network, the Keychain and
+  the screens in `IntervalsClient.swift`). No Ride entry is an error in words.
+- **The key** is in the Keychain (generic password, this device only) and never in UserDefaults, a log or the repository;
+  the profile sheet's SecureField stores it only after Test succeeded (it shows the athlete's name and FTP). The athlete
+  id is not secret and is in UserDefaults.
+- **When:** at launch and on pull to refresh, at most once an hour, and on demand with "Sync from Intervals.icu". The
+  app's values (`ftp`, `maxHR`, and `lthr`, `weight`, `wPrime`, 0 = unknown) are set, so the loads recompute; values
+  outside the menus' ranges are not used and the sheet says which.
+- **To the unit:** PROFILE_GET, then PROFILE_SET with the unit's other fields (zones choice, sex, anything Intervals did
+  not give) kept; a field outside the unit's ranges is not sent and the line says so; nothing is sent when nothing
+  differs. It starts only when the link is idle (RideBrowser's phase `profile`, started from the one-second tick before the
+  ride sync takes the link, so between its rides), and while another transfer runs it waits. The line reads "Unit
+  profile: FTP 265 W (from Intervals.icu, 8 Nov 14:02)". BUSY (a ride, or editing in the menu) or no answer is asked again
+  quietly every minute; READ ONLY says the unit's software does not save settings from the phone yet.
+- **Without a key** the sheet's FTP and max HR still work, and changing them is also pushed to the unit (source "this phone").
+- **Demo:** under `#if DEBUG` and `-demo` the answer is a made-up athlete (FTP 265), no network.
+
 ## Fast link: the chip app's layer and the speed model
 
 Moved from docs/status.md (2026-11-07).
