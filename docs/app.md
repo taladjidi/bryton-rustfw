@@ -238,7 +238,7 @@ Debug builds read launch arguments (all with `-demo`; `xcrun simctl launch <devi
 `-demo-workout` (the first workout's page), `-demo-edit` (the editor; `-demo-saved` saves the copy, `-demo-send` opens the
 send sheet after 1.5 s, `-demo-send-go` presses Send), `-demo-profile` (the profile sheet), `-demo-delete` (the unit
 workout delete confirmation), `-demo-import` (the Files picker), `-demo-mtu 244` (the demo link's write length, 20 without it), `-demo-routes` (the demo GPX imported; `-demo-route-open` its page, `-demo-route-send` and `-demo-route-send-go` the send sheet, `-demo-route-sent` sent without it, `-demo-route-delete` the unit route delete confirmation, `-demo-scroll-routes|unitroutes`), and `-demo-scroll-rides|intervals|unit|phone` (a home
-list position). The images in `docs/img/app-*.png` are light mode shots of an iPhone 18 Pro Simulator at the default
+list position). The home list shows only the latest ride and an "All rides (N)" row, which pushes the full list (`-demo-all-rides`). The images in `docs/img/app-*.png` are light mode shots of an iPhone 18 Pro Simulator at the default
 text size.
 
 | The profile sheet | The unit workouts (delete asked) | "On the phone", import | The Files picker |
