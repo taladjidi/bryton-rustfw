@@ -1616,7 +1616,7 @@ cut_part!(a_discard_cut_at_every_sector_part_6, a_discard_cut(6));
 cut_part!(a_discard_cut_at_every_sector_part_7, a_discard_cut(7));
 
 /// The cuts of the discard's ride at which the next start finds it already discarded (both torn modes).
-const AT_BOOT_CUTS: [u64; 4] = [958, 959, 960, 961];
+const AT_BOOT_CUTS: [u64; 4] = [967, 968, 969, 970];
 
 fn a_discard_cut(part: u64) {
     for torn in [false, true] {
@@ -3205,7 +3205,7 @@ fn making_the_apps_files_survives_a_cut_at_every_sector() {
         }
     }
     std::println!("{total} writes cut, {torn_mine} tearing \\Rustfw's directory");
-    assert_eq!((total, torn_mine), (171, 18), "a write added or dropped");
+    assert_eq!((total, torn_mine), (174, 20), "a write added or dropped");
 }
 
 /// The review of S7: a `make_kept` that fails (a name in [`KEPT`] taken by a folder) is tried once a boot, never
@@ -3427,8 +3427,8 @@ fn give_up_saves_rescue_cut_at_every_sector() {
         r.give_up_save(d, local(300));
     };
     let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.card, act, "Rustfw/Rescue/261023100000.fit");
-    // the rescue folder's entry in \Rustfw: one sector, its tear S7's
-    assert_eq!((total, s7), (40, 1), "a write added or dropped");
+    // the rescue folder's entry in \Rustfw: one sector written twice (deleted, then made live), its tears S7's
+    assert_eq!((total, s7), (41, 2), "a write added or dropped");
     assert!(lost <= 1, "{lost} lost");
 }
 

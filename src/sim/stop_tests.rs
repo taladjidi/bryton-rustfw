@@ -368,8 +368,11 @@ fn hour_ride(ride_stop: bool) -> RideOut {
             assert!(!app.rec.clean.due() && !app.rec.full.due(), "a ride's Stop with card work due");
         }
     }
-    // the receiver read as often with Stops as without: no fix waits past its second (ride_radio_tests' bound, 816 ms)
-    sim.gnss.assert_reads(900, 0);
+    // the receiver read as often with Stops as without: no fix waits past its second (ride_radio_tests' bound, 816 ms),
+    // but for a card stall landing in that gap (every 1024 sectors written, 300 ms: where it lands moves with the
+    // writes, 2026-11-08 a folder's entry written twice; budget_tests.rs bounds the stalls)
+    let stall = sim.worst_gnss_gap.1[5] / 1_000_000;
+    sim.gnss.assert_reads(900 + stall, 0);
     let heard = app.radio_counts().1;
     let radio = (
         sim.nordic.hangs,

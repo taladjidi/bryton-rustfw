@@ -34,7 +34,10 @@
 //!   size. A move done again after a cut looks for the old entry by its chain ([`Fat::locate_chain`]), never only by
 //!   its name, and may give an alias its long name back ([`Fat::relink_long_name`]); its new entry ([`Fat::link`]) is
 //!   written deleted, then made live by its first bytes alone, so no tear leaves half of it (recorder/mod.rs, "Steps
-//!   4 and 5"). A create or a folder's entry is still one write: on such a card its tear can leave orphan pieces.
+//!   4 and 5"). A folder's entry ([`Fat::mkdir`]) is written the same way, after its cluster (`.` and `..`) and its
+//!   end of chain: a tear leaves it deleted (its cluster lost) or live and whole, never live on cluster 0 (which
+//!   made every later `ensure_dir` answer Corrupt until a computer's chkdsk, 2026-11-08) nor on an unwritten cluster.
+//!   A create is still one write: on such a card its tear can leave orphan pieces (its cluster is 0 anyway).
 //! - **a revive** ([`Fat::revive`], the undo of a move a full card cannot finish): the first bytes a delete marked
 //!   written back, the long name's pieces in the sector before first; no cluster taken.
 //! - **FSInfo** (free count, next free hint) is written after the FAT sectors it counts; a cut between leaves the
@@ -735,7 +738,9 @@ impl Fat {
         self.add_named(d, dir, name, ARCHIVE, (0, 0), time)
     }
 
-    /// Creates folder `name` in `dir`: its cluster written (`.`, `..`, zeros), taken, then its entry.
+    /// Creates folder `name` in `dir`: its cluster written (`.`, `..`, zeros), taken, then its entry as
+    /// [`Fat::link`] writes one (deleted, then made live by its first bytes), so no tear leaves a live entry on
+    /// cluster 0 or on a cluster not yet written (module doc).
     pub fn mkdir(&mut self, d: &mut impl DiskWrite, dir: File, name: &str, time: (u16, u16)) -> Result<File, Error> {
         self.check_new(d, dir, name)?;
         let hint = self.hint(d)?;
@@ -750,7 +755,7 @@ impl Fat {
         self.set_entries(d, &[(c, EOC)])?;
         // FSInfo is a hint (a failed write leaves its count high, module doc): not a reason to leave `c` unnamed
         let _ = self.fsinfo_update(d, 1, c + 1, None);
-        self.add_named(d, dir, name, DIR, (c, 0), time)?;
+        self.add_live(d, dir, name, DIR, (c, 0), time)?;
         Ok(File { cluster: c, size: 0, dir: true })
     }
 
@@ -843,9 +848,25 @@ impl Fat {
         h: &Handle,
         time: (u16, u16),
     ) -> Result<Handle, Error> {
+        let (entry_lba, slot) = self.add_live(d, dir, name, ARCHIVE, (h.first, h.size), time)?;
+        let (last, clusters) = self.chain_end(d, h.first)?;
+        Ok(Handle { entry_lba, slot, first: h.first, last, clusters, size: h.size, dir: dir.cluster })
+    }
+
+    /// `name`'s entries in `dir` on the chain from `first`, `size` bytes, written deleted, then made live by their
+    /// first bytes alone ([`Fat::link`]'s two writes; [`Fat::mkdir`]'s too). Where its 8.3 entry went.
+    fn add_live(
+        &mut self,
+        d: &mut impl DiskWrite,
+        dir: File,
+        name: &str,
+        attr: u8,
+        (first, size): (u32, u32),
+        time: (u16, u16),
+    ) -> Result<(u32, u8), Error> {
         self.check_new(d, dir, name)?;
         let short = self.alias(d, dir, name)?;
-        let (mut entries, n) = dir_entries(name, short, ARCHIVE, h.first, h.size, time);
+        let (mut entries, n) = dir_entries(name, short, attr, first, size, time);
         let entries = entries.get_mut(..n).ok_or(Error::Corrupt)?;
         for e in entries.iter_mut() {
             e[0] = 0xe5;
@@ -856,8 +877,7 @@ impl Fat {
         if !self.revive_at(d, dir, entry_lba, &s, usize::from(slot), name, false)? {
             return Err(Error::Corrupt); // never: its own entries, just written
         }
-        let (last, clusters) = self.chain_end(d, h.first)?;
-        Ok(Handle { entry_lba, slot, first: h.first, last, clusters, size: h.size, dir: dir.cluster })
+        Ok((entry_lba, slot))
     }
 
     /// Marks `h`'s entry, and the long name pieces just before it in its sector, deleted (0xe5); nothing else
@@ -2408,6 +2428,137 @@ pub(crate) mod tests {
         assert!(made.dir && made.cluster != 0);
         assert_eq!(fat.find(&mut d, root, "Own"), Ok(made));
         assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// Where folder `dir` ends (its first 0x00 entry): (sector of its chain, slot).
+    fn dir_end(fat: &mut Fat, d: &mut Ram, dir: File) -> (u32, usize) {
+        let mut cluster = dir.cluster;
+        for k in 0..64 {
+            for sec in 0..fat.spc {
+                let mut s = [0u8; SECTOR];
+                fat.read(d, fat.lba(cluster) + sec, &mut s).unwrap();
+                if let Some(i) = s.chunks(32).position(|e| e[0] == 0) {
+                    return (k * fat.spc + sec, i);
+                }
+            }
+            cluster = fat.next(d, cluster).unwrap().unwrap();
+        }
+        panic!("no end");
+    }
+
+    /// Folder `name` in the root, filled with empty files until its end marker sits at slot 15 of its sector `at`: the
+    /// next entry of two slots goes into the next sector, a new cluster's when `at` is the cluster's last.
+    fn at_slot_15(d: &mut Ram, name: &str, at: u32) {
+        let mut fat = Fat::mount(d).unwrap();
+        let dir = fat.mkdir(d, fat.root(), name, T).unwrap();
+        for i in 0..1000 {
+            let slot = match dir_end(&mut fat, d, dir) {
+                (sec, 15) if sec == at => return,
+                (_, slot) => slot,
+            };
+            // a name of one long name piece takes 2 slots, of two pieces 3
+            let name = match slot {
+                15 => std::format!("n{i:03}.txt"),
+                _ if (15 - slot) % 2 == 1 => std::format!("note {i:03} long.txt"),
+                _ => std::format!("n{i:03}.txt"),
+            };
+            fat.create(d, dir, &name, T).unwrap();
+        }
+        panic!("slot 15 of sector {at} never reached");
+    }
+
+    /// Folder `parent` (the root when empty), then `name` in it made if missing ([`Fat::ensure_dir`]).
+    fn make_in(d: &mut impl DiskWrite, parent: &str, name: &str) -> Result<File, Error> {
+        let mut fat = Fat::mount(d)?;
+        let dir = if parent.is_empty() { fat.root() } else { fat.open(d, parent)? };
+        fat.ensure_dir(d, dir, name, T)
+    }
+
+    /// A folder made ([`Fat::mkdir`] through [`Fat::ensure_dir`], the path of every folder made: `\Activities`,
+    /// `\Rustfw` and what is in it, `\Courses`, a workout's day) cut before every sector write, and every sector torn
+    /// every 8 bytes (a card without reliable write keeps the first bytes of the sector it was writing): after the
+    /// boot's FAT sync the folder is absent (its cluster lost, and a new piece of its parent's at most) or live, whole
+    /// and empty, never on cluster 0 nor on an unwritten cluster (2026-11-08: 2 of 64 tears of `\Courses`' entry left
+    /// it on cluster 0, every later `ensure_dir` Corrupt); made again after it, nothing more lost. In the root, in a
+    /// workout's calendar (a day), with its entry spilling into its parent's next sector and into a new cluster.
+    /// check.sh's fsck reads the cut between its entry written deleted and made live (`mkdir_cut_lost1`).
+    #[test]
+    fn a_torn_mkdir_leaves_no_folder_or_a_whole_one() {
+        let spc = Fat::mount(&mut Ram(image(), 0)).unwrap().spc;
+        let filled = |at: u32| {
+            let mut d = Ram(image(), 0);
+            at_slot_15(&mut d, "Spill", at);
+            d.0
+        };
+        let cases = [
+            (image(), "", "Rustfw", 1),
+            (image(), "Workout/calendar", "20261108", 1),
+            (filled(0), "Spill", "Courses", 1),
+            (filled(spc - 1), "Spill", "Courses", 2),
+        ];
+        for (base, parent, name, more) in cases {
+            let lost0 = fsck(&base).unwrap();
+            assert_eq!(make_in(&mut Ram(base.clone(), 0), parent, "x").map(|f| f.dir), Ok(true));
+            let mut whole = Torn { ram: Ram(base.clone(), 0), budget: u32::MAX, keep: 0, cut_at: 0 };
+            make_in(&mut whole, parent, name).unwrap();
+            let writes = u32::MAX - whole.budget;
+            assert_eq!(fsck(&whole.ram.0), Ok(lost0), "{name}");
+            // the parent's sectors (its new cluster's too) torn every 8 bytes; the others (the FATs, FSInfo, the new
+            // folder's cluster) cut or torn in their middle: a test of the FAT's tears is a_torn_grow's
+            let parent_lbas = {
+                let mut m = Ram(whole.ram.0.clone(), 0);
+                let mut fat = Fat::mount(&mut m).unwrap();
+                let mut c = if parent.is_empty() { fat.root() } else { fat.open(&mut m, parent).unwrap() }.cluster;
+                let mut lbas = Vec::new();
+                loop {
+                    lbas.extend(fat.lba(c)..fat.lba(c) + fat.spc);
+                    match fat.next(&mut m, c).unwrap() {
+                        Some(n) => c = n,
+                        None => break lbas,
+                    }
+                }
+            };
+            let (mut absent, mut live) = (0, 0);
+            for at in 0..writes {
+                let mut probe = Torn { ram: Ram(base.clone(), 0), budget: at, keep: 1, cut_at: 0 };
+                assert_eq!(make_in(&mut probe, parent, name), Err(Error::Io));
+                let keeps: Vec<usize> = match parent_lbas.contains(&probe.cut_at) {
+                    true => (0..SECTOR).step_by(8).collect(),
+                    false => std::vec![0, SECTOR / 2],
+                };
+                for keep in keeps {
+                    let what = std::format!("{parent}/{name}: write {at} of {writes}, {keep} bytes");
+                    let mut t = Torn { ram: Ram(base.clone(), 0), budget: at, keep, cut_at: 0 };
+                    assert_eq!(make_in(&mut t, parent, name), Err(Error::Io), "{what}");
+                    if (parent, keep, at + 1) == ("", 0, writes) {
+                        assert_eq!(fsck(&t.ram.0), Ok(lost0 + 1), "{what}: its entry deleted, its cluster lost");
+                        super::super::tests::dump("mkdir_cut_lost1", &t.ram.0);
+                    }
+                    let mut m = Ram(t.ram.0, 0);
+                    let mut fat = Fat::mount(&mut m).unwrap();
+                    fat.sync_fats(&mut m).unwrap(); // the boot's
+                    let lost = fsck_torn(&m.0).unwrap_or_else(|e| panic!("{what}: {e}"));
+                    assert!(lost <= lost0 + more, "{what}: {lost} lost");
+                    let dir = if parent.is_empty() { fat.root() } else { fat.open(&mut m, parent).unwrap() };
+                    match fat.find(&mut m, dir, name) {
+                        Err(Error::NotFound) => absent += 1,
+                        Ok(f) => {
+                            assert!(f.dir && f.cluster != 0, "{what}: {f:?}");
+                            let mut c = fat.cursor(f).unwrap();
+                            while let Some(e) = fat.list(&mut m, &mut c).unwrap() {
+                                assert!(e.name() == b"." || e.name() == b"..", "{what}: {:?}", e.name());
+                            }
+                            live += 1;
+                        }
+                        Err(e) => panic!("{what}: {e:?}"),
+                    }
+                    let again = make_in(&mut m, parent, name).unwrap_or_else(|e| panic!("{what}: again {e:?}"));
+                    assert!(again.dir && again.cluster != 0, "{what}");
+                    assert_eq!(fsck_torn(&m.0), Ok(lost), "{what}: made again, nothing more lost");
+                }
+            }
+            assert!(absent > 0 && live > 0, "{parent}/{name}: {absent} absent, {live} live");
+        }
     }
 
     /// Every write lands between the first FAT sector and the volume's last sector, both included: never the boot

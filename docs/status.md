@@ -75,6 +75,11 @@ A cut between the temporary file's remove and its link, or inside a delete, leav
 64 for 1 MB): accepted, never reclaimed by the unit, freed by a computer's fsck (check.sh runs fsck_msdos / fsck.vfat
 on both cuts, `target/fat/*_lost.img`, and allows orphan clusters there only).
 
+The first course makes `\Courses` (a workout its day folder): its entry torn on a card without reliable write left it
+live on cluster 0 in 2 of 64 tears (2026-11-08), every later send answering I/O until a computer's chkdsk. Since then
+`Fat::mkdir` writes a folder's entry as a move's link (deleted, then made live by its first bytes): no tear leaves it
+on cluster 0 (host tests: every write of a mkdir cut and torn, fsck_msdos on the cut between, `mkdir_cut_lost1.img`).
+
 On the unit, with the owner present (it writes the card; an `EMMC_WRITE` build, no ride):
 1. Send a FIT course (one the unit already follows when copied over USB) as WRITE_BEGIN `06 seq 02 size crc len name`,
    WRITE_DATA, WRITE_END: END ok with the size. The route shows in the unit's COURSES menu under its name and is
