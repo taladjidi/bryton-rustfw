@@ -106,7 +106,9 @@ The screen (`RideDetail.swift`, `RideMap.swift`): a grid of the metrics, the map
 speed, HR, power, cadence) against distance or time, the laps, the zone bars and the power curve. Dragging on a graph
 puts a marker on the map. The map is an `MKMapView`: inside France the base is IGN's Plan IGN v2 (WMTS
 `https://data.geopf.fr/wmts`, layer `GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2`, matrix set `PM`, no key; checked 2026-11-07),
-elsewhere Apple's map (the IGN tiles are drawn over it, so where IGN has none Apple's shows). The map says "(c) IGN"
+elsewhere Apple's map. IGN replaces Apple's map (a ride's whole track must be in France for it), and its tiles are
+kept in memory and in a 200 MB disk cache: a pinch zoom asks again for every level it passes, and with Apple's map
+under the tiles it showed through until the zoom stopped (seen on the owner's iPhone, 2026-11-08). The map says "(c) IGN"
 in its corner (IGN's Plan IGN v2 is open data under the Etalab Open Licence 2.0, which asks for the source to be
 credited). The person icon opens FTP and max HR (UserDefaults, default 200 W and 190 bpm) until the unit's
 profile can be read. Launch arguments `-demo` and `-demo-scroll graphs|laps` (Debug builds only) drive the Simulator screenshots.

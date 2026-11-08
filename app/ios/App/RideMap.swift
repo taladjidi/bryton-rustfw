@@ -36,7 +36,7 @@ struct RideMap: UIViewRepresentable {
         var marker: MKPointAnnotation?
 
         func mapView(_ map: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let t = overlay as? MKTileOverlay { return MKTileOverlayRenderer(tileOverlay: t) }
+            if let t = overlay as? IGNOverlay { return IGNRenderer(overlay: t) }
             let r = MKPolylineRenderer(overlay: overlay)
             r.strokeColor = .systemOrange
             r.lineWidth = 4
@@ -64,8 +64,9 @@ struct RideMap: UIViewRepresentable {
         m.pointOfInterestFilter = .excludingAll
         guard let first = points.first, let last = points.last else { return m }
         if Self.usesIGN(points) {
-            let t = MKTileOverlay(urlTemplate: Self.ign)
-            t.canReplaceMapContent = false  // Apple's map stays under the tiles where IGN has none
+            let t = IGNOverlay(urlTemplate: Self.ign)
+            // no Apple map under it: it showed through while a zoom level's tiles loaded (the whole track is in France)
+            t.canReplaceMapContent = true
             t.maximumZ = 18
             m.addOverlay(t, level: .aboveLabels)
         }
@@ -105,5 +106,92 @@ extension Array where Element == Double {
     func minMax() -> (Double, Double)? {
         guard let lo = self.min(), let hi = self.max() else { return nil }
         return (lo, hi)
+    }
+}
+
+/// The IGN tiles, decoded and kept in memory, the downloads in a disk cache.
+final class IGNOverlay: MKTileOverlay {
+    private static let images: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 600  // about 150 MB of decoded 256 px tiles at most
+        return c
+    }()
+    private static let session: URLSession = {
+        let c = URLSessionConfiguration.default
+        c.urlCache = URLCache(memoryCapacity: 0, diskCapacity: 200 << 20, directory: nil)
+        c.requestCachePolicy = .returnCacheDataElseLoad
+        return URLSession(configuration: c)
+    }()
+    private let lock = NSLock()
+    private var loading = Set<String>()
+
+    static func key(_ z: Int, _ x: Int, _ y: Int) -> String { "\(z)/\(x)/\(y)" }
+
+    func image(_ z: Int, _ x: Int, _ y: Int) -> UIImage? { Self.images.object(forKey: Self.key(z, x, y) as NSString) }
+
+    /// Fetches a tile once (a second ask while it loads is dropped); `done` runs when it is in memory.
+    func fetch(_ z: Int, _ x: Int, _ y: Int, done: @escaping () -> Void) {
+        let k = Self.key(z, x, y)
+        lock.lock()
+        let new = loading.insert(k).inserted
+        lock.unlock()
+        guard new else { return }
+        let u = url(forTilePath: MKTileOverlayPath(x: x, y: y, z: z, contentScaleFactor: 1))
+        Self.session.dataTask(with: u) { [weak self] d, r, _ in
+            if let d, (r as? HTTPURLResponse)?.statusCode == 200, let i = UIImage(data: d) {
+                Self.images.setObject(i, forKey: k as NSString)
+                done()
+            }
+            self?.lock.lock()
+            self?.loading.remove(k)
+            self?.lock.unlock()
+        }.resume()
+    }
+}
+
+/// Draws the IGN tiles itself: while a tile loads, the nearest coarser tile already in memory is drawn scaled in its
+/// place (as map apps do), so a pinch zoom never shows an empty square; past IGN's last level the last level's tiles
+/// are scaled up. MKTileOverlayRenderer left a tile empty until it loaded.
+final class IGNRenderer: MKOverlayRenderer {
+    private var ign: IGNOverlay { overlay as! IGNOverlay }  // only made for one (rendererFor)
+
+    override func canDraw(_ mapRect: MKMapRect, zoomScale: MKZoomScale) -> Bool { true }
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
+        let world = MKMapSize.world.width
+        let z = max(0, Int(log2(world * Double(zoomScale) / 256).rounded()))
+        let side = world / Double(1 << z)
+        let x0 = Int(mapRect.minX / side), y0 = Int(mapRect.minY / side)
+        let x1 = Int((mapRect.maxX - 1) / side), y1 = Int((mapRect.maxY - 1) / side)
+        UIGraphicsPushContext(ctx)
+        defer { UIGraphicsPopContext() }
+        for x in x0...max(x0, x1) {
+            for y in y0...max(y0, y1) {
+                let tile = MKMapRect(x: Double(x) * side, y: Double(y) * side, width: side, height: side)
+                draw(z, x, y, in: rect(for: tile), tile: tile, zoomScale: zoomScale)
+            }
+        }
+    }
+
+    private func draw(_ z: Int, _ x: Int, _ y: Int, in r: CGRect, tile: MKMapRect, zoomScale: MKZoomScale) {
+        let top = ign.maximumZ
+        if z <= top, let i = ign.image(z, x, y) {
+            i.draw(in: r)
+            return
+        }
+        if z <= top {
+            ign.fetch(z, x, y) { [weak self] in self?.setNeedsDisplay(tile, zoomScale: zoomScale) }
+        }
+        // the nearest coarser tile in memory, its part over this one scaled up
+        let lo = max(1, z - top)
+        guard lo <= z else { return }  // level 0: nothing coarser
+        for dz in lo...min(z, lo + 8) {
+            guard let p = ign.image(z - dz, x >> dz, y >> dz), let cg = p.cgImage else { continue }
+            let n = 1 << dz
+            let w = CGFloat(cg.width) / CGFloat(n), h = CGFloat(cg.height) / CGFloat(n)
+            let part = CGRect(x: CGFloat(x % n) * w, y: CGFloat(y % n) * h, width: w, height: h)
+            if let c = cg.cropping(to: part) { UIImage(cgImage: c).draw(in: r) }
+            return
+        }
     }
 }
