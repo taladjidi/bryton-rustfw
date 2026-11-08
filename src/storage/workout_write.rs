@@ -695,7 +695,7 @@ pub(crate) mod tests {
             let left = folder_files(&c.0.0, to);
             assert!(left == with || left == without, "cut at {at}");
             if !dumped && scan.lost == chain(file) {
-                crate::fat::tests::dump(dump.unwrap_or_default(), &c.0.0);
+                crate::fat::tests::dump(&std::format!("{}_lost{}", dump.unwrap_or_default(), scan.lost), &c.0.0);
                 dumped = true;
             }
             c.1 = u32::MAX;
@@ -723,25 +723,27 @@ pub(crate) mod tests {
         let writes = u32::MAX - full.1;
         assert!(writes > 5, "{writes} writes");
         assert_eq!(folder_files(&full.0.0, to), plus(&before, to, file));
-        let (mut none, mut lost_seen) = (0, 0);
+        // clusters already lost on `base` (no_courses: the old folder's)
+        let (mut none, mut lost_seen, lost0) = (0, 0, fsck(&base).unwrap());
         for at in 0..writes {
             let mut c = Cut(Ram(base.clone(), 0), at);
             assert_eq!(send(&mut c, file, to), Err(Status::Io), "cut at {at}");
             let img = c.0.0;
             let scan = fsck_cut(&img).unwrap_or_else(|e| panic!("cut at {at}: {e}"));
             assert!(
-                scan.lost <= chain(file) && scan.past.is_empty(),
+                scan.lost <= lost0 + chain(file) && scan.past.is_empty(),
                 "cut at {at}: {} lost, {:?} past",
                 scan.lost,
                 scan.past
             );
             assert!(scan.apart <= 1, "cut at {at}: FATs apart in one sector at most");
-            lost_seen += scan.lost;
+            lost_seen += scan.lost - lost0;
             assert_eq!(folder_files(&img, to), before, "cut at {at}: the folder as it was");
             none += usize::from(sent(&img, to, file).is_none());
             if let (Some(name), true) = (dump, at + 2 == writes) {
-                assert_eq!(scan.lost, chain(file), "between the remove and the link: the chain lost");
-                crate::fat::tests::dump(name, &img);
+                assert_eq!(scan.lost, lost0 + chain(file), "between the remove and the link: the chain lost");
+                // the count in the name: check.sh's fsck allows that many orphan clusters there, nothing else
+                crate::fat::tests::dump(&std::format!("{name}_lost{}", scan.lost), &img);
             }
             // the boot's FAT sync, then the phone sends again: written, nothing more lost
             let mut d = Ram(img, 0);
@@ -827,15 +829,87 @@ pub(crate) mod tests {
     /// slot 15 (its entry in the next sector): `\Courses` exactly as it was or with the whole course.
     #[test]
     fn a_cut_at_every_write_of_a_course_leaves_the_folder_as_it_was_or_with_the_whole_course() {
-        cut_every_write(volume(), &turns(), &course("Zig zag"), Some("course_cut_unlinked_lost"));
+        cut_every_write(volume(), &turns(), &course("Zig zag"), Some("course_cut_unlinked"));
         cut_every_write(volume(), &turns(), &course(LONG), None);
         cut_every_write(courses_at_slot_15(), &turns(), &course(LONG), None);
+    }
+
+    /// The test volume without `\Courses`: its entry removed ([`Fat::remove`]: its clusters and its files' lost).
+    fn no_courses() -> Vec<u8> {
+        let mut d = Ram(volume(), 0);
+        let at = d.0.windows(11).position(|w| w == b"COURSES    ").expect("the folder's 8.3 entry");
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let (entry_lba, slot) = ((at / SECTOR) as u32, (at % SECTOR / 32) as u8);
+        let h = Handle { entry_lba, slot, dir: fat.root().cluster, ..Handle::default() };
+        fat.remove(&mut d, &h).unwrap();
+        assert!(fat.open(&mut d, COURSES).is_err());
+        d.0
+    }
+
+    /// A disk that keeps the sector of every write, in order.
+    struct Log(Ram, Vec<u32>);
+
+    impl crate::fat::Disk for Log {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Log {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            self.1.extend((0..buf.len().div_ceil(SECTOR) as u32).map(|i| lba + i));
+            self.0.write(lba, buf)
+        }
+    }
+
+    /// The first course on a card without `\Courses` makes it: a cut after every sector leaves the volume clean but
+    /// for what it had lost and the file's chain (or the new folder's cluster), never a course in part; the folder's
+    /// entry torn every 8 bytes leaves no course and a volume fsck takes (without the orphan check), but for one known
+    /// gap (2026-11-08, reported): a tear inside the 8.3 entry after its name and before its cluster leaves a live
+    /// `\Courses` on cluster 0 (`Fat::mkdir` writes its entry in one write, fat/write.rs "A create or a folder's
+    /// entry is still one write"). Then every later course send answers I/O and writes nothing, until a computer's
+    /// chkdsk mends the entry; nothing else on the volume is touched.
+    #[test]
+    fn a_cut_while_the_first_course_makes_its_folder() {
+        let (base, file, to) = (no_courses(), turns(), course("Zig zag"));
+        cut_every_write(base.clone(), &file, &to, None);
+        let lost0 = fsck(&base).unwrap();
+        // the folder's entry: the last write to the root directory (its first cluster: the test volume's root)
+        let mut log = Log(Ram(base.clone(), 0), Vec::new());
+        send(&mut log, &file, &to).unwrap();
+        let root = {
+            let fat = Fat::mount(&mut log.0).unwrap();
+            let lba = fat.lba(fat.root().cluster);
+            lba..lba + fat.cluster_bytes() / SECTOR as u32
+        };
+        let at = log.1.iter().rposition(|s| root.contains(s)).unwrap() as u32;
+        let mut gap = 0;
+        for keep in (1..SECTOR).step_by(8) {
+            let mut t = crate::fat::write::tests::Torn { ram: Ram(base.clone(), 0), budget: at, keep, cut_at: 0 };
+            assert_eq!(send(&mut t, &file, &to), Err(Status::Io), "{keep} bytes");
+            assert_eq!(sent(&t.ram.0, &to, &file), None, "{keep} bytes");
+            match fsck_torn(&t.ram.0) {
+                Ok(lost) => assert!(lost <= lost0 + 1, "{keep} bytes: {lost} lost"),
+                Err(e) => {
+                    // the known gap: \Courses live on cluster 0, and a send after it refused, nothing written
+                    let mut d = Ram(t.ram.0.clone(), 0);
+                    let mut fat = Fat::mount(&mut d).unwrap();
+                    assert_eq!(fat.open(&mut d, COURSES).err(), Some(Error::Corrupt), "{keep} bytes: {e}");
+                    let img = d.0.clone();
+                    assert_eq!(send(&mut d, &file, &to), Err(Status::Io), "{keep} bytes");
+                    assert!(d.0 == img, "{keep} bytes: nothing written");
+                    gap += 1;
+                }
+            }
+        }
+        std::println!("torn \\Courses entry: {gap} of 64 tears leave it on cluster 0");
+        assert!(gap <= 2, "{gap}");
     }
 
     /// And for its delete.
     #[test]
     fn a_cut_at_every_write_of_a_course_delete() {
-        cut_every_delete(volume(), &turns(), &course("Zig zag"), Some("course_cut_mid_delete_lost"));
+        cut_every_delete(volume(), &turns(), &course("Zig zag"), Some("course_cut_mid_delete"));
         cut_every_delete(volume(), &turns(), &course(LONG), None);
         cut_every_delete(courses_at_slot_15(), &turns(), &course(LONG), None);
     }

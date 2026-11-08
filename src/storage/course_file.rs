@@ -375,9 +375,6 @@ impl Courses {
 
     /// Lists the course files (their folders only: quick); their lengths are measured by the next steps.
     pub fn open(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
-        if matches!(self.job, Job::Measure { .. }) {
-            self.job = Job::Idle;
-        }
         self.relist(d)?;
         self.next_job();
         Ok(())
@@ -387,6 +384,10 @@ impl Courses {
     /// deleted one while COURSES was not shown. Never while a course is read to follow: its place in the list is how
     /// it is found when it ends.
     pub fn relist(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
+        // a length being measured: its place in the list may now be another file's
+        if matches!(self.job, Job::Measure { .. }) {
+            self.job = Job::Idle;
+        }
         self.list.read(d)?;
         self.stale = false;
         Ok(())
@@ -787,6 +788,19 @@ pub(crate) mod tests {
         let k = (0..c.list.len()).find(|&i| c.list.get(i).unwrap().name() == "CUT").unwrap();
         assert_eq!(load(&mut c, &mut d, k), Progress::Loaded(false));
         assert_eq!(c.on, None);
+    }
+
+    /// A list read again measures nothing: a length being measured is dropped (its place may be another file's).
+    #[test]
+    fn a_relist_drops_a_measure() {
+        let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut c = Courses::new();
+        c.open(&mut d).unwrap();
+        assert!(c.measuring());
+        c.stale = true;
+        c.relist(&mut d).unwrap();
+        assert!(!c.measuring() && !c.stale);
+        assert_eq!(c.step(&mut d, 4096), Progress::Idle);
     }
 
     /// A long file name is listed (its extension kept), and a second open keeps the lengths measured.
