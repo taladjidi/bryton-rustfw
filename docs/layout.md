@@ -472,5 +472,6 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `app/ios/App/RideDetail.swift`: the viewer (summary grid, graphs, laps, zones, curve, the FTP / max HR sheet).
   `RideMap.swift`: the track on an `MKMapView` with IGN Plan v2 tiles inside France.
 - `app/core/src/intervals.rs`: the Intervals.icu athlete JSON parsed (`intervals_parse`, serde_json) and merged into the unit's profile (`merge_unit_profile`), with its tests and fuzz. `app/ios/App/IntervalsClient.swift`: the Keychain, the URLSession call and the sync rules.
+- `app/core/src/calendar.rs`: Intervals.icu's calendar events parsed and settled against what this app sent (`calendar_parse`, `calendar_to_fetch`, `calendar_settle`), a ZWO converted to the unit's file (`plan_workout`), the upload answer (`upload_outcome`). `app/ios/App/IntervalsLoop.swift`: the network calls, the uploaded and sent sets, the loop; `IntervalsViews.swift`: its section, switches and ride link.
 - `app/core/src/summary.rs`: the ride brief the list caches, the load (Intervals.icu's definitions), `weekly_totals`; `summary_tests.rs`: its tests and fuzz. `demo_tests.rs`: the demo unit's dates.
   `app/ios/App/RideLibrary.swift`: the summary cache, the weekly panel and the row texts.

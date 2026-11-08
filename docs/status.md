@@ -24,6 +24,10 @@ names). A feature not listed here was seen on the unit. What was fully seen is i
 
 ### Phone and phone app
 
+**Intervals.icu upload and planned workouts (docs/app.md "Rides up to Intervals.icu", "Planned workouts from Intervals.icu to the unit")**
+
+Seen: core tests, and the Simulator in Demo mode (canned calendar, workouts sent to the fake unit, ride checks). Not seen against the real account: a real key must upload a new ride once (201), answer 200 for the same file again (it must count as uploaded, and the link must open the activity), and a planned workout of the next 7 days must come down as `.zwo` through `/events/{id}/download.zwo` (the route and the plain `/events` list are inferred). Not seen on the unit: a planned workout arriving in its workout list through an EMMC_WRITE build, a move on Intervals.icu deleting the old file, and a rider's action in the middle of a calendar write (the write is dropped; the unit's reaction to the next WRITE_BEGIN is unverified).
+
 **Profile from Intervals.icu (docs/app.md "Profile from Intervals.icu")**
 
 Seen: app core tests (parse, merge, fuzz, a fake unit round trip) and the Simulator build with the Demo answer. Seen on the unit? No, and not against the real Intervals.icu API: with an EMMC_WRITE build, a real key and the unit connected, "Sync from Intervals.icu" must change the FTP in the unit's menu, and it must still be there after a restart; during a ride the line must say it will try again, and on a build without card writes it must say READ ONLY.

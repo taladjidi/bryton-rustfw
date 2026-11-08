@@ -13,6 +13,7 @@ struct ContentView: View {
     @StateObject private var rides = RideBrowser()
     @StateObject private var library = RideLibrary()
     @StateObject private var intervals = IntervalsSync()
+    @StateObject private var loop = IntervalsLoop()
     @State private var profile = false
     @StateObject private var store = WorkoutStore()
     @State private var path: [WorkoutRoute] = []
@@ -20,7 +21,7 @@ struct ContentView: View {
 
     // the environment objects sit outside the stack: the sheets and the pushed pages are presented from inside it
     var body: some View {
-        stack.environmentObject(rides).environmentObject(intervals)
+        stack.environmentObject(rides).environmentObject(intervals).environmentObject(loop)
     }
 
     private var stack: some View {
@@ -43,6 +44,7 @@ struct ContentView: View {
                         Text(rides.debug).font(.caption2.monospaced()).foregroundStyle(.secondary)
                     }
                 }
+                IntervalsSection(loop: loop)
                 if let m = rides.message ?? library.error {
                     Section { Text(m).foregroundStyle(.orange) }
                 }
@@ -50,7 +52,8 @@ struct ContentView: View {
                     ForEach(rides.rides, id: \.name) { r in
                         RideRow(
                             rides: rides, ride: r, brief: library.briefs[r.name],
-                            downloaded: rides.downloaded.contains(r.name), active: rides.phase == .downloading(r.name),
+                            downloaded: rides.downloaded.contains(r.name), uploaded: loop.uploaded[r.name] != nil,
+                            active: rides.phase == .downloading(r.name),
                             locked: rides.phase == .listing || (rides.isDownloading && rides.phase != .downloading(r.name))
                         ).equatable()
                     }
@@ -67,7 +70,11 @@ struct ContentView: View {
                 WorkoutSection(rides: rides)
                 PhoneWorkoutSection(store: store) { editing = $0 }
             }
-            .onChange(of: rides.downloaded) { _, d in library.catchUp(rides.rides, downloaded: d) }
+            .onChange(of: rides.downloaded) { _, d in
+                library.catchUp(rides.rides, downloaded: d)
+                loop.uploadPass()  // a ride just synced goes up
+            }
+            .onChange(of: intervals.hasKey) { _, has in loop.keyChanged(has) }
             .onChange(of: rides.rides) { _, l in library.catchUp(l, downloaded: rides.downloaded) }
             .sheet(item: $editing) { WorkoutEditor(target: $0, store: store, rides: rides) }
             .navigationDestination(for: WorkoutRoute.self) { r in
@@ -78,11 +85,16 @@ struct ContentView: View {
                 } }
             }
             .navigationTitle("Bike computer")
-            .task { await intervals.sync(rides: rides, force: false) }
+            .task {
+                loop.attach(rides)
+                loop.keyChanged(intervals.hasKey)
+                await intervals.sync(rides: rides, force: false)
+            }
             .refreshable {
                 link.refresh()
                 rides.refresh()
                 await intervals.sync(rides: rides, force: false)
+                loop.kick(force: true)
                 try? await Task.sleep(nanoseconds: 800_000_000)
             }
             .navigationDestination(item: $rides.saved) { s in RideDetail(url: s.url) }
@@ -159,18 +171,20 @@ struct RideRow: View, Equatable {
     let ride: RideEntry
     let brief: RideBrief?
     let downloaded: Bool
+    let uploaded: Bool
     let active: Bool
     let locked: Bool
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
 
-    init(rides: RideBrowser, ride: RideEntry, brief: RideBrief?, downloaded: Bool, active: Bool, locked: Bool) {
-        (self.rides, self.ride, self.brief, self.downloaded, self.active, self.locked) =
-            (rides, ride, brief, downloaded, active, locked)
+    init(rides: RideBrowser, ride: RideEntry, brief: RideBrief?, downloaded: Bool, uploaded: Bool, active: Bool, locked: Bool) {
+        (self.rides, self.ride, self.brief, self.downloaded, self.uploaded, self.active, self.locked) =
+            (rides, ride, brief, downloaded, uploaded, active, locked)
     }
 
     static func == (a: RideRow, b: RideRow) -> Bool {
-        a.ride == b.ride && a.brief == b.brief && a.downloaded == b.downloaded && a.active == b.active && a.locked == b.locked
+        a.ride == b.ride && a.brief == b.brief && a.downloaded == b.downloaded && a.uploaded == b.uploaded && a.active == b.active
+            && a.locked == b.locked
     }
 
     var body: some View {
@@ -185,6 +199,9 @@ struct RideRow: View, Equatable {
             VStack(alignment: .leading, spacing: 4) {
                 Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
                 Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
+                if uploaded {
+                    Label("Intervals.icu", systemImage: "checkmark.circle").font(.caption2).foregroundStyle(.green)
+                }
                 if active { RideProgress(rides: rides) }
             }
         }

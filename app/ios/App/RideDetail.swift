@@ -48,6 +48,7 @@ struct ProfileSheet: View {
                 } footer: {
                     Text("The key is in Intervals.icu's Settings, Developer Settings. It is kept in the Keychain.")
                 }
+                if intervals.hasKey { IntervalsOptions() }
             }
             .navigationTitle("Profile")
             .toolbar { Button("Done") { dismiss() } }
@@ -143,6 +144,7 @@ struct RideDetail: View {
             if let r = ride {
                 VStack(alignment: .leading, spacing: 20) {
                     SummaryGrid(s: r.summary)
+                    IntervalsRideLink(url: url)
                     if !prep.coords.isEmpty {
                         RideMap(points: prep.coords, selected: selX.flatMap { x in Prep.nearest(prep.geo, x) { $0.x }?.c })
                             .frame(height: 280)

@@ -40,11 +40,17 @@ enum Keychain {
     }
 }
 
-struct IntervalsFailure: Error { let text: String }
+struct IntervalsFailure: Error {
+    let text: String
+    /// The key was refused: retrying without a new key is pointless.
+    var auth = false
+    /// Worth trying again later (network, 429, 5xx); false for a file or request Intervals.icu will always refuse.
+    var retry = true
+}
 
 enum IntervalsClient {
     /// No cache or cookies on disk: the athlete's data is not kept by the system.
-    private static let session = URLSession(configuration: .ephemeral)
+    static let session = URLSession(configuration: .ephemeral)
 
 
     /// The athlete with its Ride settings, or why not, in plain words. The key is never put in a message.

@@ -42,6 +42,7 @@ struct WorkoutSection: View {
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
     @State private var deleting: WorkoutFile?
+    @EnvironmentObject private var loop: IntervalsLoop
 
     var body: some View {
         Section("Workouts") {
@@ -50,6 +51,9 @@ struct WorkoutSection: View {
                     NavigationLink(value: WorkoutRoute(key: f.key)) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pretty(w.name))
+                            if loop.sentHashes.contains(fileCrc(bytes: f.bytes)) {
+                                Text("from Intervals.icu").font(.caption2).foregroundStyle(.green)
+                            }
                             HStack {
                                 Text(day(f.key))
                                 Spacer()

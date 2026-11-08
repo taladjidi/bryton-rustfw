@@ -335,6 +335,54 @@ forum guide https://forum.intervals.icu/t/api-access-to-intervals-icu/609):
 - **Without a key** the sheet's FTP and max HR still work, and changing them is also pushed to the unit (source "this phone").
 - **Demo:** under `#if DEBUG` and `-demo` the answer is a made-up athlete (FTP 265), no network.
 
+## Rides up to Intervals.icu
+
+Looked up 2026-11-08 (OpenAPI spec https://intervals.icu/api/v1/docs; the core's `calendar.rs` cites the same pages):
+- **Request:** `POST /api/v1/athlete/{id}/activities`, multipart field `file` (a FIT). The spec: "Activities are de-duped
+  using a hash of the file. Response code is 201 if at least one new activity was created and 200 otherwise (all dups)".
+  So 201 and 200 both count as uploaded (`upload_outcome`); the activity id is `activities[0].id`, and that a duplicate
+  answer may have none is inferred. 400, 413, 415 and 422 mean the file itself is refused: that ride is marked rejected and
+  not tried again; 401 and 403, 429, 5xx and a network error are retried with a backoff (2, 4, 8 minutes, an hour at most),
+  never in a loop.
+- **When:** after a ride reaches the phone (the background sync or a tap), at launch, on pull to refresh, and on a
+  10 minute clock for what is pending. One ride at a time, newest first. Only rides that started after the switch
+  "Upload rides to Intervals.icu" was turned on (on by itself when the first key is stored); "Upload older rides (n)" in
+  the profile sheet sends the others. A ride still being recorded is never listed by the unit.
+- **Kept:** name to activity id in UserDefaults (`ivUploaded`), rejected names (`ivRejected`).
+- **Shown:** a green "Intervals.icu" check on the ride's row, "Open on Intervals.icu" on its page (the page URL
+  `https://intervals.icu/activities/<id>` is inferred: the spec has no web URLs), a status line on the main screen
+  (last upload, errors in words).
+
+## Planned workouts from Intervals.icu to the unit
+
+- **Read:** `GET /api/v1/athlete/{id}/events?oldest=&newest=&category=WORKOUT` for today and the next 7 days (the spec
+  lists the route as `events{format}`, `.csv` being the alternative; the plain form is inferred). `calendar_parse` keeps
+  WORKOUT events with an integer id and a date in the window; the rest is dropped.
+- **Convert:** `GET .../events/{eventId}/download.zwo` ("Download a planned workout in zwo, mrc, erg or fit format"; the
+  dot of `{ext}` is inferred), then the editor's `import_workout` and `encode_workout`, so the unit's limits apply:
+  over 64 items, 96 steps or 8 KB is shown in the list as "Not sent: <reason>" and not sent.
+- **Send:** each file goes to its day with the file service's write (WRITE_BEGIN ...), when the unit is connected and
+  idle and the ride sync has nothing left to download (`RideBrowser.autoCalendar`, from the one-second tick). The rider's
+  actions come first: anything the rider starts puts a write under way back at the front of the queue. A failure drops the
+  rest; the loop plans again from its records.
+- **Sent set** (`ivSent`): event id, day, the event's `updated` stamp and the CRC-32 of the file. An unchanged event is not
+  downloaded again; a restamped one with the same file only gets its record refreshed; the unit also dedupes by CRC.
+  `calendar_settle` decides: moved or edited means delete the old file, then send; deleted, out of the window or no
+  longer holdable means delete from the unit. Only files this app sent are deleted (found in the unit's list by day and
+  CRC, from a list read just before, with the key and check of that list); days before today are never touched.
+- **When:** at launch and pull to refresh, then at most hourly (a failure asks again in 15 minutes). Switch "Send planned
+  workouts to the unit" (on with the first key).
+- **Shown:** the main screen's Intervals.icu section lists each planned workout (waiting, on the unit, or why not sent);
+  the unit's own list marks the files this app sent "from Intervals.icu".
+- **Demo:** under `#if DEBUG` and `-demo`, a canned calendar (four workouts, the last with 70 steps) and upload answer,
+  no network; the demo unit takes the writes.
+
+![The Intervals.icu section](img/app-intervals.png)
+
+Tests (`cargo test` in `app/core`, no network): the events JSON (missing fields, wrong types, the window and category), the
+sent set (a re-run sends nothing, moved, edited, deleted, past days), a sample Intervals ZWO through import and encode into
+the unit's limits, the upload answers, and a fuzz over events and settle.
+
 ## Fast link: the chip app's layer and the speed model
 
 Moved from docs/status.md (2026-11-07).
