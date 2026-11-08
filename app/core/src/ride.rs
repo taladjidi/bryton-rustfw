@@ -155,7 +155,7 @@ pub struct RideView {
     pub samples: Vec<TrackSample>,
 }
 
-fn num(f: &[FitDataField], name: &str) -> Option<f64> {
+pub(crate) fn num(f: &[FitDataField], name: &str) -> Option<f64> {
     let v: f64 = f.iter().find(|x| x.name() == name)?.value().clone().try_into().ok()?;
     v.is_finite().then_some(v)
 }
@@ -207,21 +207,41 @@ fn decimate(all: Vec<TrackSample>) -> Vec<TrackSample> {
     keep.into_iter().filter_map(|i| all.get(i).cloned()).collect()
 }
 
-/// Decodes a FIT file's bytes. `ftp` (W) and `max_hr` (bpm) set the intensity and the zones; 0 leaves them out.
-#[uniffi::export]
-pub fn analyze_ride(bytes: Vec<u8>, ftp: u16, max_hr: u16) -> Result<RideView, RideError> {
-    // the crate is not fuzzed by us: a panic inside it is an unreadable file, not a crash of the app
+/// The FIT file's messages; a ride never finalized or with a damaged tail (power cut) still has its records, so it is
+/// read again without the CRCs. The crate is not fuzzed by us: a panic inside it is an unreadable file, not a crash.
+pub(crate) fn parse_msgs(bytes: &[u8]) -> Result<Vec<FitDataRecord>, RideError> {
     let parse = |lax: bool| {
         let opts: HashSet<DecodeOption> = if lax {
             [DecodeOption::SkipDataCrcValidation, DecodeOption::SkipHeaderCrcValidation].into()
         } else {
             HashSet::new()
         };
-        std::panic::catch_unwind(|| from_bytes_with_options(&bytes, &opts)).ok().and_then(Result::ok)
+        std::panic::catch_unwind(|| from_bytes_with_options(bytes, &opts)).ok().and_then(Result::ok)
     };
-    // a ride never finalized or with a damaged tail (power cut) still has its records: retry without the CRCs
-    let msgs = parse(false).or_else(|| parse(true)).ok_or(RideError::Unreadable)?;
-    view(&msgs, ftp, max_hr)
+    parse(false).or_else(|| parse(true)).ok_or(RideError::Unreadable)
+}
+
+/// The sample of a `record` message; `t0` is the first record's timestamp (set by the first call).
+pub(crate) fn sample_of(f: &[FitDataField], t0: &mut Option<f64>) -> Option<TrackSample> {
+    let ts = num(f, "timestamp")?;
+    let t0 = *t0.get_or_insert(ts);
+    Some(TrackSample {
+        t_s: u32_of(Some(ts - t0)).unwrap_or(0),
+        dist_m: num(f, "distance").unwrap_or(0.0),
+        lat: num(f, "position_lat").map(degrees),
+        lon: num(f, "position_long").map(degrees),
+        alt_m: first(f, &["enhanced_altitude", "altitude"]),
+        speed_ms: first(f, &["enhanced_speed", "speed"]),
+        hr: u16_of(num(f, "heart_rate")),
+        power: u16_of(num(f, "power")),
+        cadence: u16_of(num(f, "cadence")),
+    })
+}
+
+/// Decodes a FIT file's bytes. `ftp` (W) and `max_hr` (bpm) set the intensity and the zones; 0 leaves them out.
+#[uniffi::export]
+pub fn analyze_ride(bytes: Vec<u8>, ftp: u16, max_hr: u16) -> Result<RideView, RideError> {
+    view(&parse_msgs(&bytes)?, ftp, max_hr)
 }
 
 fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideError> {
@@ -231,21 +251,7 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
     for m in msgs {
         let f = m.fields();
         match m.kind() {
-            MesgNum::Record => {
-                let Some(ts) = num(f, "timestamp") else { continue };
-                let t0 = *t0.get_or_insert(ts);
-                samples.push(TrackSample {
-                    t_s: u32_of(Some(ts - t0)).unwrap_or(0),
-                    dist_m: num(f, "distance").unwrap_or(0.0),
-                    lat: num(f, "position_lat").map(degrees),
-                    lon: num(f, "position_long").map(degrees),
-                    alt_m: first(f, &["enhanced_altitude", "altitude"]),
-                    speed_ms: first(f, &["enhanced_speed", "speed"]),
-                    hr: u16_of(num(f, "heart_rate")),
-                    power: u16_of(num(f, "power")),
-                    cadence: u16_of(num(f, "cadence")),
-                });
-            }
+            MesgNum::Record => samples.extend(sample_of(f, &mut t0)),
             MesgNum::Session if session.is_none() => session = Some(f),
             MesgNum::Lap => laps.push(RideLap {
                 time_s: u32_of(num(f, "total_timer_time")).unwrap_or(0),

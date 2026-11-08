@@ -126,6 +126,9 @@ struct RideDetail: View {
     let url: URL
     @AppStorage("ftp") private var ftp = 200
     @AppStorage("maxHR") private var maxHR = 190
+    @AppStorage("weight") private var weight = 0
+    @AppStorage("wPrime") private var wPrime = 0
+    @State private var insight: RideInsight?
     @State private var ride: RideView?
     @State private var prep = Prep()
     @State private var error: String?
@@ -144,7 +147,11 @@ struct RideDetail: View {
                 VStack(alignment: .leading, spacing: 20) {
                     SummaryGrid(s: r.summary)
                     if !prep.coords.isEmpty {
-                        RideMap(points: prep.coords, selected: selX.flatMap { x in Prep.nearest(prep.geo, x) { $0.x }?.c })
+                        RideMap(
+                            points: prep.coords, selected: selX.flatMap { x in Prep.nearest(prep.geo, x) { $0.x }?.c },
+                            climbs: (insight?.climbs ?? []).map {
+                                ClimbLine.Spec(coords: $0.coords(in: r.samples), color: UIColor(Color(rgb: $0.color)))
+                            })
                             .frame(height: 280)
                             .overlay(alignment: .bottomTrailing) {
                                 if RideMap.usesIGN(prep.coords) {
@@ -155,6 +162,7 @@ struct RideDetail: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     graphs.id("graphs")
+                    if let i = insight { insightSections(r, i) }
                     if !r.summary.laps.isEmpty { LapList(laps: r.summary.laps).id("laps") }
                     if r.summary.powerZoneS.contains(where: { $0 > 0 }) {
                         ZoneBars(title: "Power zones", secs: r.summary.powerZoneS.map(Int.init), color: .orange)
@@ -194,6 +202,11 @@ struct RideDetail: View {
         .sheet(isPresented: $sharing) { ShareSheet(url: url) }
         .sheet(isPresented: $profile) { ProfileSheet() }
         .task(id: "\(ftp) \(maxHR)") { await load() }
+        // off the main thread and cached for the session; CP is the FTP, as the unit takes it
+        .task(id: "\(ftp) \(weight) \(wPrime)") {
+            insight = await InsightCache.shared.insight(
+                url, weight: UInt16(clamping: weight), cp: UInt16(clamping: ftp), wPrime: UInt16(clamping: wPrime))
+        }
         .onChange(of: byTime) { _, t in
             selX = nil
             if let r = ride { prep = Prep(r, byTime: t) }
@@ -222,8 +235,21 @@ struct RideDetail: View {
                 Text("Time").tag(true)
             }
             .pickerStyle(.segmented)
-            ForEach(prep.series) { s in MetricChart(series: s, byTime: byTime, selX: $selX) }
+            ForEach(prep.series) { s in
+                MetricChart(series: s, byTime: byTime, selX: $selX, climbs: s.id.hasPrefix("Altitude") ? (insight?.climbs ?? []) : [])
+            }
         }
+    }
+
+    @ViewBuilder private func insightSections(_ r: RideView, _ i: RideInsight) -> some View {
+        if !i.climbs.isEmpty { ClimbsSection(climbs: i.climbs).id("climbs") }
+        if !i.wbal.isEmpty { WbalChart(points: i.wbal, minJ: i.wbalMinJ).id("wbal") }
+        if let d = i.decoupling { DecouplingRow(d: d).id("decoupling") }
+        if i.dfa.count > 1 { DfaChart(points: i.dfa, vt1: i.vt1, vt2: i.vt2).id("dfa") }
+        CompareSection(
+            url: url, view: r, climbs: i.climbs, weight: UInt16(clamping: weight), cp: UInt16(clamping: ftp),
+            wPrime: UInt16(clamping: wPrime)
+        ).id("compare")
     }
 }
 
@@ -231,6 +257,8 @@ struct MetricChart: View {
     let series: Series
     let byTime: Bool
     @Binding var selX: Double?
+    /// The climbs, drawn over the altitude line in their grade colour.
+    var climbs: [ClimbStat] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -241,11 +269,20 @@ struct MetricChart: View {
                     Text(String(format: "%.0f", p.y)).font(.subheadline.monospacedDigit()).foregroundStyle(series.color)
                 }
             }
-            Chart(series.pts) { p in
-                if series.area {
-                    AreaMark(x: .value("x", p.x), y: .value("y", p.y)).foregroundStyle(series.color.opacity(0.3))
+            Chart {
+                ForEach(series.pts) { p in
+                    if series.area {
+                        AreaMark(x: .value("x", p.x), y: .value("y", p.y)).foregroundStyle(series.color.opacity(0.3))
+                    }
+                    LineMark(x: .value("x", p.x), y: .value("y", p.y)).foregroundStyle(series.color)
                 }
-                LineMark(x: .value("x", p.x), y: .value("y", p.y)).foregroundStyle(series.color)
+                ForEach(climbs.indices, id: \.self) { i in
+                    let r = climbs[i].xRange(byTime: byTime)
+                    ForEach(series.pts.filter { r.contains($0.x) }) { p in
+                        LineMark(x: .value("x", p.x), y: .value("y", p.y), series: .value("climb", i))
+                            .foregroundStyle(Color(rgb: climbs[i].color)).lineStyle(StrokeStyle(lineWidth: 4))
+                    }
+                }
             }
             .chartXSelection(value: $selX)
             .chartXAxisLabel(byTime ? "min" : "km")

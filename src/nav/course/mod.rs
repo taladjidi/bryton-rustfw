@@ -1019,7 +1019,7 @@ impl Course {
 
     /// The climbs of any profile `total` m long whose altitude (dm) at a distance (m) is `alt_at`, by the same
     /// definition: a course's own, and the road ahead's (`climbs_ahead`).
-    pub(crate) fn climbs_of(total: u32, alt_at: impl Fn(u32) -> Option<i32>) -> ([Climb; CLIMBS], usize) {
+    pub fn climbs_of(total: u32, alt_at: impl Fn(u32) -> Option<i32>) -> ([Climb; CLIMBS], usize) {
         Self::runs_of(total, alt_at, MIN_LEN_M, MIN_GRADE_X10)
     }
 

@@ -17,7 +17,9 @@ pub mod draft;
 pub mod files;
 #[cfg(test)]
 mod files_tests;
+pub mod fitness;
 pub mod import;
+pub mod insight;
 pub mod intervals;
 pub mod ride;
 pub mod summary;
