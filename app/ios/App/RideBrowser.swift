@@ -129,7 +129,7 @@ final class RideBrowser: ObservableObject {
             self.workoutsFresh = false
             self.workoutsListed = false
             self.syncOff = false  // a reconnect tries the sync again
-            if case .downloading = self.phase { self.message = "Link lost, resuming..." }
+            if case .downloading = self.phase { self.message = "Link lost, resuming…" }
             self.dropProfileExchange()  // the pending profile goes on the next connection
             if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
@@ -433,9 +433,7 @@ final class RideBrowser: ObservableObject {
 
     private func profileDone(_ p: UnitProfile) {
         guard let pend = pendingProfile else { return endProfileExchange() }
-        let f = DateFormatter()
-        f.dateFormat = "d MMM HH:mm"
-        var line = "Unit profile: FTP \(p.ftp) W (from \(pend.source), \(f.string(from: pend.at)))"
+        var line = "Unit profile: FTP \(p.ftp) W (from \(pend.source), \(Fmt.when(pend.at)))"
         if let m = merged, !m.skipped.isEmpty { line += ". Not sent: " + m.skipped.joined(separator: "; ") }
         (profileLine, pendingProfile) = (line, nil)
         endProfileExchange()
@@ -456,7 +454,7 @@ final class RideBrowser: ObservableObject {
             }
         case .readOnly?:
             pendingProfile = nil
-            profileLine = "Unit profile: READ ONLY, this unit's software does not save settings from the phone yet"
+            profileLine = "Unit profile: read only, this unit's software does not save settings from the phone yet"
         case let e?:
             pendingProfile = nil
             profileLine = "Unit profile: " + Self.text(e)
@@ -471,7 +469,7 @@ final class RideBrowser: ObservableObject {
         guard ready, client.silent(nowMs: Self.now) else { return }
         if profileInFlight { client.abort(); profileFailed(nil); return }
         if case .downloading = phase {
-            message = "No answer, resuming..."
+            message = "No answer, resuming…"
             resume()
         } else if phase == .workouts {
             if listingWorkouts { refreshWorkouts() } else { resume() }
@@ -549,7 +547,7 @@ final class RideBrowser: ObservableObject {
             if busyRetries > 20 {
                 fail("The unit is busy (riding or on USB). Try again later.")
             } else {
-                message = "The unit is busy (riding or on USB). Waiting..."
+                message = "The unit is busy (riding or on USB). Waiting…"
                 retry?.cancel()
                 let item = DispatchWorkItem { [weak self] in self?.resume() }
                 retry = item
@@ -637,7 +635,7 @@ final class RideBrowser: ObservableObject {
 
     /// "1 Nov 2026, 09:00" from `YYMMDDhhmmss`.
     static func title(_ name: String) -> String {
-        date(name)?.formatted(date: .abbreviated, time: .shortened) ?? name
+        date(name).map(Fmt.when) ?? name
     }
 }
 

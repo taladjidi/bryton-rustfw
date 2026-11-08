@@ -456,6 +456,12 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   iOS targets, bindings, XCFramework into the ignored `Generated/`). `Icon/icon.svg` (the icon's source: Ferris on a
   bike computer screen), `Icon/ferris-rustacean.svg` (Ferris as downloaded, CC0), `Icon/render.py` (renders the
   light, dark and tinted 1024 px PNGs into `App/Assets.xcassets/AppIcon.appiconset`).
+  `App/Theme.swift` (colour tokens `Tok`, `Notice`, the numeral modifier), `App/Fmt.swift` (the one formatting helper),
+  `App/LicencesView.swift`, `App/Fonts/` (Barlow Semi Condensed Bold and its OFL.txt, copied from `tools/fonts/`),
+  `App/Assets.xcassets/*.colorset` (the colour tokens).
+- `app/core/src/theme.rs`: the colour token table and its tests against the colour sets, the firmware's constants and
+  the contrast rules; `zone_upper` for the viewer's zone ranges. `app/core/src/fmt.rs`: clock-style durations.
+- `docs/review-app-ui-2026-11-08.md`: the UI review of the iPhone app (findings P1 to P3, tokens); part A is done.
 - `link.x`, `tools/pack.py`: memory map and the update file. `tools/pack.py` re-checks what the stock updater checks.
 - `app/core/src/files.rs`: the phone's file service client (`FileClient`, sans-IO, UniFFI): LIST / READ commands from the
   firmware's own `filesvc` encoder, Data frames in, resume from the bytes kept, progress and speed. `files_tests.rs`: its

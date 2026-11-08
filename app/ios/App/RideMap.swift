@@ -47,7 +47,7 @@ struct RideMap: UIViewRepresentable {
                 return r
             }
             let r = MKPolylineRenderer(overlay: overlay)
-            r.strokeColor = .systemOrange
+            r.strokeColor = Tok.ui("AccentColor")
             r.lineWidth = 4
             r.lineJoin = .round
             return r
@@ -57,9 +57,9 @@ struct RideMap: UIViewRepresentable {
             guard let a = a as? MKPointAnnotation else { return nil }
             let v = MKMarkerAnnotationView(annotation: a, reuseIdentifier: nil)
             switch a.title {
-            case "Start": v.markerTintColor = .systemGreen; v.glyphText = "S"
-            case "End": v.markerTintColor = .systemRed; v.glyphText = "E"
-            default: v.markerTintColor = .systemBlue; v.glyphText = nil
+            case "Start": v.markerTintColor = Tok.ui("ok"); v.glyphText = "S"
+            case "End": v.markerTintColor = Tok.uiZone(7); v.glyphText = "E"
+            default: v.markerTintColor = Tok.uiZone(1); v.glyphText = nil
             }
             return v
         }
@@ -217,7 +217,7 @@ final class ClimbLine: MKPolyline {
         let coords: [CLLocationCoordinate2D]
         let color: UIColor
     }
-    var color = UIColor.systemRed
+    var color = Tok.uiZone(5)
 
     convenience init(spec: Spec) {
         self.init(coordinates: spec.coords, count: spec.coords.count)

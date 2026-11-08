@@ -23,7 +23,9 @@ pub mod import;
 pub mod insight;
 pub mod intervals;
 pub mod ride;
+pub mod fmt;
 pub mod summary;
+pub mod theme;
 #[cfg(test)]
 mod summary_tests;
 pub mod workout;

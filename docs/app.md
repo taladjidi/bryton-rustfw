@@ -11,6 +11,34 @@ otherwise. It looks for the name "S510". Confirmed on the owner's iPhone (2026-1
 the battery, through `retrieveConnectedPeripherals`. The scan's filter on 0x180F is inferred: whether the unit's
 advertisement carries 0x180F is not verified.
 
+## Look and feel
+
+Reviewed 2026-11-08 (docs/review-app-ui-2026-11-08.md); part A is done: the colours and the numeral face are the
+unit's, the numbers are formatted in one place, and the P1 findings are fixed.
+
+- **Colour tokens**, one table in `app/core/src/theme.rs` (`TOKENS`), one Color Set per token in
+  `app/ios/App/Assets.xcassets` (light and dark), read through `Tok` in `App/Theme.swift`. Tests fail when a colour
+  set differs from the table, when a token that must equal the firmware's colour does not, or when a contrast falls
+  under its rule (4.5:1 for text tokens, 3:1 for the zones, against the iOS card and background, light and dark):
+  - light: `Theme::LIGHT` (src/ui/theme.rs): accent #B04000, zones #2F6259 #2F6223 #947D31 #8F572A #7C203B #442D7C
+    #3C3748, ok #007000, warn #8A6400, alarm #D00000;
+  - dark: accent `ACCENT` #FFA600, zones 1 to 4 `ZONE_COLORS` (src/training/ride.rs) #4A9284 #4A9231 #DEBA4A #D68242,
+    zones 6 and 7 from `Theme::OUTDOOR` #885AF8 #786E90 (DARK's own are 3.1 and 2.8 on black), zone 5 lifted to
+    #E0486F (DARK's #BD315A is 3.0); ok, warn and alarm are iOS's green, yellow and red (#30D158 #FFD60A #FF453A), the
+    firmware's neon ones being too hard on a phone;
+  - derived: `Tok.grade` = zones 2 to 5 by `grade_color`'s bands, `Tok.hrZone` = zones 1 to 5, `Tok.form` as
+    `form_color` (ok, secondary, warn, alarm). Series: speed zone 1, heart rate zone 5, power the accent, cadence
+    zone 2; red is never a series. Errors and warnings are a `Notice` (icon and text in warn or alarm).
+- **Numerals** in Barlow Semi Condensed Bold, the unit's SMOOTH face (`App/Fonts/`, copied from `tools/fonts/`, SIL OFL
+  1.1, text in Profile > Licences). `.numeral(.title3)` (`Theme.swift`) scales with Dynamic Type and turns on tabular
+  figures (`tnum`; the font's default digits differ in width). Used for big numbers only (tiles, weekly panel, lap
+  numbers, readouts, fitness); all text stays SF. The pixel font is not used: a 1 bit face at 2x is blurred on a Retina
+  screen and does not scale.
+- **Formatting** is `App/Fmt.swift`: decimals and dates follow the phone's region (French reads "28,8 km/h"),
+  clock-style durations come from `app/core/src/fmt.rs` (tested there). No `String(format:)` for display anywhere.
+- **Accessibility:** icon buttons, the map, the charts (label, lowest, highest, average) and the zone rows carry
+  VoiceOver text; the viewer's tiles, laps and the weekly panel reflow at large Dynamic Type sizes.
+
 ## Build
 
 Needs Xcode 16 or later, Rust (the pinned toolchain, with `aarch64-apple-ios` and `aarch64-apple-ios-sim`).

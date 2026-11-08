@@ -75,13 +75,6 @@ struct ClimbSlice: Identifiable {
     let pts: [Pt]
 }
 
-extension Color {
-    /// 0xRRGGBB from the core.
-    init(rgb: UInt32) {
-        self.init(red: Double(rgb >> 16 & 255) / 255, green: Double(rgb >> 8 & 255) / 255, blue: Double(rgb & 255) / 255)
-    }
-}
-
 extension ClimbStat {
     /// The track's stretch of the climb, from the viewer's samples.
     func coords(in samples: [TrackSample]) -> [CLLocationCoordinate2D] {
@@ -99,8 +92,6 @@ extension ClimbStat {
     }
 }
 
-private func mmss(_ s: UInt32) -> String { String(format: "%d:%02d", s / 60, s % 60) }
-
 struct ClimbsSection: View {
     let climbs: [ClimbStat]
 
@@ -110,9 +101,9 @@ struct ClimbsSection: View {
             ForEach(climbs.indices, id: \.self) { i in
                 let c = climbs[i]
                 HStack(alignment: .top, spacing: 8) {
-                    RoundedRectangle(cornerRadius: 2).fill(Color(rgb: c.color)).frame(width: 6)
+                    RoundedRectangle(cornerRadius: 2).fill(Tok.grade(Int(c.avgGradeX10))).frame(width: 6)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(i + 1)  \(String(format: "%.1f km", Double(c.lenM) / 1000)) at \(String(format: "%.1f", Double(c.avgGradeX10) / 10)) %, +\(c.gainM) m")
+                        Text("\(i + 1)  \(Fmt.km(Double(c.lenM))) at \(Fmt.dec(Double(c.avgGradeX10) / 10)) %, +\(c.gainM) m")
                             .font(.subheadline.bold())
                         Text(detail(c)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -123,10 +114,10 @@ struct ClimbsSection: View {
     }
 
     private func detail(_ c: ClimbStat) -> String {
-        var t = ["max \(String(format: "%.1f", Double(c.maxGradeX10) / 10)) %", mmss(c.timeS)]
+        var t = ["max \(Fmt.dec(Double(c.maxGradeX10) / 10)) %", Fmt.mmss(c.timeS)]
         if let v = c.vam { t.append("VAM \(v) m/h") }
         if let p = c.avgPower { t.append("\(p) W") }
-        if let w = c.wPerKgX100 { t.append(String(format: "%.1f W/kg", Double(w) / 100)) }
+        if let w = c.wPerKgX100 { t.append("\(Fmt.dec(Double(w) / 100)) W/kg") }
         return t.joined(separator: "  ")
     }
 }
@@ -140,14 +131,14 @@ struct WbalChart: View {
             HStack {
                 Text("W' balance (kJ)").font(.subheadline.bold())
                 Spacer()
-                if let m = minJ { Text(String(format: "lowest %.1f kJ", Double(m) / 1000)).font(.caption).foregroundStyle(.secondary) }
+                if let m = minJ { Text("lowest \(Fmt.dec(Double(m) / 1000)) kJ").font(.caption).foregroundStyle(.secondary) }
             }
             Chart(points.indices, id: \.self) { i in
                 let p = points[i]
                 AreaMark(x: .value("min", Double(p.tS) / 60), y: .value("kJ", Double(p.wbalJ) / 1000))
-                    .foregroundStyle(.purple.opacity(0.3))
+                    .foregroundStyle(Tok.zone(6).opacity(0.3))
                 LineMark(x: .value("min", Double(p.tS) / 60), y: .value("kJ", Double(p.wbalJ) / 1000))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Tok.zone(6))
             }
             .chartXAxisLabel("min")
             .frame(height: 110)
@@ -163,9 +154,9 @@ struct DecouplingRow: View {
             Text("Aerobic decoupling (Pa:HR)").font(.subheadline.bold())
             HStack {
                 // under 5 % is the usual mark of a well-built aerobic base (Friel); inferred, not a diagnosis
-                Text(String(format: "%.1f %%", d.percent)).font(.title3.bold().monospacedDigit())
-                    .foregroundStyle(d.percent < 5 ? .green : .orange)
-                Text(String(format: "%.2f to %.2f W/bpm, first half to second", d.efFirst, d.efSecond))
+                Text("\(Fmt.dec(d.percent)) %").numeral(.title3)
+                    .foregroundStyle(d.percent < 5 ? Tok.ok : Tok.warn)
+                Text("\(Fmt.dec(d.efFirst, 2)) to \(Fmt.dec(d.efSecond, 2)) W/bpm, first half to second")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -182,15 +173,15 @@ struct DfaChart: View {
             Text("DFA alpha1").font(.subheadline.bold())
             Chart {
                 ForEach(points.indices, id: \.self) { i in
-                    LineMark(x: .value("min", Double(points[i].tS) / 60), y: .value("a1", points[i].a1)).foregroundStyle(.teal)
+                    LineMark(x: .value("min", Double(points[i].tS) / 60), y: .value("a1", points[i].a1)).foregroundStyle(Tok.zone(1))
                 }
                 RuleMark(y: .value("VT1", vt1)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                    .foregroundStyle(.green).annotation(position: .top, alignment: .trailing) {
-                        Text(String(format: "%.2f aerobic threshold", vt1)).font(.caption2)
+                    .foregroundStyle(Tok.ok).annotation(position: .top, alignment: .trailing) {
+                        Text("\(Fmt.dec(vt1, 2)) aerobic threshold").font(.caption2)
                     }
                 RuleMark(y: .value("VT2", vt2)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                    .foregroundStyle(.red).annotation(position: .top, alignment: .trailing) {
-                        Text(String(format: "%.2f anaerobic threshold", vt2)).font(.caption2)
+                    .foregroundStyle(Tok.alarm).annotation(position: .top, alignment: .trailing) {
+                        Text("\(Fmt.dec(vt2, 2)) anaerobic threshold").font(.caption2)
                     }
             }
             .chartXAxisLabel("min")
@@ -200,7 +191,7 @@ struct DfaChart: View {
     }
 }
 
-/// "Compare with...": another synced ride's power curve over this one's, and the climbs the two share.
+/// "Compare with…": another synced ride's power curve over this one's, and the climbs the two share.
 struct CompareSection: View {
     let url: URL
     let view: RideView
@@ -225,7 +216,7 @@ struct CompareSection: View {
         let names = Self.candidates(excluding: url)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Compare with...").font(.subheadline.bold())
+                Text("Compare with…").font(.subheadline.bold())
                 Spacer()
                 if !names.isEmpty {
                     Menu(other.map { RideBrowser.title($0.name) } ?? "Pick a ride") {
@@ -257,7 +248,7 @@ struct CompareSection: View {
         }
     }
 
-    private func label(_ s: UInt32) -> String { s < 60 ? "\(s) s" : "\(s / 60) min" }
+    private func label(_ s: UInt32) -> String { Fmt.span(s) }
 
     @ViewBuilder private func curve(_ o: (name: String, view: RideView, climbs: [ClimbStat])) -> some View {
         let rows = [("This ride", view.summary.curve), (RideBrowser.title(o.name), o.view.summary.curve)]
@@ -273,7 +264,7 @@ struct CompareSection: View {
             }
         }
         .chartXScale(domain: secs.map(label))
-        .chartForegroundStyleScale([rows[0].0: Color.orange, rows[1].0: Color.blue])
+        .chartForegroundStyleScale([rows[0].0: Tok.accent, rows[1].0: Tok.zone(1)])
         .frame(height: 160)
     }
 
@@ -285,11 +276,11 @@ struct CompareSection: View {
                 if let a = climbs[safe: Int(pairs[k].first)], let b = o.climbs[safe: Int(pairs[k].second)] {
                     let d = Int(a.timeS) - Int(b.timeS)
                     HStack {
-                        Text("\(Int(pairs[k].first) + 1)  \(String(format: "%.1f km", Double(a.lenM) / 1000))")
+                        Text("\(Int(pairs[k].first) + 1)  \(Fmt.km(Double(a.lenM)))")
                         Spacer()
-                        Text("\(mmss(a.timeS)) vs \(mmss(b.timeS))")
-                        Text(d == 0 ? "same" : "\(d < 0 ? "-" : "+")\(mmss(UInt32(abs(d))))")
-                            .foregroundStyle(d <= 0 ? .green : .orange)
+                        Text("\(Fmt.mmss(a.timeS)) vs \(Fmt.mmss(b.timeS))")
+                        Text(d == 0 ? "same" : "\(d < 0 ? "-" : "+")\(Fmt.mmss(UInt32(abs(d))))")
+                            .foregroundStyle(d <= 0 ? Tok.ok : Tok.warn)
                     }
                     .font(.caption.monospacedDigit())
                 }

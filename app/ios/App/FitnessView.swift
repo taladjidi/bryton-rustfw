@@ -89,14 +89,19 @@ struct FitnessView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if let last = d.days.last {
-                    HStack {
-                        stat("Fitness", String(format: "%.0f", last.ctl), .blue)
-                        stat("Fatigue", String(format: "%.0f", last.atl), .pink)
-                        stat("Form", String(format: "%+.0f", last.tsb), last.tsb >= 0 ? .green : .orange)
-                        if let e = d.eftp { stat("eFTP", String(format: "%.0f W", e), .orange) }
+                    let stats = Group {
+                        stat("Fitness", Fmt.dec(last.ctl, 0), Tok.accent)
+                        stat("Fatigue", Fmt.dec(last.atl, 0), Tok.zone(5))
+                        stat("Form", Fmt.signed(last.tsb), Tok.form(last.tsb))
+                        if let e = d.eftp { stat("eFTP", "\(Fmt.dec(e, 0)) W", Tok.accent) }
+                    }
+                    // four across, or a column when the type is large
+                    ViewThatFits(in: .horizontal) {
+                        HStack { stats }
+                        VStack { stats }
                     }
                     if last.day < today - 1 {
-                        Text("The last day is \(Self.iso(last.day)).").font(.footnote).foregroundStyle(.orange)
+                        Notice(text: "The last day is \(Self.iso(last.day)).").font(.footnote)
                     }
                     loadChart(d.days)
                     formChart(d.days)
@@ -111,7 +116,7 @@ struct FitnessView: View {
                     ? "Source: Intervals.icu (wellness)"
                     : "From this phone's rides: 42 and 7 day averages of their loads. The series starts at 0, so it needs about 6 weeks of rides to be right. Intervals.icu's numbers need its key (profile).")
                     .font(.footnote).foregroundStyle(.secondary)
-                if let n = note { Text(n).font(.footnote).foregroundStyle(.orange) }
+                if let n = note { Notice(text: n).font(.footnote) }
             }
             .padding()
         }
@@ -126,11 +131,10 @@ struct FitnessView: View {
     private func stat(_ label: String, _ value: String, _ color: Color) -> some View {
         VStack(alignment: .leading) {
             Text(label).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title2.bold().monospacedDigit()).foregroundStyle(color)
+            Text(value).numeral(.title2).foregroundStyle(color)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+        .tile()
     }
 
     private func loadChart(_ days: [FitnessDay]) -> some View {
@@ -142,7 +146,7 @@ struct FitnessView: View {
                 LineMark(x: .value("Day", date(d.day)), y: .value("Load", d.atl), series: .value("s", "Fatigue (ATL)"))
                     .foregroundStyle(by: .value("Series", "Fatigue (ATL)"))
             }
-            .chartForegroundStyleScale(["Fitness (CTL)": Color.blue, "Fatigue (ATL)": Color.pink])
+            .chartForegroundStyleScale(["Fitness (CTL)": Tok.accent, "Fatigue (ATL)": Tok.zone(5)])
             .frame(height: 180)
         }
     }
@@ -151,9 +155,9 @@ struct FitnessView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Form (TSB)").font(.subheadline.bold())
             Chart(days, id: \.day) { d in
-                AreaMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(.green.opacity(0.3))
-                LineMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(.green)
-                RuleMark(y: .value("zero", 0)).foregroundStyle(Color.gray)
+                AreaMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(2).opacity(0.3))
+                LineMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(2))
+                RuleMark(y: .value("zero", 0)).foregroundStyle(Color.secondary)
             }
             .frame(height: 120)
         }
@@ -163,8 +167,8 @@ struct FitnessView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Power curve, last 90 days").font(.subheadline.bold())
             Chart(curve, id: \.secs) { p in
-                BarMark(x: .value("Duration", p.secs < 60 ? "\(p.secs) s" : "\(p.secs / 60) min"), y: .value("W", p.watts))
-                    .foregroundStyle(.orange)
+                BarMark(x: .value("Duration", Fmt.span(p.secs)), y: .value("W", p.watts))
+                    .foregroundStyle(Tok.power)
                     .annotation(position: .top) { Text("\(p.watts)").font(.caption2) }
             }
             .frame(height: 150)

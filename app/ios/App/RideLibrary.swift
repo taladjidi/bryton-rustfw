@@ -107,34 +107,6 @@ final class RideLibrary: ObservableObject {
     }
 }
 
-enum Fmt {
-    private static let startFormat: DateFormatter = {
-        let f = DateFormatter()
-        f.setLocalizedDateFormatFromTemplate("EEE d MMM HH:mm")
-        return f
-    }()
-    private static let weekFormat: DateFormatter = {
-        let f = DateFormatter()
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.setLocalizedDateFormatFromTemplate("d MMM")
-        return f
-    }()
-
-    /// "2 h 31", "45 min".
-    static func duration(_ s: UInt64) -> String {
-        let m = (s + 30) / 60
-        return m >= 60 ? "\(m / 60) h \(String(format: "%02d", m % 60))" : "\(m) min"
-    }
-
-    static func km(_ m: Double) -> String { String(format: "%.1f km", m / 1000) }
-
-    /// "Sat 24 Oct, 14:29" in the phone's zone.
-    static func start(_ unix: Int64) -> String { startFormat.string(from: Date(timeIntervalSince1970: Double(unix))) }
-
-    /// "10 Nov", the label of a week by its first day (days since 1970, a plain calendar date).
-    static func week(_ day: Int64) -> String { weekFormat.string(from: Date(timeIntervalSince1970: Double(day) * 86_400)) }
-}
-
 /// This week's time, distance and load, and the last 8 weeks as bars.
 struct WeeklyPanel: View, Equatable {
     @ObservedObject var library: RideLibrary
@@ -145,6 +117,8 @@ struct WeeklyPanel: View, Equatable {
     @AppStorage("maxHR") private var maxHR = 190
     @State private var byLoad = true
     @State private var selected: String?
+    @Environment(\.dynamicTypeSize) private var type
+    @ScaledMetric private var chartHeight: CGFloat = 120
 
     static func == (a: WeeklyPanel, b: WeeklyPanel) -> Bool { a.missing == b.missing && a.library === b.library }
 
@@ -156,14 +130,13 @@ struct WeeklyPanel: View, Equatable {
         VStack(alignment: .leading, spacing: 10) {
             Text(shown.firstDay == current.firstDay ? "This week" : "Week of \(Fmt.week(shown.firstDay))")
                 .font(.subheadline).foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline) {
-                stat(Fmt.duration(shown.movingS), "time")
-                Spacer()
-                stat(Fmt.km(shown.distanceM), "distance")
-                Spacer()
-                stat("\(shown.load)", unit)
-                Spacer()
-                stat("\(shown.rides)", shown.rides == 1 ? "ride" : "rides")
+            // four columns, or two by two when the type is large (a column would wrap its label mid-word)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) { stats(shown, unit) }
+                Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+                    GridRow { stat(Fmt.duration(shown.movingS), "time"); stat(Fmt.km(shown.distanceM), "distance") }
+                    GridRow { stat("\(shown.load)", unit); stat("\(shown.rides)", shown.rides == 1 ? "ride" : "rides") }
+                }
             }
             Picker("Bars", selection: $byLoad) {
                 Text("Load").tag(true)
@@ -172,21 +145,25 @@ struct WeeklyPanel: View, Equatable {
             .pickerStyle(.segmented)
             Chart(weeks, id: \.firstDay) { w in
                 BarMark(x: .value("Week", Fmt.week(w.firstDay)), y: .value(byLoad ? "TSS" : "Hours", value(w)))
-                    .foregroundStyle(w.firstDay == shown.firstDay ? Color.accentColor : Color.accentColor.opacity(0.4))
+                    .foregroundStyle(w.firstDay == shown.firstDay ? Tok.accent : Tok.accent.opacity(0.4))
             }
             .chartXSelection(value: $selected)
             .chartXAxis {
                 AxisMarks { v in
-                    if v.index % 2 == 0 { AxisValueLabel() }
+                    // every second week; every fourth when the type is large and the labels would collide
+                    if v.index % (type.isAccessibilitySize ? 4 : 2) == 0 { AxisValueLabel() }
                 }
             }
-            .frame(height: 120)
+            .frame(height: chartHeight)
+            .accessibilityLabel("Weekly \(byLoad ? "load" : "time"), last 8 weeks")
+            .accessibilityValue(weeks.map { "\(Fmt.week($0.firstDay)): \(byLoad ? "\($0.load)" : Fmt.duration($0.movingS))" }.joined(separator: ", "))
             if weeks.contains(where: \.hasHrLoad) {
                 Text("* includes loads worked out from heart rate (no power), which are not TSS.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if UserDefaults.standard.object(forKey: "ftp") == nil {
-                Button("FTP not set: loads use 200 W. Open the profile.", action: openProfile).font(.caption)
+                Button("FTP not set: loads use 200 W. Open the profile.", action: openProfile)
+                    .font(.subheadline).frame(minHeight: 44, alignment: .leading)
             }
             if missing > 0 {
                 Text("\(missing) ride\(missing == 1 ? "" : "s") of the last 8 weeks not on the phone yet.")
@@ -198,10 +175,21 @@ struct WeeklyPanel: View, Equatable {
 
     private func value(_ w: WeekTotal) -> Double { byLoad ? Double(w.load) : Double(w.movingS) / 3600 }
 
+    @ViewBuilder private func stats(_ shown: WeekTotal, _ unit: String) -> some View {
+        stat(Fmt.duration(shown.movingS), "time")
+        Spacer()
+        stat(Fmt.km(shown.distanceM), "distance")
+        Spacer()
+        stat("\(shown.load)", unit)
+        Spacer()
+        stat("\(shown.rides)", shown.rides == 1 ? "ride" : "rides")
+    }
+
     private func stat(_ v: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(v).font(.headline.monospacedDigit())
+            Text(v).numeral(.title3)
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .combine)
     }
 }
