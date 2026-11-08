@@ -26,10 +26,15 @@ enum Keychain {
 
     @discardableResult
     static func set(_ account: String, _ value: String?) -> Bool {
-        SecItemDelete(query(account) as CFDictionary)
-        guard let value, !value.isEmpty else { return true }
+        guard let value, !value.isEmpty else {
+            SecItemDelete(query(account) as CFDictionary)
+            return true
+        }
+        let data = Data(value.utf8)
+        let st = SecItemUpdate(query(account) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        guard st == errSecItemNotFound else { return st == errSecSuccess }
         var q = query(account)
-        q[kSecValueData as String] = Data(value.utf8)
+        q[kSecValueData as String] = data
         q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
     }
@@ -38,20 +43,26 @@ enum Keychain {
 struct IntervalsFailure: Error { let text: String }
 
 enum IntervalsClient {
+    /// No cache or cookies on disk: the athlete's data is not kept by the system.
+    private static let session = URLSession(configuration: .ephemeral)
+
+
     /// The athlete with its Ride settings, or why not, in plain words. The key is never put in a message.
     static func fetch(key: String, athlete: String) async throws -> IntervalsProfile {
         #if DEBUG
         if CommandLine.arguments.contains("-demo") { return try demoProfile() }
         #endif
-        let id = athlete.trimmingCharacters(in: .whitespaces).isEmpty ? "0" : athlete.trimmingCharacters(in: .whitespaces)
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let athlete = athlete.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = athlete.isEmpty ? "0" : athlete
         guard id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
             let url = URL(string: "https://intervals.icu/api/v1/athlete/\(id)")
         else { throw IntervalsFailure(text: "The athlete id should be 0 or like i12345.") }
-        var req = URLRequest(url: url, timeoutInterval: 15)
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         req.setValue("Basic " + Data("API_KEY:\(key)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
         let (data, resp): (Data, URLResponse)
         do {
-            (data, resp) = try await URLSession.shared.data(for: req)
+            (data, resp) = try await session.data(for: req)
         } catch {
             throw IntervalsFailure(text: "Could not reach Intervals.icu. Check the connection.")
         }
@@ -63,8 +74,14 @@ enum IntervalsClient {
         }
         do {
             return try intervalsParse(json: data)
+        } catch let e as IntervalsParseError {
+            switch e {
+            case .NotAthlete: throw IntervalsFailure(text: "Intervals.icu answered with something that is not an athlete.")
+            case .NoRideSettings:
+                throw IntervalsFailure(text: "This Intervals.icu account has no sport settings for Ride. Add them in its Settings.")
+            }
         } catch {
-            throw IntervalsFailure(text: "\(error)")
+            throw IntervalsFailure(text: "Intervals.icu answered with something unreadable.")
         }
     }
 
@@ -87,11 +104,16 @@ final class IntervalsSync: ObservableObject {
     static let athleteKey = "intervalsAthlete"
     private static let lastKey = "intervalsLastSync"
 
-    var hasKey: Bool {
+    /// A key is stored (read once: the Keychain is not asked on every redraw).
+    @Published private(set) var hasKey = false
+
+    init() { refreshKey() }
+
+    private func refreshKey() {
         #if DEBUG
-        if CommandLine.arguments.contains("-demo") { return true }
+        if CommandLine.arguments.contains("-demo") { hasKey = true; return }
         #endif
-        return Keychain.get("apikey") != nil
+        hasKey = Keychain.get("apikey") != nil
     }
 
     var athlete: String { UserDefaults.standard.string(forKey: Self.athleteKey) ?? "" }
@@ -104,18 +126,23 @@ final class IntervalsSync: ObservableObject {
         defer { busy = false }
         do {
             let p = try await IntervalsClient.fetch(key: k, athlete: athlete)
-            guard Keychain.set("apikey", k) else { status = "Could not store the key in the Keychain."; return }
+            guard Keychain.set("apikey", k.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                status = "Could not store the key in the Keychain."
+                return
+            }
+            refreshKey()
             UserDefaults.standard.set(athlete, forKey: Self.athleteKey)
             status = "\(p.name ?? "Athlete"): FTP " + (p.ftp.map { "\($0) W" } ?? "not set")
         } catch let e as IntervalsFailure {
             status = e.text
         } catch {
-            status = "\(error)"
+            status = "Could not test the key."
         }
     }
 
     func forget() {
         Keychain.set("apikey", nil)
+        refreshKey()
         status = "Key removed."
     }
 
@@ -129,14 +156,7 @@ final class IntervalsSync: ObservableObject {
         #endif
         guard let key = demo ? "demo" : Keychain.get("apikey") else { return }
         let d = UserDefaults.standard
-        if !force, !demo, Date().timeIntervalSince1970 - d.double(forKey: Self.lastKey) < Self.hour {
-            // fresh enough: no fetch, but a unit that was not reachable then still gets the stored values
-            let o = { (k: String) -> UInt32? in d.integer(forKey: k) > 0 ? UInt32(clamping: d.integer(forKey: k)) : nil }
-            rides.pushProfile(
-                IntervalsProfile(name: nil, ftp: o("ftp"), maxHr: o("maxHR"), lthr: o("lthr"), weightKg: o("weight"), wprimeJ: o("wPrime")),
-                source: "Intervals.icu")
-            return
-        }
+        if !force, !demo, Date().timeIntervalSince1970 - d.double(forKey: Self.lastKey) < Self.hour { return }
         busy = true
         defer { busy = false }
         do {
@@ -154,7 +174,7 @@ final class IntervalsSync: ObservableObject {
         } catch let e as IntervalsFailure {
             status = e.text
         } catch {
-            status = "\(error)"
+            status = "Could not sync from Intervals.icu."
         }
     }
 }

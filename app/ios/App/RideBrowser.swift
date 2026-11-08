@@ -63,10 +63,18 @@ final class RideBrowser: ObservableObject {
     /// The write under way is a send (not a delete).
     private var sending = false
     /// The profile to give the unit, kept until the unit took it (or refused for good); `merged` is what was sent.
-    private var pendingProfile: (iv: IntervalsProfile, source: String, at: Date)?
+    /// A push that arrives while an exchange is in flight waits in `queuedProfile` and replaces the pending one after.
+    private struct ProfilePush { let iv: IntervalsProfile; let source: String; let at: Date }
+    private var pendingProfile: ProfilePush?
+    private var queuedProfile: ProfilePush?
     private var merged: ProfileMerge?
-    /// Not before this uptime (ms): a busy unit is asked again quietly.
-    private var profileRetryAt: UInt64 = 0
+    /// The PROFILE_GET / SET exchange is on the link (phase `profile`).
+    private var profileInFlight = false
+    /// Failed attempts of the pending push (busy or silence), and whether this connection already tried: the next try
+    /// is at the next connection, at most `profileMaxTries` in all.
+    private var profileTries = 0
+    private var profileTried = false
+    private static let profileMaxTries = 5
     /// The download under way is the background sync's, not the rider's: anything the rider starts cancels it.
     private(set) var auto = false
     /// The rider cancelled a sync download: no more until they refresh.
@@ -106,7 +114,7 @@ final class RideBrowser: ObservableObject {
             self.ready = false
             self.syncOff = false  // a reconnect tries the sync again
             if case .downloading = self.phase { self.message = "Link lost, resuming..." }
-            if self.phase == .profile { self.phase = .idle }  // the pending profile goes on the next connection
+            self.dropProfileExchange()  // the pending profile goes on the next connection
             if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
         t.onError = { [weak self] m in self?.message = m }
@@ -119,6 +127,10 @@ final class RideBrowser: ObservableObject {
 
     /// A rider's action takes the link from the background sync.
     private func yieldAuto() {
+        if profileInFlight {  // the profile exchange never blocks the rider: it is asked again later
+            client.abort()
+            dropProfileExchange()
+        }
         if auto && isDownloading {
             auto = false
             cancel()
@@ -128,7 +140,7 @@ final class RideBrowser: ObservableObject {
     func refresh() {
         yieldAuto()
         syncPaused = false
-        guard ready, let t = transport, !isDownloading, phase != .writing, phase != .profile else { return }
+        guard ready, let t = transport, !isDownloading, phase != .writing else { return }
         message = nil
         listingWorkouts = false
         workoutKey = nil
@@ -255,6 +267,7 @@ final class RideBrowser: ObservableObject {
 
     private func becameReady() {
         ready = true
+        profileTried = false  // a new connection tries the pending profile again
         if sendError != nil && phase == .idle { refreshWorkouts() }  // a send ended while the link was down
         if case .downloading = phase { resume() } else if phase == .workouts { if listingWorkouts { refreshWorkouts() } else { resume() } } else if rides.isEmpty { refresh() }
     }
@@ -282,35 +295,60 @@ final class RideBrowser: ObservableObject {
     /// Gives the unit the profile Intervals.icu (or the profile sheet) set, when nothing else uses the link: PROFILE_GET,
     /// then PROFILE_SET with the unit's other fields kept. The unit answers during a ride; the sync yields to it.
     func pushProfile(_ iv: IntervalsProfile, source: String) {
-        pendingProfile = (iv, source, Date())
-        profileRetryAt = 0
+        let push = ProfilePush(iv: iv, source: source, at: Date())
+        if profileInFlight {
+            queuedProfile = push
+            return
+        }
+        (pendingProfile, profileTries, profileTried) = (push, 0, false)
         if !ready { profileLine = "Unit profile: waiting for the unit" }
         startProfile()
     }
 
     private func startProfile() {
-        guard pendingProfile != nil, ready, phase == .idle, Self.now >= profileRetryAt, let t = transport else { return }
-        phase = .profile
+        guard pendingProfile != nil, ready, phase == .idle, !profileTried, let t = transport else { return }
+        (phase, profileInFlight) = (.profile, true)
         t.write(client.profileGetCommand(nowMs: Self.now))
     }
 
+    /// The exchange is over or given up: the link is free, and a push queued meanwhile becomes the pending one.
+    private func endProfileExchange() {
+        (phase, profileInFlight, merged) = (.idle, false, nil)
+        if let q = queuedProfile {
+            (pendingProfile, queuedProfile, profileTries, profileTried) = (q, nil, 0, false)
+        }
+    }
+
+    /// Preempted or the link dropped: the pending push stays for the next try.
+    private func dropProfileExchange() {
+        guard profileInFlight else { return }
+        if phase == .profile { phase = .idle }
+        endProfileExchange()
+    }
+
     private func profileDone(_ p: UnitProfile) {
-        guard let pend = pendingProfile else { return }
+        guard let pend = pendingProfile else { return endProfileExchange() }
         let f = DateFormatter()
         f.dateFormat = "d MMM HH:mm"
         var line = "Unit profile: FTP \(p.ftp) W (from \(pend.source), \(f.string(from: pend.at)))"
         if let m = merged, !m.skipped.isEmpty { line += ". Not sent: " + m.skipped.joined(separator: "; ") }
-        (profileLine, pendingProfile, merged, phase) = (line, nil, nil, .idle)
+        (profileLine, pendingProfile) = (line, nil)
+        endProfileExchange()
     }
 
-    /// The unit refused or went quiet: busy and silence are asked again in a minute, anything else ends the push.
+    /// The unit refused or went quiet: busy and silence are asked again at the next connection (5 tries in all),
+    /// anything else ends the push.
     private func profileFailed(_ e: FileError?) {
-        phase = .idle
-        merged = nil
         switch e {
         case .busy?, nil:
-            profileRetryAt = Self.now + 60_000
-            profileLine = "Unit profile: the unit is busy or did not answer, trying again later"
+            profileTries += 1
+            profileTried = true
+            if profileTries >= Self.profileMaxTries {
+                pendingProfile = nil
+                profileLine = "Unit profile: the unit stayed busy or silent, giving up until the next sync"
+            } else {
+                profileLine = "Unit profile: the unit is busy or did not answer, trying again at the next connection"
+            }
         case .readOnly?:
             pendingProfile = nil
             profileLine = "Unit profile: READ ONLY, this unit's software does not save settings from the phone yet"
@@ -318,13 +356,14 @@ final class RideBrowser: ObservableObject {
             pendingProfile = nil
             profileLine = "Unit profile: " + Self.text(e)
         }
+        endProfileExchange()
     }
 
     private func silence() {
         startProfile()
         autoSync()
         guard ready, client.silent(nowMs: Self.now) else { return }
-        if phase == .profile { profileFailed(nil); return }
+        if profileInFlight { client.abort(); profileFailed(nil); return }
         if case .downloading = phase {
             message = "No answer, resuming..."
             resume()
@@ -365,14 +404,14 @@ final class RideBrowser: ObservableObject {
             endWrite(nil, isSend: sending)
         case .written, .deleted:
             break  // a late answer of a write that was given up
-        case .profile where phase == .profile:
+        case .profile where profileInFlight:
             guard let pend = pendingProfile, let unit = client.profile() else { return profileFailed(.card) }
             let m = mergeUnitProfile(unit: unit, iv: pend.iv)
             merged = m
             if m.changed { transport?.write(client.profileSetCommand(profile: m.profile, nowMs: Self.now)) } else { profileDone(unit) }
-        case .profileSet where phase == .profile:
+        case .profileSet where profileInFlight:
             if let m = merged { profileDone(m.profile) } else { profileFailed(.card) }
-        case .failed(let e) where phase == .profile:
+        case .failed(let e) where profileInFlight:
             profileFailed(e)
         case .profile, .profileSet:
             break  // a late answer

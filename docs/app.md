@@ -311,8 +311,10 @@ forum guide https://forum.intervals.icu/t/api-access-to-intervals-icu/609):
 - **Request:** `GET https://intervals.icu/api/v1/athlete/{id}` with HTTP basic auth, user `API_KEY`, password the key from
   Intervals.icu's Settings, Developer Settings. `{id}` is `0` (the key's own athlete) or `i<number>` (the second form is
   from the forum guide, inferred from memory of it).
-- **Used:** the `sportSettings` entry whose `types` holds `Ride`: `ftp`, `max_hr`, `lthr`, `w_prime`; the athlete's
-  `weight` (kg, float) and `name`. Every field is optional: a missing, null, string, negative or absurd value is "not
+- **Used:** the first `sportSettings` entry whose `types` holds `Ride`, else `VirtualRide`, `GravelRide`,
+  `MountainBikeRide` or `EBikeRide`: `ftp`, `max_hr`, `lthr`, `w_prime`; the athlete's `weight` and `name`. The spec
+  gives the types (floats and int32) but no units and no required fields: kg and J are inferred, and so is the id form.
+  Every field is optional: a missing, null, string, negative, zero or above-100000 value is "not
   given" (`app/core/src/intervals.rs`, which parses and merges; the Swift side only does the network, the Keychain and
   the screens in `IntervalsClient.swift`). No Ride entry is an error in words.
 - **The key** is in the Keychain (generic password, this device only) and never in UserDefaults, a log or the repository;
@@ -324,9 +326,12 @@ forum guide https://forum.intervals.icu/t/api-access-to-intervals-icu/609):
 - **To the unit:** PROFILE_GET, then PROFILE_SET with the unit's other fields (zones choice, sex, anything Intervals did
   not give) kept; a field outside the unit's ranges is not sent and the line says so; nothing is sent when nothing
   differs. It starts only when the link is idle (RideBrowser's phase `profile`, started from the one-second tick before the
-  ride sync takes the link, so between its rides), and while another transfer runs it waits. The line reads "Unit
-  profile: FTP 265 W (from Intervals.icu, 8 Nov 14:02)". BUSY (a ride, or editing in the menu) or no answer is asked again
-  quietly every minute; READ ONLY says the unit's software does not save settings from the phone yet.
+  ride sync takes the link, so between its rides), and anything the rider starts (a download, a refresh, the workout list,
+  a send) preempts it, keeping the pending push. A push made during an exchange is queued, never dropped. A value is
+  pushed after a fetch or a sheet edit only, so a value set in the unit's menu is not overwritten on every launch. The
+  line reads "Unit profile: FTP 265 W (from Intervals.icu, 8 Nov 14:02)". BUSY (a ride, or editing in the menu) or no
+  answer is asked again at the next connection, 5 tries in all; READ ONLY says the unit's software does not save
+  settings from the phone yet.
 - **Without a key** the sheet's FTP and max HR still work, and changing them is also pushed to the unit (source "this phone").
 - **Demo:** under `#if DEBUG` and `-demo` the answer is a made-up athlete (FTP 265), no network.
 

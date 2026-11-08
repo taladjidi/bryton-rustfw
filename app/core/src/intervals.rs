@@ -7,8 +7,11 @@
 //!   Settings (security scheme `APIKey`).
 //! - The forum's API access guide, https://forum.intervals.icu/t/api-access-to-intervals-icu/609 : the athlete id is
 //!   `0` for the key's own athlete, else `i<number>` (inferred from memory of that page, the spec's id is a string).
-//! - Every field is optional in the spec; the parser keeps what is a positive number and drops the rest (a string, a
-//!   null, a negative or an absurd value become "not given"). Nothing here touches the network: Swift fetches.
+//! - The spec types `weight` as a float and `ftp`, `lthr`, `max_hr`, `w_prime` as int32 but states no units and
+//!   marks no field required: kg and J are inferred (the Intervals.icu UI shows kg and J), and so are the id forms
+//!   (the spec's `id` parameter has no description). Every field is optional: the parser keeps a number from 0.5 to
+//!   100000 and drops anything else (a string, a null, a negative, a huge value) as "not given"; the unit's menu
+//!   ranges are applied later, by the merge. Nothing here touches the network: Swift fetches.
 
 use crate::files::UnitProfile;
 use bryton_rustfw::menu;
@@ -48,26 +51,29 @@ impl core::fmt::Display for IntervalsParseError {
     }
 }
 
-/// A positive finite number, rounded (saturating to u32).
+/// Above any sane FTP, heart rate, weight or W' (the largest menu range ends at 40000).
+const CAP: f64 = 100_000.0;
+
+/// A finite number from 0.5 to [`CAP`], rounded.
 fn num(v: Option<&serde_json::Value>) -> Option<u32> {
     let f = v?.as_f64()?;
-    (f.is_finite() && f >= 0.5).then(|| f.round() as u32)
+    (0.5..=CAP).contains(&f).then(|| f.round() as u32)
 }
+
+/// Bike sport types an account may keep its settings under, best first.
+const RIDE_TYPES: [&str; 5] = ["Ride", "VirtualRide", "GravelRide", "MountainBikeRide", "EBikeRide"];
 
 /// Parses the body of `GET /api/v1/athlete/{id}`.
 #[uniffi::export]
 pub fn intervals_parse(json: Vec<u8>) -> Result<IntervalsProfile, IntervalsParseError> {
     let v: serde_json::Value = serde_json::from_slice(&json).map_err(|_| IntervalsParseError::NotAthlete)?;
     let obj = v.as_object().ok_or(IntervalsParseError::NotAthlete)?;
-    let ride = obj
-        .get("sportSettings")
-        .and_then(|s| s.as_array())
-        .and_then(|a| {
-            a.iter().find(|s| {
-                s.get("types").and_then(|t| t.as_array()).is_some_and(|t| t.iter().any(|x| x.as_str() == Some("Ride")))
-            })
-        })
-        .ok_or(IntervalsParseError::NoRideSettings)?;
+    let all = obj.get("sportSettings").and_then(|s| s.as_array()).ok_or(IntervalsParseError::NoRideSettings)?;
+    let has = |s: &serde_json::Value, ty: &str| {
+        s.get("types").and_then(|t| t.as_array()).is_some_and(|t| t.iter().any(|x| x.as_str() == Some(ty)))
+    };
+    let ride =
+        RIDE_TYPES.iter().find_map(|ty| all.iter().find(|s| has(s, ty))).ok_or(IntervalsParseError::NoRideSettings)?;
     let name = obj.get("name").and_then(|n| n.as_str()).map(|n| n.chars().take(60).collect());
     Ok(IntervalsProfile {
         name,
@@ -166,10 +172,7 @@ mod tests {
         let j =
             r#"{"sportSettings":[{"types":["Ride"],"ftp":"265","lthr":-4,"max_hr":1e30,"w_prime":null}],"weight":"x"}"#;
         let p = intervals_parse(j.as_bytes().to_vec()).unwrap();
-        assert_eq!(
-            (p.ftp, p.lthr, p.max_hr, p.wprime_j, p.weight_kg, p.name),
-            (None, None, Some(u32::MAX), None, None, None)
-        );
+        assert_eq!((p.ftp, p.lthr, p.max_hr, p.wprime_j, p.weight_kg, p.name), (None, None, None, None, None, None));
         assert_eq!(intervals_parse(b"[]".to_vec()), Err(IntervalsParseError::NotAthlete));
         let run = b"{\"sportSettings\":[{\"types\":[\"Run\"]}]}".to_vec();
         assert_eq!(intervals_parse(run), Err(IntervalsParseError::NoRideSettings));
@@ -177,10 +180,24 @@ mod tests {
     }
 
     #[test]
+    fn hostile_documents() {
+        let deep = format!("{}{}", "[".repeat(300), "]".repeat(300));
+        let deep_obj = format!("{{\"a\":{deep},\"sportSettings\":[]}}");
+        for bad in [deep.as_bytes(), deep_obj.as_bytes(), b"\xff\xfe{\"name\":\"\xc3\"}", b"42", b"\"x\"", b"null", b""]
+        {
+            assert_eq!(intervals_parse(bad.to_vec()), Err(IntervalsParseError::NotAthlete), "{bad:?}");
+        }
+        // several entries: Ride wins over VirtualRide and Run, whatever the order
+        let j = r#"{"sportSettings":[{"types":["Run"],"ftp":1},{"types":["VirtualRide"],"ftp":200},{"types":["Ride"],"ftp":250}]}"#;
+        assert_eq!(intervals_parse(j.as_bytes().to_vec()).unwrap().ftp, Some(250));
+        let j = r#"{"sportSettings":[{"types":["Run"],"ftp":1},{"types":["GravelRide"],"ftp":230}]}"#;
+        assert_eq!(intervals_parse(j.as_bytes().to_vec()).unwrap().ftp, Some(230));
+    }
+
+    #[test]
     fn merge_keeps_unit_fields_and_drops_out_of_range() {
         let u = unit();
-        let iv =
-            IntervalsProfile { ftp: Some(300), max_hr: Some(400), weight_kg: Some(u32::MAX), ..Default::default() };
+        let iv = IntervalsProfile { ftp: Some(300), max_hr: Some(400), weight_kg: Some(99_999), ..Default::default() };
         let m = merge_unit_profile(u, iv);
         assert_eq!(m.profile, UnitProfile { ftp: 300, ..u });
         assert!(m.changed);

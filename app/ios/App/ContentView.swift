@@ -18,7 +18,12 @@ struct ContentView: View {
     @State private var path: [WorkoutRoute] = []
     @State private var editing: EditorTarget?
 
+    // the environment objects sit outside the stack: the sheets and the pushed pages are presented from inside it
     var body: some View {
+        stack.environmentObject(rides).environmentObject(intervals)
+    }
+
+    private var stack: some View {
         NavigationStack(path: $path) {
             List {
                 Section {
@@ -73,8 +78,6 @@ struct ContentView: View {
                 } }
             }
             .navigationTitle("Bike computer")
-            .environmentObject(rides)
-            .environmentObject(intervals)
             .task { await intervals.sync(rides: rides, force: false) }
             .refreshable {
                 link.refresh()

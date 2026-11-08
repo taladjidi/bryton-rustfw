@@ -328,9 +328,11 @@ impl Inner {
                 (self.mode, self.profile) = (Mode::Idle, Some(profile.into()));
                 FileEvent::Profile
             }
-            (Mode::ProfileGet, Frame::End { seq, status, .. }) if seq == self.seq => {
-                self.fail(if status == Status::BadRequest { FileError::BadRequest } else { FileError::Card })
-            }
+            (Mode::ProfileGet, Frame::End { seq, status, .. }) if seq == self.seq => self.fail(match status {
+                Status::BadRequest => FileError::BadRequest,
+                Status::Busy => FileError::Busy,
+                _ => FileError::Card,
+            }),
             (Mode::ProfileSet, Frame::End { seq, status, .. }) if seq == self.seq => match status {
                 Status::Ok => {
                     self.mode = Mode::Idle;
