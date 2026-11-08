@@ -28,7 +28,13 @@
 //!                                                     answer unless refused (an END, and the write is dropped)
 //! WRITE_END   08 seq                                  checked (size, CRC, a FIT workout), then made visible; END
 //! DELETE      09 seq folder len key[len] check[2]     a listed workout removed; END (count 1)
+//! PROFILE_GET 0A seq                      the training profile: one PROFILE frame (works during a ride)
+//! PROFILE_SET 0B seq profile[9]           the profile set as the menus set it; END (count 1 changed, 0 as held)
 //! ```
+//! **Profile** (2026-11-08), 9 bytes, little endian: `version` (1), `ftp` u16 (W), `max_hr` u8 (bpm), `lthr` u8
+//! (bpm), `weight` u8 (kg), `wprime` u16 (J), `flags` u8 (bit 0: zones from the LTHR, not the max; bit 1: female;
+//! the others 0). A SET with another version, a reserved bit or a value outside the menus' ranges is BAD REQUEST;
+//! BUSY during a ride or while the card is lent, READ ONLY in a build that may not write the card.
 //! **Writes** (2026-11-07): folder 1 only, and only a file the unit reads as a workout ([`crate::storage::workout_file::parse`],
 //! at most `FILE_MAX` bytes). The phone never names a path or a file: the unit names it `<CRC-32, 8 hex digits>.fit`
 //! in `\Workout\calendar\<day>\` (stock lists the `.fit` files of a day folder, inferred). A WRITE_DATA carries 14 bytes
@@ -278,6 +284,18 @@ pub enum Command<'a> {
         /// Echoed by the END.
         seq: u8,
     },
+    /// The training profile is wanted.
+    ProfileGet {
+        /// Echoed by the PROFILE frame.
+        seq: u8,
+    },
+    /// Sets the training profile.
+    ProfileSet {
+        /// Echoed by the END.
+        seq: u8,
+        /// The new values.
+        profile: Profile,
+    },
     /// Deletes file `key` of `folder` (folder 1 only; the key carries its check).
     Delete {
         /// Echoed by the END.
@@ -298,6 +316,55 @@ const WRITE_BEGIN: u8 = 6;
 const WRITE_DATA: u8 = 7;
 const WRITE_END: u8 = 8;
 const DELETE: u8 = 9;
+const PROFILE_GET: u8 = 10;
+const PROFILE_SET: u8 = 11;
+const PROFILE: u8 = 0x85;
+/// The profile layout's version byte.
+pub const PROFILE_VERSION: u8 = 1;
+/// A profile's bytes after the version: ftp 2, max HR, LTHR, weight, W' 2, flags.
+const PROFILE_LEN: usize = 8;
+
+/// The training profile of PROFILE_GET / PROFILE_SET (module doc). Ranges are the unit's to check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Profile {
+    /// FTP, W.
+    pub ftp: u16,
+    /// Maximum heart rate, bpm.
+    pub max_hr: u8,
+    /// Lactate threshold heart rate, bpm.
+    pub lthr: u8,
+    /// Rider weight, kg.
+    pub weight_kg: u8,
+    /// W', J.
+    pub wprime_j: u16,
+    /// Heart-rate zones come from the LTHR, not the maximum.
+    pub zones_lthr: bool,
+    /// Female (TRIMP's constant).
+    pub female: bool,
+}
+
+impl Profile {
+    /// The 9 bytes, version first.
+    fn bytes(&self) -> [u8; PROFILE_LEN + 1] {
+        let (f, w) = (self.ftp.to_le_bytes(), self.wprime_j.to_le_bytes());
+        let flags = u8::from(self.zones_lthr) | u8::from(self.female) << 1;
+        [PROFILE_VERSION, f[0], f[1], self.max_hr, self.lthr, self.weight_kg, w[0], w[1], flags]
+    }
+
+    /// From the 9 bytes; None for another version or a reserved flag bit.
+    fn from_bytes(p: &[u8]) -> Option<Profile> {
+        let [v, f0, f1, max_hr, lthr, weight_kg, w0, w1, flags] = *<&[u8; PROFILE_LEN + 1]>::try_from(p).ok()?;
+        (v == PROFILE_VERSION && flags & !3 == 0).then_some(Profile {
+            ftp: u16::from_le_bytes([f0, f1]),
+            max_hr,
+            lthr,
+            weight_kg,
+            wprime_j: u16::from_le_bytes([w0, w1]),
+            zones_lthr: flags & 1 != 0,
+            female: flags & 2 != 0,
+        })
+    }
+}
 const ENTRY: u8 = 0x81;
 const CHUNK: u8 = 0x82;
 const END: u8 = 0x83;
@@ -419,6 +486,11 @@ impl<'a> Command<'a> {
                 _ => bad,
             },
             Some(&WRITE_END) if p.len() == 2 => Ok(Command::WriteEnd { seq }),
+            Some(&PROFILE_GET) if p.len() == 2 => Ok(Command::ProfileGet { seq }),
+            Some(&PROFILE_SET) if p.len() == 2 + PROFILE_LEN + 1 => match p.get(2..).and_then(Profile::from_bytes) {
+                Some(profile) => Ok(Command::ProfileSet { seq, profile }),
+                None => bad,
+            },
             Some(&DELETE) if p.get(2) == Some(&(Folder::Workout as u8)) => {
                 let l = usize::from(p.get(3).copied().unwrap_or(0));
                 let key = p.get(4..4 + l).filter(|_| p.len() == 6 + l).and_then(|k| Key::new(Folder::Workout, k));
@@ -471,6 +543,11 @@ impl<'a> Command<'a> {
                 put(out, n, data.get(..data.len().min(out.len().saturating_sub(6))).unwrap_or(&[]))
             }
             Command::WriteEnd { seq } => put(out, 0, &[WRITE_END, *seq]),
+            Command::ProfileGet { seq } => put(out, 0, &[PROFILE_GET, *seq]),
+            Command::ProfileSet { seq, profile } => {
+                let n = put(out, 0, &[PROFILE_SET, *seq]);
+                put(out, n, &profile.bytes())
+            }
             Command::Delete { seq, folder, key } => {
                 let n = put(out, 0, &[DELETE, *seq, *folder as u8, key.len]);
                 let n = put(out, n, key.bytes());
@@ -508,6 +585,13 @@ pub enum Frame<'a> {
         /// Up to [`FRAME_BIG`] less 2 bytes (18 at the default MTU).
         data: &'a [u8],
     },
+    /// The answer to a PROFILE_GET.
+    Profile {
+        /// The command's.
+        seq: u8,
+        /// The unit's profile.
+        profile: Profile,
+    },
     /// The answer is over.
     End {
         /// The command's.
@@ -544,6 +628,10 @@ impl<'a> Frame<'a> {
             Frame::Chunk { seq, data } => {
                 let n = put(out, 0, &[CHUNK, *seq]);
                 put(out, n, data.get(..data.len().min(out.len().saturating_sub(2))).unwrap_or(&[]))
+            }
+            Frame::Profile { seq, profile } => {
+                let n = put(out, 0, &[PROFILE, *seq]);
+                put(out, n, &profile.bytes())
             }
             Frame::End { seq, status, count } => {
                 let n = put(out, 0, &[END, *seq, *status as u8]);
@@ -583,6 +671,9 @@ impl<'a> Frame<'a> {
                 Some(Frame::EntryIn { seq, key, size: u32_at(p, 3 + l + cl)? })
             }
             CHUNK if (3..=FRAME_BIG).contains(&p.len()) => Some(Frame::Chunk { seq, data: p.get(2..)? }),
+            PROFILE if p.len() == 2 + PROFILE_LEN + 1 => {
+                Some(Frame::Profile { seq, profile: Profile::from_bytes(p.get(2..)?)? })
+            }
             END if p.len() == 7 => Some(Frame::End { seq, status: Status::from_u8(*p.get(2)?)?, count: u32_at(p, 3)? }),
             _ => None,
         }
@@ -593,6 +684,30 @@ impl<'a> Frame<'a> {
 mod tests {
     use super::*;
 
+    const PROFILE_SAMPLE: Profile =
+        Profile { ftp: 265, max_hr: 186, lthr: 170, weight_kg: 68, wprime_j: 20_000, zones_lthr: true, female: false };
+
+    #[test]
+    fn the_profile_commands_round_trip_and_odd_ones_are_refused() {
+        let mut f = [0; FRAME_MAX];
+        let set = Command::ProfileSet { seq: 5, profile: PROFILE_SAMPLE };
+        let n = set.encode(&mut f);
+        assert_eq!(&f[..n], &[11, 5, 1, 9, 1, 186, 170, 68, 0x20, 0x4e, 1]);
+        assert_eq!(Command::parse(&f[..n]), Ok(set));
+        let get = Command::ProfileGet { seq: 6 };
+        let n = get.encode(&mut f);
+        assert_eq!(Command::parse(&f[..n]), Ok(get));
+        let bad = Err((5, Status::BadRequest));
+        let mut g = [11, 5, 1, 9, 1, 186, 170, 68, 0x20, 0x4e, 1];
+        assert_eq!(Command::parse(&g[..10]), bad, "short");
+        g[2] = 2;
+        assert_eq!(Command::parse(&g), bad, "another version");
+        g[2] = 1;
+        g[10] = 4;
+        assert_eq!(Command::parse(&g), bad, "a reserved flag");
+        assert_eq!(Command::parse(&[10, 5, 0]), bad, "GET with a tail");
+    }
+
     #[test]
     fn every_frame_round_trips() {
         let mut f = [0; FRAME_MAX];
@@ -602,6 +717,7 @@ mod tests {
             Frame::Chunk { seq: 2, data: &data },
             Frame::Chunk { seq: 2, data: &data[..1] },
             Frame::End { seq: 3, status: Status::Io, count: u32::MAX },
+            Frame::Profile { seq: 4, profile: PROFILE_SAMPLE },
         ] {
             let n = fr.encode(&mut f);
             assert_eq!(Frame::parse(&f[..n]), Some(fr));

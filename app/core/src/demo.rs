@@ -3,7 +3,7 @@
 //! The rides are made by the firmware's FIT writer from invented samples: a made-up loop (a lap of about 5 km, a
 //! wobbling circle) around a public landmark, the Eiffel Tower in Paris; no real ride, nothing of the owner's.
 
-use bryton_rustfw::filesvc::{Command, FRAME_BIG, Folder, Frame, Key, Name, Status, name_check};
+use bryton_rustfw::filesvc::{Command, FRAME_BIG, Folder, Frame, Key, Name, Profile, Status, name_check};
 
 /// The largest CHUNK payload: the fast link's frame (the largest MTU less 3) less the CHUNK header (kind, seq). The
 /// demo unit serves it, as the unit does on a phone that exchanged the MTU.
@@ -121,6 +121,8 @@ pub struct FakeUnit {
     pub faults: Faults,
     /// The write under way: day, size, CRC and the bytes so far.
     writing: Option<([u8; 8], u32, u32, Vec<u8>)>,
+    /// The training profile PROFILE_GET gives and PROFILE_SET replaces.
+    pub profile: Profile,
 }
 
 fn enc(f: Frame) -> Vec<u8> {
@@ -137,6 +139,15 @@ impl FakeUnit {
             workouts: Vec::new(),
             faults: Faults { chunk: BIG_CHUNK, ..Faults::default() },
             writing: None,
+            profile: Profile {
+                ftp: 250,
+                max_hr: 185,
+                lthr: 168,
+                weight_kg: 70,
+                wprime_j: 20_000,
+                zones_lthr: false,
+                female: false,
+            },
         }
     }
 
@@ -208,6 +219,16 @@ impl FakeUnit {
                 };
                 let data = data.clone();
                 self.serve(seq, offset, &data)
+            }
+            Command::ProfileGet { seq } => vec![enc(Frame::Profile { seq, profile: self.profile })],
+            Command::ProfileSet { seq, .. } if self.faults.busy => end(seq, Status::Busy, 0),
+            Command::ProfileSet { seq, .. } if self.faults.read_only => end(seq, Status::ReadOnly, 0),
+            Command::ProfileSet { seq, profile } => {
+                let (changed, in_range) = (profile != self.profile, (50..=600).contains(&profile.ftp));
+                if in_range {
+                    self.profile = profile;
+                }
+                end(seq, if in_range { Status::Ok } else { Status::BadRequest }, u32::from(changed && in_range))
             }
             Command::WriteBegin { seq, .. } | Command::Delete { seq, .. } if self.faults.busy => {
                 end(seq, Status::Busy, 0)

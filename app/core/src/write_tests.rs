@@ -113,3 +113,32 @@ fn a_write_awaiting_its_answer_goes_silent() {
     assert!(c.silent(t + SILENCE_MS) && !c.silent(t + 10));
     assert_eq!(c.progress().total, 3);
 }
+
+#[test]
+fn the_profile_is_read_set_and_refused_by_the_unit() {
+    let (c, mut u, mut t) = (FileClient::new(), FakeUnit::demo(), 0);
+    assert_eq!(c.profile(), None);
+    let cmd = c.profile_get_command(t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Profile);
+    let mut p = c.profile().unwrap();
+    assert_eq!((p.ftp, p.max_hr), (250, 185));
+    p.ftp = 283;
+    let cmd = c.profile_set_command(p, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::ProfileSet);
+    let cmd = c.profile_get_command(t);
+    pump(&c, &mut u, &cmd, &mut t);
+    assert_eq!(c.profile(), Some(p), "read back");
+    let fail = |error| FileEvent::Failed { error };
+    for (busy, read_only, ftp, want) in [
+        (true, false, 300, FileError::Busy),
+        (false, true, 300, FileError::ReadOnly),
+        (false, false, 9, FileError::BadRequest),
+    ] {
+        (u.faults.busy, u.faults.read_only) = (busy, read_only);
+        let cmd = c.profile_set_command(UnitProfile { ftp, ..p }, t);
+        assert_eq!(pump(&c, &mut u, &cmd, &mut t), fail(want));
+    }
+    assert_eq!(u.profile.ftp, 283, "refusals change nothing");
+    c.profile_get_command(t);
+    assert!(c.silent(t + crate::files::SILENCE_MS), "an unanswered GET goes silent");
+}

@@ -578,6 +578,7 @@ impl App {
             return;
         }
         let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
+        let profile = self.training_profile();
         let svc = &mut self.phone.files;
         svc.stall_ms = 0;
         let cmd = fs::Command::parse(written);
@@ -621,9 +622,73 @@ impl App {
                 | fs::Command::ListIn { seq, .. }
                 | fs::Command::ReadIn { seq, .. },
             ) => svc.finish(seq, Status::Busy, 0),
+            Ok(fs::Command::ProfileGet { seq }) => {
+                svc.reset();
+                let mut f = [0; fs::FRAME_BIG];
+                let n = Frame::Profile { seq, profile }.encode(&mut f);
+                (svc.out, svc.out_len, svc.pending) = (f, n, 0);
+            }
+            Ok(fs::Command::ProfileSet { seq, profile }) => {
+                svc.reset();
+                let (status, count) = self.profile_set(b, profile, busy);
+                self.phone.files.finish(seq, status, count);
+            }
             Ok(_) => {} // the writes: files_write
             Err((seq, status)) => svc.finish(seq, status, 0),
         }
+    }
+
+    /// The settings the phone reads and sets (link/filesvc.rs "Profile").
+    fn training_profile(&self) -> fs::Profile {
+        let (s, byte) = (&self.settings, |v: u16| u8::try_from(v).unwrap_or(u8::MAX));
+        fs::Profile {
+            ftp: s.ftp,
+            max_hr: byte(s.max_hr),
+            lthr: byte(s.lthr),
+            weight_kg: byte(s.weight_kg),
+            wprime_j: s.wprime_j,
+            zones_lthr: s.zones_lthr,
+            female: s.female,
+        }
+    }
+
+    /// PROFILE_SET: the answer's status and count. A value must be in the menu's range (or be the one held, so a
+    /// profile read and sent back unchanged is never refused). Applied as the menus do (`setting_edited`, then
+    /// `save_misc`): the file is written between rides, the registers hold it until then.
+    #[inline(never)]
+    fn profile_set(&mut self, b: &mut impl Board, p: fs::Profile, busy: bool) -> (Status, u32) {
+        let now = self.training_profile();
+        let ok = |r: core::ops::RangeInclusive<u16>, new: u16, old: u16| new == old || r.contains(&new);
+        let b8 = u16::from;
+        let valid = ok(menu::FTP_RANGE, p.ftp, now.ftp)
+            && ok(menu::MAX_HR_RANGE, b8(p.max_hr), b8(now.max_hr))
+            && ok(menu::LTHR_RANGE, b8(p.lthr), b8(now.lthr))
+            && ok(menu::WEIGHT_RANGE, b8(p.weight_kg), b8(now.weight_kg))
+            && ok(menu::WPRIME_RANGE, p.wprime_j, now.wprime_j);
+        if !valid {
+            return (Status::BadRequest, 0);
+        }
+        if busy {
+            return (Status::Busy, 0);
+        }
+        if !self.card_writable {
+            return (Status::ReadOnly, 0);
+        }
+        if p == now {
+            return (Status::Ok, 0);
+        }
+        if !self.settings_ready(b) {
+            return (Status::Io, 0);
+        }
+        let s = &mut self.settings;
+        (s.ftp, s.wprime_j, s.zones_lthr, s.female) = (p.ftp, p.wprime_j, p.zones_lthr, p.female);
+        (s.lthr, s.weight_kg) = (b8(p.lthr), b8(p.weight_kg));
+        if p.max_hr != now.max_hr {
+            s.max_hr = b8(p.max_hr);
+            self.setting_edited(menu::Setting::MaxHr);
+        }
+        self.save_misc(b);
+        (Status::Ok, 1)
     }
 
     /// A write command ([`App::files_command`]): refused (and the write under way dropped) unless the card may be

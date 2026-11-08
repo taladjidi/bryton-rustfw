@@ -254,6 +254,19 @@ On the owner's iPhone 16 Pro (iOS 27):
 - Speed was about 3 KB/s, far below the simulator's 34 KB/s; after the event length 6 and the connection event extension it is 16.6 KB/s (below, and docs/status.md for the steps still owed).
 - iOS keeps a stale GATT table after the unit switches firmware (no Service Changed characteristic yet): forget S510 and pair again fixes it; a RAM run's new bond lives only in RAM.
 
+## Training profile
+
+PROFILE_GET (`0A seq`) and PROFILE_SET (`0B seq profile[9]`) read and set the unit's training profile over the same
+file service (frames in src/link/filesvc.rs). The profile is 9 bytes, little endian: `version` (1), `ftp` u16 (W),
+`max_hr` u8, `lthr` u8, `weight` u8 (kg), `wprime` u16 (J), `flags` u8 (bit 0: zones from the LTHR, bit 1: female).
+GET answers one PROFILE frame (`85 seq profile[9]`) and works during a ride and with the card lent. SET answers an END:
+OK (count 1 changed, 0 the unit already held these values, nothing written), BAD REQUEST (another version, a
+reserved flag bit, or a value outside the menus' ranges; a value the unit already holds is never refused, so a
+profile read and sent back whole always passes), BUSY (a ride, or the card lent), READ ONLY (a build that does not
+write the card). It is applied as the menus do (the same `save_misc`, so the file is written between rides and the
+backup registers hold it until then). The phone core: `FileClient.profile_get_command` / `profile_set_command`, the
+events `profile` and `profileSet`, `profile()`. The flow: Intervals.icu gives the FTP to the phone, the phone sets it.
+
 ## Fast link: the chip app's layer and the speed model
 
 Moved from docs/status.md (2026-11-07).

@@ -24,6 +24,10 @@ names). A feature not listed here was seen on the unit. What was fully seen is i
 
 ### Phone and phone app
 
+**Training profile over the phone (PROFILE_GET / PROFILE_SET, docs/app.md "Training profile")**
+
+Seen: simulator (get, set, read back, kept after a restart, each refusal, a ride, fuzz), app core tests. Seen on the unit? No: a RAM run with an EMMC_WRITE build, the phone bonded, sets the FTP from the phone; check that the unit's menu shows it and that it survives a restart.
+
 **Workouts read by the phone (LIST_IN / READ_IN of `\Workout\calendar`, docs/app.md "Workouts")**
 
 Seen: simulator (a folder changed between the two commands, fuzz), app core tests, the iOS Simulator demo. Reading only.

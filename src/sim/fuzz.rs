@@ -7985,8 +7985,8 @@ fn file_service_commands() {
     use super::filesvc_tests::{drain, paired, rides};
     use super::run;
     use crate::filesvc::{Command, Frame, Status};
-    let mut reached = [0u32; 8]; // entries, chunks, bad requests, not found, ok ends, busy ends, workout entries, READ_IN of a listed key
-    for seed in 1..=scaled(40) {
+    let mut reached = [0u32; 10]; // entries, chunks, bad requests, not found, ok ends, busy ends, workout entries, READ_IN of a listed key, PROFILE frames, PROFILE_SET that changed the settings
+    for seed in 1..=scaled(80) {
         let mut next = xorshift(seed);
         let (mut sim, mut app, control, data) = paired();
         let rides = rides();
@@ -8027,7 +8027,44 @@ fn file_service_commands() {
                 k.extend(std::format!("{:02}", next() % 3).bytes());
                 crate::filesvc::Key::new(crate::filesvc::Folder::Workout, &k).unwrap()
             };
-            let n = match r % 11 {
+            // one command in eight is a profile one, drawn from the high bits so the others keep their sequence
+            let n = match if r >> 20 & 7 == 0 { 11 + (r >> 24 & 1) } else { r % 11 } {
+                11 => Command::ProfileGet { seq }.encode(&mut f),
+                12 => {
+                    // a profile of the wire's shape: mostly inside the menus' ranges, now and then one value outside,
+                    // a bit of the frame flipped or the frame cut
+                    let wild = next().is_multiple_of(5);
+                    let mut v = |lo: u32, hi: u32| lo + next() % (hi - lo + 1);
+                    let (ftp, max_hr, lthr, weight_kg, wprime_j) = if wild {
+                        (v(0, 900) as u16, v(0, 255) as u8, v(0, 255) as u8, v(0, 255) as u8, v(0, 60_000) as u16)
+                    } else {
+                        (
+                            v(50, 600) as u16,
+                            v(100, 230) as u8,
+                            v(100, 230) as u8,
+                            v(30, 150) as u8,
+                            v(5000, 40_000) as u16,
+                        )
+                    };
+                    let profile = crate::filesvc::Profile {
+                        ftp,
+                        max_hr,
+                        lthr,
+                        weight_kg,
+                        wprime_j,
+                        zones_lthr: next().is_multiple_of(2),
+                        female: next().is_multiple_of(2),
+                    };
+                    let n = Command::ProfileSet { seq, profile }.encode(&mut f);
+                    match next() % 6 {
+                        0 => {
+                            f[next() as usize % n] ^= 1 << (next() % 8);
+                            n
+                        }
+                        1 => n.saturating_sub(1 + next() as usize % 3),
+                        _ => n,
+                    }
+                }
                 8 => Command::ListIn { seq, folder: crate::filesvc::Folder::Workout }.encode(&mut f),
                 9 => {
                     let key = wkey(&mut next);
@@ -8072,10 +8109,14 @@ fn file_service_commands() {
                     n
                 }
             };
+            let held = (app.settings.ftp, app.settings.max_hr, app.settings.weight_kg, app.settings.lthr);
             sim.nordic.phone_write(control, &f[..n]);
             run(&mut sim, &mut app, 100 + u64::from(next() % 600));
+            let now = (app.settings.ftp, app.settings.max_hr, app.settings.weight_kg, app.settings.lthr);
+            reached[9] += u32::from(now != held);
             for p in drain(&mut sim, data) {
                 match Frame::parse(&p).unwrap_or_else(|| panic!("seed {seed}: {p:?} does not parse")) {
+                    Frame::Profile { .. } => reached[8] += 1,
                     Frame::Entry { .. } => reached[0] += 1,
                     Frame::EntryIn { key, .. } => {
                         reached[6] += 1;
@@ -8094,7 +8135,7 @@ fn file_service_commands() {
         }
     }
     std::println!(
-        "file service fuzz: {reached:?} (entries, chunks, bad requests, not found, ok ends, busy, workout entries, READ_IN of a listed key)"
+        "file service fuzz: {reached:?} (entries, chunks, bad requests, not found, ok ends, busy, workout entries, READ_IN of a listed key, PROFILE frames, profiles set)"
     );
     assert!(reached.iter().all(|&n| n >= thr(20)), "reached {reached:?}");
 }

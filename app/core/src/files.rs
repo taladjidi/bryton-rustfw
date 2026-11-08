@@ -5,7 +5,7 @@
 //! Chunk sizes are never assumed: each CHUNK says its own length. The whole file is kept in memory, so a dropped
 //! READ (BUSY, a link drop, 5 s of silence) resumes with [`FileClient::resume_command`] from the bytes kept.
 
-use bryton_rustfw::filesvc::{Command, FRAME_BIG, FRAME_MAX, Folder, Frame, Key, NAME_LEN, Status};
+use bryton_rustfw::filesvc::{Command, FRAME_BIG, FRAME_MAX, Folder, Frame, Key, NAME_LEN, Profile, Status};
 use std::sync::Mutex;
 
 /// No frame for this long while an answer is awaited means the unit dropped it (filesvc.rs, "Dropped and moved").
@@ -42,6 +42,53 @@ impl From<UnitFolder> for Folder {
         match f {
             UnitFolder::Activities => Folder::Activities,
             UnitFolder::Workout => Folder::Workout,
+        }
+    }
+}
+
+/// The unit's training profile (src/link/filesvc.rs "Profile"): what PROFILE_GET gives and PROFILE_SET takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct UnitProfile {
+    /// FTP, W (50 to 600).
+    pub ftp: u16,
+    /// Maximum heart rate, bpm (100 to 230).
+    pub max_hr: u8,
+    /// Lactate threshold heart rate, bpm (100 to 230).
+    pub lthr: u8,
+    /// Rider weight, kg (30 to 150).
+    pub weight_kg: u8,
+    /// W', J (5000 to 40000).
+    pub wprime_j: u16,
+    /// The heart-rate zones come from the LTHR, not the maximum.
+    pub zones_lthr: bool,
+    /// Female (TRIMP's constant).
+    pub female: bool,
+}
+
+impl From<Profile> for UnitProfile {
+    fn from(p: Profile) -> Self {
+        UnitProfile {
+            ftp: p.ftp,
+            max_hr: p.max_hr,
+            lthr: p.lthr,
+            weight_kg: p.weight_kg,
+            wprime_j: p.wprime_j,
+            zones_lthr: p.zones_lthr,
+            female: p.female,
+        }
+    }
+}
+
+impl From<UnitProfile> for Profile {
+    fn from(p: UnitProfile) -> Self {
+        Profile {
+            ftp: p.ftp,
+            max_hr: p.max_hr,
+            lthr: p.lthr,
+            weight_kg: p.weight_kg,
+            wprime_j: p.wprime_j,
+            zones_lthr: p.zones_lthr,
+            female: p.female,
         }
     }
 }
@@ -97,6 +144,10 @@ pub enum FileEvent {
     Written,
     /// The unit removed the workout.
     Deleted,
+    /// The unit's profile arrived: [`FileClient::profile`].
+    Profile,
+    /// The unit took the profile (it held other values), or already held it.
+    ProfileSet,
     /// The transfer failed.
     Failed {
         /// Why.
@@ -129,6 +180,10 @@ enum Mode {
     Ending,
     /// DELETE sent, its END awaited.
     Deleting,
+    /// PROFILE_GET sent, its PROFILE frame awaited.
+    ProfileGet,
+    /// PROFILE_SET sent, its END awaited.
+    ProfileSet,
 }
 
 struct Inner {
@@ -156,6 +211,8 @@ struct Inner {
     /// A workout being written: its bytes and how many were handed out.
     out: Vec<u8>,
     sent: usize,
+    /// The last PROFILE the unit gave.
+    profile: Option<UnitProfile>,
 }
 
 /// The file service client; one command at a time (a new one replaces the one under way, as on the unit).
@@ -267,6 +324,17 @@ impl Inner {
                 Status::Ok => self.fail(FileError::CountMismatch),
                 s => self.write_error(s),
             },
+            (Mode::ProfileGet, Frame::Profile { seq, profile }) if seq == self.seq => {
+                (self.mode, self.profile) = (Mode::Idle, Some(profile.into()));
+                FileEvent::Profile
+            }
+            (Mode::ProfileGet | Mode::ProfileSet, Frame::End { seq, status, .. }) if seq == self.seq => match status {
+                Status::Ok if self.mode == Mode::ProfileSet => {
+                    self.mode = Mode::Idle;
+                    FileEvent::ProfileSet
+                }
+                s => self.write_error(s),
+            },
             _ => FileEvent::Ignored,
         }
     }
@@ -320,6 +388,7 @@ impl FileClient {
             now_ms: 0,
             out: Vec::new(),
             sent: 0,
+            profile: None,
         }))
     }
 
@@ -416,10 +485,39 @@ impl FileClient {
         Some(cmd)
     }
 
+    /// Asks for the unit's training profile (PROFILE_GET; works during a ride): the bytes to write to Control. The
+    /// answer is [`FileEvent::Profile`], then [`FileClient::profile`].
+    pub fn profile_get_command(&self, now_ms: u64) -> Vec<u8> {
+        let mut s = self.lock();
+        s.seq = s.seq.wrapping_add(1);
+        (s.mode, s.last_ms) = (Mode::ProfileGet, now_ms);
+        let seq = s.seq;
+        s.encode(Command::ProfileGet { seq })
+    }
+
+    /// Sets the unit's training profile (PROFILE_SET): the bytes to write to Control. The answer is
+    /// [`FileEvent::ProfileSet`], or a failure: `BadRequest` (a value outside the unit's ranges), `Busy` (riding or on
+    /// USB), `ReadOnly` (a build that does not write its card).
+    pub fn profile_set_command(&self, profile: UnitProfile, now_ms: u64) -> Vec<u8> {
+        let mut s = self.lock();
+        s.seq = s.seq.wrapping_add(1);
+        (s.mode, s.last_ms) = (Mode::ProfileSet, now_ms);
+        let seq = s.seq;
+        s.encode(Command::ProfileSet { seq, profile: profile.into() })
+    }
+
+    /// The last profile the unit gave (None before the first [`FileEvent::Profile`]).
+    pub fn profile(&self) -> Option<UnitProfile> {
+        self.lock().profile
+    }
+
     /// Drops a write or delete under way (after a timeout, a lost link or a refusal): late answers are ignored.
     pub fn abort(&self) {
         let mut s = self.lock();
-        if matches!(s.mode, Mode::WriteBegin | Mode::Sending | Mode::Ending | Mode::Deleting) {
+        if matches!(
+            s.mode,
+            Mode::WriteBegin | Mode::Sending | Mode::Ending | Mode::Deleting | Mode::ProfileGet | Mode::ProfileSet
+        ) {
             s.mode = Mode::Idle;
         }
         (s.out, s.sent) = (Vec::new(), 0);
@@ -483,7 +581,14 @@ impl FileClient {
         let s = self.lock();
         matches!(
             s.mode,
-            Mode::Listing | Mode::Reading | Mode::WriteBegin | Mode::Sending | Mode::Ending | Mode::Deleting
+            Mode::Listing
+                | Mode::Reading
+                | Mode::WriteBegin
+                | Mode::Sending
+                | Mode::Ending
+                | Mode::Deleting
+                | Mode::ProfileGet
+                | Mode::ProfileSet
         ) && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
     }
 

@@ -260,6 +260,8 @@ final class RideBrowser: ObservableObject {
             endWrite(nil, isSend: sending)
         case .written, .deleted:
             break  // a late answer of a write that was given up
+        case .profile, .profileSet:
+            break  // the profile (a later task's screen)
         case .failed(let e) where phase == .writing:
             if !sending && (e == .notFound || e == .mismatch) {
                 endWrite("That workout is no longer on the unit. The list was refreshed.", isSend: false)

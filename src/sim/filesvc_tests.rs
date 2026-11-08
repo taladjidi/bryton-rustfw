@@ -1110,3 +1110,86 @@ fn a_power_cut_at_every_write_of_a_sent_workout_leaves_the_calendar_whole() {
     std::println!("{writes} sectors: {none} cuts left the calendar as it was");
     assert!(none > 0 && writes > 10);
 }
+
+/// Sends a profile command; the PROFILE frame and the END that answered.
+fn profile_ask(sim: &mut Sim, app: &mut App, ends: (u16, u16), cmd: Command) -> (Option<crate::filesvc::Profile>, End) {
+    let mut f = [0; 20];
+    let n = cmd.encode(&mut f);
+    let (seq, mut got, mut end) = (f[1], None, None);
+    sim.nordic.phone_write(ends.0, &f[..n]);
+    for _ in 0..20 {
+        pass(sim, app, 50);
+        for p in drain(sim, ends.1) {
+            match Frame::parse(&p) {
+                Some(Frame::Profile { seq: s, profile }) if s == seq => got = Some(profile),
+                Some(Frame::End { seq: s, status, count }) if s == seq => end = Some((status, count)),
+                _ => {}
+            }
+        }
+    }
+    (got, end)
+}
+
+#[test]
+fn the_profile_is_read_set_and_kept_after_a_restart() {
+    let (mut sim, mut app, control, data) = paired();
+    let ends = (control, data);
+    let (p, _) = profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 1 });
+    let mut p = p.expect("a PROFILE frame");
+    let s = app.settings;
+    assert_eq!((u16::from(p.max_hr), p.ftp, u16::from(p.weight_kg)), (s.max_hr, s.ftp, s.weight_kg));
+    // the values held, sent back: OK, nothing written
+    let before = sim.emmc.image.clone();
+    let set = |p| Command::ProfileSet { seq: 2, profile: p };
+    assert_eq!(profile_ask(&mut sim, &mut app, ends, set(p)).1, Some((Status::Ok, 0)));
+    assert!(sim.emmc.image == before && !app.settings_store.file.dirty, "as held: no write");
+    (p.ftp, p.max_hr, p.weight_kg, p.zones_lthr) = (283, 181, 71, true);
+    assert_eq!(profile_ask(&mut sim, &mut app, ends, set(p)).1, Some((Status::Ok, 1)));
+    assert_eq!((app.settings.ftp, app.settings.max_hr, app.settings.weight_kg), (283, 181, 71));
+    assert!(!app.settings.max_hr_age);
+    assert_eq!(profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 3 }).0, Some(p), "read back");
+    for _ in 0..200 {
+        if !app.settings_store.file.dirty {
+            break;
+        }
+        run(&mut sim, &mut app, 200);
+    }
+    let (_, app2) = super::page_tests::reboot(&mut sim);
+    assert_eq!((app2.settings.ftp, app2.settings.max_hr, app2.settings.weight_kg), (283, 181, 71), "after a restart");
+    assert!(app2.settings.zones_lthr);
+}
+
+#[test]
+fn every_risky_profile_set_is_refused_and_a_get_always_works() {
+    use crate::filesvc::Profile;
+    let (mut sim, mut app, control, data) = paired();
+    let ends = (control, data);
+    let ok = profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 1 }).0.unwrap();
+    let ftp = app.settings.ftp;
+    let set =
+        |sim: &mut Sim, app: &mut App, profile| profile_ask(sim, app, ends, Command::ProfileSet { seq: 2, profile }).1;
+    for p in [
+        Profile { ftp: 49, ..ok },
+        Profile { ftp: 601, ..ok },
+        Profile { max_hr: 99, ..ok },
+        Profile { weight_kg: 29, ..ok },
+        Profile { wprime_j: 4000, ..ok },
+        Profile { lthr: 231, ..ok },
+    ] {
+        assert_eq!(set(&mut sim, &mut app, p), Some((Status::BadRequest, 0)), "{p:?}");
+    }
+    let want = Profile { ftp: 300, ..ok };
+    app.card_writable = false;
+    assert_eq!(set(&mut sim, &mut app, want), Some((Status::ReadOnly, 0)));
+    app.card_writable = true;
+    app.emmc.lend(true);
+    assert_eq!(set(&mut sim, &mut app, want), Some((Status::Busy, 0)), "lent");
+    assert!(profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 3 }).0.is_some(), "a GET while lent");
+    app.emmc.lend(false);
+    app.leave_menus();
+    app.input(&mut sim, Input::Select); // Start
+    run(&mut sim, &mut app, 300);
+    assert_eq!(set(&mut sim, &mut app, want), Some((Status::Busy, 0)), "during a ride");
+    assert_eq!(profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 4 }).0, Some(ok), "a GET in a ride");
+    assert_eq!(app.settings.ftp, ftp, "nothing changed");
+}
