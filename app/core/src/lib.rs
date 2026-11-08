@@ -24,6 +24,7 @@ pub mod import;
 pub mod insight;
 pub mod intervals;
 pub mod ride;
+pub mod route;
 pub mod summary;
 #[cfg(test)]
 mod summary_tests;

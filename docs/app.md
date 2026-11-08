@@ -237,7 +237,7 @@ Debug builds read launch arguments (all with `-demo`; `xcrun simctl launch <devi
 `-demo-scroll graphs|laps|climbs` (a ride page position), `-demo-share` (the share sheet), `-demo-fitness`,
 `-demo-workout` (the first workout's page), `-demo-edit` (the editor; `-demo-saved` saves the copy, `-demo-send` opens the
 send sheet after 1.5 s, `-demo-send-go` presses Send), `-demo-profile` (the profile sheet), `-demo-delete` (the unit
-workout delete confirmation), `-demo-import` (the Files picker), and `-demo-scroll-rides|intervals|unit|phone` (a home
+workout delete confirmation), `-demo-import` (the Files picker), `-demo-routes` (the demo GPX imported; `-demo-route-open` its page, `-demo-route-send` and `-demo-route-send-go` the send sheet, `-demo-route-sent` sent without it, `-demo-route-delete` the unit route delete confirmation, `-demo-scroll-routes|unitroutes`), and `-demo-scroll-rides|intervals|unit|phone` (a home
 list position). The images in `docs/img/app-*.png` are light mode shots of an iPhone 18 Pro Simulator at the default
 text size.
 
@@ -396,7 +396,7 @@ a 20 B write length ends in "Sent"); its `Faults` can answer each status.
 
 ## Courses from the phone
 
-The unit's side (2026-11-08; the app's route screen and its GPX to FIT encoder are the next step). Folder 2 of the file
+The unit's side (2026-11-08; the phone's side is "Routes" below). Folder 2 of the file
 service is `\Courses\`, the folder the unit's COURSES menu lists after stock's `\PlanTrip` (src/link/filesvc.rs,
 src/app/filesvc.rs, src/storage/workout_write.rs):
 - LIST_IN `04 seq 02` lists its `.fit` and `.gpx` files, ENTRY_IN `84 seq 02 key[2] check[2] size[4]`: the key is the
@@ -428,6 +428,46 @@ src/app/filesvc.rs, src/storage/workout_write.rs):
 - The core: `UnitFolder::Courses` for `list_in_command`, `read_in_command` and `delete_command`;
   `course_write_command(name, bytes, max_write)`; the fake unit keeps `courses`. COURSES holds 64 courses since
   2026-11-08 (`course_file::LIST`, was 32).
+
+## Routes
+
+The phone side of the courses (2026-11-08): import a GPX, see it, send it to the unit, delete it there. A route planner
+later makes a `RouteView` through `route_from_points` (or hands a FIT course to `route_from_fit`) and joins the same
+pipeline.
+
+- **Core** (`app/core/src/route.rs`): `import_route(gpx, fallback_name)` reads the GPX with the firmware's own reader
+  (`course_file::Gpx`: `trkpt`, `rtept` with their optional `ele`, `wpt` turn words as course points), works out the
+  length (the unit's `step_mm`), the ascent and descent (3 m hysteresis) and the climbs (`Course::climbs_of`, the unit's
+  rule), thins past the unit's 4096 points by distance, and writes the FIT course (file_id course, course, lap, timer
+  events, a record per point with position, altitude and distance, a `course_point` per cue). The name is the GPX's
+  first `<name>` cut to the unit's alphabet (`route_name`: 1 to 20 of letters, digits, space, `-`, `_`). The file is
+  1 MB at most and the GPX 32 MB. The same route is the same bytes, so sending it twice is one file to the unit.
+- **Checked three ways:** each file is read back by the firmware's FIT reader (`fitread::Reader::with_position`, what
+  `is_course` runs on the card) before it is given out; the tests fuzz structured GPX (missing and bad `ele`, bad
+  numbers, junk, many segments, 150 000 points) and assert the seeds reach the encoder; and `tools/fit_check.py --course
+  app/core/target/course.fit` (from `cargo test the_encoded_route_is_written_for_fit_check`) reads one with fitdecode and
+  Garmin's SDK. `is_course` itself needs a FAT volume and is not run from the app's crate.
+- **The unit's list has no names**, only a key, a size and a check (the FIT CRC of `<name>.fit`, then of the size). The
+  phone keeps a ledger of what it sent (`Documents/Routes/sent.json`) and names a unit course whose check matches
+  (`course_check`); another course shows as "Route 00, not sent from this phone". Routes on the phone are the FIT files
+  in `Documents/Routes`.
+- **Screens:** the home list gets "Routes" (the phone's, with "On the unit" where the ledger matches, and "Import a GPX
+  file") and "Routes on the unit" (swipe or long press to delete, with a confirmation). A route page: the IGN map with
+  the climbs in their grade colour, distance, ascent, descent, an elevation profile with the climbs coloured and a
+  cursor that moves a marker on the map, the climb list, "Send to the unit". Opening a `.gpx` from Files or the share
+  sheet ("Open in Bryton", `CFBundleDocumentTypes` and the imported type `com.topografix.gpx` in Info-extra.plist)
+  imports it and opens its page.
+- **Sending:** a name field (checked as the unit does; at the default MTU the link carries 8 characters of a name and the
+  sheet says which), progress, and the unit's answers in words: FULL "the unit's course list is full (64)", BAD REQUEST
+  "a route with that name exists on the unit: rename or delete it first", BUSY "riding or the card is lent", READ ONLY.
+  Deleting the course the unit follows answers BUSY, said so. Phases: the courses' list is a background step after the
+  workouts' list and any action of the rider (a ride tap, a send, a delete) preempts it.
+- **Not done:** the unit's route names (needs a read of each file or a name in LIST_IN), a route on the phone edited or
+  merged, turn cues drawn on the map, a planner.
+
+| The routes on the home list | A route page |
+|:-:|:-:|
+| ![Routes](img/app-routes.png) | ![A route](img/app-route.png) |
 
 ## Seen on the unit, 2026-11-07
 
