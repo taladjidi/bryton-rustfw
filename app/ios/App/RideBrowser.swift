@@ -48,6 +48,8 @@ final class RideBrowser: ObservableObject {
     @Published var unitRoutes: [UnitRoute] = []
     @Published var routesListed = false
     @Published var routeMessage: String?
+    /// Why the unit's courses are not listed (its software has no folder 2 list, or it is riding), or nil.
+    @Published var routeListError: String?
     /// Told when the unit took a route, with the name it has there.
     var onRouteSent: ((SentRoute) -> Void)?
     @Published var sendDone = false
@@ -112,8 +114,6 @@ final class RideBrowser: ObservableObject {
     static let syncDays = 56
 
     var hasTransport: Bool { transport != nil }
-    /// The longest course name the link carries: 20, or 8 at the default MTU (the core cuts a longer one).
-    var courseNameMax: Int { min(20, max(transport?.writeLength ?? 20, 20) - 12) }
     var isDownloading: Bool { if case .downloading = phase { true } else { false } }
 
     static var now: UInt64 { UInt64(ProcessInfo.processInfo.systemUptime * 1000) }
@@ -284,8 +284,8 @@ final class RideBrowser: ObservableObject {
         }
     }
 
-    /// Sends a FIT course to the unit as `name` (the core cuts it to the link's write length: 8 characters at the
-    /// default MTU), then lists the courses again. `source` is the phone route it comes from.
+    /// Sends a FIT course to the unit as `name` (1 to 20 characters of its alphabet), then lists the courses again.
+    /// `source` is the phone route it comes from.
     func sendRoute(name: String, source: String, bytes: Data) {
         sendError = nil
         sendDone = false
@@ -301,7 +301,7 @@ final class RideBrowser: ObservableObject {
         }
         message = nil
         (sending, routeWrite) = (true, true)
-        routeSending = SentRoute(unitName: String(name.prefix(min(20, max(t.writeLength, 20) - 12))).trimmingCharacters(in: .whitespaces), size: UInt32(clamping: bytes.count), route: source)
+        routeSending = SentRoute(unitName: name, size: UInt32(clamping: bytes.count), route: source)
         phase = .writing
         progress = Progress(received: 0, total: UInt32(clamping: bytes.count), bytesPerS: 0)
         t.write(cmd)
@@ -593,10 +593,15 @@ final class RideBrowser: ObservableObject {
             listingRoutes = false
             let list = client.filesIn(), checks = client.filesInChecks()
             unitRoutes = zip(list, checks).map { UnitRoute(key: $0.name, size: $0.size, check: $1) }
-            (routesListed, routesFresh, phase) = (true, true, .idle)
-        case .busy where phase == .routes, .failed where phase == .routes:
-            // a background list that failed (riding, USB): the old list stays, no notice
+            (routesListed, routesFresh, phase, routeListError) = (true, true, .idle, nil)
+        case .busy where phase == .routes:
+            // a background list refused (riding, USB): the old list stays; the section says why
             (listingRoutes, phase) = (false, .idle)
+            routeListError = "The unit is riding or its card is lent to a computer: the list of routes comes later."
+        case .failed(let e) where phase == .routes:
+            (listingRoutes, phase) = (false, .idle)
+            routeListError = e == .badRequest
+                ? "This unit's software does not list routes yet." : "The unit could not list its routes: \(Self.text(e))"
         case .listed where listingWorkouts:
             listingWorkouts = false
             workoutQueue = client.filesIn().map(\.name)
@@ -780,7 +785,7 @@ final class DemoTransport: FileTransport {
     private var timer: Timer?
 
     func start() {
-        onDebug?("Demo: fake unit, write length 244 B")
+        onDebug?("Demo: fake unit, write length \(writeLength) B")
         DispatchQueue.main.async { self.onReady?() }
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -791,8 +796,12 @@ final class DemoTransport: FileTransport {
         }
     }
 
-    /// What the owner's phone negotiated (docs/app.md): a course name of 20 characters fits.
-    var writeLength: Int { 244 }
+    /// The default MTU's 20 bytes; `-demo-mtu 244` is what the owner's phone negotiated (docs/app.md), where a course
+    /// name of 20 characters fits.
+    var writeLength: Int {
+        let a = CommandLine.arguments
+        return a.firstIndex(of: "-demo-mtu").flatMap { a[safe: $0 + 1] }.flatMap { Int($0) } ?? 20
+    }
 
     func write(_ d: Data) {
         queue = unit.handle(command: d)

@@ -237,7 +237,7 @@ Debug builds read launch arguments (all with `-demo`; `xcrun simctl launch <devi
 `-demo-scroll graphs|laps|climbs` (a ride page position), `-demo-share` (the share sheet), `-demo-fitness`,
 `-demo-workout` (the first workout's page), `-demo-edit` (the editor; `-demo-saved` saves the copy, `-demo-send` opens the
 send sheet after 1.5 s, `-demo-send-go` presses Send), `-demo-profile` (the profile sheet), `-demo-delete` (the unit
-workout delete confirmation), `-demo-import` (the Files picker), `-demo-routes` (the demo GPX imported; `-demo-route-open` its page, `-demo-route-send` and `-demo-route-send-go` the send sheet, `-demo-route-sent` sent without it, `-demo-route-delete` the unit route delete confirmation, `-demo-scroll-routes|unitroutes`), and `-demo-scroll-rides|intervals|unit|phone` (a home
+workout delete confirmation), `-demo-import` (the Files picker), `-demo-mtu 244` (the demo link's write length, 20 without it), `-demo-routes` (the demo GPX imported; `-demo-route-open` its page, `-demo-route-send` and `-demo-route-send-go` the send sheet, `-demo-route-sent` sent without it, `-demo-route-delete` the unit route delete confirmation, `-demo-scroll-routes|unitroutes`), and `-demo-scroll-rides|intervals|unit|phone` (a home
 list position). The images in `docs/img/app-*.png` are light mode shots of an iPhone 18 Pro Simulator at the default
 text size.
 
@@ -439,17 +439,30 @@ pipeline.
   (`course_file::Gpx`: `trkpt`, `rtept` with their optional `ele`, `wpt` turn words as course points), works out the
   length (the unit's `step_mm`), the ascent and descent (3 m hysteresis) and the climbs (`Course::climbs_of`, the unit's
   rule), thins past the unit's 4096 points by distance, and writes the FIT course (file_id course, course, lap, timer
-  events, a record per point with position, altitude and distance, a `course_point` per cue). The name is the GPX's
-  first `<name>` cut to the unit's alphabet (`route_name`: 1 to 20 of letters, digits, space, `-`, `_`). The file is
-  1 MB at most and the GPX 32 MB. The same route is the same bytes, so sending it twice is one file to the unit.
+  events, a record per point with position, altitude and distance, a `course_point` per cue, sorted by distance). The
+  same route is the same bytes, so sending it twice is one file to the unit. The GPX is 8 MB at most, the course 1 MB;
+  UTF-16 (byte order mark) is read as UTF-8.
+  - **Track and route of the same road:** planners often write both. The firmware's reader does not say which tag a
+    point came from, so the file is read twice, once with `rtept` and once with `trkpt` renamed, and the group with
+    more points wins (the track on a tie); two different places say so in `RouteView.notes`.
+  - **Separate tracks:** a jump of over 1 km where a segment starts ends the route (the unit's gap rule): the first track
+    is kept and a note says so. Waypoints over 500 m from the route are not cues.
+  - **Cues:** a turn word on a track point keeps that point's own distance, so an out-and-back has each pass's cue.
+  - **Name:** `<metadata><name>`, else the first `<trk>` or `<rte>` name (never a waypoint's or the author's), entities
+    and CDATA decoded, then `route_name`: accents folded (é is e, ß is ss, œ is oe), apostrophes dropped, other
+    characters spaces, 1 to 20 of letters, digits, space, `-`, `_`, not a Windows device name.
+  - **Clashes:** `route_clash` (any case, `_` as a space, as the unit's COURSES menu); the send sheet compares the name
+    with the unit's known names and says "already on the unit as X" before sending.
 - **Checked three ways:** each file is read back by the firmware's FIT reader (`fitread::Reader::with_position`, what
   `is_course` runs on the card) before it is given out; the tests fuzz structured GPX (missing and bad `ele`, bad
   numbers, junk, many segments, 150 000 points) and assert the seeds reach the encoder; and `tools/fit_check.py --course
   app/core/target/course.fit` (from `cargo test the_encoded_route_is_written_for_fit_check`) reads one with fitdecode and
-  Garmin's SDK. `is_course` itself needs a FAT volume and is not run from the app's crate.
+  Garmin's SDK. `is_course` itself needs a FAT volume and is not run from the app's crate. The fuzz also covers a BOM and
+  UTF-16, damaged and out-of-range FIT in `route_from_fit`, and odd names; it scales with `FUZZ_SCALE`.
 - **The unit's list has no names**, only a key, a size and a check (the FIT CRC of `<name>.fit`, then of the size). The
   phone keeps a ledger of what it sent (`Documents/Routes/sent.json`) and names a unit course whose check matches
-  (`course_check`); another course shows as "Route 00, not sent from this phone". Routes on the phone are the FIT files
+  (`course_check`); another course shows as "Route 00, not sent from this phone", which the rider can name on the phone only (swipe, Rename;
+  `aliases.json`, by size and check). When the unit's list carries names the ledger is the fallback. Routes on the phone are the FIT files
   in `Documents/Routes`.
 - **Screens:** the home list gets "Routes" (the phone's, with "On the unit" where the ledger matches, and "Import a GPX
   file") and "Routes on the unit" (swipe or long press to delete, with a confirmation). A route page: the IGN map with
@@ -457,12 +470,13 @@ pipeline.
   cursor that moves a marker on the map, the climb list, "Send to the unit". Opening a `.gpx` from Files or the share
   sheet ("Open in Bryton", `CFBundleDocumentTypes` and the imported type `com.topografix.gpx` in Info-extra.plist)
   imports it and opens its page.
-- **Sending:** a name field (checked as the unit does; at the default MTU the link carries 8 characters of a name and the
-  sheet says which), progress, and the unit's answers in words: FULL "the unit's course list is full (64)", BAD REQUEST
+- **Sending:** a name field (checked as the unit does), progress, and the unit's answers in words: FULL "the unit's course list is full (64)", BAD REQUEST
   "a route with that name exists on the unit: rename or delete it first", BUSY "riding or the card is lent", READ ONLY.
   Deleting the course the unit follows answers BUSY, said so. Phases: the courses' list is a background step after the
   workouts' list and any action of the rider (a ride tap, a send, a delete) preempts it.
-- **Not done:** the unit's route names (needs a read of each file or a name in LIST_IN), a route on the phone edited or
+- **When the list is missing:** the section says why (an older firmware without the folder 2 list, or riding or USB).
+  Import and the GPX conversion run off the main thread, and the decoded routes are cached by file size and date.
+- **Not done:** the unit's route names (the firmware is adding the name to ENTRY_IN), a route on the phone edited or
   merged, turn cues drawn on the map, a planner.
 
 | The routes on the home list | A route page |

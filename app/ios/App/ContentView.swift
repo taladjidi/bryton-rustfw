@@ -84,8 +84,8 @@ struct ContentView: View {
                 if let p = routes.items.first(where: { $0.name == r.name }) { RoutePage(route: p, rides: rides, store: routes) }
             }
             .onOpenURL { url in  // "Open in Bryton" from Files or the share sheet
-                guard url.pathExtension.lowercased() == "gpx", let r = routes.importGpx(url) else { return }
-                path.append(RouteRoute(name: r.name))
+                guard url.pathExtension.lowercased() == "gpx" else { return }
+                routes.importGpx(url) { path.append(RouteRoute(name: $0.name)) }
             }
             .navigationTitle("Rides")
             .navigationBarTitleDisplayMode(.inline)

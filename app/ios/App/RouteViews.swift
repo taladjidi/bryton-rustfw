@@ -35,8 +35,9 @@ struct RoutesSection: View {
             }
             Button { importing = true } label: { Label("Import a GPX file", systemImage: "square.and.arrow.down") }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { r in
-                    if case .success(let url) = r { store.importGpx(url) }
+                    if case .success(let url) = r { store.importGpx(url) }  // stays on the list: the row appears
                 }
+            if store.importing { HStack { ProgressView(); Text("Reading the file…").foregroundStyle(.secondary) } }
             if let p = store.problem { Notice(text: p, level: .alarm) }
         } header: {
             Text("Routes")
@@ -53,25 +54,38 @@ struct UnitRoutesSection: View {
     @ObservedObject var store: RouteStore
     @ObservedObject var rides: RideBrowser
     @State private var deleting: UnitRoute?
+    @State private var renaming: UnitRoute?
+    @State private var newName = ""
 
     var body: some View {
         Section("Routes on the unit") {
             ForEach(rides.unitRoutes) { u in
+                let l = store.label(u)
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(store.unitName(u) ?? "Route \(u.key)")
-                        if store.unitName(u) == nil {
+                        Text(l?.name ?? "Route \(u.key)")
+                        if l == nil {
                             Text("Not sent from this phone").font(.caption).foregroundStyle(.secondary)
+                        } else if l?.own == true {
+                            Text("Named on this phone").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     Spacer()
                     Text("\(max(1, u.size / 1024)) KB").font(.caption).foregroundStyle(.secondary)
                 }
-                .swipeActions { Button("Delete", role: .destructive) { deleting = u } }
-                .contextMenu { Button("Delete from the unit", systemImage: "trash", role: .destructive) { deleting = u } }
+                .swipeActions {
+                    Button("Delete", role: .destructive) { deleting = u }
+                    if store.unitName(u) == nil { Button("Rename") { renaming = u; newName = l?.name ?? "" }.tint(.blue) }
+                }
+                .contextMenu {
+                    if store.unitName(u) == nil { Button("Name on this phone", systemImage: "pencil") { renaming = u; newName = l?.name ?? "" } }
+                    Button("Delete from the unit", systemImage: "trash", role: .destructive) { deleting = u }
+                }
             }
             if rides.unitRoutes.isEmpty {
-                Text(rides.routesListed ? "No routes on the unit" : "Reading routes…").foregroundStyle(.secondary)
+                Text(rides.routeListError ?? (rides.routesListed ? "No routes on the unit" : "Reading routes…")).foregroundStyle(.secondary)
+            } else if let e = rides.routeListError {
+                Notice(text: e)
             }
             if let m = rides.routeMessage { Notice(text: m, level: .alarm) }
         }
@@ -82,6 +96,13 @@ struct UnitRoutesSection: View {
             }
         }
         #endif
+        .alert("Name this route", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Save") { if let u = renaming { store.rename(u, to: newName) }; renaming = nil }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        } message: {
+            Text("Only on this phone: the unit lists the file under its own name. 1 to 20 letters, digits, spaces, - and _.")
+        }
         .confirmationDialog(
             "Delete this route from the unit?",
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible
@@ -176,6 +197,7 @@ struct RoutePage: View {
                 Button { sending = true } label: { Label("Send to the unit", systemImage: "arrow.up.circle") }
                     .frame(minHeight: 44)
                 if v.thinned { Notice(text: "The file had more points than the unit keeps, so the route was thinned.").font(.caption) }
+                ForEach(v.notes, id: \.self) { Notice(text: $0).font(.caption) }
             } footer: {
                 Text("The unit follows it from COURSES, with the climbs and \(v.cueCount) turns or waypoints of the file.")
             }
@@ -259,6 +281,8 @@ struct SendRouteSheet: View {
 
     private var valid: Bool { routeName(text: name) == name }
     private var busy: Bool { rides.phase == .writing }
+    /// The name of a course on the unit this one would meet.
+    private var clash: (name: String, same: Bool)? { valid ? store.clash(name, route: route, in: rides.unitRoutes) : nil }
 
     var body: some View {
         NavigationStack {
@@ -268,16 +292,10 @@ struct SendRouteSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .submitLabel(.done)
                 } footer: {
-                    if valid && name.count > rides.courseNameMax {
-                        Text("This link carries \(rides.courseNameMax) characters of a name: the unit gets \(name.prefix(rides.courseNameMax)).")
-                    } else if valid {
-                        Text("The unit lists it as \(name.uppercased()) in COURSES. Sending the same route twice keeps one.")
-                    } else {
-                        Text("1 to 20 letters, digits, spaces, - and _, no accents.").foregroundStyle(Tok.alarm)
-                    }
+                    footer
                 }
                 Section {
-                    Button("Send \(name)") { send() }.disabled(busy || !valid)
+                    Button("Send \(name)") { send() }.disabled(busy || !valid || (clash.map { !$0.same } ?? false))
                     if rides.phase == .writing {
                         ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
                         Text("\(rides.progress.received / 1024) of \(rides.progress.total / 1024) KB").font(.caption).foregroundStyle(.secondary)
@@ -297,6 +315,23 @@ struct SendRouteSheet: View {
                 send()
             }
             #endif
+        }
+    }
+
+    @ViewBuilder private var footer: some View {
+        if !valid {
+            Text("1 to 20 letters, digits, spaces, - and _. Accents are not kept.").foregroundStyle(Tok.alarm)
+        } else if let c = clash {
+            VStack(alignment: .leading, spacing: 6) {
+                if c.same {
+                    Text("This route is already on the unit as \(c.name). Sending it again changes nothing.")
+                } else {
+                    Text("A route is already on the unit as \(c.name): rename this one or delete that one first.")
+                        .foregroundStyle(Tok.alarm)
+                }
+            }
+        } else {
+            Text("The unit lists it as \(name.uppercased()) in COURSES. Sending the same route twice keeps one.")
         }
     }
 

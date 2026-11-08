@@ -32,7 +32,7 @@ use bryton_rustfw::storage::course_file::Gpx;
 use bryton_rustfw::storage::workout_write::COURSE_MAX;
 
 /// The largest GPX read, bytes.
-const READ_MAX: usize = 32 << 20;
+const READ_MAX: usize = 8 << 20;
 /// Cues kept (course points).
 const CUES_MAX: usize = 200;
 /// The unit's name length.
@@ -87,6 +87,8 @@ pub struct RouteView {
     pub cue_count: u32,
     /// The file had more points than the unit keeps, so it was thinned.
     pub thinned: bool,
+    /// What was left out or chosen, in words (a second group of points, separate tracks); empty when nothing.
+    pub notes: Vec<String>,
     /// The FIT course to send.
     pub fit: Vec<u8>,
 }
@@ -107,6 +109,9 @@ struct Cue {
     lon: i32,
     kind: u8,
     dist_m: Option<u32>,
+    /// The point it is on (a track point's own turn word), so its distance is that point's: an out-and-back keeps
+    /// each pass's cue.
+    idx: Option<usize>,
 }
 
 fn fit_type(t: Turn) -> u8 {
@@ -132,16 +137,69 @@ fn refuse<T>(message: &str) -> Result<T, DraftError> {
     Err(DraftError::Invalid { message: message.to_owned() })
 }
 
-/// A name in the unit's alphabet from any text: other characters become spaces, runs of spaces one, cut to 20; None
-/// when nothing the unit takes is left (empty, or a Windows device name).
+/// A letter without its accent, as plain ASCII ("é" is "e", "ß" is "ss", "œ" is "oe"); None for any other character.
+fn fold(c: char) -> Option<&'static str> {
+    let lower = c.to_lowercase().next()?;
+    let f = match lower {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => "a",
+        'æ' => "ae",
+        'ç' | 'ć' | 'č' | 'ĉ' | 'ċ' => "c",
+        'ď' | 'đ' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => "e",
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => "g",
+        'ĥ' | 'ħ' => "h",
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => "i",
+        'ĵ' => "j",
+        'ķ' => "k",
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => "l",
+        'ñ' | 'ń' | 'ņ' | 'ň' | 'ŉ' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => "o",
+        'œ' => "oe",
+        'ŕ' | 'ŗ' | 'ř' => "r",
+        'ś' | 'ŝ' | 'ş' | 'š' => "s",
+        'ß' => "ss",
+        'ţ' | 'ť' | 'ŧ' => "t",
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => "u",
+        'ŵ' => "w",
+        'ý' | 'ÿ' | 'ŷ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        _ => return None,
+    };
+    Some(f)
+}
+
+/// A name in the unit's alphabet from any text: accents folded ("été" is "ete", "Côte d'Azur" is "Cote dAzur"),
+/// apostrophes dropped, other characters spaces, runs of spaces one, cut to 20; None when nothing the unit takes is
+/// left (empty, or a Windows device name).
 #[uniffi::export]
 pub fn route_name(text: String) -> Option<String> {
-    let mapped: String =
-        text.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { ' ' }).collect();
+    let mut mapped = String::new();
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            mapped.push(c);
+        } else if let Some(f) = fold(c) {
+            // a capital keeps its case ("Ç" is "C", "Œ" is "Oe")
+            let mut it = f.chars();
+            if let Some(first) = it.next() {
+                mapped.push(if c.is_uppercase() { first.to_ascii_uppercase() } else { first });
+                mapped.extend(it);
+            }
+        } else if !matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '`') {
+            mapped.push(' ');
+        }
+    }
     let words: Vec<&str> = mapped.split(' ').filter(|w| !w.is_empty()).collect();
     let cut: String = words.join(" ").chars().take(NAME_MAX).collect();
     let name = cut.trim().to_owned();
     CourseName::new(name.as_bytes()).map(|_| name)
+}
+
+/// Whether the unit would take these for one course: the same name once cut, any case, `_` for a space (its COURSES
+/// menu shows them alike).
+#[uniffi::export]
+pub fn route_clash(a: String, b: String) -> bool {
+    let key = |s: &str| s.to_ascii_lowercase().replace('_', " ");
+    key(&a) == key(&b)
 }
 
 /// The check the unit lists a course with: its file name as listed (`<name>.fit`) and size (src/link/filesvc.rs
@@ -151,36 +209,146 @@ pub fn course_check(name: String, size: u32) -> u16 {
     bryton_rustfw::filesvc::name_check(format!("{name}.fit").as_bytes(), size)
 }
 
-/// The first `<name>` of a GPX file, as text.
-fn gpx_name(bytes: &[u8]) -> Option<String> {
-    let head = String::from_utf8_lossy(bytes.get(..bytes.len().min(64 << 10))?).into_owned();
-    let from = head.find("<name>")? + 6;
-    let rest = head.get(from..)?;
-    let text = rest.get(..rest.find("</name>")?)?;
-    Some(text.replace("<![CDATA[", "").replace("]]>", ""))
+/// The text of an XML element: CDATA unwrapped, the five entities and numeric references decoded.
+fn xml_text(s: &str) -> String {
+    let s = s.replace("<![CDATA[", "").replace("]]>", "");
+    let mut out = String::new();
+    let mut rest = s.as_str();
+    while let Some(i) = rest.find('&') {
+        out += rest.get(..i).unwrap_or("");
+        let tail = rest.get(i..).unwrap_or("");
+        let end = tail.find(';').filter(|&e| e <= 10);
+        let ent = end.and_then(|e| tail.get(1..e));
+        let ch = ent.and_then(|e| match e {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => {
+                let n = e.strip_prefix('#')?;
+                let v = match n.strip_prefix(['x', 'X']) {
+                    Some(h) => u32::from_str_radix(h, 16).ok()?,
+                    None => n.parse().ok()?,
+                };
+                char::from_u32(v)
+            }
+        });
+        match (ch, end) {
+            (Some(c), Some(e)) => {
+                out.push(c);
+                rest = tail.get(e + 1..).unwrap_or("");
+            }
+            _ => {
+                out.push('&');
+                rest = tail.get(1..).unwrap_or("");
+            }
+        }
+    }
+    out + rest
 }
 
-/// Reads a GPX file into a route named after the file's own name (or `fallback_name`).
-#[uniffi::export]
-pub fn import_route(bytes: Vec<u8>, fallback_name: String) -> Result<RouteView, DraftError> {
-    if bytes.len() > READ_MAX {
-        return refuse("The file is too big for a route (32 MB at most).");
+/// The text of the first `<name>` in `s`, None when there is none or it is not closed.
+fn name_in(s: &str) -> Option<String> {
+    let from = s.find("<name>")? + 6;
+    let rest = s.get(from..)?;
+    Some(xml_text(rest.get(..rest.find("</name>")?)?).trim().to_owned()).filter(|n| !n.is_empty())
+}
+
+/// The route's name: `<metadata><name>`, else the `<name>` of the first `<trk>` or `<rte>` (before its points); the
+/// names of waypoints and of the author are not it.
+fn gpx_name(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes.get(..bytes.len().min(1 << 20))?).into_owned();
+    if let (Some(a), Some(b)) = (text.find("<metadata"), text.find("</metadata>")) {
+        let meta = text.get(a..b).unwrap_or("");
+        // out of the author's and copyright's elements
+        let mut flat = String::new();
+        let mut rest = meta;
+        while let Some(i) = rest.find("<author") {
+            flat += rest.get(..i).unwrap_or("");
+            rest = rest.get(i..).and_then(|r| r.find("</author>").and_then(|e| r.get(e + 9..))).unwrap_or("");
+        }
+        flat += rest;
+        if let Some(n) = name_in(&flat) {
+            return Some(n);
+        }
     }
+    let start = ["<trk>", "<rte>", "<trk ", "<rte "].iter().filter_map(|t| text.find(t)).min()?;
+    let body = text.get(start..)?;
+    let end = ["<trkseg", "<trkpt", "<rtept", "</trk>", "</rte>"].iter().filter_map(|t| body.find(t)).min()?;
+    name_in(body.get(..end)?)
+}
+
+/// A UTF-16 file (byte order mark) as UTF-8; anything else as it is.
+fn utf8(bytes: Vec<u8>) -> Vec<u8> {
+    let (big, rest) = match bytes.as_slice() {
+        [0xff, 0xfe, rest @ ..] => (false, rest),
+        [0xfe, 0xff, rest @ ..] => (true, rest),
+        _ => return bytes,
+    };
+    let units = rest
+        .chunks_exact(2)
+        .map(|c| if big { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) });
+    String::from_utf16_lossy(&units.collect::<Vec<_>>()).into_bytes()
+}
+
+/// `bytes` with every `from` written as `to` (the same length): a file read as if its `rtept` (or `trkpt`) were
+/// another tag, since the firmware's reader does not say which it read.
+fn rename(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let mut i = 0;
+    while let Some(w) = bytes.get(i..i + from.len()) {
+        if w == from {
+            if let Some(slot) = out.get_mut(i..i + to.len()) {
+                slot.copy_from_slice(to);
+            }
+            i += from.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The points and cues the firmware's reader finds in GPX bytes.
+fn read_gpx(bytes: &[u8]) -> (Vec<P>, Vec<Cue>) {
     let (mut pts, mut cues) = (Vec::new(), Vec::new());
     let mut gpx = Gpx::new();
     for chunk in bytes.chunks(4096) {
         gpx.push_slice(chunk, &mut |item| match item {
             Item::Point(p) => pts.push(P { lat: p.lat, lon: p.lon, alt: p.alt_dm, split: p.split }),
-            Item::Cue(lat, lon, t, dist_m) => cues.push(Cue { lat, lon, kind: fit_type(t), dist_m }),
+            Item::Cue(lat, lon, t, dist_m) => cues.push(Cue { lat, lon, kind: fit_type(t), dist_m, idx: None }),
             Item::CueHere(t) => {
-                if let Some(p) = pts.last() {
-                    cues.push(Cue { lat: p.lat, lon: p.lon, kind: fit_type(t), dist_m: None });
+                if let Some((i, p)) = pts.len().checked_sub(1).and_then(|i| Some((i, pts.get(i)?))) {
+                    cues.push(Cue { lat: p.lat, lon: p.lon, kind: fit_type(t), dist_m: None, idx: Some(i) });
                 }
             }
         });
     }
+    (pts, cues)
+}
+
+/// Reads a GPX file into a route named after the file's own name (or `fallback_name`). A UTF-16 file is read as
+/// UTF-8. A file with a track and a route reads the one with more points (the track on a tie): planners often write
+/// the same road as both.
+#[uniffi::export]
+pub fn import_route(bytes: Vec<u8>, fallback_name: String) -> Result<RouteView, DraftError> {
+    if bytes.len() > READ_MAX {
+        return refuse("The GPX file is too big for a route (8 MB at most).");
+    }
+    let bytes = utf8(bytes);
+    let (trk, rte) = (read_gpx(&rename(&bytes, b"rtept", b"xtept")), read_gpx(&rename(&bytes, b"trkpt", b"xrkpt")));
+    let mut notes = Vec::new();
+    let apart = |a: &[P], b: &[P]| match (a.first(), b.first()) {
+        (Some(x), Some(y)) => step_mm((x.lat, x.lon), (y.lat, y.lon)) > 200_000,
+        _ => false,
+    };
+    if apart(&trk.0, &rte.0) {
+        notes.push("The file holds a track and a different route: the one with more points is used.".to_owned());
+    }
+    let (pts, cues) = if rte.0.len() > trk.0.len() { rte } else { trk };
     let name = gpx_name(&bytes).and_then(route_name).or_else(|| route_name(fallback_name)).unwrap_or("Route".into());
-    build(name, pts, cues)
+    build(name, pts, cues, notes)
 }
 
 /// A route from points a planner made (`dist_m` is ignored: it is worked out).
@@ -197,14 +365,14 @@ pub fn route_from_points(name: String, points: Vec<RoutePoint>) -> Result<RouteV
             split: false,
         })
         .collect();
-    build(route_name(name).unwrap_or("Route".into()), pts, Vec::new())
+    build(route_name(name).unwrap_or("Route".into()), pts, Vec::new(), Vec::new())
 }
 
 /// A route from a FIT course (one this encoder made, or another tool's), named `name`.
 #[uniffi::export]
 pub fn route_from_fit(bytes: Vec<u8>, name: String) -> Result<RouteView, DraftError> {
     let Some((pts, cues)) = read_back(&bytes) else { return refuse("This file is not a FIT course.") };
-    build(route_name(name).unwrap_or("Route".into()), pts, cues)
+    build(route_name(name).unwrap_or("Route".into()), pts, cues, Vec::new())
 }
 
 /// The firmware's FIT reader on a course: its points and cues, None when the file is not whole.
@@ -213,13 +381,13 @@ fn read_back(fit: &[u8]) -> Option<(Vec<P>, Vec<Cue>)> {
     let mut r = Reader::with_position();
     r.push_slice(fit, |m| match m {
         Msg::Record(x) => {
-            if let Some((la, lo)) = x.pos {
+            if let Some((la, lo)) = x.pos.filter(|&(la, lo)| from_semi(la).abs() <= 900_000_000 && lo != i32::MAX) {
                 pts.push(P { lat: from_semi(la), lon: from_semi(lo), alt: x.alt_dm, split: false });
             }
         }
         Msg::CoursePoint { pos: Some((la, lo)), kind, dist_cm } => {
             let (lat, lon) = (from_semi(la), from_semi(lo));
-            cues.push(Cue { lat, lon, kind: kind.unwrap_or(0), dist_m: dist_cm.map(|c| c / 100) });
+            cues.push(Cue { lat, lon, kind: kind.unwrap_or(0), dist_m: dist_cm.map(|c| c / 100), idx: None });
         }
         _ => {}
     });
@@ -301,7 +469,17 @@ fn alt_at(kept: &[(P, u32)], d: u32) -> Option<i32> {
     i32::try_from(if db > da { aa + (ab - aa) * t / (db - da) } else { ab }).ok()
 }
 
-fn build(name: String, mut pts: Vec<P>, mut cues: Vec<Cue>) -> Result<RouteView, DraftError> {
+fn build(name: String, mut pts: Vec<P>, mut cues: Vec<Cue>, mut notes: Vec<String>) -> Result<RouteView, DraftError> {
+    // separate tracks (a jump of over 1 km where a segment starts) are not one ride: the first is kept
+    let gap = (1..pts.len()).find(|&i| {
+        let (a, b) = (pts.get(i - 1), pts.get(i));
+        matches!((a, b), (Some(a), Some(b)) if b.split && step_mm((a.lat, a.lon), (b.lat, b.lon)) > JUMP_M * 1000)
+    });
+    if let Some(i) = gap {
+        pts.truncate(i);
+        cues.retain(|c| c.idx.is_none_or(|k| k < i));
+        notes.push("The file holds several separate tracks: only the first one is kept.".to_owned());
+    }
     if pts.len() < 2 {
         return refuse("The file holds no route: it needs at least two track or route points.");
     }
@@ -337,11 +515,18 @@ fn build(name: String, mut pts: Vec<P>, mut cues: Vec<Cue>) -> Result<RouteView,
         Vec::new()
     };
 
+    // a cue is on its own point, or states its distance, or is placed on the nearest point; a waypoint over 500 m
+    // from the route (a far landmark) is not a cue of it
+    cues.retain_mut(|c| {
+        if let Some(d) = c.idx.and_then(|i| cum.get(i)) {
+            c.dist_m = Some(*d);
+            return true;
+        }
+        let near = kept.iter().map(|p| (step_mm((c.lat, c.lon), (p.0.lat, p.0.lon)), p.1)).min();
+        c.dist_m = c.dist_m.or(near.map(|n| n.1));
+        near.is_some_and(|n| n.0 <= 500_000)
+    });
     cues.truncate(CUES_MAX);
-    for c in &mut cues {
-        let near = kept.iter().min_by_key(|p| step_mm((c.lat, c.lon), (p.0.lat, p.0.lon))).map_or(0, |p| p.1);
-        c.dist_m = c.dist_m.or(Some(near));
-    }
     cues.sort_by_key(|c| c.dist_m);
 
     let fit = encode(&name, &kept, &cues, has_alt);
@@ -363,7 +548,7 @@ fn build(name: String, mut pts: Vec<P>, mut cues: Vec<Cue>) -> Result<RouteView,
         })
         .collect();
     let cue_count = u32::try_from(cues.len()).unwrap_or(0);
-    Ok(RouteView { name, distance_m, ascent_m, descent_m, has_alt, points, climbs, cue_count, thinned, fit })
+    Ok(RouteView { name, distance_m, ascent_m, descent_m, has_alt, points, climbs, cue_count, thinned, notes, fit })
 }
 
 /// The Demo's GPX file: a made-up loop of about 25 km around the Eiffel Tower's quarter with two hills (invented
@@ -492,7 +677,8 @@ mod tests {
 
     /// A loop of `n` points around a centre, climbing 500 m over its first half (4.5 % for 11 km).
     fn gpx_loop(n: usize, ele: bool, extra: &str) -> String {
-        let mut s = String::from("<?xml version=\"1.0\"?><gpx version=\"1.1\"><metadata><name>Loop de test!</name></metadata>");
+        let mut s =
+            String::from("<?xml version=\"1.0\"?><gpx version=\"1.1\"><metadata><name>Loop de test!</name></metadata>");
         s += extra;
         s += "<trk><trkseg>";
         for i in 0..n {
@@ -509,15 +695,6 @@ mod tests {
     }
 
     #[test]
-    fn names_follow_the_units_rule() {
-        assert_eq!(route_name("Col de la Croix-Haute (2)".into()).as_deref(), Some("Col de la Croix-Haut"));
-        assert_eq!(route_name("  été  ".into()).as_deref(), Some("t"));
-        assert_eq!(route_name("CON".into()), None);
-        assert_eq!(route_name("!!!".into()), None);
-        assert_eq!(route_name("a_b-c 1".into()).as_deref(), Some("a_b-c 1"));
-    }
-
-    #[test]
     fn a_gpx_becomes_a_course_the_units_reader_follows() {
         let wpt = "<wpt lat=\"48.88\" lon=\"2.29\"><name>Left</name></wpt>";
         let r = import_route(gpx_loop(400, true, wpt).into_bytes(), "file".into()).unwrap();
@@ -525,7 +702,12 @@ mod tests {
         assert_eq!(r.points.len(), 400);
         // a loop of 0.03 deg x 0.045 deg radii: about 22 km
         assert!((20_000..25_000).contains(&r.distance_m), "{}", r.distance_m);
-        assert!((490..=510).contains(&r.ascent_m) && (490..=510).contains(&r.descent_m), "{} {}", r.ascent_m, r.descent_m);
+        assert!(
+            (490..=510).contains(&r.ascent_m) && (490..=510).contains(&r.descent_m),
+            "{} {}",
+            r.ascent_m,
+            r.descent_m
+        );
         assert_eq!(r.cue_count, 1);
         assert!(!r.climbs.is_empty() && r.climbs[0].grade_x10 >= 30, "{:?}", r.climbs);
         // it reads back whole, and what it reads is what the view says
@@ -557,9 +739,7 @@ mod tests {
         use crate::files::{FileClient, FileEvent, UnitFolder};
         let (c, unit) = (FileClient::new(), crate::demo::DemoUnit::new());
         let r = import_route(demo_route_gpx(), "x".into()).unwrap();
-        let feed = |cmd: Vec<u8>| -> Vec<FileEvent> {
-            unit.handle(cmd).into_iter().map(|f| c.on_data(f, 1)).collect()
-        };
+        let feed = |cmd: Vec<u8>| -> Vec<FileEvent> { unit.handle(cmd).into_iter().map(|f| c.on_data(f, 1)).collect() };
         feed(c.course_write_command(r.name.clone(), r.fit.clone(), 244, 1).unwrap());
         while let Some(cmd) = c.write_next_command(244, 1) {
             feed(cmd);
@@ -609,62 +789,246 @@ mod tests {
         }
     }
 
-    /// Structured GPX, valid and not: nothing panics, an accepted one reads back whole within the unit's limits, and
-    /// the seeds reach the encoder (a count), or the test would prove nothing about it.
+    /// `FUZZ_SCALE` as the firmware's fuzz reads it (the quick gate sets 0.25).
+    fn scale() -> f64 {
+        std::env::var("FUZZ_SCALE").ok().and_then(|v| v.parse().ok()).filter(|s| *s > 0.0 && *s <= 1.0).unwrap_or(1.0)
+    }
+
+    /// A random GPX of tracks, routes and waypoints with bad numbers, junk and missing `ele`; every 20th seed has a
+    /// file with more points than the unit keeps.
+    fn random_gpx(seed: u64) -> String {
+        let mut g = Lcg(seed + 1);
+        let mut s = String::from("<gpx>");
+        if g.next(3) == 0 {
+            s += "<name>x</name><junk><a><b>";
+        }
+        for _ in 0..1 + g.next(3) {
+            s += ["<trk><trkseg>", "<rte>", "<trk><name>t</name><trkseg>"][g.next(3) as usize];
+            let n = if seed.is_multiple_of(20) { 15_000 } else { [3, 20, 120][g.next(3) as usize] + g.next(30) };
+            for _ in 0..n {
+                let (la, lo) = match g.next(12) {
+                    0 => ("abc".to_string(), "1".to_string()),
+                    1 => ("1e5".to_string(), "2".to_string()),
+                    2 => ("99999".to_string(), "2".to_string()),
+                    3 => ("-0.0".to_string(), "180".to_string()),
+                    _ => (
+                        format!("{}.{:05}", 40 + g.next(10), g.next(99999)),
+                        format!("{}.{:05}", 1 + g.next(5), g.next(99999)),
+                    ),
+                };
+                let ele = match g.next(6) {
+                    0 => String::new(),
+                    1 => "<ele>NaN</ele>".into(),
+                    2 => "<ele></ele>".into(),
+                    3 => format!("<ele>{}</ele>", g.next(99_999_999_999)),
+                    _ => format!("<ele>{}.{}</ele>", g.next(2000), g.next(9)),
+                };
+                let cue = if g.next(40) == 0 { "<type>left</type>" } else { "" };
+                let junk = if g.next(30) == 0 { "<extensions><x:y><z/></x:y></extensions>" } else { "" };
+                let tag = ["trkpt", "rtept", "wpt"][g.next(3) as usize];
+                s += &format!("<{tag} lat=\"{la}\" lon=\"{lo}\">{ele}{cue}{junk}</{tag}>");
+            }
+            s += ["</trkseg></trk>", "</rte>", ""][g.next(3) as usize];
+        }
+        s
+    }
+
+    /// Structured GPX, valid and not, in UTF-8, with a BOM and in UTF-16: nothing panics, an accepted one reads back
+    /// whole within the unit's limits, and the seeds reach the encoder, the cues and the thinning (counts), or the
+    /// test would prove nothing about them.
     #[test]
     fn random_gpx_never_panics_and_accepted_ones_encode() {
-        let (mut ok, mut cued, mut thinned) = (0, 0, 0);
+        let (mut ok, mut cued, mut thinned, mut noted, mut utf16) = (0, 0, 0, 0, 0);
         let mut why = std::collections::BTreeMap::new();
-        for seed in 0..300u64 {
-            let mut g = Lcg(seed + 1);
-            let mut s = String::from("<gpx>");
-            if g.next(3) == 0 {
-                s += "<name>x</name><junk><a><b>";
-            }
-            for _ in 0..1 + g.next(4) {
-                s += ["<trk><trkseg>", "<rte>", "<trk><name>t</name><trkseg>"][g.next(3) as usize];
-                let n = [3, 20, 200, 5000][g.next(4) as usize] + g.next(50);
-                for _ in 0..n {
-                    let (la, lo) = match g.next(12) {
-                        0 => ("abc".to_string(), "1".to_string()),
-                        1 => ("1e5".to_string(), "2".to_string()),
-                        2 => ("99999".to_string(), "2".to_string()),
-                        3 => ("-0.0".to_string(), "180".to_string()),
-                        _ => (format!("{}.{:05}", 40 + g.next(10), g.next(99999)), format!("{}.{:05}", 1 + g.next(5), g.next(99999))),
-                    };
-                    let ele = match g.next(6) {
-                        0 => String::new(),
-                        1 => "<ele>NaN</ele>".into(),
-                        2 => "<ele></ele>".into(),
-                        3 => format!("<ele>{}</ele>", g.next(99_999_999_999)),
-                        _ => format!("<ele>{}.{}</ele>", g.next(2000), g.next(9)),
-                    };
-                    let cue = if g.next(40) == 0 { "<type>left</type>" } else { "" };
-                    let junk = if g.next(30) == 0 { "<extensions><x:y><z/></x:y></extensions>" } else { "" };
-                    s += &format!("<{0} lat=\"{la}\" lon=\"{lo}\">{ele}{cue}{junk}</{0}>", ["trkpt", "rtept", "wpt"][g.next(3) as usize]);
-                }
-                s += ["</trkseg></trk>", "</rte>", ""][g.next(3) as usize];
-            }
-            let got = import_route(s.into_bytes(), "f".into());
+        for seed in 0..(120.0 * scale()) as u64 {
+            let s = random_gpx(seed);
+            let bytes = match seed % 5 {
+                1 => [&[0xef, 0xbb, 0xbf][..], s.as_bytes()].concat(),
+                2 => [&[0xff, 0xfe][..], &s.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>()].concat(),
+                3 => [&[0xfe, 0xff][..], &s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<_>>()].concat(),
+                _ => s.into_bytes(),
+            };
+            let got = import_route(bytes, "f".into());
             if let Err(e) = &got {
                 *why.entry(e.to_string()).or_insert(0) += 1;
             }
             if let Ok(r) = got {
                 ok += 1;
+                utf16 += usize::from(seed % 5 >= 2);
                 cued += usize::from(r.cue_count > 0);
                 thinned += usize::from(r.thinned);
+                noted += usize::from(!r.notes.is_empty());
                 assert!(r.points.len() >= 2 && r.points.len() <= POINTS && r.fit.len() <= COURSE_MAX as usize);
                 assert!(read_back(&r.fit).is_some());
                 assert!(r.points.windows(2).all(|w| w[0].dist_m <= w[1].dist_m));
             }
         }
-        assert!(ok > 100 && cued > 0 && thinned > 0, "{ok} {cued} {thinned} {why:?}");
+        assert!(ok > 25 && utf16 > 0 && noted > 0, "{ok} {utf16} {noted} {why:?}");
+        assert!(scale() < 0.5 || (cued > 0 && thinned > 0), "{cued} {thinned}");
+    }
+
+    /// A valid course, truncated, mutated and with coordinates out of range: refused or read within bounds.
+    #[test]
+    fn route_from_fit_survives_damaged_files() {
+        let wpt = "<wpt lat=\"48.88\" lon=\"2.29\"><name>Left</name></wpt>";
+        let good = import_route(gpx_loop(300, true, wpt).into_bytes(), "x".into()).unwrap().fit;
+        let (mut ok, mut refused) = (0, 0);
+        let check = |fit: Vec<u8>, ok: &mut u32, refused: &mut u32| match route_from_fit(fit, "f".into()) {
+            Ok(r) => {
+                *ok += 1;
+                assert!(r.points.iter().all(|p| p.lat.abs() <= 90.0 && p.lon.abs() <= 180.0));
+                assert!(r.points.len() >= 2 && read_back(&r.fit).is_some());
+            }
+            Err(_) => *refused += 1,
+        };
+        for seed in 0..(400.0 * scale()) as u64 {
+            let mut g = Lcg(seed + 7);
+            let mut f = good.clone();
+            match g.next(3) {
+                0 => f.truncate(g.next(f.len() as u64) as usize),
+                1 => {
+                    for _ in 0..1 + g.next(4) {
+                        let i = g.next(f.len() as u64) as usize;
+                        f[i] ^= 1 << g.next(8);
+                    }
+                }
+                _ => {
+                    // a latitude set out of range, the CRC made right again: only the range is wrong
+                    let at = 14 + 13 + 5 + 24 + 30 + 70 + g.next(200) as usize;
+                    if let Some(w) = f.get_mut(at..at + 4) {
+                        w.copy_from_slice(&0x7000_0000u32.to_le_bytes());
+                    }
+                    let n = f.len();
+                    let c = crc(0, &f[..n - 2]).to_le_bytes();
+                    f[n - 2..].copy_from_slice(&c);
+                }
+            }
+            check(f, &mut ok, &mut refused);
+        }
+        check(good, &mut ok, &mut refused);
+        assert!(ok > 0 && refused > 0, "{ok} {refused}");
+    }
+
+    /// Names with Unicode, entities, CDATA and unterminated elements: None or a name the unit takes.
+    #[test]
+    fn names_from_odd_text_are_the_units_or_none() {
+        let pieces = [
+            "é",
+            "Ç",
+            "œ",
+            "ß",
+            "'",
+            "’",
+            "日本",
+            "&amp;",
+            "&#233;",
+            "&#x41;",
+            "&bogus;",
+            "<![CDATA[x]]>",
+            "  ",
+            "_",
+            "-",
+            "a",
+            "Z",
+            "9",
+            "CON",
+            "\u{0}",
+            "😀",
+        ];
+        let mut g = Lcg(5);
+        for _ in 0..(2000.0 * scale()) as usize {
+            let text: String = (0..g.next(14)).map(|_| pieces[g.next(pieces.len() as u64) as usize]).collect();
+            let closed = format!("<gpx><metadata><name>{text}</name></metadata></gpx>");
+            let open = format!("<gpx><metadata><name>{text}");
+            for t in [closed, open] {
+                let n = gpx_name(t.as_bytes()).and_then(route_name);
+                for n in [n, route_name(text.clone())].into_iter().flatten() {
+                    assert!(CourseName::new(n.as_bytes()).is_some(), "{n:?}");
+                }
+            }
+        }
     }
 
     #[test]
     fn a_huge_file_is_refused_or_read_without_trouble() {
         assert!(import_route(vec![b'<'; READ_MAX + 1], "x".into()).is_err());
-        let r = import_route(gpx_loop(150_000, true, "").into_bytes(), "x".into()).unwrap();
+        let r = import_route(gpx_loop(90_000, true, "").into_bytes(), "x".into()).unwrap();
         assert!(r.thinned && r.points.len() <= POINTS);
+    }
+
+    #[test]
+    fn a_track_and_a_route_of_the_same_road_are_read_once() {
+        let a = gpx_loop(300, true, "");
+        let body = a.split("<trk>").nth(1).unwrap().split("</trk>").next().unwrap();
+        let rte = body.replace("trkseg", "x").replace("trkpt", "rtept");
+        let both = a.replace("</gpx>", &format!("<rte>{rte}</rte></gpx>"));
+        let one = import_route(a.into_bytes(), "x".into()).unwrap();
+        let two = import_route(both.into_bytes(), "x".into()).unwrap();
+        assert_eq!((two.points.len(), two.distance_m), (one.points.len(), one.distance_m));
+        assert!(two.notes.is_empty(), "the same road is no news: {:?}", two.notes);
+        // the group with more points wins, and it is said when they are two different places
+        let pts = |c: &str, n: usize, lat: f64| {
+            (0..n).map(|k| format!("<{c} lat=\"{}\" lon=\"5.0\"/>", lat + 0.01 * k as f64)).collect::<String>()
+        };
+        let s = format!(
+            "<gpx><trk><trkseg>{}</trkseg></trk><rte>{}</rte></gpx>",
+            pts("trkpt", 2, 48.0),
+            pts("rtept", 4, 43.0)
+        );
+        let r = import_route(s.into_bytes(), "x".into()).unwrap();
+        assert_eq!((r.points.len(), r.notes.len()), (4, 1));
+    }
+
+    #[test]
+    fn separate_tracks_keep_the_first_and_say_so() {
+        let seg = |lat: f64| {
+            let b = lat + 0.01;
+            format!("<trk><trkseg><trkpt lat=\"{lat}\" lon=\"2.0\"/><trkpt lat=\"{b}\" lon=\"2.0\"/></trkseg></trk>")
+        };
+        let r = import_route(format!("<gpx>{}{}</gpx>", seg(48.0), seg(49.0)).into_bytes(), "x".into()).unwrap();
+        assert_eq!((r.points.len(), r.notes.len()), (2, 1));
+        // a gap under 1 km inside one file is the same ride
+        let near = import_route(format!("<gpx>{}{}</gpx>", seg(48.0), seg(48.0125)).into_bytes(), "x".into()).unwrap();
+        assert_eq!((near.points.len(), near.notes.len()), (4, 0));
+    }
+
+    #[test]
+    fn names_fold_accents_and_come_from_the_right_element() {
+        assert_eq!(route_name("été".into()).as_deref(), Some("ete"));
+        assert_eq!(route_name("Côte d'Azur".into()).as_deref(), Some("Cote dAzur"));
+        assert_eq!(route_name("Œuvre Straße Ça".into()).as_deref(), Some("Oeuvre Strasse Ca"));
+        assert_eq!(route_name("Col de la Croix-Haute (2)".into()).as_deref(), Some("Col de la Croix-Haut"));
+        assert_eq!(route_name("CON".into()), None);
+        assert_eq!(route_name("!!!".into()), None);
+        let gpx = "<gpx><wpt lat=\"1\" lon=\"1\"><name>Cafe</name></wpt><metadata><author><name>Me</name></author><name>Tour &amp; Cie &#233;t&#xE9;</name></metadata><trk><name>Trk</name></trk></gpx>";
+        assert_eq!(gpx_name(gpx.as_bytes()).as_deref(), Some("Tour & Cie été"));
+        let no_meta = "<gpx><wpt lat=\"1\" lon=\"1\"><name>Cafe</name></wpt><trk><name><![CDATA[Col du Galibier]]></name><trkseg/></trk></gpx>";
+        assert_eq!(gpx_name(no_meta.as_bytes()).as_deref(), Some("Col du Galibier"));
+        assert_eq!(gpx_name(b"<gpx><wpt><name>Cafe</name></wpt><trk><trkseg/></trk></gpx>"), None);
+        assert_eq!(gpx_name(b"<gpx><metadata><name>open"), None);
+    }
+
+    #[test]
+    fn a_cue_on_an_out_and_back_keeps_its_own_pass() {
+        // out along a line and back over it, a turn word on the same place on each pass
+        let pt = |k: i32, w: &str| format!("<trkpt lat=\"{}\" lon=\"2.0\">{w}</trkpt>", 48.0 + 0.001 * f64::from(k));
+        let mut s = String::from("<gpx><trk><trkseg>");
+        for k in 0..=10 {
+            s += &pt(k, if k == 5 { "<type>left</type>" } else { "" });
+        }
+        for k in (0..10).rev() {
+            s += &pt(k, if k == 5 { "<type>right</type>" } else { "" });
+        }
+        let r = import_route((s + "</trkseg></trk></gpx>").into_bytes(), "x".into()).unwrap();
+        let (_, cues) = read_back(&r.fit).unwrap();
+        let d: Vec<u32> = cues.iter().filter_map(|c| c.dist_m).collect();
+        assert_eq!(cues.iter().map(|c| c.kind).collect::<Vec<_>>(), [6, 7]);
+        assert!(d[1] > d[0] + 100, "the way back is a second pass: {d:?}");
+    }
+
+    #[test]
+    fn clashes_match_the_units_menu() {
+        assert!(route_clash("Col_du Lac".into(), "col du lac".into()));
+        assert!(!route_clash("Col du Lac".into(), "Col du Lad".into()));
     }
 }
