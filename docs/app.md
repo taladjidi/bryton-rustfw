@@ -133,7 +133,7 @@ count seconds. Ascent and descent come from one method: the file's pair when it 
 the altitude samples with 3 m of hysteresis (this firmware's files have no total_descent).
 
 The screen (`RideDetail.swift`, `RideMap.swift`): a hero card (distance, moving time, TSS, NP; average speed and heart rate
-when there is no power), the map (a button opens it full screen; dark mode dims the IGN tiles), a "Details" grid, five Swift Charts graphs (altitude,
+when there is no power), the map (a button opens it full screen; the IGN tiles are drawn as they are in dark mode too: dimming them made the map hard to read, owner 2026-11-08), a "Details" grid, five Swift Charts graphs (altitude,
 speed, HR, power, cadence) against distance or time, the laps, the zone bars and the power curve. Dragging on a graph
 puts a marker on the map. The map is an `MKMapView`: inside France the base is IGN's Plan IGN v2 (WMTS
 `https://data.geopf.fr/wmts`, layer `GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2`, matrix set `PM`, no key; checked 2026-11-07),
