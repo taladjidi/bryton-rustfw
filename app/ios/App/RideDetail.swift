@@ -16,6 +16,7 @@ struct ProfileSheet: View {
             Form {
                 Stepper("FTP: \(ftp) W", value: $ftp, in: 50...600, step: 5)
                 Stepper("Max heart rate: \(maxHR) bpm", value: $maxHR, in: 120...230)
+                Text("Keep it equal to your FTP on Intervals.icu so the loads match.").font(.footnote).foregroundStyle(.secondary)
             }
             .navigationTitle("Profile")
             .toolbar { Button("Done") { dismiss() } }

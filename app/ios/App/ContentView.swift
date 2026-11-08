@@ -11,6 +11,7 @@ struct BrytonApp: App {
 struct ContentView: View {
     @StateObject private var link = UnitLink()
     @StateObject private var rides = RideBrowser()
+    @StateObject private var library = RideLibrary()
     @State private var profile = false
     @StateObject private var store = WorkoutStore()
     @State private var path: [WorkoutRoute] = []
@@ -19,6 +20,7 @@ struct ContentView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                Section { WeeklyPanel(library: library, rides: rides) }
                 Section {
                     Text(message).foregroundStyle(.secondary)
                     if link.state == .connected {
@@ -36,15 +38,23 @@ struct ContentView: View {
                 if let m = rides.message {
                     Section { Text(m).foregroundStyle(.orange) }
                 }
-                Section("Rides") {
-                    ForEach(rides.rides, id: \.name) { r in RideRow(rides: rides, ride: r) }
+                Section {
+                    ForEach(rides.rides, id: \.name) { r in RideRow(rides: rides, library: library, ride: r) }
                     if rides.rides.isEmpty && rides.phase == .idle {
                         Text("No rides listed").foregroundStyle(.secondary)
+                    }
+                } header: {
+                    HStack {
+                        Text("Rides")
+                        Spacer()
+                        if let line = rides.syncLine { Text(line).textCase(nil) }
                     }
                 }
                 WorkoutSection(rides: rides)
                 PhoneWorkoutSection(store: store) { editing = $0 }
             }
+            .onChange(of: rides.downloaded) { _, d in library.catchUp(rides.rides, downloaded: d) }
+            .onChange(of: rides.rides) { _, l in library.catchUp(l, downloaded: rides.downloaded) }
             .sheet(item: $editing) { WorkoutEditor(target: $0, store: store, rides: rides) }
             .navigationDestination(for: WorkoutRoute.self) { r in
                 if let f = rides.workouts.first(where: { $0.key == r.key }) { WorkoutDetail(file: f) { d in
@@ -124,7 +134,10 @@ struct ContentView: View {
 
 struct RideRow: View {
     @ObservedObject var rides: RideBrowser
+    @ObservedObject var library: RideLibrary
     let ride: RideEntry
+    @AppStorage("ftp") private var ftp = 200
+    @AppStorage("maxHR") private var maxHR = 190
 
     var body: some View {
         let active = rides.phase == .downloading(ride.name)
@@ -137,14 +150,9 @@ struct RideRow: View {
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(RideBrowser.title(ride.name))
-                    if rides.downloaded.contains(ride.name) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    }
-                    Spacer()
-                    Text("\((ride.size + 512) / 1024) KB").foregroundStyle(.secondary)
-                }
+                let brief = library.briefs[ride.name]
+                Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
+                Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
                 if active {
                     ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
                     HStack {
@@ -160,6 +168,17 @@ struct RideRow: View {
         }
         .foregroundStyle(.primary)
         .disabled(rides.phase == .listing || (rides.isDownloading && !active))
+    }
+}
+
+extension RideRow {
+    /// "2 h 31 · 68.4 km · TSS 112", or why there is no such line yet.
+    func subtitle(_ b: RideBrief?) -> String {
+        guard let b else { return rides.downloaded.contains(ride.name) ? "Reading the ride..." : "not on the phone yet" }
+        var parts = [Fmt.duration(UInt64(b.movingS)), Fmt.km(b.distanceM)]
+        let s = rideStat(b: b, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR), tzOffsetS: 0)
+        if let l = s.load { parts.append("TSS \(l)") }
+        return parts.joined(separator: " · ")
     }
 }
 

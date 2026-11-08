@@ -132,6 +132,34 @@ Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had 
 Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
 itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
 
+## Ride list and weekly totals
+
+![Main screen: the weekly panel and the ride list](img/app-home.png)
+
+The main screen opens with this week's time, distance, load (TSS) and ride count, and the last 8 weeks as bars (load or
+time; touch a bar to read that week). Each ride row shows its start in the phone's zone and "2 h 31 · 68.4 km · TSS 112".
+The numbers come from the ride's file, so the app **syncs by itself**: with the unit connected and nothing else going on
+it downloads the rides of the last 8 weeks, newest first, into the same Documents folder a manual download uses, then
+reads each once (`ride_brief`) and caches the result in `ride-summaries.txt` (name, list size and one text line per ride).
+A refresh, a send, a delete or a tap on a ride takes the link from the sync at once; cancelling a sync download stops the
+sync until the next refresh; a reconnect resumes it; a ride on the phone is never downloaded twice. "Syncing 3 of 7" shows
+while it runs, and the panel says how many rides of the period are not on the phone yet. Older rides download when
+opened. The cache keeps the NP, the seconds and the heart rate histogram, so a new FTP or max HR (the profile sheet, which
+says to keep the FTP equal to Intervals.icu's) recomputes every load at once without reading a file.
+
+Definitions, from Intervals.icu (`app/core/src/summary.rs` has the URLs; looked up 2026-11-08):
+- **Week:** Monday to Sunday, Intervals.icu's only choice; a ride counts in the week of its local start (inferred).
+- **Moving time:** speed of 0.05 m/s or more; a ride with no speed is all moving. Each record counts for the time to the
+  next, at most 5 s. The viewer uses the same number (it no longer reads the file's timer time).
+- **Distance:** the file's total distance (inferred).
+- **Load with power:** TSS over the moving seconds with NP, as TrainingPeaks but without stopped time; the FTP is the
+  profile's.
+- **Load without power:** Intervals.icu's default is HRSS (normalised TRIMP). The app's version is inferred: Banister
+  TRIMP with a resting rate of 60 bpm, against an hour at 85 % of the max HR. Intervals uses its own resting and
+  threshold HR, so this load can differ more than a power one. NP can differ by a few percent too.
+
+The Demo unit's ten rides are dated relative to today over the last three weeks (Paris time), so the panel has bars.
+
 ## The iPhone app against the unit
 
 iOS keeps a copy of the unit's GATT table for each bond. Our builds keep one table: the phone's services and
