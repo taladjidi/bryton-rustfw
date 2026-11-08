@@ -578,7 +578,6 @@ impl App {
             return;
         }
         let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
-        let profile = self.training_profile();
         let svc = &mut self.phone.files;
         svc.stall_ms = 0;
         let cmd = fs::Command::parse(written);
@@ -622,19 +621,45 @@ impl App {
                 | fs::Command::ListIn { seq, .. }
                 | fs::Command::ReadIn { seq, .. },
             ) => svc.finish(seq, Status::Busy, 0),
-            Ok(fs::Command::ProfileGet { seq }) => {
-                svc.reset();
+            Ok(c @ (fs::Command::ProfileGet { .. } | fs::Command::ProfileSet { .. })) => self.files_profile(b, c, busy),
+            Ok(_) => {} // the writes: files_write
+            Err((seq, status)) => svc.finish(seq, status, 0),
+        }
+    }
+
+    /// A LIST or READ under way ends with its END (BUSY, what it sent) before a command's answer, refusal or not:
+    /// notified now, since the answer takes its place (a full queue loses it: the phone then sees the new answer only).
+    fn abort_transfer(&mut self, b: &mut impl Board) {
+        if matches!(self.phone.files.job, Job::List { .. } | Job::Read { .. }) {
+            self.phone.files.abort(Status::Busy);
+            let svc = &mut self.phone.files;
+            if let (Some(conn), Some((_, data))) = (self.phone.conn, svc.handles) {
+                let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
+                if ble::notify(b, &mut self.rx, conn, data, frame).is_ok() {
+                    svc.taken(self.up_ms);
+                }
+            }
+        }
+    }
+
+    /// PROFILE_GET and PROFILE_SET ([`App::files_command`]): the profile is built here only, so `files_command`'s
+    /// frame stays small. A write under way is dropped, as a LIST would drop it.
+    #[inline(never)]
+    fn files_profile(&mut self, b: &mut impl Board, c: fs::Command, busy: bool) {
+        self.abort_transfer(b);
+        self.phone.files.reset();
+        match c {
+            fs::Command::ProfileGet { seq } => {
                 let mut f = [0; fs::FRAME_BIG];
-                let n = Frame::Profile { seq, profile }.encode(&mut f);
+                let n = Frame::Profile { seq, profile: self.training_profile() }.encode(&mut f);
+                let svc = &mut self.phone.files;
                 (svc.out, svc.out_len, svc.pending) = (f, n, 0);
             }
-            Ok(fs::Command::ProfileSet { seq, profile }) => {
-                svc.reset();
+            fs::Command::ProfileSet { seq, profile } => {
                 let (status, count) = self.profile_set(b, profile, busy);
                 self.phone.files.finish(seq, status, count);
             }
-            Ok(_) => {} // the writes: files_write
-            Err((seq, status)) => svc.finish(seq, status, 0),
+            _ => {}
         }
     }
 
@@ -652,42 +677,60 @@ impl App {
         }
     }
 
-    /// PROFILE_SET: the answer's status and count. A value must be in the menu's range (or be the one held, so a
-    /// profile read and sent back unchanged is never refused). Applied as the menus do (`setting_edited`, then
+    /// PROFILE_SET: the answer's status and count. A value must be in the menu's range, or be the one held (so a
+    /// profile read and sent back unchanged is never refused), or be 0 for the LTHR (unset). Values the unit already
+    /// holds answer OK, count 0, even in a ride. BUSY also while a setting is being edited in the menu. Each field is
+    /// assigned only when it differs. Applied as the menus do (`setting_edited`, then
     /// `save_misc`): the file is written between rides, the registers hold it until then.
     #[inline(never)]
     fn profile_set(&mut self, b: &mut impl Board, p: fs::Profile, busy: bool) -> (Status, u32) {
         let now = self.training_profile();
         let ok = |r: core::ops::RangeInclusive<u16>, new: u16, old: u16| new == old || r.contains(&new);
+        let lthr_ok = |new: u16, old: u16| new == 0 || ok(menu::LTHR_RANGE, new, old);
         let b8 = u16::from;
         let valid = ok(menu::FTP_RANGE, p.ftp, now.ftp)
             && ok(menu::MAX_HR_RANGE, b8(p.max_hr), b8(now.max_hr))
-            && ok(menu::LTHR_RANGE, b8(p.lthr), b8(now.lthr))
+            && lthr_ok(b8(p.lthr), b8(now.lthr))
             && ok(menu::WEIGHT_RANGE, b8(p.weight_kg), b8(now.weight_kg))
             && ok(menu::WPRIME_RANGE, p.wprime_j, now.wprime_j);
         if !valid {
             return (Status::BadRequest, 0);
         }
-        if busy {
+        if p == now {
+            return (Status::Ok, 0);
+        }
+        if busy || self.menu.editing {
             return (Status::Busy, 0);
         }
         if !self.card_writable {
             return (Status::ReadOnly, 0);
         }
-        if p == now {
-            return (Status::Ok, 0);
-        }
         if !self.settings_ready(b) {
             return (Status::Io, 0);
         }
         let s = &mut self.settings;
-        (s.ftp, s.wprime_j, s.zones_lthr, s.female) = (p.ftp, p.wprime_j, p.zones_lthr, p.female);
-        (s.lthr, s.weight_kg) = (b8(p.lthr), b8(p.weight_kg));
+        if p.ftp != now.ftp {
+            s.ftp = p.ftp;
+        }
+        if p.wprime_j != now.wprime_j {
+            s.wprime_j = p.wprime_j;
+        }
+        if p.lthr != now.lthr {
+            s.lthr = b8(p.lthr);
+        }
+        if p.weight_kg != now.weight_kg {
+            s.weight_kg = b8(p.weight_kg);
+        }
+        (s.zones_lthr, s.female) = (p.zones_lthr, p.female);
         if p.max_hr != now.max_hr {
             s.max_hr = b8(p.max_hr);
             self.setting_edited(menu::Setting::MaxHr);
         }
         self.save_misc(b);
+        self.notice("PROFILE FROM PHONE");
+        if matches!(self.screen, Screen::Menu(..)) {
+            self.show(b); // an open settings row shows the new value
+        }
         (Status::Ok, 1)
     }
 
@@ -700,19 +743,7 @@ impl App {
             fs::Command::WriteData { seq, .. } | fs::Command::WriteEnd { seq } => (seq, false),
             _ => return,
         };
-        if matches!(self.phone.files.job, Job::List { .. } | Job::Read { .. }) {
-            // the LIST or READ under way ends with its END (BUSY, what it sent) before this command's answer, refusal
-            // or not: notified now, since the answer takes its place (a full queue loses it: the phone then sees the
-            // new answer only)
-            self.phone.files.abort(Status::Busy);
-            let svc = &mut self.phone.files;
-            if let (Some(conn), Some((_, data))) = (self.phone.conn, svc.handles) {
-                let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
-                if ble::notify(b, &mut self.rx, conn, data, frame).is_ok() {
-                    svc.taken(self.up_ms);
-                }
-            }
-        }
+        self.abort_transfer(b);
         let writing = matches!(self.phone.files.job, Job::Write { .. });
         let why = if busy {
             Some(Status::Busy)

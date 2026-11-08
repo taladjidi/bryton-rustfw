@@ -4,6 +4,7 @@
 //! wobbling circle) around a public landmark, the Eiffel Tower in Paris; no real ride, nothing of the owner's.
 
 use bryton_rustfw::filesvc::{Command, FRAME_BIG, Folder, Frame, Key, Name, Profile, Status, name_check};
+use bryton_rustfw::menu;
 
 /// The largest CHUNK payload: the fast link's frame (the largest MTU less 3) less the CHUNK header (kind, seq). The
 /// demo unit serves it, as the unit does on a phone that exchanged the MTU.
@@ -221,14 +222,28 @@ impl FakeUnit {
                 self.serve(seq, offset, &data)
             }
             Command::ProfileGet { seq } => vec![enc(Frame::Profile { seq, profile: self.profile })],
-            Command::ProfileSet { seq, .. } if self.faults.busy => end(seq, Status::Busy, 0),
-            Command::ProfileSet { seq, .. } if self.faults.read_only => end(seq, Status::ReadOnly, 0),
             Command::ProfileSet { seq, profile } => {
-                let (changed, in_range) = (profile != self.profile, (50..=600).contains(&profile.ftp));
-                if in_range {
-                    self.profile = profile;
+                // the firmware's order (app/filesvc.rs profile_set): ranges, unchanged, busy, read only
+                let (o, n) = (self.profile, profile);
+                let ok = |r: std::ops::RangeInclusive<u16>, new: u16, old: u16| new == old || r.contains(&new);
+                let (w, h) = (|v: u8| u16::from(v), |v: u8| u16::from(v));
+                let valid = ok(menu::FTP_RANGE, n.ftp, o.ftp)
+                    && ok(menu::MAX_HR_RANGE, h(n.max_hr), h(o.max_hr))
+                    && (n.lthr == 0 || ok(menu::LTHR_RANGE, w(n.lthr), w(o.lthr)))
+                    && ok(menu::WEIGHT_RANGE, w(n.weight_kg), w(o.weight_kg))
+                    && ok(menu::WPRIME_RANGE, n.wprime_j, o.wprime_j);
+                if !valid {
+                    end(seq, Status::BadRequest, 0)
+                } else if n == o {
+                    end(seq, Status::Ok, 0)
+                } else if self.faults.busy {
+                    end(seq, Status::Busy, 0)
+                } else if self.faults.read_only {
+                    end(seq, Status::ReadOnly, 0)
+                } else {
+                    self.profile = n;
+                    end(seq, Status::Ok, 1)
                 }
-                end(seq, if in_range { Status::Ok } else { Status::BadRequest }, u32::from(changed && in_range))
             }
             Command::WriteBegin { seq, .. } | Command::Delete { seq, .. } if self.faults.busy => {
                 end(seq, Status::Busy, 0)

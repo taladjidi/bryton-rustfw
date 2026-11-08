@@ -1186,9 +1186,17 @@ fn every_risky_profile_set_is_refused_and_a_get_always_works() {
     assert_eq!(set(&mut sim, &mut app, want), Some((Status::Busy, 0)), "lent");
     assert!(profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 3 }).0.is_some(), "a GET while lent");
     app.emmc.lend(false);
+    app.menu.editing = true;
+    assert_eq!(set(&mut sim, &mut app, want), Some((Status::Busy, 0)), "a setting is being edited");
+    app.menu.editing = false;
+    app.settings.lthr = 160;
+    assert_eq!(set(&mut sim, &mut app, Profile { lthr: 0, ..ok }), Some((Status::Ok, 1)));
+    assert_eq!(app.settings.lthr, 0, "LTHR 0 is unset");
+    app.settings.lthr = ok.lthr.into();
     app.leave_menus();
     app.input(&mut sim, Input::Select); // Start
     run(&mut sim, &mut app, 300);
+    assert_eq!(set(&mut sim, &mut app, ok), Some((Status::Ok, 0)), "the held values in a ride: no error");
     assert_eq!(set(&mut sim, &mut app, want), Some((Status::Busy, 0)), "during a ride");
     assert_eq!(profile_ask(&mut sim, &mut app, ends, Command::ProfileGet { seq: 4 }).0, Some(ok), "a GET in a ride");
     assert_eq!(app.settings.ftp, ftp, "nothing changed");

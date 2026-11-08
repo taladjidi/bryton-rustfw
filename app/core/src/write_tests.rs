@@ -142,3 +142,32 @@ fn the_profile_is_read_set_and_refused_by_the_unit() {
     c.profile_get_command(t);
     assert!(c.silent(t + crate::files::SILENCE_MS), "an unanswered GET goes silent");
 }
+
+#[test]
+fn the_fake_unit_checks_each_field_like_the_firmware() {
+    let (c, mut u, mut t) = (FileClient::new(), FakeUnit::demo(), 0);
+    let p = UnitProfile { ftp: 250, max_hr: 185, lthr: 168, weight_kg: 70, wprime_j: 20_000, zones_lthr: false, female: false };
+    let bad = FileEvent::Failed { error: FileError::BadRequest };
+    for q in [
+        UnitProfile { ftp: 49, ..p },
+        UnitProfile { ftp: 601, ..p },
+        UnitProfile { max_hr: 99, ..p },
+        UnitProfile { max_hr: 231, ..p },
+        UnitProfile { lthr: 99, ..p },
+        UnitProfile { weight_kg: 29, ..p },
+        UnitProfile { weight_kg: 151, ..p },
+        UnitProfile { wprime_j: 4999, ..p },
+        UnitProfile { wprime_j: 40_001, ..p },
+    ] {
+        let cmd = c.profile_set_command(q, t);
+        assert_eq!(pump(&c, &mut u, &cmd, &mut t), bad, "{q:?}");
+    }
+    // unchanged answers OK even when busy; LTHR 0 is "unset"
+    u.faults.busy = true;
+    let cmd = c.profile_set_command(p, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::ProfileSet);
+    u.faults.busy = false;
+    let cmd = c.profile_set_command(UnitProfile { lthr: 0, ..p }, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::ProfileSet);
+    assert_eq!(u.profile.lthr, 0);
+}

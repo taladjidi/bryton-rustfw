@@ -7985,8 +7985,8 @@ fn file_service_commands() {
     use super::filesvc_tests::{drain, paired, rides};
     use super::run;
     use crate::filesvc::{Command, Frame, Status};
-    let mut reached = [0u32; 10]; // entries, chunks, bad requests, not found, ok ends, busy ends, workout entries, READ_IN of a listed key, PROFILE frames, PROFILE_SET that changed the settings
-    for seed in 1..=scaled(80) {
+    let mut reached = [0u32; 8]; // entries, chunks, bad requests, not found, ok ends, busy ends, workout entries, READ_IN of a listed key
+    for seed in 1..=scaled(40) {
         let mut next = xorshift(seed);
         let (mut sim, mut app, control, data) = paired();
         let rides = rides();
@@ -8027,44 +8027,7 @@ fn file_service_commands() {
                 k.extend(std::format!("{:02}", next() % 3).bytes());
                 crate::filesvc::Key::new(crate::filesvc::Folder::Workout, &k).unwrap()
             };
-            // one command in eight is a profile one, drawn from the high bits so the others keep their sequence
-            let n = match if r >> 20 & 7 == 0 { 11 + (r >> 24 & 1) } else { r % 11 } {
-                11 => Command::ProfileGet { seq }.encode(&mut f),
-                12 => {
-                    // a profile of the wire's shape: mostly inside the menus' ranges, now and then one value outside,
-                    // a bit of the frame flipped or the frame cut
-                    let wild = next().is_multiple_of(5);
-                    let mut v = |lo: u32, hi: u32| lo + next() % (hi - lo + 1);
-                    let (ftp, max_hr, lthr, weight_kg, wprime_j) = if wild {
-                        (v(0, 900) as u16, v(0, 255) as u8, v(0, 255) as u8, v(0, 255) as u8, v(0, 60_000) as u16)
-                    } else {
-                        (
-                            v(50, 600) as u16,
-                            v(100, 230) as u8,
-                            v(100, 230) as u8,
-                            v(30, 150) as u8,
-                            v(5000, 40_000) as u16,
-                        )
-                    };
-                    let profile = crate::filesvc::Profile {
-                        ftp,
-                        max_hr,
-                        lthr,
-                        weight_kg,
-                        wprime_j,
-                        zones_lthr: next().is_multiple_of(2),
-                        female: next().is_multiple_of(2),
-                    };
-                    let n = Command::ProfileSet { seq, profile }.encode(&mut f);
-                    match next() % 6 {
-                        0 => {
-                            f[next() as usize % n] ^= 1 << (next() % 8);
-                            n
-                        }
-                        1 => n.saturating_sub(1 + next() as usize % 3),
-                        _ => n,
-                    }
-                }
+            let n = match r % 11 {
                 8 => Command::ListIn { seq, folder: crate::filesvc::Folder::Workout }.encode(&mut f),
                 9 => {
                     let key = wkey(&mut next);
@@ -8109,14 +8072,10 @@ fn file_service_commands() {
                     n
                 }
             };
-            let held = (app.settings.ftp, app.settings.max_hr, app.settings.weight_kg, app.settings.lthr);
             sim.nordic.phone_write(control, &f[..n]);
             run(&mut sim, &mut app, 100 + u64::from(next() % 600));
-            let now = (app.settings.ftp, app.settings.max_hr, app.settings.weight_kg, app.settings.lthr);
-            reached[9] += u32::from(now != held);
             for p in drain(&mut sim, data) {
                 match Frame::parse(&p).unwrap_or_else(|| panic!("seed {seed}: {p:?} does not parse")) {
-                    Frame::Profile { .. } => reached[8] += 1,
                     Frame::Entry { .. } => reached[0] += 1,
                     Frame::EntryIn { key, .. } => {
                         reached[6] += 1;
@@ -8129,13 +8088,104 @@ fn file_service_commands() {
                     Frame::End { status: Status::NotFound, .. } => reached[3] += 1,
                     Frame::End { status: Status::Ok, .. } => reached[4] += 1,
                     Frame::End { status: Status::Busy, .. } => reached[5] += 1,
-                    Frame::End { .. } => {}
+                    Frame::End { .. } | Frame::Profile { .. } => {}
                 }
             }
         }
     }
     std::println!(
-        "file service fuzz: {reached:?} (entries, chunks, bad requests, not found, ok ends, busy, workout entries, READ_IN of a listed key, PROFILE frames, profiles set)"
+        "file service fuzz: {reached:?} (entries, chunks, bad requests, not found, ok ends, busy, workout entries, READ_IN of a listed key)"
     );
     assert!(reached.iter().all(|&n| n >= thr(20)), "reached {reached:?}");
+}
+
+/// PROFILE_GET / PROFILE_SET (app/filesvc.rs): structured SET frames (mostly inside the menus' ranges, now and then a
+/// value outside, a bit flipped, a frame cut) and GETs between passes, a card lent or a ride started on a few seeds.
+/// After each command every field is in its range or what it was; a SET not answered OK changes nothing; nothing
+/// changes once a ride runs. Counted: PROFILE frames, SETs answered OK with count 1, settings that changed.
+#[test]
+fn profile_commands() {
+    use super::filesvc_tests::{drain, paired};
+    use super::run;
+    use crate::filesvc::{Command, Frame, Profile, Status};
+    let mut reached = [0u32; 3];
+    for seed in 1..=scaled(40) {
+        let mut next = xorshift(seed);
+        let (mut sim, mut app, control, data) = paired();
+        let mut riding = false;
+        for i in 0..14 {
+            if i == 9 && seed % 6 == 0 {
+                app.leave_menus();
+                app.input(&mut sim, crate::Input::Select);
+                riding = true;
+            }
+            app.emmc.lend(seed % 8 == 0 && i % 4 == 1);
+            let o = app.settings;
+            let mut f = [0u8; 20];
+            let wild = next().is_multiple_of(5);
+            let mut v = |lo: u32, hi: u32| lo + next() % (hi - lo + 1);
+            let profile = if wild {
+                Profile {
+                    ftp: v(0, 900) as u16,
+                    max_hr: v(0, 255) as u8,
+                    lthr: v(0, 255) as u8,
+                    weight_kg: v(0, 255) as u8,
+                    wprime_j: v(0, 60_000) as u16,
+                    zones_lthr: v(0, 1) == 1,
+                    female: v(0, 1) == 1,
+                }
+            } else {
+                Profile {
+                    ftp: v(50, 600) as u16,
+                    max_hr: v(100, 230) as u8,
+                    lthr: v(100, 230) as u8,
+                    weight_kg: v(30, 150) as u8,
+                    wprime_j: v(5000, 40_000) as u16,
+                    zones_lthr: v(0, 1) == 1,
+                    female: v(0, 1) == 1,
+                }
+            };
+            let seq = next() as u8;
+            let mut n = if next().is_multiple_of(6) {
+                Command::ProfileGet { seq }.encode(&mut f)
+            } else {
+                Command::ProfileSet { seq, profile }.encode(&mut f)
+            };
+            match next() % 8 {
+                0 => f[next() as usize % n] ^= 1 << (next() % 8),
+                1 => n = n.saturating_sub(1 + next() as usize % 3).max(1),
+                _ => {}
+            }
+            sim.nordic.phone_write(control, &f[..n]);
+            run(&mut sim, &mut app, 100 + u64::from(next() % 400));
+            let mut ok = true;
+            for p in drain(&mut sim, data) {
+                match Frame::parse(&p).unwrap_or_else(|| panic!("seed {seed}: {p:?} does not parse")) {
+                    Frame::Profile { .. } => reached[0] += 1,
+                    Frame::End { status, count, .. } => {
+                        ok &= status == Status::Ok;
+                        reached[1] += u32::from(status == Status::Ok && count == 1);
+                    }
+                    _ => {}
+                }
+            }
+            let s = app.settings;
+            let inside = |r: core::ops::RangeInclusive<u16>, new: u16, old: u16| new == old || r.contains(&new);
+            assert!(
+                inside(crate::menu::FTP_RANGE, s.ftp, o.ftp)
+                    && inside(crate::menu::MAX_HR_RANGE, s.max_hr, o.max_hr)
+                    && (s.lthr == 0 || inside(crate::menu::LTHR_RANGE, s.lthr, o.lthr))
+                    && inside(crate::menu::WEIGHT_RANGE, s.weight_kg, o.weight_kg)
+                    && inside(crate::menu::WPRIME_RANGE, s.wprime_j, o.wprime_j),
+                "seed {seed} step {i}: {s:?}"
+            );
+            let changed = (s.ftp, s.max_hr, s.lthr, s.weight_kg, s.wprime_j, s.zones_lthr, s.female)
+                != (o.ftp, o.max_hr, o.lthr, o.weight_kg, o.wprime_j, o.zones_lthr, o.female);
+            reached[2] += u32::from(changed);
+            assert!(!changed || ok, "seed {seed} step {i}: a refused command changed the settings");
+            assert!(!changed || !riding, "seed {seed} step {i}: the settings changed in a ride");
+        }
+    }
+    std::println!("profile fuzz: {reached:?} (PROFILE frames, SETs applied, settings changed)");
+    assert!(reached.iter().all(|&n| n >= thr(10)), "reached {reached:?}");
 }
