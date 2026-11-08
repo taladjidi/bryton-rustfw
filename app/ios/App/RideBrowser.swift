@@ -59,6 +59,16 @@ final class RideBrowser: ObservableObject {
     private var workoutFiles: [WorkoutFile] = []
     /// The write under way is a send (not a delete).
     private var sending = false
+    /// The download under way is the background sync's, not the rider's: anything the rider starts cancels it.
+    private(set) var auto = false
+    /// The rider cancelled a sync download: no more until they refresh.
+    private var syncPaused = false
+    /// The unit was busy or its card unreadable during a sync: no more sync until the app restarts or reconnects.
+    private var syncOff = false
+    /// Rides whose sync download failed: not tried again until the app restarts.
+    private var syncFailed = Set<String>()
+    /// How far back the sync goes, days (the last 8 weeks; older rides download when opened).
+    static let syncDays = 56
 
     var hasTransport: Bool { transport != nil }
     var isDownloading: Bool { if case .downloading = phase { true } else { false } }
@@ -86,17 +96,29 @@ final class RideBrowser: ObservableObject {
         t.onLost = { [weak self] in
             guard let self else { return }
             self.ready = false
+            self.syncOff = false  // a reconnect tries the sync again
             if case .downloading = self.phase { self.message = "Link lost, resuming..." }
             if self.phase == .writing { self.endWrite("The link dropped. Look at the unit's list before sending again.", isSend: self.sending) }
         }
         t.onError = { [weak self] m in self?.message = m }
         t.onDebug = { [weak self] m in self?.debug = m }
+        syncOff = false
         t.start()
         tick?.invalidate()
         tick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.silence() }
     }
 
+    /// A rider's action takes the link from the background sync.
+    private func yieldAuto() {
+        if auto && isDownloading {
+            auto = false
+            cancel()
+        }
+    }
+
     func refresh() {
+        yieldAuto()
+        syncPaused = false
         guard ready, let t = transport, !isDownloading, phase != .writing else { return }
         message = nil
         listingWorkouts = false
@@ -107,6 +129,7 @@ final class RideBrowser: ObservableObject {
 
     /// Reads the planned workouts: LIST_IN of the Workout folder, then each file whole (they are a few KB).
     func refreshWorkouts() {
+        yieldAuto()
         guard ready, let t = transport, phase == .idle || phase == .workouts else { return }
         message = nil
         phase = .workouts
@@ -138,6 +161,7 @@ final class RideBrowser: ObservableObject {
     func send(day: String, bytes: Data) {
         sendError = nil
         sendDone = false
+        yieldAuto()
         guard ready, phase == .idle || phase == .failed, let t = transport else {
             sendError = "Not connected to the unit, or it is busy with another transfer. Try again in a moment."
             return
@@ -157,6 +181,7 @@ final class RideBrowser: ObservableObject {
     /// Removes a workout of the last list from the unit, then lists again; `file` is what the rider saw, which must
     /// still be what the list holds (a key is a place in the unit's folder).
     func deleteWorkout(file: WorkoutFile) {
+        yieldAuto()
         guard ready, phase == .idle, let t = transport else {
             message = "The unit is busy with another transfer."
             return
@@ -196,13 +221,15 @@ final class RideBrowser: ObservableObject {
         refreshWorkouts()  // not ready (a drop): becameReady lists again
     }
 
-    func download(_ r: RideEntry) {
+    func download(_ r: RideEntry, auto isAuto: Bool = false) {
+        if !isAuto { yieldAuto() }
         guard ready, phase == .idle || phase == .failed, let t = transport, let cmd = client.readCommand(name: r.name, nowMs: Self.now) else { return }
         message = nil
         retry?.cancel()
         busyRetries = 0
         (listingWorkouts, workoutKey, workoutQueue) = (false, nil, [])
         wanted = r.name
+        auto = isAuto
         progress = Progress(received: 0, total: r.size, bytesPerS: 0)
         phase = .downloading(r.name)
         t.write(cmd)
@@ -213,6 +240,8 @@ final class RideBrowser: ObservableObject {
         transport?.write(client.cancelCommand())
         phase = .idle
         wanted = nil
+        if auto { syncPaused = true }
+        auto = false
     }
 
     private func becameReady() {
@@ -226,7 +255,23 @@ final class RideBrowser: ObservableObject {
         transport?.write(cmd)
     }
 
+    /// Nothing else going on: the newest ride of the last 8 weeks that is not on the phone yet.
+    private func autoSync() {
+        guard ready, phase == .idle, !syncPaused, !syncOff,
+            let r = rides.first(where: { Self.inWindow($0.name) && !downloaded.contains($0.name) && !syncFailed.contains($0.name) })
+        else { return }
+        download(r, auto: true)
+    }
+
+    /// "Syncing 3 of 7" while the background sync downloads.
+    var syncLine: String? {
+        guard auto, isDownloading else { return nil }
+        let inWindow = rides.filter { Self.inWindow($0.name) }
+        return "Syncing \(inWindow.filter { downloaded.contains($0.name) }.count + 1) of \(inWindow.count)"
+    }
+
     private func silence() {
+        autoSync()
         guard ready, client.silent(nowMs: Self.now) else { return }
         if case .downloading = phase {
             message = "No answer, resuming..."
@@ -241,7 +286,15 @@ final class RideBrowser: ObservableObject {
     }
 
     private func data(_ d: Data) {
-        switch client.onData(value: d, nowMs: Self.now) {
+        let event = client.onData(value: d, nowMs: Self.now)
+        // a read the rider or a yield cancelled: what was already on the way must not finish or resume it
+        if wanted == nil && workoutKey == nil && phase != .workouts {
+            switch event {
+            case .progress, .partial, .finished: return
+            default: break
+            }
+        }
+        switch event {
         case .ignored, .entry: break
         case .listed where listingWorkouts:
             listingWorkouts = false
@@ -278,6 +331,10 @@ final class RideBrowser: ObservableObject {
         case .finished:
             progress = client.progress()
             finish()
+        case .busy where auto:
+            stopSyncQuietly()
+        case .failed(.card) where auto:
+            stopSyncQuietly()
         case .busy:
             busyRetries += 1
             if busyRetries > 20 {
@@ -303,8 +360,19 @@ final class RideBrowser: ObservableObject {
 
     private var isWorkoutPhase: Bool { phase == .workouts }
 
+    /// A sync download ends without a word: the unit is busy or its card is not readable, so the sync stays off.
+    private func stopSyncQuietly() {
+        retry?.cancel()
+        transport?.write(client.cancelCommand())
+        syncOff = true
+        (auto, wanted, message, phase) = (false, nil, nil, .idle)
+    }
+
     private func fail(_ m: String) {
         retry?.cancel()
+        if auto, let w = wanted { syncFailed.insert(w) }
+        auto = false
+        wanted = nil
         (listingWorkouts, workoutKey, workoutQueue) = (false, nil, [])
         message = m
         phase = .failed
@@ -316,7 +384,8 @@ final class RideBrowser: ObservableObject {
         do {
             try client.file().write(to: url, options: .atomic)
             downloaded.insert(name)
-            saved = SavedRide(url: url)
+            if auto { auto = false } else { saved = SavedRide(url: url) }
+            wanted = nil
             message = nil
             phase = .idle
         } catch {
@@ -342,14 +411,24 @@ final class RideBrowser: ObservableObject {
         }
     }
 
-    /// "1 Nov 2026, 09:00" from `YYMMDDhhmmss`.
-    static func title(_ name: String) -> String {
+    /// The start in the unit's local time, from `YYMMDDhhmmss` (taken as the phone's zone).
+    static func date(_ name: String) -> Date? {
         let n = name.compactMap { $0.wholeNumberValue }
-        guard n.count == 12 else { return name }
+        guard n.count == 12 else { return nil }
         let v = stride(from: 0, to: 12, by: 2).map { n[$0] * 10 + n[$0 + 1] }
         let c = DateComponents(year: 2000 + v[0], month: v[1], day: v[2], hour: v[3], minute: v[4], second: v[5])
-        guard let d = Calendar.current.date(from: c) else { return name }
-        return d.formatted(date: .abbreviated, time: .shortened)
+        return Calendar.current.date(from: c)
+    }
+
+    /// The ride started within the sync window.
+    static func inWindow(_ name: String) -> Bool {
+        guard let d = date(name) else { return false }
+        return d >= Date().addingTimeInterval(-Double(syncDays) * 86_400)
+    }
+
+    /// "1 Nov 2026, 09:00" from `YYMMDDhhmmss`.
+    static func title(_ name: String) -> String {
+        date(name)?.formatted(date: .abbreviated, time: .shortened) ?? name
     }
 }
 

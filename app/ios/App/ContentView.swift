@@ -11,6 +11,7 @@ struct BrytonApp: App {
 struct ContentView: View {
     @StateObject private var link = UnitLink()
     @StateObject private var rides = RideBrowser()
+    @StateObject private var library = RideLibrary()
     @State private var profile = false
     @StateObject private var store = WorkoutStore()
     @State private var path: [WorkoutRoute] = []
@@ -19,6 +20,9 @@ struct ContentView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                Section {
+                    WeeklyPanel(library: library, missing: missing, openProfile: { profile = true }).equatable()
+                }
                 Section {
                     Text(message).foregroundStyle(.secondary)
                     if link.state == .connected {
@@ -33,18 +37,32 @@ struct ContentView: View {
                         Text(rides.debug).font(.caption2.monospaced()).foregroundStyle(.secondary)
                     }
                 }
-                if let m = rides.message {
+                if let m = rides.message ?? library.error {
                     Section { Text(m).foregroundStyle(.orange) }
                 }
-                Section("Rides") {
-                    ForEach(rides.rides, id: \.name) { r in RideRow(rides: rides, ride: r) }
+                Section {
+                    ForEach(rides.rides, id: \.name) { r in
+                        RideRow(
+                            rides: rides, ride: r, brief: library.briefs[r.name],
+                            downloaded: rides.downloaded.contains(r.name), active: rides.phase == .downloading(r.name),
+                            locked: rides.phase == .listing || (rides.isDownloading && rides.phase != .downloading(r.name))
+                        ).equatable()
+                    }
                     if rides.rides.isEmpty && rides.phase == .idle {
                         Text("No rides listed").foregroundStyle(.secondary)
+                    }
+                } header: {
+                    HStack {
+                        Text("Rides")
+                        Spacer()
+                        if let line = rides.syncLine { Text(line).textCase(nil) }
                     }
                 }
                 WorkoutSection(rides: rides)
                 PhoneWorkoutSection(store: store) { editing = $0 }
             }
+            .onChange(of: rides.downloaded) { _, d in library.catchUp(rides.rides, downloaded: d) }
+            .onChange(of: rides.rides) { _, l in library.catchUp(l, downloaded: rides.downloaded) }
             .sheet(item: $editing) { WorkoutEditor(target: $0, store: store, rides: rides) }
             .navigationDestination(for: WorkoutRoute.self) { r in
                 if let f = rides.workouts.first(where: { $0.key == r.key }) { WorkoutDetail(file: f) { d in
@@ -97,6 +115,11 @@ struct ContentView: View {
         }
     }
 
+    /// Rides of the last 8 weeks the unit lists that are not on the phone yet.
+    private var missing: Int {
+        rides.rides.filter { RideBrowser.inWindow($0.name) && library.briefs[$0.name] == nil }.count
+    }
+
     private var noBluetooth: Bool {
         switch link.state {
         case .bluetoothOff, .unauthorized, .unsupported: true
@@ -122,44 +145,70 @@ struct ContentView: View {
     }
 }
 
-struct RideRow: View {
-    @ObservedObject var rides: RideBrowser
+/// A ride's row. Equatable, with the transfer's progress in its own view, so a download's ticks redraw only that bar.
+struct RideRow: View, Equatable {
+    let rides: RideBrowser
     let ride: RideEntry
+    let brief: RideBrief?
+    let downloaded: Bool
+    let active: Bool
+    let locked: Bool
+    @AppStorage("ftp") private var ftp = 200
+    @AppStorage("maxHR") private var maxHR = 190
+
+    init(rides: RideBrowser, ride: RideEntry, brief: RideBrief?, downloaded: Bool, active: Bool, locked: Bool) {
+        (self.rides, self.ride, self.brief, self.downloaded, self.active, self.locked) =
+            (rides, ride, brief, downloaded, active, locked)
+    }
+
+    static func == (a: RideRow, b: RideRow) -> Bool {
+        a.ride == b.ride && a.brief == b.brief && a.downloaded == b.downloaded && a.active == b.active && a.locked == b.locked
+    }
 
     var body: some View {
-        let active = rides.phase == .downloading(ride.name)
         Button {
             if active { return }
-            if rides.downloaded.contains(ride.name) {
+            if downloaded {
                 rides.saved = SavedRide(url: RideBrowser.path(ride.name))  // opens the viewer
             } else {
                 rides.download(ride)
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(RideBrowser.title(ride.name))
-                    if rides.downloaded.contains(ride.name) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    }
-                    Spacer()
-                    Text("\((ride.size + 512) / 1024) KB").foregroundStyle(.secondary)
-                }
-                if active {
-                    ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
-                    HStack {
-                        Text("\(rides.progress.received / 1024) of \(rides.progress.total / 1024) KB")
-                        Spacer()
-                        Text(String(format: "%.1f KB/s", Double(rides.progress.bytesPerS) / 1024))
-                        Button("Cancel") { rides.cancel() }.buttonStyle(.borderless)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
+                Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
+                Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
+                if active { RideProgress(rides: rides) }
             }
         }
         .foregroundStyle(.primary)
-        .disabled(rides.phase == .listing || (rides.isDownloading && !active))
+        .disabled(locked)
+    }
+}
+
+struct RideProgress: View {
+    @ObservedObject var rides: RideBrowser
+
+    var body: some View {
+        ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
+        HStack {
+            Text("\(rides.progress.received / 1024) of \(rides.progress.total / 1024) KB")
+            Spacer()
+            Text(String(format: "%.1f KB/s", Double(rides.progress.bytesPerS) / 1024))
+            Button("Cancel") { rides.cancel() }.buttonStyle(.borderless)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+}
+
+extension RideRow {
+    /// "2 h 31 · 68.4 km · TSS 112" ("HR load 80" without power), or why there is no such line yet.
+    func subtitle(_ b: RideBrief?) -> String {
+        guard let b else { return downloaded ? "Reading the ride..." : "not on the phone yet" }
+        var parts = [Fmt.duration(UInt64(b.movingS)), Fmt.km(b.distanceM)]
+        let s = rideStat(b: b, name: ride.name, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR), tzOffsetS: 0)
+        if let l = s.load { parts.append("\(s.loadFromHr ? "HR load" : "TSS") \(l)") }
+        return parts.joined(separator: " · ")
     }
 }
 

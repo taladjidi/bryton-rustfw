@@ -9,6 +9,7 @@
 //! Fields (FIT profile, Profile.xlsx of the Garmin SDK): record 253 timestamp, 0/1 position, 2/78 altitude,
 //! 3 heart_rate, 4 cadence, 5 distance, 6/73 speed, 7 power; session 18 and lap 19 as in the firmware's writer.
 
+use crate::summary::{HrBin, MOVING_MS, RideBrief, brief_load};
 use bryton_rustfw::{
     power::Power,
     power_curve::{DURATIONS, Rolling},
@@ -126,6 +127,13 @@ pub struct RideSummary {
     pub if_x100: Option<u32>,
     /// Training stress score (against the FTP given).
     pub tss: Option<u32>,
+    /// Training load as Intervals.icu shows it: the TSS from power when there is power and an FTP, else the heart
+    /// rate load (see `summary.rs`).
+    pub load: Option<u32>,
+    /// The load came from heart rate.
+    pub load_from_hr: bool,
+    /// What the ride list caches (the weekly totals are worked out from it).
+    pub brief: RideBrief,
     /// Calories: the file's, else worked out from the power.
     pub kcal: Option<u32>,
     /// The laps.
@@ -257,14 +265,23 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
     let (mut hr_z, mut p_z) = (vec![0u32; 5], vec![0u32; 7]);
     let (mut hr_sum, mut hr_n, mut cad_sum, mut cad_n) = (0u64, 0u64, 0u64, 0u64);
     let (mut hr_max, mut v_max, mut moving) = (0u16, 0f64, 0u32);
+    // Moving as the unit counts it (auto-pause speed, see summary.rs); a ride with no speed at all is all moving.
+    let has_speed = samples.iter().any(|s| s.speed_ms.is_some());
+    let (mut hr_bins, mut heard, mut power_s) = (vec![0u32; 256], false, 0u32);
     let (mut up, mut down, mut anchor) = (0f64, 0f64, None::<f64>);
     for (i, s) in samples.iter().enumerate() {
         // Each record stands for the time to the next one, 1 to 5 s (a smart-recording file has gaps; a gap over
         // 5 s is a pause, not riding), so the zones, the averages and NP count seconds, not records.
         let dt = samples.get(i + 1).map_or(1, |n| n.t_s.saturating_sub(s.t_s).clamp(1, 5));
+        let v = s.speed_ms.unwrap_or(0.0);
+        let mv = !has_speed || v >= MOVING_MS;
+        heard |= s.power.is_some();
         for k in 0..dt {
-            power.sample(s.power, true);
+            power.sample(s.power, mv);
             rolling.sample(s.t_s + k, s.power);
+        }
+        if mv && heard {
+            power_s = power_s.saturating_add(dt);
         }
         if let Some(p) = s.power.filter(|_| ftp > 0)
             && let Some(z) = p_z.get_mut(usize::from(power_zone(p, ftp)).wrapping_sub(1))
@@ -275,6 +292,9 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
             hr_sum += u64::from(h) * u64::from(dt);
             hr_n += u64::from(dt);
             hr_max = hr_max.max(h);
+            if let (true, Some(b)) = (mv, hr_bins.get_mut(usize::from(h.min(255)))) {
+                *b += dt;
+            }
             if max_hr > 0
                 && let Some(z) = hr_z.get_mut(usize::from(hr_zone(h, max_hr)).wrapping_sub(1))
             {
@@ -285,9 +305,8 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
             cad_sum += u64::from(c) * u64::from(dt);
             cad_n += u64::from(dt);
         }
-        let v = s.speed_ms.unwrap_or(0.0);
         v_max = v_max.max(v);
-        moving += if v > 0.5 { dt } else { 0 };
+        moving += if mv { dt } else { 0 };
         // 3 m of hysteresis against the altitude's noise (a common ascent rule)
         if let Some(a) = s.alt_m {
             let base = *anchor.get_or_insert(a);
@@ -300,7 +319,7 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
     }
     let elapsed_s = last_s.t_s;
     let distance_m = num(ses, "total_distance").unwrap_or(last_s.dist_m);
-    let moving_s = u32_of(num(ses, "total_timer_time")).unwrap_or(if moving > 0 { moving } else { elapsed_s });
+    let moving_s = moving;
     let avg = |sum: u64, n: u64| (n > 0).then(|| (sum / n) as u16);
     let curve = CURVE_S
         .iter()
@@ -314,8 +333,24 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
     // firmware's writer has no total_descent), so ascent and descent never come from different methods.
     let file_ascent = u32_of(num(ses, "total_ascent")).filter(|a| *a > 0);
     let file_descent = u32_of(num(ses, "total_descent")).filter(|a| *a > 0);
+    let start_unix = num(ses, "start_time").map_or_else(|| t0.unwrap_or(0.0) as i64, |v| v as i64);
+    let brief = RideBrief {
+        start_unix,
+        elapsed_s: u32_of(num(ses, "total_elapsed_time")).unwrap_or(elapsed_s).max(elapsed_s),
+        moving_s,
+        distance_m,
+        np: power.np().unwrap_or(0),
+        power_s,
+        hr_bins: hr_bins
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| **s > 0)
+            .map(|(b, s)| HrBin { bpm: b as u8, secs: *s })
+            .collect(),
+    };
+    let (load, load_from_hr) = brief_load(&brief, ftp, max_hr);
     let summary = RideSummary {
-        start_unix: num(ses, "start_time").map_or_else(|| t0.unwrap_or(0.0) as i64, |v| v as i64),
+        start_unix,
         elapsed_s: u32_of(num(ses, "total_elapsed_time")).unwrap_or(elapsed_s).max(elapsed_s),
         moving_s,
         distance_m,
@@ -332,6 +367,9 @@ fn view(msgs: &[FitDataRecord], ftp: u16, max_hr: u16) -> Result<RideView, RideE
         np: power.np(),
         if_x100: power.if_x100(ftp),
         tss: power.tss(ftp),
+        load,
+        load_from_hr,
+        brief,
         kcal: u32_of(num(ses, "total_calories")).filter(|k| *k > 0).or_else(|| power.np().map(|_| power.kcal())),
         laps,
         hr_zone_s: hr_z,

@@ -471,3 +471,5 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   and zone code for the viewer (UniFFI). `ride_tests.rs`: its tests, truncations and corruption.
   `app/ios/App/RideDetail.swift`: the viewer (summary grid, graphs, laps, zones, curve, the FTP / max HR sheet).
   `RideMap.swift`: the track on an `MKMapView` with IGN Plan v2 tiles inside France.
+- `app/core/src/summary.rs`: the ride brief the list caches, the load (Intervals.icu's definitions), `weekly_totals`; `summary_tests.rs`: its tests and fuzz. `demo_tests.rs`: the demo unit's dates.
+  `app/ios/App/RideLibrary.swift`: the summary cache, the weekly panel and the row texts.

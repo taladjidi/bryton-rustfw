@@ -33,6 +33,19 @@ impl Sink for Mem {
     }
 }
 
+/// (year, month, day) of a day count since 1970-01-01 (Hinnant's civil_from_days, public domain).
+fn civil(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
 /// Where second `i` is on the demo loop, degrees x 1e7: a circle of about 0.8 km radius with a wobble, around the
 /// Eiffel Tower (48.8584 N, 2.2945 E, public), one lap every 600 s.
 fn loop_point(i: u32) -> (i32, i32) {
@@ -46,7 +59,11 @@ fn loop_point(i: u32) -> (i32, i32) {
 /// for the altitude, power, cadence and speed, a heart rate that lags the power, a coast every 450 s. The Demo unit
 /// names its files in Paris time (UTC+1 in November), as the bike computer names them in local time.
 pub fn synthetic_ride(hour: u8, seconds: u32) -> Vec<u8> {
-    let t0 = fit::fit_time((2026, 11, 1, hour, 0, 0));
+    ride_from(fit::fit_time((2026, 11, 1, hour, 0, 0)), seconds)
+}
+
+/// The same ride starting at FIT time `t0`.
+fn ride_from(t0: u32, seconds: u32) -> Vec<u8> {
     let mut m = Mem(Vec::new());
     let Ok(mut w) = Writer::begin_with(&mut m, t0, false) else { return Vec::new() };
     let mut hr_f = 110.0f64;
@@ -66,7 +83,8 @@ pub fn synthetic_ride(hour: u8, seconds: u32) -> Vec<u8> {
         hr_f += (105.0 + 0.38 * (power - 100.0) + 0.004 * x - hr_f) / 25.0;
         let cadence = if coast { 0.0 } else { 88.0 + 6.0 * wave(90.0, 0.0) + 0.03 * (power - 185.0) + 1.5 * n(2) };
         let alt_m = 65.0 + 15.0 * wave(600.0, 0.0) + 1.2 * wave(97.0, 0.0);
-        let speed = 8.4 + 1.2 * wave(150.0, 0.0) + 0.9 * wave(600.0, 2.0) + 0.2 * n(3);
+        // stopped during the coast (a junction), so the moving time is less than the elapsed time
+        let speed = if coast { 0.0 } else { 8.4 + 1.2 * wave(150.0, 0.0) + 0.9 * wave(600.0, 2.0) + 0.2 * n(3) };
         let s = Sample {
             time: t0 + i,
             pos: Some(loop_point(i)),
@@ -86,6 +104,10 @@ pub fn synthetic_ride(hour: u8, seconds: u32) -> Vec<u8> {
     }
     m.0
 }
+
+#[cfg(test)]
+#[path = "demo_tests.rs"]
+mod tests;
 
 /// What the fake unit does to its next answers (the tests set them, Demo leaves them off).
 #[derive(Clone, Debug, Default)]
@@ -150,6 +172,40 @@ impl FakeUnit {
                 female: false,
             },
         }
+    }
+
+    /// The Demo unit as the app shows it: rides over the last three weeks before `now_unix` (Unix seconds), dates
+    /// relative to today, in Paris time (UTC+1 whatever the season: it is a demo).
+    pub fn demo_at(now_unix: i64) -> FakeUnit {
+        // (days ago, hour, seconds)
+        const PLAN: [(i64, u8, u32); 10] = [
+            (0, 7, 1500),
+            (2, 17, 2700),
+            (3, 6, 1800),
+            (5, 9, 3300),
+            (8, 18, 1500),
+            (9, 7, 2400),
+            (12, 10, 3600),
+            (14, 17, 1200),
+            (16, 8, 2700),
+            (19, 9, 3000),
+        ];
+        let day0 = (now_unix + 3600).div_euclid(86_400);
+        let mut rides: Vec<(Name, Vec<u8>)> = Vec::new();
+        for (ago, hour, secs) in PLAN {
+            let (y, m, d) = civil(day0 - ago);
+            let name = format!("{:02}{m:02}{d:02}{hour:02}0000", y % 100);
+            let (Ok(n), Some(t0)) = (
+                Name::try_from(name.as_bytes()),
+                u32::try_from((day0 - ago) * 86_400 + i64::from(hour) * 3600 - 3600 - 631_065_600).ok(),
+            ) else {
+                continue;
+            };
+            rides.push((n, ride_from(t0, secs)));
+        }
+        let mut u = FakeUnit::new(rides);
+        u.workouts = crate::workout::demo_workouts();
+        u
     }
 
     /// The Demo unit: three synthetic rides.
@@ -339,7 +395,10 @@ impl DemoUnit {
     /// Three synthetic rides.
     #[uniffi::constructor]
     pub fn new() -> Self {
-        DemoUnit(Mutex::new(FakeUnit::demo()))
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1_794_000_000, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        DemoUnit(Mutex::new(FakeUnit::demo_at(now)))
     }
 
     /// The Data frames for one Control write.

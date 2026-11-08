@@ -19,6 +19,9 @@ pub mod files;
 mod files_tests;
 pub mod import;
 pub mod ride;
+pub mod summary;
+#[cfg(test)]
+mod summary_tests;
 pub mod workout;
 #[cfg(test)]
 mod write_more_tests;

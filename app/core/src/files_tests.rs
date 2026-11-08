@@ -265,3 +265,23 @@ fn workouts_are_listed_and_read_in_their_folder_beside_the_rides() {
     assert_eq!(cmd[0], 2, "READ");
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
 }
+
+#[test]
+fn a_chunk_that_arrives_after_a_cancel_is_ignored() {
+    let (c, mut u, ride) = setup(20);
+    let mut t = 1000;
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
+    let frames = u.handle(&cmd);
+    for f in frames.iter().take(3) {
+        t += 10;
+        assert_ne!(c.on_data(f.clone(), t), FileEvent::Ignored);
+    }
+    c.cancel_command();
+    assert!(frames.len() > 10 && ride.len() > 100);
+    // the rest was already in flight: nothing counts, nothing finishes, nothing can be resumed
+    for f in frames.iter().skip(3) {
+        t += 10;
+        assert_eq!(c.on_data(f.clone(), t), FileEvent::Ignored);
+    }
+    assert!(c.file().is_empty() && c.resume_command(t).is_none());
+}

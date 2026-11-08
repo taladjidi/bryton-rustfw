@@ -134,6 +134,41 @@ Screenshots from the Simulator (an iPhone 18 Pro, demo mode; the Xcode here had 
 Not yet tried on a phone: that the service is found after `retrieveConnectedPeripherals` (the app discovers `aa3c0001`
 itself), that the first Data subscription makes iOS encrypt with the stored bond, the speed over the real link.
 
+## Ride list and weekly totals
+
+![Main screen: the weekly panel and the ride list](img/app-home.png)
+
+The main screen opens with this week's time, distance, load (TSS) and ride count, and the last 8 weeks as bars (load or
+time; touch a bar to read that week). Each ride row shows its start in the phone's zone and "2 h 31 · 68.4 km · TSS 112".
+The numbers come from the ride's file, so the app **syncs by itself**: with the unit connected and nothing else going on
+it downloads the rides of the last 8 weeks, newest first, into the same Documents folder a manual download uses, then
+reads each once (`ride_brief`) and caches the result in `ride-summaries.txt` (name, list size and one text line per ride).
+A refresh, a send, a delete or a tap on a ride takes the link from the sync at once; cancelling a sync download stops the
+sync until the next refresh; a reconnect resumes it; a ride on the phone is never downloaded twice. "Syncing 3 of 7" shows
+while it runs, and the panel says how many rides of the period are not on the phone yet. Older rides download when
+opened. The cache keeps the NP, the seconds and the heart rate histogram, so a new FTP or max HR (the profile sheet, which
+says to keep the FTP equal to Intervals.icu's) recomputes every load at once without reading a file.
+
+Definitions (`app/core/src/summary.rs` has the sources and what is inferred; looked up 2026-11-08). The numbers can
+differ from Intervals.icu's for the same file:
+- **Week:** Monday to Sunday, which a forum reply says is hardcoded in Intervals.icu. A ride counts in the week of the
+  local day in the unit's file name (`YYMMDDhhmmss` is the unit's local time), else of its start in the phone's zone
+  (inferred: Intervals shows an activity on its local start date).
+- **Moving time:** a second counts when the speed is at or above the unit's auto-pause speed (2 km/h), so the phone and
+  the unit agree (a test runs the same samples through the firmware's `Ride` and the viewer and compares TSS). Intervals'
+  own threshold is not confirmed (a staff post is reported to give 0.05 m/s: inferred, not confirmed by the cited page).
+  A ride with no speed field is all moving. Each record counts for the time to the next, at most 5 s. The viewer uses
+  the same number; it no longer reads the file's timer time. The viewer's average power and calories still prefer the
+  file's own values (which include stopped seconds); only when the file has none are they worked out, over moving seconds.
+- **Distance:** the file's total distance (inferred).
+- **Load with power:** TSS over the moving seconds with NP; a forum answer says Intervals' is TrainingPeaks' without
+  stopped time. Its NP method is not confirmed to match (inferred). The FTP is the profile's.
+- **Load without power:** Intervals' default is a regression on time in heart rate zones; the app approximates it with
+  Banister TRIMP (rest 60 bpm, against an hour at 85 % of the max HR). It is not a TSS: rows say "HR load" and a week
+  holding one says "TSS*".
+
+The Demo unit's ten rides are dated relative to today over the last three weeks (Paris time), so the panel has bars.
+
 ## The iPhone app against the unit
 
 iOS keeps a copy of the unit's GATT table for each bond. Our builds keep one table: the phone's services and

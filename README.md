@@ -55,8 +55,8 @@ Runs on the unit: installed, and newer builds from RAM. What is on the unit's li
   cut; they need an `EMMC_WRITE=1` build (docs/install.md). Sync to Intervals.icu from the computer (docs/sync.md). The
   storage is shared with Bryton's firmware, so the two can be swapped.
 - **Phone:** the phone as a Bluetooth accessory (notifications, media), and since 2026-11-07 the iPhone app: on the
-  owner's iPhone it shows the unit and its battery, lists the rides and downloads them, byte for byte identical to the
-  USB copy. The fast link (larger packets) works on the unit; its speed is being tuned (3 KB/s, then 16.6 KB/s seen; the next build aims for 40 to 50 KB/s).
+  owner's iPhone it shows the unit and its battery, lists the rides (date, time, distance, load) and downloads them, byte for byte identical to the
+  USB copy, with weekly totals like Intervals.icu's. The fast link (larger packets) works on the unit; its speed is being tuned (3 KB/s, then 16.6 KB/s seen; the next build aims for 40 to 50 KB/s).
 - **Tools:** a USB dev link, a profiler over it, and a settings file on the card.
 - **Testing:** since 2026-11-01 the radio, GNSS, touch, keys, panel and card each have a strict model in the simulator,
   and the radio chip's own app runs in an emulator (docs/devloop.md), so a link bug shows on the Mac first.
