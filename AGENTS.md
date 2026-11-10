@@ -164,7 +164,7 @@ main first.
 recorder, FAT, FIT) or src/app/filesvc.rs is pushed only after a `reviewer` pass cleared its last commit, named in the
 runner's brief as `reviewed: <sha>...`; the runner pushes only when each such path at HEAD equals its content in a
 reviewed sha that is an ancestor of HEAD. The gate alone is not enough (2026-11-10: a gated fix deleted the phone's copy
-of a ride on any upload refusal, docs/review-app-2026-11-10.md L1). Their decisions live in the tested core (app/core),
+of a ride on any upload refusal). Their decisions live in the tested core (app/core),
 not in Swift, and `app/core/src/files_fuzz.rs` must keep passing.
 
 ## Before every commit

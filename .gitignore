@@ -8,3 +8,6 @@ di2_key.bin
 mutants.out*
 check.log
 tools/real.env
+
+# review reports stay local (owner, 2026-11-10); the older ones are tracked and stay
+docs/review-*.md
