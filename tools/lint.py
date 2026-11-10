@@ -250,8 +250,39 @@ def ruff(root):
     return found or [f"lint: ruff: exit {p.returncode}: {p.stderr[:200]}"]
 
 
+RIDE_FILE = "app/ios/App/RideBrowser.swift"
+# the old set-aside copy (.fit.bad) is removed before reread moves a new one there
+RIDE_REMOVE_OK = {"try? FileManager.default.removeItem(at: bad)"}
+
+
+def ride_hits(name, text):
+    """Swift lines that delete a ride's file, or move one outside RideBrowser's func reread. Line based: a ride's
+    path is `RideBrowser.path(` anywhere, and `path(` / `url` / `bad` inside RideBrowser.swift."""
+    hits, fn = [], ""
+    for i, l in enumerate(text.splitlines(), 1):
+        m = re.search(r"\bfunc (\w+)", l)
+        if m:
+            fn = m.group(1)
+        why = "the app never deletes a ride's file (AGENTS.md, never lose a ride; 2026-11-10)"
+        if re.search(r"\bremoveItem\(", l):
+            ride = "RideBrowser.path(" in l or (name == RIDE_FILE and re.search(r"path\(|\burl\b|\bbad\b", l))
+            if ride and l.strip() not in RIDE_REMOVE_OK:
+                hits.append(f"lint: ride-delete: {name}:{i}: removeItem of a ride's file: {why}")
+        if re.search(r"\bmoveItem\(", l) and not (name == RIDE_FILE and fn == "reread"):
+            hits.append(f"lint: ride-delete: {name}:{i}: moveItem outside RideBrowser.reread: {why}")
+    return hits
+
+
+def ride_delete(root):
+    hits = []
+    for n in files(root):
+        if n.startswith("app/ios/") and n.endswith(".swift"):
+            hits += ride_hits(n, (root / n).read_text(errors="replace"))
+    return hits
+
+
 def run(root):
-    return unused_pub(root) + dashes(root) + keys(root) + tools_dead(root) + ruff(root)
+    return unused_pub(root) + dashes(root) + keys(root) + tools_dead(root) + ruff(root) + ride_delete(root)
 
 
 def selftest():
@@ -298,6 +329,24 @@ def selftest():
             assert tools_dead(root) == []
     finally:
         ALLOW, ALLOW_DEAD = saved
+    must_fail = [
+        (RIDE_FILE, "try? FileManager.default.removeItem(at: Self.path(name))"),
+        ("App/Other.swift", "try? FileManager.default.removeItem(at: RideBrowser.path(n))"),
+        (RIDE_FILE, "try? FileManager.default.removeItem(at: url)"),
+        (RIDE_FILE, "    func other() { try? FileManager.default.moveItem(at: url, to: bad) }"),
+        ("App/IntervalsLoop.swift", "guard (try? FileManager.default.moveItem(at: a, to: b)) != nil else { return }"),
+    ]
+    for name, line in must_fail:
+        assert ride_hits(name, line), (name, line)
+    must_pass = [
+        (RIDE_FILE, "try? FileManager.default.removeItem(at: bad)"),
+        (RIDE_FILE, "guard (try? FileManager.default.moveItem(at: url, to: bad)) != nil else { return false }"),
+        ("App/RouteStore.swift", "try? FileManager.default.removeItem(at: Self.file(r.name))"),
+        ("App/IntervalsLoop.swift", "defer { try? FileManager.default.removeItem(at: tmp) }"),
+    ]
+    for name, line in must_pass:
+        # inside a func reread, where a move of the ride's copy is allowed
+        assert ride_hits(name, "func reread(_ n: String) {\n" + line + "\n}") == [], (name, line)
     selftest_keys()
     print("lint selftest: ok")
 
