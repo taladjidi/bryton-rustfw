@@ -407,9 +407,7 @@ struct MetricChart: View {
             }
             .chartXSelection(value: $selX)
             .chartYAxis {
-                // four marks on any range: `desiredCount` is only a hint, and Charts steps by 1, 2 or 5
-                let (lo, hi) = (series.domain.lowerBound, series.domain.upperBound)
-                AxisMarks(values: Array(stride(from: lo, through: hi, by: max((hi - lo) / 3, .ulpOfOne)))) { v in
+                AxisMarks(values: niceMarks(series.domain.lowerBound, series.domain.upperBound)) { v in
                     AxisGridLine()
                     AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d.rounded()))") } }
                 }

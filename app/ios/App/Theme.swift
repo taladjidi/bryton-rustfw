@@ -171,3 +171,27 @@ struct UnitGlyph: View {
         .accessibilityHidden(true)
     }
 }
+
+/// Axis marks at round values: the multiples of the smallest 1, 2 or 5 x 10^n step that leave at most 5 marks inside
+/// `lo...hi` (at least 2: the step halves otherwise). Swift Charts' own `desiredCount` is only a hint and gave six
+/// labels on a speed axis; marks computed from the domain's ends gave 265 / 205 / 145 / 85, which no chart app shows.
+/// 2.5 steps are left out: the labels are whole numbers.
+func niceMarks(_ lo: Double, _ hi: Double) -> [Double] {
+    guard hi > lo, abs(lo) < 1e9, abs(hi) < 1e9 else { return [lo] }
+    func marks(_ step: Double) -> [Double] {
+        let first = (lo / step).rounded(.up)
+        let last = (hi / step).rounded(.down)
+        return last >= first ? (Int(first)...Int(last)).map { Double($0) * step } : []
+    }
+    var pow10 = pow(10.0, floor(log10(hi - lo)) - 1)
+    var found: [Double] = []
+    outer: while pow10 <= hi - lo {
+        for m in [1.0, 2.0, 5.0] {
+            found = marks(m * pow10)
+            if found.count <= 5 { break outer }
+        }
+        pow10 *= 10
+    }
+    if found.count < 2 { found = marks(max(pow10 / 2, .ulpOfOne)) }
+    return found
+}
