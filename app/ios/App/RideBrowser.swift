@@ -420,12 +420,20 @@ final class RideBrowser: ObservableObject {
         transport?.write(cmd)
     }
 
-    /// The phone's copy of a ride is unreadable: removed, so the sync reads it again from the unit.
-    func forget(_ name: String) {
-        try? FileManager.default.removeItem(at: Self.path(name))
+    /// The phone's copy of a ride fails its FIT CRC and the unit still lists the ride: set aside as `.fit.bad` (kept,
+    /// never deleted) so the sync reads it again. False when the copy is whole or the unit cannot give it again.
+    @discardableResult
+    func reread(_ name: String) -> Bool {
+        let url = Self.path(name)
+        guard ready, rides.contains(where: { $0.name == name }), let data = try? Data(contentsOf: url), !fitWhole(bytes: data)
+        else { return false }
+        let bad = url.appendingPathExtension("bad")
+        try? FileManager.default.removeItem(at: bad)
+        guard (try? FileManager.default.moveItem(at: url, to: bad)) != nil else { return false }
         downloaded.remove(name)
         syncFailed.remove(name)
         autoSync()
+        return true
     }
 
     /// Nothing else going on: the newest ride of the last 8 weeks that is not on the phone yet.

@@ -229,6 +229,17 @@ struct Inner {
     profile: Option<UnitProfile>,
 }
 
+/// A whole FIT file: its header and its trailing CRC hold (FIT's CRC over the data and its CRC is 0).
+fn fit_ok(b: &[u8]) -> bool {
+    b.len() >= 14 && bryton_rustfw::fit::crc(0, b) == 0
+}
+
+/// The phone's copy of a ride is a whole FIT file (its CRC holds): the app reads a damaged one again from the unit.
+#[uniffi::export]
+pub fn fit_whole(bytes: Vec<u8>) -> bool {
+    fit_ok(&bytes)
+}
+
 /// The file service client; one command at a time (a new one replaces the one under way, as on the unit).
 #[derive(uniffi::Object)]
 pub struct FileClient(Mutex<Inner>);
@@ -315,7 +326,7 @@ impl Inner {
                 }
                 Status::Ok if self.file.len() != self.size as usize => self.fail(FileError::Short),
                 // a ride's whole-file CRC (FIT: 0 over the data and its CRC) sees a hole no count saw: read it all again
-                Status::Ok if self.read_folder.is_none() && bryton_rustfw::fit::crc(0, &self.file) != 0 => {
+                Status::Ok if self.read_folder.is_none() && !fit_ok(&self.file) => {
                     if self.redo >= REDO_MAX {
                         return self.fail(FileError::CountMismatch);
                     }

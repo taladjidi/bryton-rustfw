@@ -178,8 +178,8 @@ final class IntervalsLoop: ObservableObject {
     private weak var rides: RideBrowser?
     private var records: [Sent]
     private var rejected: Set<String>
-    /// Rides refused or read again from the unit this launch: a rejected ride gets one more try a launch (a damaged
-    /// copy read again, or a ride Intervals.icu already holds, which it answers as a duplicate: then marked uploaded).
+    /// Rides refused this launch: a rejected ride gets one more upload a launch (a ride Intervals.icu already holds is
+    /// answered as a duplicate, then marked uploaded); only a copy failing its FIT CRC is read again from the unit.
     private var tried = Set<String>()
     private var events: [CalendarEvent] = []
     /// Events the unit cannot hold, by id: the stamp they had and why (not downloaded again until they change).
@@ -329,7 +329,10 @@ final class IntervalsLoop: ObservableObject {
             // one after the other; a ride the phone cannot read is skipped, not retried in a loop
             do {
                 guard let r = try await IntervalsClient.upload(key: key, athlete: athlete, name: name, file: RideBrowser.path(name))
-                else { continue }
+                else {
+                    rides?.reread(name)  // the phone cannot read its copy: a damaged one is read again from the unit
+                    continue
+                }
                 uploaded[name] = r.activityId
                 d.set(uploaded, forKey: "ivUploaded")
                 if rejected.remove(name) != nil { d.set(Array(rejected), forKey: "ivRejected") }
@@ -350,10 +353,10 @@ final class IntervalsLoop: ObservableObject {
                     scheduleKick(after: wait)
                     return
                 }
-                let first = tried.insert(name).inserted
-                if e.file, first, let rides = self.rides {
-                    // the phone's copy may be damaged in transit (2026-11-10): read it again before giving up
-                    rides.forget(name)
+                tried.insert(name)
+                if e.file, let rides = self.rides, rides.reread(name) {
+                    // the phone's copy was damaged in transit (2026-11-10): read again from the unit, then sent again
+                    if rejected.remove(name) != nil { d.set(Array(rejected), forKey: "ivRejected") }
                     continue
                 }
                 rejected.insert(name)

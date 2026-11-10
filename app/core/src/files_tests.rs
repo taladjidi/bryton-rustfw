@@ -321,3 +321,13 @@ fn a_chunk_that_arrives_after_a_cancel_is_ignored() {
     }
     assert!(c.file().is_empty() && c.resume_command(t).is_none());
 }
+
+#[test]
+fn fit_whole_holds_for_a_ride_and_not_for_a_damaged_one() {
+    let mut ride = synthetic_ride(9, 60);
+    assert!(fit_whole(ride.clone()));
+    let mid = ride.len() / 2;
+    ride[mid] ^= 1;
+    assert!(!fit_whole(ride));
+    assert!(!fit_whole(Vec::new()));
+}
