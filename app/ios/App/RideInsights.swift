@@ -166,6 +166,14 @@ struct DecouplingRow: View {
     }
 }
 
+/// A dashed line sample and its name, for a chart's rule lines.
+private func legend(_ color: Color, _ text: String) -> some View {
+    HStack(spacing: 6) {
+        Rectangle().stroke(color, style: StrokeStyle(lineWidth: 2, dash: [4, 2])).frame(width: 20, height: 2)
+        Text(text)
+    }
+}
+
 struct DfaChart: View {
     let points: [DfaPoint]
     let vt1: Double
@@ -179,18 +187,18 @@ struct DfaChart: View {
                 ForEach(points.indices, id: \.self) { i in
                     LineMark(x: .value("min", Double(points[i].tS) / 60), y: .value("a1", points[i].a1)).foregroundStyle(Tok.zone(1))
                 }
-                RuleMark(y: .value("VT1", vt1)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                    .foregroundStyle(Tok.ok).annotation(position: .top, alignment: .trailing) {
-                        Text("\(Fmt.dec(vt1, 2)) aerobic threshold").font(.caption2)
-                    }
-                RuleMark(y: .value("VT2", vt2)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                    .foregroundStyle(Tok.alarm).annotation(position: .top, alignment: .trailing) {
-                        Text("\(Fmt.dec(vt2, 2)) anaerobic threshold").font(.caption2)
-                    }
+                RuleMark(y: .value("VT1", vt1)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4])).foregroundStyle(Tok.ok)
+                RuleMark(y: .value("VT2", vt2)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4])).foregroundStyle(Tok.alarm)
             }
             .chartXAxisLabel("min")
             .chartYScale(domain: 0...max(1.5, ((points.map(\.a1).max() ?? 0) * 4).rounded(.up) / 4))
             .frame(height: height)
+            // the two thresholds sit close together: named under the chart, where they cannot overprint the lines
+            VStack(alignment: .leading, spacing: 2) {
+                legend(Tok.ok, "\(Fmt.dec(vt1, 2)) aerobic threshold")
+                legend(Tok.alarm, "\(Fmt.dec(vt2, 2)) anaerobic threshold")
+            }
+            .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

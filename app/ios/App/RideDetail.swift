@@ -564,6 +564,7 @@ struct ZoneBars: View {
     let unit: String
     let color: (Int) -> Color
     @ScaledMetric(relativeTo: .caption) private var barHeight: CGFloat = 10
+    @ScaledMetric(relativeTo: .caption) private var valueWidth: CGFloat = 84
 
     var body: some View {
         let total = max(secs.reduce(0, +), 1)
@@ -577,11 +578,17 @@ struct ZoneBars: View {
                         Text(range(i)).font(.caption).foregroundStyle(.secondary)
                     }
                     HStack(spacing: 8) {
+                        // the track keeps a 0 % zone's row as tall as the others (an empty bar had no baseline)
                         GeometryReader { g in
-                            Capsule().fill(color(i + 1)).frame(width: max(g.size.width * Double(secs[i]) / Double(longest), secs[i] > 0 ? 4 : 0))
+                            ZStack(alignment: .leading) {
+                                Rectangle().fill(Color.secondary.opacity(0.15))
+                                Rectangle().fill(color(i + 1))
+                                    .frame(width: max(g.size.width * Double(secs[i]) / Double(longest), secs[i] > 0 ? 4 : 0))
+                            }
                         }
-                        .frame(height: barHeight)
-                        Text("\(Fmt.hm(secs[i]))  \(secs[i] * 100 / total) %").font(.caption.monospacedDigit()).fixedSize()
+                        .frame(maxWidth: .infinity).frame(height: barHeight)
+                        Text("\(Fmt.hm(secs[i]))  \(secs[i] * 100 / total) %").font(.caption.monospacedDigit())
+                            .lineLimit(1).fixedSize().frame(minWidth: valueWidth, alignment: .trailing)
                     }
                 }
                 .accessibilityElement(children: .combine)
