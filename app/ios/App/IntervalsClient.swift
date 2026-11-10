@@ -141,8 +141,8 @@ final class IntervalsSync: ObservableObject {
                 status = "Could not store the key in the Keychain."
                 return
             }
-            refreshKey()
             UserDefaults.standard.set(athlete, forKey: Self.athleteKey)
+            refreshKey()  // after the athlete is stored: keyVersion also stands for a changed athlete id
             status = "\(p.name ?? "Athlete"): FTP " + (p.ftp.map { "\($0) W" } ?? "not set")
         } catch let e as IntervalsFailure {
             status = e.text

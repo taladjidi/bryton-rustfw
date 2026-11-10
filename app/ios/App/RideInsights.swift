@@ -17,8 +17,10 @@ actor InsightCache {
     private var running2: [String: Task<RideView?, Never>] = [:]
 
     private func key(_ url: URL, _ extra: String) -> String {
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        return "\(url.lastPathComponent) \(size) \(extra)"
+        let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        // size and date: a ride read again from the unit can keep its size but not its date
+        let stamp = v?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        return "\(url.lastPathComponent) \(v?.fileSize ?? 0) \(stamp) \(extra)"
     }
 
     func insight(_ url: URL, weight: UInt16, cp: UInt16, wPrime: UInt16) async -> RideInsight? {

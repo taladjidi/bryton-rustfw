@@ -173,10 +173,15 @@ pub fn power_curve_parse(json: Vec<u8>) -> Result<Vec<CurvePoint>, FitnessError>
 pub fn fitness_from_loads(loads: Vec<DayLoad>, today: i64) -> Vec<FitnessDay> {
     let Some(first) = loads.iter().map(|l| l.day).filter(|d| *d <= today).min() else { return Vec::new() };
     let first = first.max(today - 3650); // ten years at most: a damaged date cannot make a long loop
+    // one pass over the loads, not one per day: a long ride history stays cheap
+    let mut by_day = std::collections::BTreeMap::<i64, f64>::new();
+    for l in loads.iter().filter(|l| (first..=today).contains(&l.day)) {
+        *by_day.entry(l.day).or_default() += f64::from(l.load);
+    }
     let (mut c, mut a) = (0.0, 0.0);
     let mut days = Vec::new();
     for day in first..=today {
-        let load: f64 = loads.iter().filter(|l| l.day == day).map(|l| f64::from(l.load)).sum();
+        let load = by_day.get(&day).copied().unwrap_or(0.0);
         (c, a) = (c + (load - c) / CTL_D, a + (load - a) / ATL_D);
         days.push((day, c, a));
     }
