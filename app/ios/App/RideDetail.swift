@@ -28,9 +28,9 @@ struct ProfileSheet: View {
                 }
                 if profile.lthr > 0 || profile.weight > 0 || profile.wPrime > 0 {
                     Section {
-                        if profile.lthr > 0 { LabeledContent("Threshold heart rate", value: Fmt.bpm(profile.lthr)) }
-                        if profile.weight > 0 { LabeledContent("Weight", value: Fmt.weight(profile.weight)) }
-                        if profile.wPrime > 0 { LabeledContent("W'", value: "\(profile.wPrime) J") }
+                        if profile.lthr > 0 { valueRow("Threshold heart rate", Fmt.bpm(profile.lthr)) }
+                        if profile.weight > 0 { valueRow("Weight", Fmt.weight(profile.weight)) }
+                        if profile.wPrime > 0 { valueRow("W'", "\(profile.wPrime) J") }
                     } header: {
                         Text("From Intervals.icu")
                     } footer: {
@@ -90,6 +90,16 @@ struct ProfileSheet: View {
             }
         }
         .presentationDetents([.large])
+    }
+
+    /// A read-only value in the numeral face, as the other key numbers.
+    private func valueRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value).numeral(.title3)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// A typed value with a stepper beside it (13 taps from 200 W to 265 W is too many).
