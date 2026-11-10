@@ -38,13 +38,12 @@ struct ProfileSheet: View {
                     }
                 }
                 Section {
-                    Picker("Units", selection: $profile.imperial) {
-                        Text("Metric").tag(false)
-                        Text("Imperial").tag(true)
+                    CardHeader(title: "Units") {
+                        Picker("Units", selection: $profile.imperial) {
+                            Text("Metric").tag(false)
+                            Text("Imperial").tag(true)
+                        }
                     }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Units")
                 } footer: {
                     Text("Distance, speed, height and weight on this phone. The unit keeps its own setting, which the phone cannot read.")
                 }
@@ -407,7 +406,14 @@ struct MetricChart: View {
                 }
             }
             .chartXSelection(value: $selX)
-            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
+            .chartYAxis {
+                // four marks on any range: `desiredCount` is only a hint, and Charts steps by 1, 2 or 5
+                let (lo, hi) = (series.domain.lowerBound, series.domain.upperBound)
+                AxisMarks(values: Array(stride(from: lo, through: hi, by: max((hi - lo) / 3, .ulpOfOne)))) { v in
+                    AxisGridLine()
+                    AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d.rounded()))") } }
+                }
+            }
             .chartYScale(domain: series.domain)
             .chartOverlay { proxy in
                 // the cursor line, drawn here so the chart's 2000 marks are not rebuilt on every drag tick
@@ -534,6 +540,8 @@ struct LapList: View {
             Text("Laps").font(.subheadline.bold())
             ForEach(laps.indices, id: \.self) { i in LapRow(index: i + 1, lap: laps[i]) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
     }
 }
 

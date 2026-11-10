@@ -33,7 +33,9 @@ enum Tok {
 
 /// Series colours of the ride charts: none is the alarm red.
 extension Tok {
-    static let speed = zone(7)  // the ramp's neutral slate: zone 1's teal is a zone, and a speed line is not
+    /// A slate of its own (zone 7 is pinned to the firmware's constant by a test): 3:1 or more on the card, light and dark.
+    static let speed = Color(UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0.58, green: 0.54, blue: 0.68, alpha: 1) : UIColor(red: 0.35, green: 0.40, blue: 0.52, alpha: 1) })
     static let heartRate = zone(5)
     static let power = accent
     static let cadence = zone(2)
@@ -125,30 +127,44 @@ struct ActionRow: View {
 struct CardHeader<Control: View>: View {
     let title: String
     @ViewBuilder let control: Control
-    @Environment(\.dynamicTypeSize) private var type
 
     var body: some View {
-        let layout = type.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
-        layout {
-            Text(title).font(.subheadline.bold())
-            if !type.isAccessibilitySize { Spacer(minLength: 8) }
-            control.pickerStyle(.segmented).frame(maxWidth: type.isAccessibilitySize ? .infinity : 190)
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Text(title).font(.subheadline.bold()).lineLimit(1)
+                Spacer(minLength: 8)
+                control.pickerStyle(.segmented).frame(maxWidth: 190)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.subheadline.bold())
+                control.pickerStyle(.segmented)
+            }
         }
     }
 }
 
-/// The bike computer drawn as a pixel grid: a body outline and a pixel "7" on its screen. One colour (the foreground
-/// style), for the unit card and the empty states; rides keep the `bicycle` symbol.
+/// A portrait bike computer drawn on a 12 x 12 pixel grid: the body with its corners cut, a one-cell screen frame with a
+/// small bar chart inside, a side button and a chin. One colour (the foreground style), for the unit card and the empty
+/// states; rides keep the `bicycle` symbol.
 struct UnitGlyph: View {
     @ScaledMetric(relativeTo: .title2) private var side: CGFloat = 30
 
     var body: some View {
         Canvas { ctx, size in
-            let u = size.width / 10  // a 10 x 10 pixel grid
+            let u = size.width / 12
             var path = Path()
             func cell(_ x: Int, _ y: Int) { path.addRect(CGRect(x: CGFloat(x) * u, y: CGFloat(y) * u, width: u, height: u)) }
-            for y in 0..<10 { for x in 1..<9 where x == 1 || x == 8 || y == 0 || y == 9 { cell(x, y) } }
-            for (x, y) in [(3, 2), (4, 2), (5, 2), (6, 2), (6, 3), (5, 4), (5, 5), (4, 6), (4, 7)] { cell(x, y) }
+            for y in 0...11 {
+                for x in 2...9 {
+                    let corner = (x == 2 || x == 9) && (y == 0 || y == 11)
+                    if !corner && (x == 2 || x == 9 || y == 0 || y == 11) { cell(x, y) }
+                }
+            }
+            for x in 3...8 { for y in [2, 7] { cell(x, y) } }  // the screen frame
+            for y in 3...6 { for x in [3, 8] { cell(x, y) } }
+            for (x, h) in [(4, 1), (5, 3), (6, 2), (7, 4)] { for k in 0..<h { cell(x, 6 - k) } }  // bars
+            cell(10, 3); cell(10, 4)  // side button
+            cell(5, 9); cell(6, 9)  // chin
             ctx.fill(path, with: .foreground)
         }
         .frame(width: side, height: side)

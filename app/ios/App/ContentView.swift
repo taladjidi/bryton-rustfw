@@ -114,8 +114,7 @@ struct ContentView: View {
             .toolbar {
                 // two items with their own names, not one unlabelled capsule
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { fitness = true } label: { Label("Fitness", systemImage: "chart.line.uptrend.xyaxis") }
-                        .labelStyle(.titleAndIcon)
+                    Button("Fitness") { fitness = true }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { profile = true } label: { Image(systemName: "person.crop.circle") }
