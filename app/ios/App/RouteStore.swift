@@ -36,6 +36,8 @@ struct UnitRoute: Identifiable, Equatable {
     var id: String { key }
 }
 
+/// Main actor: it publishes state the views read; the file work runs in detached tasks and hops back explicitly.
+@MainActor
 final class RouteStore: ObservableObject {
     @Published var items: [PhoneRoute] = []
     @Published var problem: String?
@@ -46,14 +48,17 @@ final class RouteStore: ObservableObject {
 
     /// Decoded routes by file, as long as the file's size and date are the same: a change of the list parses nothing.
     private var cache: [String: (stamp: String, route: PhoneRoute)] = [:]
+    /// Counts the keeps and deletes: a reload that started before the last one holds an older folder and is dropped
+    /// (it would blank a route just imported).
+    private var generation = 0
 
-    private static var dir: URL {
+    private nonisolated static var dir: URL {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Routes")
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }
-    private static var ledger: URL { dir.appendingPathComponent("sent.json") }
-    private static var aliasFile: URL { dir.appendingPathComponent("aliases.json") }
+    private nonisolated static var ledger: URL { dir.appendingPathComponent("sent.json") }
+    private nonisolated static var aliasFile: URL { dir.appendingPathComponent("aliases.json") }
 
     init() {
         sent = (try? JSONDecoder().decode([SentRoute].self, from: Data(contentsOf: Self.ledger))) ?? []
@@ -61,12 +66,13 @@ final class RouteStore: ObservableObject {
         reload()
     }
 
-    private static func file(_ n: String) -> URL { dir.appendingPathComponent("\(n).fit") }
+    private nonisolated static func file(_ n: String) -> URL { dir.appendingPathComponent("\(n).fit") }
 
     /// Reads the folder off the main thread; a file already decoded with the same size and date is not read again.
     func reload() {
         let known = cache.mapValues(\.stamp)
         let routes = cache
+        let started = generation
         Task.detached {
             var fresh: [String: (stamp: String, route: PhoneRoute)] = [:]
             let names = (try? FileManager.default.contentsOfDirectory(atPath: Self.dir.path)) ?? []
@@ -83,6 +89,7 @@ final class RouteStore: ObservableObject {
                 }
             }
             await MainActor.run {
+                guard self.generation == started else { return }
                 self.cache = fresh
                 self.items = fresh.values.map(\.route).sorted { $0.name < $1.name }
             }
@@ -134,6 +141,7 @@ final class RouteStore: ObservableObject {
         let kept = try routeFromFit(bytes: v.fit, name: name)
         let r = PhoneRoute(name: name, view: kept)
         cache[name] = ("new", r)
+        generation += 1
         items = (items.filter { $0.name != name } + [r]).sorted { $0.name < $1.name }
         problem = nil
         return r
@@ -142,6 +150,7 @@ final class RouteStore: ObservableObject {
     func delete(_ r: PhoneRoute) {
         try? FileManager.default.removeItem(at: Self.file(r.name))
         cache[r.name] = nil
+        generation += 1
         items.removeAll { $0.name == r.name }
     }
 

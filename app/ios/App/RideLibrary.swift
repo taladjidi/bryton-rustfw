@@ -16,6 +16,7 @@ final class RideLibrary: ObservableObject {
     private var busy = Set<String>()
     private var unreadable = Set<String>()
     private var seenDownloaded = 0
+    private var saveTask: Task<Void, Never>?
     private let file = RideBrowser.documents.appendingPathComponent("ride-summaries.txt")
     private let queue = DispatchQueue(label: "ride-analysis", qos: .utility)
     /// The weeks last worked out, for the inputs they were worked out for.
@@ -52,6 +53,15 @@ final class RideLibrary: ObservableObject {
         return (briefs, sizes)
     }
 
+    /// One write for a burst of analysed rides (a catch-up of many would rewrite the whole cache for each).
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled { self?.save() }
+        }
+    }
+
     private func save() {
         let rows = briefs.keys.sorted().compactMap { k in briefs[k].map { "\(k) \(sizes[k] ?? 0) \(briefEncode(b: $0))" } }
         let text = (["definitions \(Self.definitions)"] + rows).joined(separator: "\n") + "\n"
@@ -79,7 +89,7 @@ final class RideLibrary: ObservableObject {
                     if let b {
                         self.briefs[r.name] = b
                         self.sizes[r.name] = r.size
-                        self.save()
+                        self.scheduleSave()
                     } else {
                         self.unreadable.insert(r.name)
                     }

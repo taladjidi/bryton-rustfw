@@ -14,6 +14,7 @@ struct ContentView: View {
     @StateObject private var library = RideLibrary()
     @StateObject private var intervals = IntervalsSync()
     @StateObject private var loop = IntervalsLoop()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var profile = false
     @State private var fitness = false
     @State private var allRides = false
@@ -69,6 +70,7 @@ struct ContentView: View {
                 loop.uploadPass()  // a ride just synced goes up
             }
             .onChange(of: intervals.keyVersion) { _, _ in loop.keyChanged(intervals.hasKey) }
+            .onChange(of: scenePhase) { _, p in if p == .active { loop.foreground() } }
             .onChange(of: rides.rides) { _, l in
                 library.catchUp(l, downloaded: rides.downloaded)
                 lastSync = Date()  // the unit just answered with its list

@@ -107,17 +107,24 @@ struct PhoneWorkoutSection: View {
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { r in
                     switch r {
                     case .success(let url):
-                        let ok = url.startAccessingSecurityScopedResource()
-                        defer { if ok { url.stopAccessingSecurityScopedResource() } }
-                        do {
-                            // the core refuses over 1 MB too; this keeps a huge file out of memory
-                            if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 1_000_000 {
-                                problem = "File too big"
-                                return
+                        // read and parsed off the main thread
+                        Task {
+                            let result = await Task.detached { () -> Result<WorkoutDraft, Error> in
+                                let ok = url.startAccessingSecurityScopedResource()
+                                defer { if ok { url.stopAccessingSecurityScopedResource() } }
+                                return Result {
+                                    // the core refuses over 1 MB too; this keeps a huge file out of memory
+                                    if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 1_000_000 {
+                                        throw DraftError.Invalid(message: "File too big")
+                                    }
+                                    return try importWorkout(bytes: Data(contentsOf: url), fallbackName: url.deletingPathExtension().lastPathComponent)
+                                }
+                            }.value
+                            switch result {
+                            case .success(let d): onEdit(EditorTarget(draft: d, file: nil))
+                            case .failure(let e): problem = message(e)
                             }
-                            let d = try importWorkout(bytes: try Data(contentsOf: url), fallbackName: url.deletingPathExtension().lastPathComponent)
-                            onEdit(EditorTarget(draft: d, file: nil))
-                        } catch { problem = message(error) }
+                        }
                     case .failure(let e): problem = e.localizedDescription
                     }
                 }

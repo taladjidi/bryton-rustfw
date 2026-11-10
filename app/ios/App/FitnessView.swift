@@ -6,9 +6,6 @@ import Charts
 import SwiftUI
 
 extension IntervalsClient {
-    /// No cache or cookies on disk, as the profile's session.
-    private static let getSession = URLSession(configuration: .ephemeral)
-
     /// A GET of `path` (under /api/v1/athlete/{id}/) with its query, the answer's bytes or why not, in plain words.
     static func get(key: String, athlete: String, path: String, query: [URLQueryItem]) async throws -> Data {
         #if DEBUG
@@ -26,7 +23,7 @@ extension IntervalsClient {
         req.setValue("Basic " + Data("API_KEY:\(k)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
         let (data, resp): (Data, URLResponse)
         do {
-            (data, resp) = try await getSession.data(for: req)
+            (data, resp) = try await session.data(for: req)
         } catch {
             throw IntervalsFailure(text: "Could not reach Intervals.icu.")
         }
@@ -48,6 +45,7 @@ struct FitnessData {
 struct FitnessView: View {
     @ObservedObject var library: RideLibrary
     @EnvironmentObject private var profile: Profile
+    @EnvironmentObject private var intervals: IntervalsSync
     private var ftp: Int { profile.ftp }
     private var maxHR: Int { profile.maxHR }
     /// Chart heights, scaled with Dynamic Type.
@@ -81,13 +79,6 @@ struct FitnessView: View {
     }
 
     private func date(_ day: Int64) -> Date { Date(timeIntervalSince1970: Double(day) * 86_400 + 43_200) }
-
-    private var hasKey: Bool {
-        #if DEBUG
-        if CommandLine.arguments.contains("-demo") { return true }
-        #endif
-        return Keychain.get("apikey") != nil
-    }
 
     var body: some View {
         let d = shown
@@ -127,10 +118,18 @@ struct FitnessView: View {
         }
         .navigationTitle("Fitness")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(Keychain.get("apikey") ?? "") \(UserDefaults.standard.string(forKey: IntervalsSync.athleteKey) ?? "")") {
+        // the key itself is never an id: a new key counts as keyVersion
+        .task(id: "\(intervals.keyVersion) \(intervals.athlete)") {
             await fetchRemote()
         }
-        .task(id: "\(ftp) \(maxHR) \(library.briefs.count)") { computeLocal() }
+        .task(id: "\(ftp) \(maxHR) \(library.briefs.count)") {
+            // a catch-up changes the briefs once per ride: wait for the burst to end (the first run is at once)
+            if !local.days.isEmpty {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if Task.isCancelled { return }
+            }
+            computeLocal()
+        }
     }
 
     private func stat(_ label: String, _ value: String, _ color: Color) -> some View {

@@ -10,11 +10,19 @@ import Foundation
 extension IntervalsClient {
     /// `yyyyMMdd` and `yyyy-MM-dd` in the phone's zone: the calendar's local days.
     static func day(_ d: Date, iso: Bool = false) -> String {
+        (iso ? dayIso : dayPlain).string(from: d)
+    }
+
+    /// Built once (a DateFormatter is slow to make); the zone follows the phone's.
+    private static func dayFormatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = iso ? "yyyy-MM-dd" : "yyyyMMdd"
-        return f.string(from: d)
+        f.timeZone = .autoupdatingCurrent
+        f.dateFormat = format
+        return f
     }
+    private static let dayPlain = dayFormatter("yyyyMMdd")
+    private static let dayIso = dayFormatter("yyyy-MM-dd")
 
     private static func base(_ athlete: String) throws -> String {
         let a = athlete.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -42,13 +50,18 @@ extension IntervalsClient {
         }
     }
 
+    /// The failure for a status, by the core's classification: a refused key, a busy service (retried later), a file
+    /// Intervals.icu cannot read (that ride is not tried again), or anything else (the pass stops; no ride is blamed).
     private static func refused(_ status: Int) -> IntervalsFailure {
-        switch status {
-        case 401, 403:
+        switch httpClass(status: UInt16(clamping: status)) {
+        case .auth:
             IntervalsFailure(text: "Intervals.icu refused the API key. Check the key and the athlete id.", auth: true, retry: false)
-        case 429: IntervalsFailure(text: "Intervals.icu asked to slow down (429).")
-        case 500...599: IntervalsFailure(text: "Intervals.icu had an error (\(status)).")
-        default: IntervalsFailure(text: "Intervals.icu answered with an error (\(status)).", retry: false)
+        case .later:
+            IntervalsFailure(text: status == 429 ? "Intervals.icu asked to slow down (429)." : "Intervals.icu had an error (\(status)).")
+        case .badFile:
+            IntervalsFailure(text: "Intervals.icu could not read the file (\(status)).", retry: false, file: true)
+        case .stop:
+            IntervalsFailure(text: "Intervals.icu answered with an error (\(status)).", retry: false)
         }
     }
 
@@ -106,10 +119,7 @@ extension IntervalsClient {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let (data, status) = try await call(url, key: key, file: (tmp, "multipart/form-data; boundary=\(boundary)"))
         if let u = uploadOutcome(status: UInt16(clamping: status), json: data) { return u }
-        // the file itself is refused (bad request, unreadable, too big): not tried again
-        if status == 400 || status == 413 || status == 415 || status == 422 {
-            throw IntervalsFailure(text: "Intervals.icu could not read the file (\(status)).", retry: false, file: true)
-        }
+        // a 200 that names no activity is not an upload either: refused() reports it as an error
         throw refused(status)
     }
 
@@ -187,12 +197,19 @@ final class IntervalsLoop: ObservableObject {
     private var failures = 0
     private var uploadNotBefore = Date.distantPast
     private var calendarRetryAt: Date?
-    /// The key was refused: no pass runs until a key is entered again or an upload switch is turned on.
-    private var keyRefused = false
+    /// When the key was refused: no pass runs until a key is entered again, an upload switch is turned on, the app
+    /// comes to the foreground, or an hour has passed (a 401 in a bad moment must not block for good).
+    private var keyRefusedAt: Date?
+    private var keyRefused: Bool {
+        get { keyRefusedAt.map { Date().timeIntervalSince($0) < 3600 } ?? false }
+        set { keyRefusedAt = newValue ? Date() : nil }
+    }
     /// The unit cannot take calendar writes (no calendar folder, read only): not asked again before this.
     private var hardUntil: Date?
     private var timer: Timer?
-    private var retryTask: Task<Void, Never>?
+    /// One retry timer for the uploads and one for the calendar, so a failure of one does not cancel the other's.
+    private var uploadRetry: Task<Void, Never>?
+    private var calendarRetry: Task<Void, Never>?
     private let d = UserDefaults.standard
 
     init() {
@@ -254,6 +271,7 @@ final class IntervalsLoop: ObservableObject {
     /// The key appeared or went: the first key turns both features on, and only rides from now on go up.
     func keyChanged(_ has: Bool) {
         keyRefused = false
+        tried.removeAll()  // rides refused while the old key was wrong get their one try again
         guard has else { return }
         if d.object(forKey: "ivUpload") == nil { setUpload(true) }
         if d.object(forKey: "ivCalendar") == nil { setCalendar(true) }
@@ -277,17 +295,29 @@ final class IntervalsLoop: ObservableObject {
         if on { calendarPass(force: true) } else { rides?.setCalendarJobs([]) }
     }
 
+    /// The app came to the foreground: a refused key is tried once more, and the passes run.
+    func foreground() {
+        keyRefused = false
+        kick()
+    }
+
     func kick(force: Bool = false) {
         checkAccount()
         uploadPass()
         calendarPass(force: force)
     }
 
-    private func scheduleKick(after s: TimeInterval) {
-        retryTask?.cancel()
-        retryTask = Task { [weak self] in
+    private func scheduleKick(after s: TimeInterval, calendar: Bool) {
+        let t = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(max(s, 1) * 1_000_000_000))
             if !Task.isCancelled { self?.kick() }
+        }
+        if calendar {
+            calendarRetry?.cancel()
+            calendarRetry = t
+        } else {
+            uploadRetry?.cancel()
+            uploadRetry = t
         }
     }
 
@@ -347,13 +377,14 @@ final class IntervalsLoop: ObservableObject {
                     uploadError = "Intervals.icu refused the key. Enter it again in the profile."
                     return
                 }
-                if e.retry {
-                    // 2, 4, 8 ... minutes, an hour at most
+                if e.retry || !e.file {
+                    // a busy service, or an answer about the request or the account (404 athlete id, 409...): the pass
+                    // stops, no ride is blamed; 2, 4, 8 ... minutes, an hour at most
                     failures += 1
                     let wait = min(3600, 120 * pow(2, Double(min(failures - 1, 10))))
                     uploadNotBefore = Date().addingTimeInterval(wait)
                     uploadError = e.text + " Will try again later."
-                    scheduleKick(after: wait)
+                    scheduleKick(after: wait, calendar: false)
                     return
                 }
                 tried.insert(name)
@@ -382,7 +413,8 @@ final class IntervalsLoop: ObservableObject {
         let due = calendarRetryAt.map { now >= $0 } ?? false
         // at most hourly (an empty calendar counts too); the Simulator's demo always reads
         let tried = d.object(forKey: "ivCalTry") as? Date ?? .distantPast
-        if !force && !due && !Self.isDemo && now.timeIntervalSince(tried) < 3600 { return }
+        // nothing read yet this launch: a minute's pause only, so the planned list is not empty for an hour
+        if !force && !due && !Self.isDemo && now.timeIntervalSince(tried) < (calendarRead ? 3600 : 60) { return }
         calendarBusy = true
         d.set(now, forKey: "ivCalTry")
         Task {
@@ -397,7 +429,7 @@ final class IntervalsLoop: ObservableObject {
         do {
             events = try await IntervalsClient.events(key: key, athlete: athlete, first: today, last: last)
         } catch let e as IntervalsFailure {
-            return failCalendar(e.text, auth: e.auth)
+            return failCalendar(e.text, auth: e.auth, retry: e.retry)
         } catch {
             return failCalendar("Could not read the calendar.")
         }
@@ -446,15 +478,18 @@ final class IntervalsLoop: ObservableObject {
         showPlanned()
     }
 
-    private func failCalendar(_ text: String, auth: Bool = false) {
+    /// A failed read: shown; retried in 15 minutes only when it can pass later (not a refused key, not an answer that
+    /// will always be the same). The hourly pass still looks again.
+    private func failCalendar(_ text: String, auth: Bool = false, retry: Bool = true) {
         calendarError = text
         if auth {
             keyRefused = true
             calendarError = "Intervals.icu refused the key. Enter it again in the profile."
             return
         }
+        guard retry else { return }
         calendarRetryAt = Date().addingTimeInterval(900)
-        scheduleKick(after: 900)
+        scheduleKick(after: 900, calendar: true)
     }
 
     private static func words(_ e: Error) -> String {
@@ -506,7 +541,7 @@ final class IntervalsLoop: ObservableObject {
         case .stop:
             calendarError = "Planned workouts: \(err ?? "stopped")"
             calendarRetryAt = Date().addingTimeInterval(900)
-            scheduleKick(after: 900)
+            scheduleKick(after: 900, calendar: true)
         case .stopHard:
             calendarError = "Planned workouts: \(err ?? "the unit cannot take them")"
             hardUntil = Date().addingTimeInterval(3600)
