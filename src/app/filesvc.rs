@@ -43,7 +43,7 @@
 //! 360 B/s, a 400 KB ride in 18.5 minutes. On the fast link ([`nrf::FAST_MTU`], docs/roadmap.md 3c, reopened
 //! 2026-11-07) the frame is the negotiated MTU less 3 (242 file bytes), the stack queues [`nrf::FAST_QUEUE`], a pass
 //! fills the queue and refills it when the stack reports the slots free (`HVN_TX_COMPLETE`), and while a READ runs the
-//! loop passes every [`FAST_POLL_MS`]. **Only during a READ** the unit also asks for data length 251, the 2M PHY and
+//! loop passes every [`FAST_POLL_MS`]. **Only during a READ or a WRITE** the unit also asks for data length 251, the 2M PHY and
 //! 15 to 30 ms without latency ([`FAST_PARAMS`]; Apple's Accessory Design Guidelines, QA1931), and gives them back
 //! (`PPCP` of app/phone.rs and PHY auto) when the answer ends, stalls, is cancelled or the link drops. The unit
 //! measured 3 KB/s on 2026-11-07 (docs/status.md), so what the link really has is kept in [`LinkInfo`] (the interval,
@@ -971,7 +971,8 @@ impl App {
         }
     }
 
-    /// The link parameters of a READ, asked for once. Every answer is optional (a chip or phone that refuses costs
+    /// The link parameters of a READ or a WRITE, asked for once. A WRITE has no hold: WRITE_BEGIN clears it, so the
+    /// parameters go back on the pass after its END. Every answer is optional (a chip or phone that refuses costs
     /// speed, nothing else: the errors are dropped).
     fn boost(&mut self, b: &mut impl Board, conn: u16) {
         let rx = &mut self.rx;
@@ -1016,7 +1017,11 @@ impl App {
             self.phone.files.abort(Status::Busy); // a ride began under the transfer
         }
         let svc = &self.phone.files;
-        if !svc.boosted && matches!(svc.job, Job::Read { .. }) && svc.mtu > ble::ATT_MTU && self.fast_ok() {
+        if !svc.boosted
+            && matches!(svc.job, Job::Read { .. } | Job::Write { .. })
+            && svc.mtu > ble::ATT_MTU
+            && self.fast_ok()
+        {
             self.boost(b, conn);
         }
         let mut sent = false;
