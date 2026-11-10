@@ -247,9 +247,10 @@ struct Inner {
     profile: Option<UnitProfile>,
 }
 
-/// The bytes start a FIT header (its ".FIT" tag at 8).
-fn is_fit(b: &[u8]) -> bool {
-    b.get(8..12) == Some(b".FIT")
+/// Whether a finished file must pass the FIT CRC: a ride and a workout always; a course unless it is clearly a GPX
+/// or JSON (it starts with `<` or `{`). A damaged FIT header cannot switch the check off.
+fn needs_crc(folder: Option<Folder>, b: &[u8]) -> bool {
+    folder != Some(Folder::Courses) || !matches!(b.first(), Some(b'<' | b'{'))
 }
 
 /// A whole FIT file: its header and its trailing CRC hold (FIT's CRC over the data and its CRC is 0).
@@ -373,8 +374,8 @@ impl Inner {
                 }
                 Status::Ok if self.file.len() != self.size as usize => self.fail(FileError::Short),
                 // a FIT file's whole-file CRC (0 over the data and its CRC) sees a hole no count saw: read it all again.
-                // A ride is always FIT; a course may be a GPX, which has no CRC to check.
-                Status::Ok if (self.read_folder.is_none() || is_fit(&self.file)) && !fit_ok(&self.file) => {
+                // A ride and a workout are always FIT; a course may be a GPX, which has no CRC to check.
+                Status::Ok if needs_crc(self.read_folder, &self.file) && !fit_ok(&self.file) => {
                     if self.redo >= REDO_MAX {
                         return self.fail(FileError::CountMismatch);
                     }

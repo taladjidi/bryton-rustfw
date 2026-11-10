@@ -387,6 +387,11 @@ final class RideBrowser: ObservableObject {
 
     func download(_ r: RideEntry, auto isAuto: Bool = false) {
         if !isAuto { yieldAuto() }
+        if r.size > 16 << 20 {  // the core refuses it (RIDE_MAX): say so, and leave it out of the sync
+            message = "This ride is too large for the phone (over 16 MB)."
+            syncFailed.insert(r.name)
+            return
+        }
         guard ready, phase == .idle || phase == .failed, let t = transport, let cmd = client.readCommand(name: r.name, nowMs: Self.now) else { return }
         message = nil
         workoutsFresh = false
@@ -723,8 +728,9 @@ final class RideBrowser: ObservableObject {
         case .partial:
             if !isWorkoutPhase { progress = client.progress() }
             resume()  // the answer ended early but brought bytes: ask for the rest
-        case .failed(.notFound) where workoutKey != nil:
-            // one workout gone since the list: skip it, read the others
+        case .failed(let e) where workoutKey != nil && (e == .notFound || e == .countMismatch):
+            // one workout gone since the list, or damaged (CRC failed after the redos): skip it, read the others
+            if e == .countMismatch { message = "A workout file on the unit is damaged and was skipped." }
             workoutQueue.removeFirst()
             nextWorkout()
         case .failed(let e):

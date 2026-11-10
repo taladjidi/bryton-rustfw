@@ -53,24 +53,25 @@ final class BleFileTransport: NSObject, FileTransport, CBCentralManagerDelegate,
         guard c.state == .poweredOn else { return }
         let known = c.retrieveConnectedPeripherals(withServices: [Self.battery, Self.info])
         if let p = known.first(where: { $0.name?.hasPrefix(Self.unitName) == true }) {
-            connect(p)
+            connect(c, p)
         } else {
             c.scanForPeripherals(withServices: [Self.battery])
         }
     }
 
-    private func connect(_ p: CBPeripheral) {
-        central.stopScan()
+    /// Uses the manager the delegate call gave: `central` is assigned on main and must not be read on the queue.
+    private func connect(_ c: CBCentralManager, _ p: CBPeripheral) {
+        c.stopScan()
         peripheral = p  // CoreBluetooth does not keep it alive
         p.delegate = self
-        central.connect(p)
+        c.connect(p)
     }
 
     func centralManager(
         _ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber
     ) {
         let n = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? p.name ?? ""
-        if n.hasPrefix(Self.unitName), peripheral == nil { connect(p) }
+        if n.hasPrefix(Self.unitName), peripheral == nil { connect(c, p) }
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {

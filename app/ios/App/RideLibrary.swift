@@ -73,6 +73,7 @@ final class RideLibrary: ObservableObject {
         {
             busy.insert(r.name)
             let url = RideBrowser.path(r.name)
+            let copy = Self.copy(r.name)  // the copy the analysis reads, not whatever is there when it ends
             queue.async {
                 let b = (try? Data(contentsOf: url)).flatMap { rideBrief(bytes: $0) }
                 DispatchQueue.main.async {
@@ -82,7 +83,6 @@ final class RideLibrary: ObservableObject {
                         self.sizes[r.name] = r.size
                         self.save()
                     } else {
-                        let copy = Self.copy(r.name)
                         let fails = (self.unreadable[r.name]?.copy == copy ? self.unreadable[r.name]?.fails ?? 0 : 0) + 1
                         self.unreadable[r.name] = (copy, fails)
                         if fails == 2 { self.onUnreadable?(r.name) }

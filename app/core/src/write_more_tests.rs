@@ -90,6 +90,9 @@ fn a_workout_with_a_bad_crc_is_read_again_then_refused() {
         assert_eq!(cmd[0], 5, "READ_IN again");
     }
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::CountMismatch });
+    // the next, good workout is read (the app skips the damaged one and goes on)
+    let cmd = c.read_in_command(keys[1].clone(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
     // a course that is not FIT (a GPX) has no CRC to fail
     u.courses.push(("a.gpx".into(), b"<gpx>0123456789</gpx>".to_vec()));
     let cmd = c.list_in_command(UnitFolder::Courses, t);
