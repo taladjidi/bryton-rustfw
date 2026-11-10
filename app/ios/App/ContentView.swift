@@ -94,6 +94,7 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 loop.attach(rides)
+                library.onUnreadable = { _ = rides.reread($0) }
                 rides.onRouteSent = { routes.remember($0) }
                 loop.keyChanged(intervals.hasKey)
                 await intervals.sync(rides: rides, force: false)

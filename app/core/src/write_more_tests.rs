@@ -72,8 +72,78 @@ fn a_delete_needs_the_last_list_in() {
     assert_eq!(c.delete_command("2026110800".into(), t), None);
     pump(&c, &mut u, &cmd, &mut t);
     assert!(c.delete_command("2026110800".into(), t).is_some());
-    c.list_command(t); // the rides' list under way
-    assert_eq!(c.delete_command("2026110800".into(), t), None);
+    c.list_command(t); // the rides' list is another list: the workouts' stays
+    assert!(c.delete_command("2026110800".into(), t).is_some());
+}
+
+/// T4: a workout read back gets the ride's whole-file CRC check, and the same redo.
+#[test]
+fn a_workout_with_a_bad_crc_is_read_again_then_refused() {
+    let (c, mut u, mut t) = (FileClient::new(), FakeUnit::demo(), 0);
+    let keys = list_workouts(&c, &mut u, &mut t);
+    let mid = u.workouts[0].1.len() / 2;
+    u.workouts[0].1[mid] ^= 0x40; // every count matches: only the CRC can tell
+    let mut cmd = c.read_in_command(keys[0].clone(), t).unwrap();
+    for _ in 0..3 {
+        assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
+        cmd = c.resume_command(t).unwrap();
+        assert_eq!(cmd[0], 5, "READ_IN again");
+    }
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::CountMismatch });
+    // the next, good workout is read (the app skips the damaged one and goes on)
+    let cmd = c.read_in_command(keys[1].clone(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    // a course that is not FIT (a GPX) has no CRC to fail
+    u.courses.push(("a.gpx".into(), b"<gpx>0123456789</gpx>".to_vec()));
+    let cmd = c.list_in_command(UnitFolder::Courses, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    let cmd = c.read_in_command("00".into(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+}
+
+/// T6: WRITE_END is answered after the unit read the file back, so its wait is longer than the other answers'.
+#[test]
+fn write_end_waits_longer_than_other_answers() {
+    let c = FileClient::new();
+    let seq = c.write_command("20261108".into(), vec![1, 2, 3], 0).unwrap()[1];
+    assert!(c.silent(SILENCE_MS), "WRITE_BEGIN: 5 s");
+    c.on_data(end_frame(seq, Status::Ok, 0), 0);
+    while c.write_next_command(244, 0).is_some() {}
+    assert!(!c.silent(ENDING_SILENCE_MS - 1) && c.silent(ENDING_SILENCE_MS), "Ending: 30 s");
+}
+
+/// T12: a BUSY with another count than the bytes received, and a cancel before a resume.
+#[test]
+fn busy_with_a_wrong_count_and_cancel_then_resume() {
+    let mut u = FakeUnit::new(vec![(*b"261101100000", crate::demo::synthetic_ride(9, 300))]);
+    let (c, mut t) = (FileClient::new(), 0);
+    let cmd = c.list_command(t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    u.faults.drop_after = Some(500);
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
+    pump(&c, &mut u, &cmd, &mut t);
+    assert_eq!(c.progress().received, 500);
+    assert_eq!(c.on_data(end_frame(cmd[1], Status::Busy, 7), t), FileEvent::Busy, "a wrong count is still BUSY");
+    let cmd = c.resume_command(t).unwrap();
+    assert_eq!(&cmd[2..6], &0u32.to_le_bytes(), "the unchecked 500 bytes are read again");
+    assert_eq!(c.progress().bytes_per_s, 0, "the speed starts again with the dropped bytes");
+    c.cancel_command();
+    assert_eq!(c.resume_command(t), None, "a cancelled download is not resumed");
+    assert_eq!(c.on_data(end_frame(cmd[1], Status::Ok, 0), t), FileEvent::Ignored);
+}
+
+/// T1 (audit 2026-11-10): the app lists the workouts, then the courses, then deletes a workout.
+#[test]
+fn listing_the_courses_leaves_the_workouts_to_delete() {
+    let (c, mut u, mut t) = (FileClient::new(), FakeUnit::demo(), 0);
+    let keys = list_workouts(&c, &mut u, &mut t);
+    let cmd = c.list_in_command(UnitFolder::Courses, t);
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
+    assert_eq!(c.files_in(UnitFolder::Workout).len(), keys.len(), "the workouts' list stays whole");
+    assert!(c.read_in_command(keys[0].clone(), t).is_some());
+    let cmd = c.delete_command(keys[0].clone(), t).expect("still listed");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Deleted);
+    assert_eq!(c.delete_command("00".into(), t), None, "a course key looks in the courses' list");
 }
 
 #[test]
@@ -183,7 +253,7 @@ fn a_course_round_trips_at_both_write_lengths() {
     assert_eq!(refused, FileEvent::Failed { error: FileError::BadRequest }, "another file of that name");
     let cmd = c.list_in_command(UnitFolder::Courses, t);
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
-    let keys: Vec<_> = c.files_in().into_iter().map(|e| e.name).collect();
+    let keys: Vec<_> = c.files_in(UnitFolder::Courses).into_iter().map(|e| e.name).collect();
     assert_eq!(keys, ["00", "01"]);
     let cmd = c.read_in_command("01".into(), t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
