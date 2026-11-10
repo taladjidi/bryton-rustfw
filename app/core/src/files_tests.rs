@@ -340,3 +340,26 @@ fn fit_whole_holds_for_a_ride_and_not_for_a_damaged_one() {
     assert!(!fit_whole(ride));
     assert!(!fit_whole(Vec::new()));
 }
+
+#[test]
+fn an_overrun_answer_is_dropped_and_its_rest_ignored() {
+    let (c, mut u, ride) = setup(20);
+    let mut t = 1000;
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
+    let frames = u.handle(&cmd);
+    let (end, chunks) = frames.split_last().unwrap();
+    for f in chunks {
+        assert_eq!(c.on_data(f.clone(), t), FileEvent::Progress);
+    }
+    // the first chunk again (a doubled notification) overruns the size: the answer is dropped and asked again
+    assert_eq!(c.on_data(chunks[0].clone(), t), FileEvent::Partial);
+    assert_eq!(c.progress().received, 0);
+    // the rest of that answer carries the old seq: ignored, nothing appended
+    assert_eq!(c.on_data(chunks[1].clone(), t), FileEvent::Ignored);
+    assert_eq!(c.on_data(end.clone(), t), FileEvent::Ignored);
+    assert_eq!(c.progress().received, 0);
+    let cmd = c.resume_command(t).unwrap();
+    assert_eq!(&cmd[2..6], &0u32.to_le_bytes(), "READ from the bytes held before the answer");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), ride);
+}

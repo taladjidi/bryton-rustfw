@@ -9,6 +9,8 @@
 //! by BUSY with the true count, a stale frame of an older seq, a loss plus a double of equal length in one answer (the
 //! count matches, only the file's CRC sees it). The unit answers either to the end (as the firmware does today) or in
 //! windows (END OK with the count every N bytes, as a planned firmware change would).
+//!
+//! Not modelled: the app's busy cap (20) and its auto-sync stop on BUSY; they end a sync early, with no data at risk.
 
 use crate::demo::{BIG_CHUNK, FakeUnit, synthetic_ride};
 use crate::files::*;
@@ -54,6 +56,8 @@ struct Delivered {
     frames: Vec<(Vec<u8>, usize)>,
     /// The re-read budget this answer adds: what a fault in it may legitimately make the client read again.
     budget: usize,
+    /// A frame was lost or doubled in this answer: it may use up one of the download's `REDO_MAX` redos.
+    faulted: bool,
 }
 
 fn enc(f: Frame) -> Vec<u8> {
@@ -95,7 +99,7 @@ fn link(rng: &mut Rng, p: &Params, raw: &[Vec<u8>], late: &mut Vec<Vec<u8>>, siz
     let cap = p.window.unwrap_or(size) + BIG_CHUNK;
     let mut out: Vec<(Vec<u8>, usize)> = late.drain(..).map(|f| (f, 0)).collect();
     let mut end = Some((Status::Ok, sent));
-    let mut budget = 0;
+    let (mut budget, mut faulted) = (0, false);
     if p.rate > 0 {
         // cut silently (maybe the tail arrives late), or by BUSY with the true count
         let k = rng.below(chunks.len() + 1);
@@ -135,6 +139,7 @@ fn link(rng: &mut Rng, p: &Params, raw: &[Vec<u8>], late: &mut Vec<Vec<u8>>, siz
         }
         chunks = seen;
         if lost > 0 || doubled > 0 {
+            faulted = true;
             // a hole or a double that only the whole-file CRC finds costs the whole file once; the count, one answer
             budget += if lost == doubled { size } else { cap };
         }
@@ -155,7 +160,7 @@ fn link(rng: &mut Rng, p: &Params, raw: &[Vec<u8>], late: &mut Vec<Vec<u8>>, siz
         };
         out.insert(at, (stale, 0));
     }
-    Delivered { frames: out, budget }
+    Delivered { frames: out, budget, faulted }
 }
 
 /// What the seeds reached and what they cost.
@@ -169,12 +174,19 @@ struct Tally {
     finished: u32,
     failed: u32,
     too_long: u32,
+    count_mismatch: u32,
+    short: u32,
+    other_failed: u32,
+    /// Redos by a chunk that overran the size.
+    overrun: u32,
     /// Bytes read again by finished downloads: (windowed, bytes).
     reread: Vec<(bool, usize)>,
 }
 
 const NAME: &str = "261101100000";
 /// Answers a seed may take before the test calls it a loop.
+/// `REDO_MAX` of files.rs (private there): answers a download may ask again after a wrong count, CRC or overrun.
+const REDO_MAX: u32 = 3;
 const STEPS: usize = 2000;
 
 /// One download of one seed, driven as the app does. Asserts the invariants.
@@ -199,10 +211,12 @@ fn download(seed: u32, rides: &[Vec<u8>], t: &mut Tally) {
     }
     let size = ride.len();
     let (mut late, mut budget, mut delivered) = (Vec::new(), 0, 0);
+    let mut events = 0;
     let mut cmd = c.read_command(NAME.into(), now).expect("listed");
     for _ in 0..STEPS {
         let d = link(&mut rng, &p, &unit.handle(&cmd), &mut late, size);
         budget += d.budget;
+        events += u32::from(d.faulted);
         let mut terminal = None;
         for (f, bytes) in d.frames {
             now += 10;
@@ -215,6 +229,7 @@ fn download(seed: u32, rides: &[Vec<u8>], t: &mut Tally) {
             }
             if e == FileEvent::Partial && after < before {
                 t.redo += 1;
+                t.overrun += u32::from(bytes > 0);
                 if before as usize == size {
                     t.crc_caught += 1;
                 } else {
@@ -231,14 +246,24 @@ fn download(seed: u32, rides: &[Vec<u8>], t: &mut Tally) {
                 t.finished += 1;
                 let reread = delivered.saturating_sub(size);
                 t.reread.push((p.window.is_some(), reread));
+                // a regression that reads the whole file again after every fault goes over this
+                let allowed = budget + size * REDO_MAX as usize;
+                assert!(reread <= allowed, "seed {seed}: {reread} bytes read again, faults explain {allowed}");
                 if p.window.is_some() {
                     assert!(reread <= budget, "seed {seed}: {reread} bytes read again, a fault explains {budget}");
                 }
                 return;
             }
             Some(FileEvent::Failed { error }) => {
-                assert!(p.rate > 0, "seed {seed}: a clean link failed: {error:?}");
-                (t.failed, t.too_long) = (t.failed + 1, t.too_long + u32::from(error == FileError::TooLong));
+                // each answer with a lost or doubled frame costs at most one redo: a failure needs more than REDO_MAX
+                assert!(events > REDO_MAX, "seed {seed}: failed with {error:?} after {events} faulted answers");
+                t.failed += 1;
+                match error {
+                    FileError::TooLong => t.too_long += 1,
+                    FileError::CountMismatch => t.count_mismatch += 1,
+                    FileError::Short => t.short += 1,
+                    _ => t.other_failed += 1,
+                }
                 assert!(c.file().is_empty(), "seed {seed}: bytes given out by a failed download");
                 return;
             }
@@ -278,11 +303,15 @@ fn a_ride_survives_a_faulty_link_or_fails_whole() {
     let line =
         |v: &[usize]| format!("mean {} max {}", v.iter().sum::<usize>() / v.len().max(1), v.iter().max().unwrap_or(&0));
     std::println!(
-        "files_fuzz: {seeds} seeds, finished {} failed {} (too long {}), count {} crc {} redo {} silence {} busy {}; \
+        "files_fuzz: {seeds} seeds, finished {} failed {} (too long {}, count mismatch {}, short {}, other {}), overrun redo {}, count {} crc {} redo {} silence {} busy {}; \
          bytes read again: one answer {}, windowed {}",
         t.finished,
         t.failed,
         t.too_long,
+        t.count_mismatch,
+        t.short,
+        t.other_failed,
+        t.overrun,
         t.count_caught,
         t.crc_caught,
         t.redo,
@@ -300,6 +329,7 @@ fn a_ride_survives_a_faulty_link_or_fails_whole() {
             ("redo", t.redo),
             ("finished", t.finished),
             ("failed", t.failed),
+            ("overrun redo", t.overrun),
         ] {
             assert!(v > 0, "the fuzz never reached {n}");
         }
