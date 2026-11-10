@@ -53,7 +53,7 @@ fn whole_read_with_any_chunk_size() {
 }
 
 #[test]
-fn drop_then_resume_from_the_bytes_kept() {
+fn a_dropped_answer_is_asked_again_from_its_start() {
     let (c, mut u, ride) = setup(BIG_CHUNK);
     let mut t = 100;
     u.faults.drop_after = Some(1000);
@@ -61,8 +61,10 @@ fn drop_then_resume_from_the_bytes_kept() {
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Ignored);
     assert!(c.silent(t + SILENCE_MS) && !c.silent(t + SILENCE_MS - 20));
     assert_eq!(c.progress().received, 1000);
+    // no END checked those 1000 bytes: a frame lost before the drop would leave a hole (2026-11-10, a ride saved
+    // with 342 bytes missing and 342 doubled), so the READ starts again where the answer did
     let cmd = c.resume_command(t + SILENCE_MS).unwrap();
-    assert_eq!(&cmd[2..6], &1000u32.to_le_bytes(), "READ from the bytes kept");
+    assert_eq!(&cmd[2..6], &0u32.to_le_bytes(), "READ from the last checked byte");
     t += SILENCE_MS;
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
     assert_eq!(c.file(), ride);
@@ -78,7 +80,7 @@ fn busy_mid_read_then_resume() {
     u.faults.busy = true;
     let cmd = c.resume_command(t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Busy);
-    assert_eq!(c.progress().received, 500, "the bytes are kept");
+    assert_eq!(c.progress().received, 0, "the dropped answer's unchecked bytes are not kept");
     u.faults.busy = false;
     let cmd = c.resume_command(t).unwrap();
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
@@ -104,6 +106,21 @@ fn short_file_and_wrong_count_are_errors() {
         assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
         assert_eq!(c.progress().received, 0, "the bad answer's bytes are dropped");
         cmd = c.resume_command(t).unwrap();
+    }
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::CountMismatch });
+}
+
+#[test]
+fn a_ride_with_a_bad_crc_is_read_again_then_refused() {
+    let (c, mut u, _) = setup(BIG_CHUNK);
+    let mut t = 100;
+    let mid = u.rides[0].1.len() / 2;
+    u.rides[0].1[mid] ^= 0x40; // the counts all match, only the whole file's CRC can tell
+    let mut cmd = c.read_command("261101100000".into(), t).unwrap();
+    for _ in 0..3 {
+        assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
+        cmd = c.resume_command(t).unwrap();
+        assert_eq!(&cmd[2..6], &0u32.to_le_bytes(), "the whole file again");
     }
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::CountMismatch });
 }

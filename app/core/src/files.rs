@@ -212,7 +212,7 @@ struct Inner {
     name: String,
     size: u32,
     file: Vec<u8>,
-    /// Bytes received since the current READ was issued: END's count must equal it.
+    /// Bytes received since the current READ was issued and not yet checked: END's count must equal it.
     answer: u32,
     /// Answers of this download asked again after a wrong count ([`REDO_MAX`]).
     redo: u8,
@@ -306,14 +306,30 @@ impl Inner {
                 Status::Ok if count != self.answer => {
                     // a frame lost or doubled on the way: drop this answer's bytes, ask again from before it
                     self.file.truncate(self.file.len().saturating_sub(self.answer as usize));
-                    self.redo += 1;
+                    (self.answer, self.redo) = (0, self.redo + 1);
                     FileEvent::Partial
                 }
-                Status::Ok if self.file.len() < self.size as usize && self.answer > 0 => FileEvent::Partial,
+                Status::Ok if self.file.len() < self.size as usize && self.answer > 0 => {
+                    self.answer = 0; // checked: kept by a resume
+                    FileEvent::Partial
+                }
                 Status::Ok if self.file.len() != self.size as usize => self.fail(FileError::Short),
+                // a ride's whole-file CRC (FIT: 0 over the data and its CRC) sees a hole no count saw: read it all again
+                Status::Ok if self.read_folder.is_none() && bryton_rustfw::fit::crc(0, &self.file) != 0 => {
+                    if self.redo >= REDO_MAX {
+                        return self.fail(FileError::CountMismatch);
+                    }
+                    self.file.clear();
+                    (self.answer, self.redo) = (0, self.redo + 1);
+                    FileEvent::Partial
+                }
                 Status::Ok => {
                     self.mode = Mode::Done;
                     FileEvent::Finished
+                }
+                Status::Busy if count == self.answer => {
+                    self.answer = 0; // checked: kept by a resume
+                    FileEvent::Busy
                 }
                 s => self.end_error(s),
             },
@@ -614,6 +630,9 @@ impl FileClient {
             return None;
         }
         s.last_ms = now_ms;
+        // bytes of an answer that ended unchecked (silence, a dropped link, a BUSY with another count) may have a hole
+        let keep = s.file.len().saturating_sub(s.answer as usize);
+        s.file.truncate(keep);
         Some(s.read_cmd())
     }
 
