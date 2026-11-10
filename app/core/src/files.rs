@@ -12,8 +12,24 @@ use std::sync::Mutex;
 
 /// No frame for this long while an answer is awaited means the unit dropped it (filesvc.rs, "Dropped and moved").
 pub const SILENCE_MS: u64 = 5_000;
-/// Largest file accepted (a ride is a few MB at most): a hostile LIST cannot make the app allocate without bound.
-const FILE_MAX: usize = 64 << 20;
+/// The long silence while the unit finishes a write: WRITE_END answers only after it read the file back (up to 1 MB).
+pub const ENDING_SILENCE_MS: u64 = 30_000;
+/// Largest ride accepted (a few MB at most): a hostile LIST cannot make the app allocate without bound.
+const RIDE_MAX: usize = 16 << 20;
+
+/// The largest file a READ of `folder` (None: a ride) may bring: the unit's own limits for what it takes in.
+fn file_max(folder: Option<Folder>) -> usize {
+    match folder {
+        Some(Folder::Workout) => WRITE_MAX,
+        Some(Folder::Courses) => COURSE_MAX,
+        Some(Folder::Activities) | None => RIDE_MAX,
+    }
+}
+
+/// The folder a LIST_IN key belongs to: a workout's key is ten digits, a course's two (`Folder::key_ok`).
+fn key_folder(key: &str) -> Option<Folder> {
+    [Folder::Workout, Folder::Courses].into_iter().find(|f| f.key_ok(key.as_bytes()))
+}
 /// Answers of one download that may end with a wrong count (a frame lost or doubled on the way) and be asked again.
 const REDO_MAX: u8 = 3;
 /// Most rides kept from one LIST.
@@ -202,8 +218,10 @@ struct Inner {
     mode: Mode,
     seq: u8,
     entries: Vec<RideEntry>,
-    /// The last LIST_IN's files (`name` is the key): kept apart, so listing the workouts leaves the rides listed.
-    files_in: Vec<(RideEntry, u16)>,
+    /// The last LIST_IN of each folder (`name` is the key): one list per folder, so listing the courses leaves the
+    /// workouts' list whole (a delete of a workout looks in it).
+    workouts: Vec<(RideEntry, u16)>,
+    courses: Vec<(RideEntry, u16)>,
     /// The check READ_IN gives back for the file being read (see link/filesvc.rs).
     read_check: u16,
     /// The folder of the list under way, and of the download under way (None: LIST and READ, the rides).
@@ -229,6 +247,11 @@ struct Inner {
     profile: Option<UnitProfile>,
 }
 
+/// The bytes start a FIT header (its ".FIT" tag at 8).
+fn is_fit(b: &[u8]) -> bool {
+    b.get(8..12) == Some(b".FIT")
+}
+
 /// A whole FIT file: its header and its trailing CRC hold (FIT's CRC over the data and its CRC is 0).
 fn fit_ok(b: &[u8]) -> bool {
     b.len() >= 14 && bryton_rustfw::fit::crc(0, b) == 0
@@ -245,6 +268,20 @@ pub fn fit_whole(bytes: Vec<u8>) -> bool {
 pub struct FileClient(Mutex<Inner>);
 
 impl Inner {
+    fn list_of(&mut self, f: Folder) -> Option<&mut Vec<(RideEntry, u16)>> {
+        match f {
+            Folder::Workout => Some(&mut self.workouts),
+            Folder::Courses => Some(&mut self.courses),
+            Folder::Activities => None,
+        }
+    }
+
+    /// Drops the bytes of the answer under way (never checked) and the speed's start with them.
+    fn drop_answer(&mut self) {
+        self.file.truncate(self.file.len().saturating_sub(self.answer as usize));
+        (self.answer, self.first_ms) = (0, None);
+    }
+
     fn encode(&self, c: Command) -> Vec<u8> {
         let mut f = [0; FRAME_BIG];
         let n = c.encode(&mut f);
@@ -284,13 +321,15 @@ impl Inner {
                 self.entries.push(RideEntry { name: String::from_utf8_lossy(&name).into_owned(), size });
                 FileEvent::Entry
             }
-            (Mode::Listing, Frame::EntryIn { seq, key, size }) if seq == self.seq && self.list_folder.is_some() => {
-                if self.files_in.len() >= ENTRIES_MAX {
+            (Mode::Listing, Frame::EntryIn { seq, key, size }) if seq == self.seq => {
+                let Some(folder) = self.list_folder else { return FileEvent::Ignored };
+                let Some(list) = self.list_of(folder) else { return FileEvent::Ignored };
+                if list.len() >= ENTRIES_MAX {
                     return self.fail(FileError::TooLong);
                 }
-                self.listed += 1;
                 let name = String::from_utf8_lossy(key.bytes()).into_owned();
-                self.files_in.push((RideEntry { name, size }, key.check()));
+                list.push((RideEntry { name, size }, key.check()));
+                self.listed += 1;
                 FileEvent::Entry
             }
             (Mode::Listing, Frame::End { seq, status, count }) if seq == self.seq => match status {
@@ -302,14 +341,14 @@ impl Inner {
                 s => self.end_error(s),
             },
             (Mode::Reading, Frame::Chunk { seq, data }) if seq == self.seq => {
-                if self.file.len() + data.len() > (self.size as usize).min(FILE_MAX) {
+                if self.file.len() + data.len() > (self.size as usize).min(file_max(self.read_folder)) {
                     // a doubled notification overruns the size: drop this answer's bytes and ask again, as for a
                     // wrong count (the fuzz, 2026-11-10: it failed the download at once)
                     if self.redo >= REDO_MAX {
                         return self.fail(FileError::TooLong);
                     }
-                    self.file.truncate(self.file.len().saturating_sub(self.answer as usize));
-                    (self.answer, self.redo) = (0, self.redo + 1);
+                    self.drop_answer();
+                    self.redo += 1;
                     self.seq = self.seq.wrapping_add(1); // the rest of this answer is ignored, not appended
                     return FileEvent::Partial;
                 }
@@ -324,8 +363,8 @@ impl Inner {
                 Status::Ok if count != self.answer && self.redo >= REDO_MAX => self.fail(FileError::CountMismatch),
                 Status::Ok if count != self.answer => {
                     // a frame lost or doubled on the way: drop this answer's bytes, ask again from before it
-                    self.file.truncate(self.file.len().saturating_sub(self.answer as usize));
-                    (self.answer, self.redo) = (0, self.redo + 1);
+                    self.drop_answer();
+                    self.redo += 1;
                     FileEvent::Partial
                 }
                 Status::Ok if self.file.len() < self.size as usize && self.answer > 0 => {
@@ -333,13 +372,15 @@ impl Inner {
                     FileEvent::Partial
                 }
                 Status::Ok if self.file.len() != self.size as usize => self.fail(FileError::Short),
-                // a ride's whole-file CRC (FIT: 0 over the data and its CRC) sees a hole no count saw: read it all again
-                Status::Ok if self.read_folder.is_none() && !fit_ok(&self.file) => {
+                // a FIT file's whole-file CRC (0 over the data and its CRC) sees a hole no count saw: read it all again.
+                // A ride is always FIT; a course may be a GPX, which has no CRC to check.
+                Status::Ok if (self.read_folder.is_none() || is_fit(&self.file)) && !fit_ok(&self.file) => {
                     if self.redo >= REDO_MAX {
                         return self.fail(FileError::CountMismatch);
                     }
                     self.file.clear();
-                    (self.answer, self.redo) = (0, self.redo + 1);
+                    (self.answer, self.first_ms) = (0, None);
+                    self.redo += 1;
                     FileEvent::Partial
                 }
                 Status::Ok => {
@@ -433,7 +474,8 @@ impl FileClient {
             mode: Mode::Idle,
             seq: 0,
             entries: Vec::new(),
-            files_in: Vec::new(),
+            workouts: Vec::new(),
+            courses: Vec::new(),
             read_check: 0,
             list_folder: None,
             read_folder: None,
@@ -469,19 +511,23 @@ impl FileClient {
         let mut s = self.lock();
         s.seq = s.seq.wrapping_add(1);
         (s.mode, s.listed, s.last_ms) = (Mode::Listing, 0, now_ms);
-        s.files_in.clear();
-        s.list_folder = Some(folder.into());
+        let f: Folder = folder.into();
+        if let Some(l) = s.list_of(f) {
+            l.clear();
+        }
+        s.list_folder = Some(f);
         let seq = s.seq;
         s.encode(Command::ListIn { seq, folder: folder.into() })
     }
 
-    /// Starts downloading file `key` of the last LIST_IN from byte 0 (READ_IN): the bytes to write to Control; None
-    /// when the key is not in that list (or too large). The finished file is [`FileClient::file`].
+    /// Starts downloading file `key` of the last LIST_IN of its folder (the key's length says which) from byte 0
+    /// (READ_IN): the bytes to write to Control; None when the key is not in that list (or over what the unit keeps
+    /// there). The finished file is [`FileClient::file`].
     pub fn read_in_command(&self, key: String, now_ms: u64) -> Option<Vec<u8>> {
         let mut s = self.lock();
-        let folder = s.list_folder?;
-        let (size, check) = s.files_in.iter().find(|e| e.0.name == key).map(|e| (e.0.size, e.1))?;
-        if size as usize > FILE_MAX {
+        let folder = key_folder(&key)?;
+        let (size, check) = s.list_of(folder)?.iter().find(|e| e.0.name == key).map(|e| (e.0.size, e.1))?;
+        if size as usize > file_max(Some(folder)) {
             return None;
         }
         (s.name, s.size, s.last_ms, s.first_ms, s.read_folder) = (key, size, now_ms, None, Some(folder));
@@ -491,15 +537,15 @@ impl FileClient {
         Some(s.read_cmd())
     }
 
-    /// The files of the last LIST_IN (complete after [`FileEvent::Listed`]); `name` is the key.
-    pub fn files_in(&self) -> Vec<RideEntry> {
-        self.lock().files_in.iter().map(|e| e.0.clone()).collect()
+    /// The files of the last LIST_IN of `folder` (complete after [`FileEvent::Listed`]); `name` is the key.
+    pub fn files_in(&self, folder: UnitFolder) -> Vec<RideEntry> {
+        self.lock().list_of(folder.into()).map_or_else(Vec::new, |l| l.iter().map(|e| e.0.clone()).collect())
     }
 
-    /// The check the unit gave each file of the last LIST_IN, in the same order: for a course it is
+    /// The check the unit gave each file of the last LIST_IN of `folder`, in the same order: for a course it is
     /// [`crate::route::course_check`] of its name and size, so the phone can name the courses it sent.
-    pub fn files_in_checks(&self) -> Vec<u16> {
-        self.lock().files_in.iter().map(|e| e.1).collect()
+    pub fn files_in_checks(&self, folder: UnitFolder) -> Vec<u16> {
+        self.lock().list_of(folder.into()).map_or_else(Vec::new, |l| l.iter().map(|e| e.1).collect())
     }
 
     /// Starts sending `bytes` as a workout for `day` (`YYYYMMDD`, WRITE_BEGIN): the bytes to write to Control; None
@@ -615,11 +661,12 @@ impl FileClient {
         (s.out, s.sent) = (Vec::new(), 0);
     }
 
-    /// Deletes file `key` of the last LIST_IN (DELETE): the bytes to write to Control; None when it is not listed.
+    /// Deletes file `key` of the last LIST_IN of its folder (DELETE): the bytes to write to Control; None when it is
+    /// not listed.
     pub fn delete_command(&self, key: String, now_ms: u64) -> Option<Vec<u8>> {
         let mut s = self.lock();
-        let folder = s.list_folder?;
-        let check = s.files_in.iter().find(|e| e.0.name == key).map(|e| e.1)?;
+        let folder = key_folder(&key)?;
+        let check = s.list_of(folder)?.iter().find(|e| e.0.name == key).map(|e| e.1)?;
         let key = Key::new(folder, key.as_bytes())?.with_check(check);
         s.seq = s.seq.wrapping_add(1);
         (s.mode, s.last_ms) = (Mode::Deleting, now_ms);
@@ -632,7 +679,7 @@ impl FileClient {
     pub fn read_command(&self, name: String, now_ms: u64) -> Option<Vec<u8>> {
         let mut s = self.lock();
         let size = s.entries.iter().find(|e| e.name == name).map(|e| e.size)?;
-        if size as usize > FILE_MAX {
+        if size as usize > RIDE_MAX {
             return None;
         }
         (s.name, s.size, s.last_ms, s.first_ms, s.read_folder) = (name, size, now_ms, None, None);
@@ -650,8 +697,7 @@ impl FileClient {
         }
         s.last_ms = now_ms;
         // bytes of an answer that ended unchecked (silence, a dropped link, a BUSY with another count) may have a hole
-        let keep = s.file.len().saturating_sub(s.answer as usize);
-        s.file.truncate(keep);
+        s.drop_answer();
         Some(s.read_cmd())
     }
 
@@ -677,9 +723,11 @@ impl FileClient {
         e
     }
 
-    /// True when an answer is awaited and nothing came for [`SILENCE_MS`]: the unit dropped it.
+    /// True when an answer is awaited and nothing came for [`SILENCE_MS`] ([`ENDING_SILENCE_MS`] after WRITE_END, which
+    /// the unit answers once it read the file back): the unit dropped it.
     pub fn silent(&self, now_ms: u64) -> bool {
         let s = self.lock();
+        let limit = if s.mode == Mode::Ending { ENDING_SILENCE_MS } else { SILENCE_MS };
         matches!(
             s.mode,
             Mode::Listing
@@ -690,7 +738,7 @@ impl FileClient {
                 | Mode::Deleting
                 | Mode::ProfileGet
                 | Mode::ProfileSet
-        ) && now_ms.saturating_sub(s.last_ms) >= SILENCE_MS
+        ) && now_ms.saturating_sub(s.last_ms) >= limit
     }
 
     /// The rides of the last LIST (complete after [`FileEvent::Listed`]).

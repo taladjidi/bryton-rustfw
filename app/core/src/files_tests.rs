@@ -283,7 +283,7 @@ fn workouts_are_listed_and_read_in_their_folder_beside_the_rides() {
     let cmd = c.list_in_command(UnitFolder::Workout, t);
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Listed);
     assert_eq!(c.entries().len(), 3, "the rides stay listed");
-    let files = c.files_in();
+    let files = c.files_in(UnitFolder::Workout);
     assert_eq!(files.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["2026110800", "2026110900", "2026111100"]);
     let cmd = c.read_in_command("2026110900".into(), t).expect("listed");
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);

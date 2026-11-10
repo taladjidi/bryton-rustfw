@@ -14,8 +14,11 @@ final class RideLibrary: ObservableObject {
     /// The list size each brief was worked out for (a ride that changed size is read again).
     private var sizes: [String: UInt32] = [:]
     private var busy = Set<String>()
-    private var unreadable = Set<String>()
-    private var seenDownloaded = 0
+    /// Rides the brief could not be read from, by name: the copy they failed on (its size and date) and how many times.
+    /// A copy that failed twice is reported to `onUnreadable` (RideBrowser.reread sets a damaged one aside) and not
+    /// tried again; another copy of the same name (other size or date) is.
+    private var unreadable: [String: (copy: String, fails: Int)] = [:]
+    var onUnreadable: ((String) -> Void)?
     private let file = RideBrowser.documents.appendingPathComponent("ride-summaries.txt")
     private let queue = DispatchQueue(label: "ride-analysis", qos: .utility)
     /// The weeks last worked out, for the inputs they were worked out for.
@@ -65,10 +68,8 @@ final class RideLibrary: ObservableObject {
 
     /// Works out the brief of each downloaded ride that has none, one at a time in the background.
     func catchUp(_ rides: [RideEntry], downloaded: Set<String>) {
-        if downloaded.count > seenDownloaded { unreadable.removeAll() }  // a new download may be the fix
-        seenDownloaded = downloaded.count
         for r in rides where downloaded.contains(r.name) && sizes[r.name] != r.size && !busy.contains(r.name)
-            && !unreadable.contains(r.name)
+            && !(unreadable[r.name].map { $0.fails >= 2 && $0.copy == Self.copy(r.name) } ?? false)
         {
             busy.insert(r.name)
             let url = RideBrowser.path(r.name)
@@ -81,11 +82,20 @@ final class RideLibrary: ObservableObject {
                         self.sizes[r.name] = r.size
                         self.save()
                     } else {
-                        self.unreadable.insert(r.name)
+                        let copy = Self.copy(r.name)
+                        let fails = (self.unreadable[r.name]?.copy == copy ? self.unreadable[r.name]?.fails ?? 0 : 0) + 1
+                        self.unreadable[r.name] = (copy, fails)
+                        if fails == 2 { self.onUnreadable?(r.name) }
                     }
                 }
             }
         }
+    }
+
+    /// Which copy of a ride is on the phone: its size and date.
+    private static func copy(_ name: String) -> String {
+        let v = try? RideBrowser.path(name).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        return "\(v?.fileSize ?? -1) \(v?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
     }
 
     func weeks(ftp: Int, maxHR: Int, count: Int = 8) -> [WeekTotal] {

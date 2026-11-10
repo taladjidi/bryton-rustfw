@@ -38,7 +38,7 @@ fn send(c: &FileClient, u: &mut FakeUnit, day: &str, bytes: &[u8], max_write: u3
 pub(crate) fn list_workouts(c: &FileClient, u: &mut FakeUnit, t: &mut u64) -> Vec<String> {
     let cmd = c.list_in_command(UnitFolder::Workout, *t);
     assert_eq!(pump(c, u, &cmd, t), FileEvent::Listed);
-    c.files_in().into_iter().map(|e| e.name).collect()
+    c.files_in(UnitFolder::Workout).into_iter().map(|e| e.name).collect()
 }
 
 #[test]

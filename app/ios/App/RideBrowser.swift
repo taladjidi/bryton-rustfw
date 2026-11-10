@@ -299,6 +299,7 @@ final class RideBrowser: ObservableObject {
     private func yieldBackground() {
         yieldAuto()
         if phase == .workouts {
+            transport?.write(client.cancelCommand())  // a READ_IN under way would go on streaming to nobody
             client.abort()
             (listingWorkouts, workoutKey, workoutQueue, workoutsFresh, phase) = (false, nil, [], false, .idle)
         }
@@ -622,6 +623,10 @@ final class RideBrowser: ObservableObject {
 
     private func data(_ d: Data) {
         let event = client.onData(value: d, nowMs: Self.now)
+        switch event {
+        case .progress, .listed, .finished: busyRetries = 0  // the unit answered: BUSY counts in a row only
+        default: break
+        }
         // a read the rider or a yield cancelled: what was already on the way must not finish or resume it
         if wanted == nil && workoutKey == nil && phase != .workouts {
             switch event {
@@ -633,7 +638,7 @@ final class RideBrowser: ObservableObject {
         case .ignored, .entry: break
         case .listed where listingRoutes:
             listingRoutes = false
-            let list = client.filesIn(), checks = client.filesInChecks()
+            let list = client.filesIn(folder: .courses), checks = client.filesInChecks(folder: .courses)
             unitRoutes = zip(list, checks).map { UnitRoute(key: $0.name, size: $0.size, check: $1) }
             (routesListed, routesFresh, phase, routeListError) = (true, true, .idle, nil)
         case .busy where phase == .routes:
@@ -646,7 +651,7 @@ final class RideBrowser: ObservableObject {
                 ? "This unit's software does not list routes yet." : "The unit could not list its routes: \(Self.text(e))"
         case .listed where listingWorkouts:
             listingWorkouts = false
-            workoutQueue = client.filesIn().map(\.name)
+            workoutQueue = client.filesIn(folder: .workout).map(\.name)
             nextWorkout()
         case .listed:
             let unit = client.entries()
@@ -739,12 +744,14 @@ final class RideBrowser: ObservableObject {
 
     private func fail(_ m: String) {
         retry?.cancel()
+        let background = auto
         if auto, let w = wanted { syncFailed.insert(w) }
         auto = false
         wanted = nil
         (listingWorkouts, workoutKey, workoutQueue) = (false, nil, [])
         message = m
-        phase = .failed
+        // a background failure must not park the sync, the calendar and the profile push, which wait for .idle
+        phase = background ? .idle : .failed
     }
 
     private func finish() {
