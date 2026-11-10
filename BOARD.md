@@ -147,8 +147,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
                                       |                            |
      USB VBUS (1 = plugged) --------->| PC13 WKUP4                 |
      battery --[ / 1.5 ]------------->| PC3_C  ADC3 channel 1      |
-     charger enable (low = on) <------| PG14                       |
-     charger status ----------------->| PF6  (meaning not traced)  |
+     charger ENB (low = on) <---------| PG14  ETA6003              |
+     charger STAT (inferred) -------->| PF6  (meaning not traced)  |
                                       |                            |
      USB ULPI PHY (AF10)              |                            |
        enable  <----------------------| PA7   high = running       |
@@ -223,7 +223,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PB0 PB1 PB5 PB10..PB13 | USB ULPI D1 D2 D7 D3..D6 (AF10) | 7 |
 | PB2 | key 0x02 lap, active low | 5 |
 | PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
-| PB6 PB7 | I2C1 SCL, SDA: the touch controller (AF4, open drain, no pull) | 17 |
+| PB6 PB7 | I2C1 SCL, SDA: the ST1624 touch controller (AF4, open drain, no pull) | 17 |
 | PB15 | output, high (seen on the unit 2026-11-02): SDRAM power enable (inferred: the bootloader sets it before the FMC init); untouched | 3 |
 | PC0 | USB ULPI STP (AF10) | 7 |
 | PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
@@ -238,7 +238,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PD12 PD13 | I2C4 SCL, SDA: the sensor bus (AF4, open drain, no pull; plain GPIO for the bus clear, 16) | 16 |
 | PE2 PE4 PE5 PE6 | SPI4 SCK (pull-down), chip select, MISO, MOSI to the GNSS (AF5; PE4 by hand here) | 13 |
 | PE3 | key 0x08 page, active low | 5 |
-| PF6 | charger status input (not traced) | 12 |
+| PF6 | charger status input: the ETA6003's open-drain STAT (inferred, not traced) | 12 |
 | PF7 | GNSS line (EXTI in stock; unused here) | 13 |
 | PF8 | eMMC reset or power (inferred); left as the bootloader leaves it | 15 |
 | PF9 | ambient light sensor interrupt (EXTI falling, pull-up in stock; unused here) | 16 |
@@ -247,9 +247,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PG10 | panel chip select (SPI1 NSS, driven by hand) | 6 |
 | PG11 | SPI1 SCK (panel), AF5 | 6 |
 | PG13 | backlight, high = on (LPTIM1_OUT, AF1, in stock) | 6 |
-| PG14 | charge enable, active low (left low by the bootloader) | 12 |
+| PG14 | the ETA6003's charge enable ENB, active low (left low by the bootloader) | 12 |
 | PH2 | buzzer amplifier enable, high = on | 14 |
-| PH3 | touch controller reset, high = run (the chip answers once it is high: seen on the unit) | 17 |
+| PH3 | the ST1624 touch controller's RESET, high = run (the chip answers once it is high: seen on the unit) | 17 |
 | PH4 | USB ULPI NXT (AF10) | 7 |
 | PH8 | Nordic request line (EXTI wake-up in stock; unused here) | 11 |
 | PI3 | panel reset, low = reset (inferred) | 6 |
@@ -874,6 +874,23 @@ From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt
   window from the barometer: charge only if 0 < T < 50 C (5 < T after "too cold", T < 45 after "too hot"). This
   firmware does not drive PG14 yet: no temperature check, so charging below 0 C is possible. PF6: charger status
   input (reads high; meaning not traced).
+- **The charger IC:** ETA Solutions **ETA6003** (the owner's reading of the board), a 3 MHz switching Li-ion charger
+  with a power path, QFN3x3-16. From its datasheet (v2.5.1, electrical characteristics and pin description):
+  - *ENB* (pin 6), active low: low charges, high stops the charge but keeps the battery feeding the system. PG14
+    drives it (inferred: stock's polarity matches).
+  - *STAT* (pin 9), open drain, the charge status: PF6, which reads high, is it (inferred). The datasheet does not
+    say which state means what; an open-drain status pin is usually pulled low while charging (inferred), so PF6
+    high would be no charge or the charge done. To check: read PF6 on USB with the battery low, then full.
+  - *The charge:* below 2.9 V a 100 mA pre-charge (at most 120 min), then the fast charge (at most 960 min) to
+    4.2 V (4.16 to 4.24), ending at 10 % of the fast-charge current; it starts again 200 mV below. The fast-charge
+    current is 1000 V / R on ISET1 (USB_DET low) or ISET2 (USB_DET high); the board's resistors and USB_DET are not
+    known.
+  - *Input:* 4.4 to 5.5 V, under-voltage lockout at 4.35 V; 5 mA while switching.
+  - *NTC* (pin 7): it suspends the charge itself when the thermistor's voltage is above 76.5 % of VIN (cold) or
+    below 35 % (hot); under 100 mV the check is off. Whether the board has a thermistor is not known: stock's own
+    temperature window (above) suggests none (inferred).
+  - *ENPPB* (pin 8): tied to BATT it cuts the battery from the system (a shipping mode). Whether a pin of the MCU
+    reaches it is not known.
 
 ## 13. GNSS receiver
 
@@ -1220,9 +1237,18 @@ The S510 has a touch panel over the display (retail spec: 2.8 in colour touchscr
 (https://www.crystalfontz.com/products/document/4590/Sitronix_Touch_IC_Protocol_A_V2.7.pdf), whose register map
 stock's reads match. Read on the unit on 2026-10-23 (below).
 
-- **Controller:** Sitronix ST1xxx class at I2C address **0x55** (stock passes 0xaa, 8-bit). Stock reads two point
-  slots (0x12, 0x16), so an ST1232-class part (2 points; Linux `st1232.c`); the exact part is inferred. Registers
-  0x0c..0x0f (firmware revision) and 0x3f (max contacts) would tell.
+- **Controller:** Sitronix **ST1624-N32C** (the owner's reading of the board) at I2C address **0x55** (stock passes
+  0xaa, 8-bit): mutual capacitive, up to 5 fingers, 100 Hz reports, QFN32 (ST1624 datasheet v1.1, features). Its
+  5 contacts match register 0x3f on the unit (below); stock reads only two point slots (0x12, 0x16). The datasheet
+  has no register map: the registers are Protocol A's.
+- **From the datasheet** (v1.1, 2, 3 and 5):
+  - supplies VDD 2.7 to 3.6 V, IOVDD (the I2C side) 1.6 to 3.6 V; it resets itself below 2.3 V;
+  - RESET (pin 26) active low, 1 us low takes effect; INT (pin 27) says coordinate data is ready;
+  - I2C slave up to 400 kHz (Fast mode), SDA and SCL pulled up to IOVDD outside it;
+  - **current:** 16 mA typical (24 max) scanning, 5.9 mA (8.9 max) idle scanning at 20 Hz, 20 uA at most powered
+    down, all clocks stopped, left by a reset or by I2C. Idle, the chip alone draws about twice the MCU's
+    2.85 mA in Stop at SVOS3 (docs/power.md). How to power it down over I2C is Protocol A's (Device Control,
+    0x02: not read for this note).
 - **Bus and pins:**
 
 | what | value |
@@ -1254,7 +1280,7 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
 | 0x02, 0x03 | 00 02 | Device Control at its default; Timeout to Idle 2 (seconds per the protocol doc; the doc's default is 8) |
 | 0x04..0x06 resolution | 01 f0 40 | **240 x 320**, the panel's size: raw points map 1:1 (orientation not checked yet) |
 | 0x0c..0x0f firmware revision | 05 31 03 30 | |
-| 0x3f max contacts | 05 | **5 points**: an ST1633-class part (Linux `st1232.c`: ST1232 2, ST1633 5; the part number is inferred), although stock reads only 2 slots |
+| 0x3f max contacts | 05 | **5 points**, as the ST1624's datasheet says, although stock reads only 2 slots |
 | 0x12.. point slots | 00 ... | no valid bit: no finger |
 
   INT (PC6) read high with no finger, and polling it costs nothing measurable: awake 6 to 7 per mille before and

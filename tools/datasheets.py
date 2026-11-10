@@ -38,6 +38,12 @@ SHEETS = [
     ('ST7789V-V1.3.pdf', 'Sitronix ST7789V datasheet V1.3, the display controller',
      'https://newhavendisplay.com/content/datasheets/ST7789V.pdf',
      '8ecf0e438aa25554efc473a4cfe6e436f3fb33e68cd876b25041557235d04ca1', False),
+    ('ST1624-v1.1.pdf', 'Sitronix ST1624 datasheet v1.1, the touch controller',
+     'https://www.crystalfontz.com/controllers/uploaded/Sitronix_ST1624_Datasheet_v1.1.pdf',
+     '920e856388aa8777f5492fb16987bcfc77b2a5b29018f9ea327e5e0fd595ac31', False),
+    ('ETA6003-v2.5.1.pdf', 'ETA Solutions ETA6003 v2.5.1, the battery charger',
+     'https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/196/ETA6003-v2.5.1.pdf',
+     '1fb0e1b3bc6deee383df939c6e80d1599f1fc59562da9fb7c30d21370d4f8389', False),
 ]
 
 

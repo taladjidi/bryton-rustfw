@@ -20,11 +20,12 @@ not in it.
 | BLE / ANT radio | Nordic nRF52832 | FCC internal photos (the owner's reading); its SoftDevice and RAM size (BOARD.md 11) | [nRF52832 Product Specification v1.9](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8881/4823_nRF52832_PS_v1.9.pdf) |
 | GNSS | u-blox M10 (ROM SPG 5.10), the module not known | UBX-MON-VER on the unit (BOARD.md 13) | [u-blox M10 SPG 5.10 interface description, UBX-21035062](https://content.u-blox.com/sites/default/files/u-blox-M10-SPG-5.10_InterfaceDescription_UBX-21035062.pdf) |
 | Display controller | Sitronix ST7789 class, in a 240 x 320 module made for Bryton | its command set (BOARD.md 6) | [Sitronix ST7789V datasheet V1.3](https://newhavendisplay.com/content/datasheets/ST7789V.pdf) (2014/03, 316 pages; also the panel model's source, src/sim/panel_model.rs). The unit's die may be the newer ST7789VW, whose faster serial write is what 50 MHz needs (BOARD.md 6) |
+| Touch controller | Sitronix ST1624-N32C: mutual capacitive, up to 5 fingers, I2C | the owner's reading of the board; its 5 contacts (register 0x3f) read on the unit (BOARD.md 17) | [Sitronix ST1624 datasheet v1.1](https://www.crystalfontz.com/controllers/uploaded/Sitronix_ST1624_Datasheet_v1.1.pdf) (2014-10-22, 13 pages: pins, supplies, currents, I2C timing; the registers are in Sitronix's Touch IC Protocol A v2.7, BOARD.md 17) |
+| Battery charger | ETA Solutions ETA6003: 2.5 A switching Li-ion charger with power path, QFN3x3-16 | the owner's reading of the board | [ETA6003 v2.5.1](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/196/ETA6003-v2.5.1.pdf) (7 pages; hosted on TI's E2E forum) |
 | Barometer | ST LPS22HH | WHO_AM_I on the unit (BOARD.md 16) | not collected yet |
 | Accelerometer | ST LIS2DH12 / LIS3DH class | WHO_AM_I on the unit (BOARD.md 16) | not collected yet |
 | Battery | 3.7 V, 1200 mAh, 4.4 Wh cell | its label in the FCC internal photos | |
 
 ## Not identified yet
 
-The eMMC, the touch controller (I2C1, BOARD.md 17), the light sensor (I2C4, BOARD.md 16), the charger (PG14, PF6,
-BOARD.md 12), the regulators and the buzzer's amplifier (BOARD.md 14).
+The eMMC, the light sensor (I2C4, BOARD.md 16), the regulators and the buzzer's amplifier (BOARD.md 14).

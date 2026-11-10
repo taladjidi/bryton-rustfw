@@ -18,6 +18,9 @@ sheets, at their test conditions), none was measured on the unit.
   core clock and the SDRAM keep running (15.5 mA for the MCU with every peripheral off, DS12556 table 23, more with
   the ones this firmware keeps on, plus the SDRAM's). Stop mode between passes is the plan below ("Stop mode:
   plan").
+- **The touch controller is next** once the MCU stops: the ST1624 draws 5.9 mA typical idle (scanning at 20 Hz),
+  16 mA while touched, 20 uA at most powered down (its datasheet v1.1, table 5-2; BOARD.md 17). Neither firmware is
+  known to power it down.
 
 ## Switched off
 

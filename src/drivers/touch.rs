@@ -1,4 +1,4 @@
-//! The touch panel (BOARD.md 17): a Sitronix ST1xxx controller at I2C1 address 0x55, and the gestures recognised
+//! The touch panel (BOARD.md 17): a Sitronix ST1624 controller at I2C1 address 0x55, and the gestures recognised
 //! from its points in software (the chip reports points only).
 //!
 //! Sources:
@@ -67,7 +67,7 @@ pub fn points(b: [u8; 7]) -> [Option<(u16, u16)>; 2] {
 /// leave Init, 150 ms at most (the protocol doc gives about 50 ms; stock waits 100). False if it never got ready.
 pub fn init(b: &mut impl Board) -> bool {
     b.touch_reset(false);
-    b.delay_ms(5); // ST1633 datasheet: RESET low at least 5 ms at power-on
+    b.delay_ms(5); // ST1633 datasheet (the ST1624's has no power-on timing): RESET low at least 5 ms at power-on
     b.touch_reset(true);
     b.delay_ms(50);
     for _ in 0..10 {
