@@ -134,6 +134,47 @@ pub(super) struct Answer {
     pub stray: usize,
     /// Simulated ms until the END.
     pub ms: u64,
+    /// Answers it took ([`ask_whole`]).
+    pub windows: u32,
+}
+
+/// What the phone does: asks again from the last byte it has while an END OK leaves the file unfinished (a window's
+/// END), and returns the bytes joined, the END as one (Ok, total) and the answers it took. A window that brings
+/// nothing, or any other status, ends it.
+pub(super) fn ask_whole(
+    sim: &mut Sim,
+    app: &mut App,
+    (control, data): (u16, u16),
+    size: u32,
+    max_ms: u64,
+    cmd: impl Fn(u8, u32) -> Command<'static>,
+) -> Answer {
+    let mut all = Answer::default();
+    let mut seq = 1;
+    while all.windows < 1000 && all.ms < max_ms {
+        let off = all.bytes.len() as u32;
+        let a = ask(sim, app, control, data, cmd(seq, off), max_ms);
+        seq = seq.wrapping_add(1);
+        all.windows += 1;
+        all.ms += a.ms;
+        all.stray += a.stray;
+        all.bytes.extend(&a.bytes);
+        let total = all.bytes.len() as u32;
+        match a.end {
+            Some((Status::Ok, n)) if n > 0 && total < size => {
+                assert_eq!(n, a.bytes.len() as u32, "the count is the bytes")
+            }
+            Some((Status::Ok, _)) => {
+                all.end = Some((Status::Ok, total));
+                break;
+            }
+            e => {
+                all.end = e;
+                break;
+            }
+        }
+    }
+    all
 }
 
 /// Sends `cmd` and runs until its END (`max_ms` at most).
@@ -403,8 +444,13 @@ fn a_400_kb_ride_downloads_in_seconds_on_the_fast_link() {
     assert_eq!(app.ble.map(|v| v.mtu), Some(247));
     assert_eq!((app.phone.files.mtu, sim.nordic.server.radio.mtu), (247, 247), "the exchange answered with our max");
     assert_eq!(sim.nordic.server.radio.bad_replies, 0);
-    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 5, offset: 0, name: BIG }, 60_000);
-    assert_eq!(a.end, Some((Status::Ok, ride.len() as u32)));
+    let size = ride.len() as u32;
+    let a = ask_whole(&mut sim, &mut app, (control, data), size, 60_000, |seq, offset| Command::Read {
+        seq,
+        offset,
+        name: BIG,
+    });
+    assert_eq!((a.end, a.windows), (Some((Status::Ok, size)), 13), "400,000 B in windows of 32 KB");
     assert!(a.bytes == ride, "the bytes equal the file on the card");
     assert_eq!(a.stray, 0);
     let rate = ride.len() as u64 * 1000 / a.ms;
@@ -479,6 +525,20 @@ fn the_link_parameters_are_asked_during_a_read_and_given_back_however_it_ends() 
 }
 
 #[test]
+fn a_window_ends_ok_short_of_the_file_and_the_boost_stays_for_the_next_read() {
+    let (mut sim, mut app, control, data, ride) = fast_unit(247, 100_000, |_| {});
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
+    assert_eq!((a.end, a.bytes.len()), (Some((Status::Ok, 32768)), 32768), "END OK at the window");
+    assert!(a.bytes == ride[..32768]);
+    run(&mut sim, &mut app, 1000);
+    assert!(app.phone.files.boosted && !radio_normal(&sim), "not given back between windows");
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 2, offset: 32768, name: BIG }, 30_000);
+    assert!(a.bytes == ride[32768..65536]);
+    run(&mut sim, &mut app, 5000);
+    assert!(radio_normal(&sim) && !app.phone.files.boosted, "given back when no READ follows");
+}
+
+#[test]
 fn a_dropped_fast_transfer_resumes_byte_identical() {
     let (mut sim, mut app, control, data, ride) = fast_unit(247, 100_000, |_| {});
     start_read(&mut sim, control, 1, BIG);
@@ -493,7 +553,12 @@ fn a_dropped_fast_transfer_resumes_byte_identical() {
     assert_eq!(app.phone.files.mtu, 247, "the new link exchanged again");
     resubscribe(&mut sim, &mut app, data);
     let off = kept.len() as u32;
-    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 2, offset: off, name: BIG }, 30_000);
+    let size = ride.len() as u32;
+    let a = ask_whole(&mut sim, &mut app, (control, data), size, 30_000, |seq, o| Command::Read {
+        seq,
+        offset: off + o,
+        name: BIG,
+    });
     kept.extend(&a.bytes);
     assert!(kept == ride, "{} of {} bytes", kept.len(), ride.len());
 }
@@ -513,13 +578,17 @@ fn the_media_keys_behave_on_the_fast_link_and_ask_nothing_of_the_radio() {
 #[test]
 fn the_link_info_says_what_the_link_has_and_what_the_last_read_moved() {
     let (mut sim, mut app, control, data, ride) = fast_unit(247, 100_000, |_| {});
-    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 5, offset: 0, name: BIG }, 60_000);
-    assert_eq!(a.end, Some((Status::Ok, ride.len() as u32)));
+    let size = ride.len() as u32;
+    let a = ask_whole(&mut sim, &mut app, (control, data), size, 60_000, |seq, offset| Command::Read {
+        seq,
+        offset,
+        name: BIG,
+    });
+    assert_eq!(a.end, Some((Status::Ok, size)));
     let (mtu, ext, l) = app.phone_link();
     assert!(ext && mtu == 247, "the extension was accepted, the MTU is the phone's");
     assert_eq!((l.dle, l.boost), (251, [0, 0, 0]), "data length in force, the three boost calls accepted");
-    assert_eq!(l.bytes, ride.len() as u32, "the READ's file bytes");
-    assert!(l.ms * 2 > a.ms as u32 && l.ms < a.ms as u32 * 2, "{} ms against {}", l.ms, a.ms);
+    assert_eq!(l.bytes, ride.len() as u32 - 3 * 32 * 1024, "the last READ's file bytes: its window");
     assert!(
         l.sent > 0 && l.hvn > 0 && l.hvn <= l.sent,
         "{} frames, {} confirmed, sim completed {}",
@@ -1210,7 +1279,10 @@ fn a_course_sent_at_either_mtu_is_listed_read_back_followed_and_deleted() {
         assert_eq!(end, Some((Status::Ok, listed.len() as u32)));
         let key = course_key(&listed, &fname, size).expect("listed with its name's check");
         let read = Command::ReadIn { seq: 21, folder: Folder::Courses, offset: 0, key };
-        let a = ask(&mut sim, &mut app, control, data, read, 120_000); // 17.6 KB at 360 B/s
+        let a = ask_whole(&mut sim, &mut app, (control, data), size, 120_000, |seq, offset| match read {
+            Command::ReadIn { folder, key, .. } => Command::ReadIn { seq, folder, offset, key },
+            c => c,
+        }); // 17.6 KB at 360 B/s, in windows of 4 KB
         assert_eq!((a.end, a.bytes.len()), (Some((Status::Ok, size)), file.len()), "{fname}");
         assert!(a.bytes == file, "byte-identical");
     }
