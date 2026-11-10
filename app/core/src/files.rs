@@ -113,7 +113,7 @@ pub enum FileError {
     BadRequest,
     /// The unit's card did not answer.
     Card,
-    /// More bytes than LIST's size, or a ride too large.
+    /// More bytes than LIST's size, again after [`REDO_MAX`] answers asked again, or a ride too large.
     TooLong,
     /// The answer ended OK with fewer bytes than LIST's size (a short file, never a silent truncation).
     Short,
@@ -303,7 +303,15 @@ impl Inner {
             },
             (Mode::Reading, Frame::Chunk { seq, data }) if seq == self.seq => {
                 if self.file.len() + data.len() > (self.size as usize).min(FILE_MAX) {
-                    return self.fail(FileError::TooLong);
+                    // a doubled notification overruns the size: drop this answer's bytes and ask again, as for a
+                    // wrong count (the fuzz, 2026-11-10: it failed the download at once)
+                    if self.redo >= REDO_MAX {
+                        return self.fail(FileError::TooLong);
+                    }
+                    self.file.truncate(self.file.len().saturating_sub(self.answer as usize));
+                    (self.answer, self.redo) = (0, self.redo + 1);
+                    self.seq = self.seq.wrapping_add(1); // the rest of this answer is ignored, not appended
+                    return FileEvent::Partial;
                 }
                 if self.first_ms.is_none() {
                     (self.first_ms, self.first_bytes) = (Some(self.now_ms), self.file.len());
