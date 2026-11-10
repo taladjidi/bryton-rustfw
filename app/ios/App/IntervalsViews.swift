@@ -10,7 +10,7 @@ struct IntervalsSection: View {
 
     var body: some View {
         if intervals.hasKey {
-            Section("Intervals.icu") {
+            Section(header: SectionTitle("Intervals.icu")) {
                 row("Rides", loop.uploading ? "Uploading…" : upload)
                 if let e = loop.uploadError { Notice(text: e).font(.footnote) }
                 row("Calendar", calendar)
@@ -18,7 +18,7 @@ struct IntervalsSection: View {
                 if let next = nextWorkout(loop.planned, day: { Int($0.day) ?? 0 }) { PlannedRows(list: [next]) }
                 if !loop.planned.isEmpty {
                     NavigationLink { AllPlanned(loop: loop) } label: {
-                        Text("All planned (\(loop.planned.count))").foregroundStyle(Tok.accent)
+                        ActionRow(title: "All planned (\(loop.planned.count))", icon: "list.bullet")
                     }
                 }
             }

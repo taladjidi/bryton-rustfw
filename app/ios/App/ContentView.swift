@@ -51,16 +51,17 @@ struct ContentView: View {
                 Section {
                     WeeklyPanel(library: library, missing: missing, openProfile: { profile = true }).equatable()
                 }
-                IntervalsSection(loop: loop).id("intervals")
                 if let m = rides.message ?? library.error {
                     Section { Notice(text: m) }
                 }
-                ridesSection
+                ridesSection  // the latest ride first, as Garmin Connect and Wahoo show it
+                IntervalsSection(loop: loop).id("intervals")
                 WorkoutSection(rides: rides).id("unit")
                 PhoneWorkoutSection(store: store) { editing = $0 }.id("phone")
                 RoutesSection(store: routes, rides: rides).id("routes")
                 UnitRoutesSection(store: routes, rides: rides).id("unitroutes")
             }
+            .listSectionSpacing(24)
             .onChange(of: scrollTo) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .top) } }
             }
@@ -110,10 +111,15 @@ struct ContentView: View {
             .navigationDestination(isPresented: $fitness) { FitnessView(library: library) }
             .navigationDestination(isPresented: $allRides) { AllRidesList(rides: rides, library: library, loop: loop) }
             .toolbar {
-                Button { fitness = true } label: { Image(systemName: "chart.line.uptrend.xyaxis") }
-                    .accessibilityLabel("Fitness")
-                Button { profile = true } label: { Image(systemName: "person.crop.circle") }
-                    .accessibilityLabel("Profile")
+                // two items with their own names, not one unlabelled capsule
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { fitness = true } label: { Label("Fitness", systemImage: "chart.line.uptrend.xyaxis") }
+                        .labelStyle(.titleAndIcon)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { profile = true } label: { Image(systemName: "person.crop.circle") }
+                        .accessibilityLabel("Profile")
+                }
             }
             #if DEBUG
             .onAppear {
@@ -183,18 +189,17 @@ struct ContentView: View {
             if !rides.rides.isEmpty {
                 Button { allRides = true } label: {
                     HStack {
-                        Text("All rides (\(rides.rides.count))")
+                        ActionRow(title: "All rides (\(rides.rides.count))", icon: "list.bullet")
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     }
                 }
-                .foregroundStyle(Tok.accent)
             }
         } header: {
             HStack {
-                Text("Rides")
+                SectionTitle("Rides")
                 Spacer()
-                if let line = rides.syncLine { Text(line).textCase(nil) }
+                if let line = rides.syncLine { Text(line).font(.footnote).textCase(nil) }
             }
         }
         .id("rides")
@@ -239,7 +244,7 @@ struct UnitHeader: View {
         VStack(alignment: .leading, spacing: 6) {
             let layout = type.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
             layout {
-                Image(systemName: "bicycle").font(.title2).foregroundStyle(Tok.accent).accessibilityHidden(true)
+                UnitGlyph().foregroundStyle(Tok.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(demo ? "Demo unit" : name.isEmpty ? "Bike computer" : name).font(.headline)
                     chip
@@ -423,6 +428,7 @@ struct EmptyRides: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            UnitGlyph().foregroundStyle(.secondary)
             Text(title).font(.headline)
             Text(help).font(.subheadline).foregroundStyle(.secondary)
             if state != .searching || demo {

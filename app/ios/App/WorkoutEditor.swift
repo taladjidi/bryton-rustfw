@@ -99,11 +99,11 @@ struct PhoneWorkoutSection: View {
             PhoneWorkoutRows(store: store, list: Array(store.items.prefix(1)), onEdit: onEdit)
             if !store.items.isEmpty {
                 NavigationLink { AllPhoneWorkouts(store: store, onEdit: onEdit) } label: {
-                    Text("All workouts on the phone (\(store.items.count))").foregroundStyle(Tok.accent)
+                    ActionRow(title: "All workouts on the phone (\(store.items.count))", icon: "list.bullet")
                 }
             }
-            Button { onEdit(EditorTarget(draft: .blank, file: nil)) } label: { Label("New workout", systemImage: "plus") }
-            Button { importing = true } label: { Label("Import from Files", systemImage: "square.and.arrow.down") }
+            Button { onEdit(EditorTarget(draft: .blank, file: nil)) } label: { ActionRow(title: "New workout", icon: "plus") }
+            Button { importing = true } label: { ActionRow(title: "Import from Files", icon: "square.and.arrow.down") }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { r in
                     switch r {
                     case .success(let url):
@@ -131,11 +131,11 @@ struct PhoneWorkoutSection: View {
             if let problem { Notice(text: problem).font(.caption) }
         } header: {
             #if DEBUG
-            Text("On the phone").onAppear {  // Simulator screenshot: -demo-import opens the Files picker
+            SectionTitle("On the phone").onAppear {  // Simulator screenshot: -demo-import opens the Files picker
                 if demoImport { DispatchQueue.main.asyncAfter(deadline: .now() + 4) { importing = true } }
             }
             #else
-            Text("On the phone")
+            SectionTitle("On the phone")
             #endif
         } footer: {
             Text("Zwift (.zwo), .erg and .mrc files can be imported. Send a workout to the unit from its editor.")
@@ -253,9 +253,9 @@ struct WorkoutEditor: View {
                         StepChart(steps: w.steps, ftp: ftp, height: 150)
                         ZoneLegend(ftp: ftp)
                         HStack {
-                            Text(Fmt.duration(UInt64(w.totalS)))
+                            Text(Fmt.duration(UInt64(w.totalS))).numeral(.subheadline)
                             Spacer()
-                            if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)) }
+                            if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)).numeral(.subheadline) }
                         }
                     case .failure(let e):
                         Notice(text: message(e))
@@ -339,11 +339,11 @@ private struct StepSummary: View {
         } else {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(length(step))
-                    Text(targetText(step)).font(.caption).foregroundStyle(.secondary)
+                    Text(length(step)).numeral(.subheadline)
+                    Text(targetText(step)).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(intensityNames[min(Int(step.intensity), 6)]).font(.caption).foregroundStyle(.secondary)
+                Text(intensityNames[min(Int(step.intensity), 6)]).font(.subheadline).foregroundStyle(.secondary)
             }
         }
     }

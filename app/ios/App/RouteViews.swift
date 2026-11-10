@@ -33,14 +33,14 @@ struct RoutesSection: View {
                 .swipeActions { Button("Delete", role: .destructive) { store.delete(r) } }
                 .contextMenu { Button("Delete from the phone", systemImage: "trash", role: .destructive) { store.delete(r) } }
             }
-            Button { importing = true } label: { Label("Import a GPX file", systemImage: "square.and.arrow.down") }
+            Button { importing = true } label: { ActionRow(title: "Import a GPX file", icon: "square.and.arrow.down") }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { r in
                     if case .success(let url) = r { store.importGpx(url) }  // stays on the list: the row appears
                 }
             if store.importing { HStack { ProgressView(); Text("Reading the file…").foregroundStyle(.secondary) } }
             if let p = store.problem { Notice(text: p, level: .alarm) }
         } header: {
-            Text("Routes")
+            SectionTitle("Routes")
         } footer: {
             if store.items.isEmpty {
                 Text("Export a GPX from a planner (Komoot, RideWithGPS, BRouter...), or open one in this app from Files.")
@@ -58,7 +58,7 @@ struct UnitRoutesSection: View {
     @State private var newName = ""
 
     var body: some View {
-        Section("Routes on the unit") {
+        Section(header: SectionTitle("Routes on the unit")) {
             ForEach(rides.unitRoutes) { u in
                 let l = store.label(u)
                 HStack {

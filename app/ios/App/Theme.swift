@@ -110,7 +110,7 @@ struct SectionTitle: View {
     let text: String
     init(_ text: String) { self.text = text }
 
-    var body: some View { Text(text).font(.headline).foregroundStyle(.primary).textCase(nil) }
+    var body: some View { Text(text).font(.headline).foregroundColor(Color(.label)).textCase(nil) }
 }
 
 /// A list row that acts (an "All ..." row, New, Import): the icon column is the same on every one, so the text lines up.

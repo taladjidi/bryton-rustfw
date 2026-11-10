@@ -34,11 +34,11 @@ struct WorkoutSection: View {
     private var next: [WorkoutFile] { nextWorkout(rides.workouts, day: { Int($0.key.prefix(8)) ?? 0 }).map { [$0] } ?? [] }
 
     var body: some View {
-        Section("On the unit") {
+        Section(header: SectionTitle("On the unit")) {
             WorkoutRows(rides: rides, list: next)
             if !rides.workouts.isEmpty {
                 NavigationLink { AllWorkoutsList(rides: rides) } label: {
-                    Text("All workouts on the unit (\(rides.workouts.count))").foregroundStyle(Tok.accent)
+                    ActionRow(title: "All workouts on the unit (\(rides.workouts.count))", icon: "list.bullet")
                 }
             }
             if rides.workouts.isEmpty {
@@ -130,9 +130,9 @@ struct WorkoutDetail: View {
                     StepChart(steps: w.steps, ftp: ftp)
                     ZoneLegend(ftp: ftp)
                     HStack {
-                        Text(Fmt.duration(UInt64(w.totalS)))
+                        Text(Fmt.duration(UInt64(w.totalS))).numeral(.subheadline)
                         Spacer()
-                        if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)) }
+                        if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)).numeral(.subheadline) }
                     }
                     if w.cut { Notice(text: "Longer than the unit keeps: the end is cut.").font(.caption) }
                     Button { showProfile = true } label: {
@@ -259,12 +259,12 @@ struct StepRow: View {
         HStack {
             Text("\(index)").numeral(.subheadline).foregroundStyle(.secondary).frame(minWidth: 28, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
-                Text(length)
-                Text(target).font(.caption).foregroundStyle(.secondary)
+                Text(length).numeral(.subheadline)
+                Text(target).font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer()
             if step.kind == .power { Circle().fill(zoneColor(step.powerZone)).frame(width: dot, height: dot) }
-            Text(intensity).font(.caption).foregroundStyle(.secondary)
+            Text(intensity).font(.subheadline).foregroundStyle(.secondary)
         }
     }
 
