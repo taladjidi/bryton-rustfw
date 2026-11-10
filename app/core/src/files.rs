@@ -14,6 +14,8 @@ use std::sync::Mutex;
 pub const SILENCE_MS: u64 = 5_000;
 /// Largest file accepted (a ride is a few MB at most): a hostile LIST cannot make the app allocate without bound.
 const FILE_MAX: usize = 64 << 20;
+/// Answers of one download that may end with a wrong count (a frame lost or doubled on the way) and be asked again.
+const REDO_MAX: u8 = 3;
 /// Most rides kept from one LIST.
 /// The largest workout the unit takes (src/storage/workout_write.rs, 8 KB).
 const WRITE_MAX: usize = bryton_rustfw::storage::workout_file::FILE_MAX;
@@ -115,7 +117,7 @@ pub enum FileError {
     TooLong,
     /// The answer ended OK with fewer bytes than LIST's size (a short file, never a silent truncation).
     Short,
-    /// END's count differs from the bytes received in the answer.
+    /// END's count differed from the bytes received in the answer, again after [`REDO_MAX`] answers asked again.
     CountMismatch,
     /// A write was refused: this build of the unit does not write its card (the RAM run's).
     ReadOnly,
@@ -212,6 +214,8 @@ struct Inner {
     file: Vec<u8>,
     /// Bytes received since the current READ was issued: END's count must equal it.
     answer: u32,
+    /// Answers of this download asked again after a wrong count ([`REDO_MAX`]).
+    redo: u8,
     /// List answer: entries received.
     listed: u32,
     last_ms: u64,
@@ -298,7 +302,13 @@ impl Inner {
                 FileEvent::Progress
             }
             (Mode::Reading, Frame::End { seq, status, count }) if seq == self.seq => match status {
-                Status::Ok if count != self.answer => self.fail(FileError::CountMismatch),
+                Status::Ok if count != self.answer && self.redo >= REDO_MAX => self.fail(FileError::CountMismatch),
+                Status::Ok if count != self.answer => {
+                    // a frame lost or doubled on the way: drop this answer's bytes, ask again from before it
+                    self.file.truncate(self.file.len().saturating_sub(self.answer as usize));
+                    self.redo += 1;
+                    FileEvent::Partial
+                }
                 Status::Ok if self.file.len() < self.size as usize && self.answer > 0 => FileEvent::Partial,
                 Status::Ok if self.file.len() != self.size as usize => self.fail(FileError::Short),
                 Status::Ok => {
@@ -396,6 +406,7 @@ impl FileClient {
             size: 0,
             file: Vec::new(),
             answer: 0,
+            redo: 0,
             listed: 0,
             last_ms: 0,
             first_ms: None,
@@ -441,6 +452,7 @@ impl FileClient {
         (s.name, s.size, s.last_ms, s.first_ms, s.read_folder) = (key, size, now_ms, None, Some(folder));
         s.read_check = check;
         s.file.clear();
+        s.redo = 0;
         Some(s.read_cmd())
     }
 
@@ -590,6 +602,7 @@ impl FileClient {
         }
         (s.name, s.size, s.last_ms, s.first_ms, s.read_folder) = (name, size, now_ms, None, None);
         s.file.clear();
+        s.redo = 0;
         Some(s.read_cmd())
     }
 

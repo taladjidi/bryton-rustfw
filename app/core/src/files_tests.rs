@@ -98,8 +98,27 @@ fn short_file_and_wrong_count_are_errors() {
     assert!(c.file().is_empty());
     u.faults.short_by = 0;
     u.faults.count_off = 1;
-    let cmd = c.read_command("261101100000".into(), t).unwrap();
+    let mut cmd = c.read_command("261101100000".into(), t).unwrap();
+    // a wrong count drops the answer's bytes and asks again, three times, then gives up
+    for _ in 0..3 {
+        assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
+        assert_eq!(c.progress().received, 0, "the bad answer's bytes are dropped");
+        cmd = c.resume_command(t).unwrap();
+    }
     assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Failed { error: FileError::CountMismatch });
+}
+
+#[test]
+fn a_wrong_count_is_asked_again_to_a_whole_file() {
+    let (c, mut u, ride) = setup(BIG_CHUNK);
+    let mut t = 100;
+    u.faults.count_off = 1;
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Partial);
+    u.faults.count_off = 0;
+    let cmd = c.resume_command(t).unwrap();
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), ride);
 }
 
 #[test]
