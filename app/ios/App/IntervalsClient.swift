@@ -46,6 +46,8 @@ struct IntervalsFailure: Error {
     var auth = false
     /// Worth trying again later (network, 429, 5xx); false for a file or request Intervals.icu will always refuse.
     var retry = true
+    /// Intervals.icu could not read the file: the phone's copy may be damaged.
+    var file = false
 }
 
 enum IntervalsClient {

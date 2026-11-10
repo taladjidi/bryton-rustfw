@@ -108,7 +108,7 @@ extension IntervalsClient {
         if let u = uploadOutcome(status: UInt16(clamping: status), json: data) { return u }
         // the file itself is refused (bad request, unreadable, too big): not tried again
         if status == 400 || status == 413 || status == 415 || status == 422 {
-            throw IntervalsFailure(text: "Intervals.icu could not read the file (\(status)).", retry: false)
+            throw IntervalsFailure(text: "Intervals.icu could not read the file (\(status)).", retry: false, file: true)
         }
         throw refused(status)
     }
@@ -178,6 +178,9 @@ final class IntervalsLoop: ObservableObject {
     private weak var rides: RideBrowser?
     private var records: [Sent]
     private var rejected: Set<String>
+    /// Rides refused or read again from the unit this launch: a rejected ride gets one more try a launch (a damaged
+    /// copy read again, or a ride Intervals.icu already holds, which it answers as a duplicate: then marked uploaded).
+    private var tried = Set<String>()
     private var events: [CalendarEvent] = []
     /// Events the unit cannot hold, by id: the stamp they had and why (not downloaded again until they change).
     private var refusedAt: [Int64: (stamp: String, why: String)] = [:]
@@ -300,7 +303,7 @@ final class IntervalsLoop: ObservableObject {
 
     /// Downloaded rides not up yet, newest first; `all` also takes the ones from before the toggle was turned on.
     private func candidates(_ rides: RideBrowser, all: Bool) -> [String] {
-        rides.downloaded.filter { uploaded[$0] == nil && !rejected.contains($0) && (all || eligible($0)) }.sorted(by: >)
+        rides.downloaded.filter { uploaded[$0] == nil && !(rejected.contains($0) && tried.contains($0)) && (all || eligible($0)) }.sorted(by: >)
     }
 
     /// How many rides "Upload older rides" would send.
@@ -329,6 +332,7 @@ final class IntervalsLoop: ObservableObject {
                 else { continue }
                 uploaded[name] = r.activityId
                 d.set(uploaded, forKey: "ivUploaded")
+                if rejected.remove(name) != nil { d.set(Array(rejected), forKey: "ivRejected") }
                 (lastUpload, failures, uploadError) = (Date(), 0, nil)
                 d.set(lastUpload, forKey: "ivLastUpload")
             } catch let e as IntervalsFailure {
@@ -345,6 +349,12 @@ final class IntervalsLoop: ObservableObject {
                     uploadError = e.text + " Will try again later."
                     scheduleKick(after: wait)
                     return
+                }
+                let first = tried.insert(name).inserted
+                if e.file, first, let rides = self.rides {
+                    // the phone's copy may be damaged in transit (2026-11-10): read it again before giving up
+                    rides.forget(name)
+                    continue
                 }
                 rejected.insert(name)
                 d.set(Array(rejected), forKey: "ivRejected")

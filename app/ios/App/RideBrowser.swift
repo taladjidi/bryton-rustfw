@@ -420,6 +420,14 @@ final class RideBrowser: ObservableObject {
         transport?.write(cmd)
     }
 
+    /// The phone's copy of a ride is unreadable: removed, so the sync reads it again from the unit.
+    func forget(_ name: String) {
+        try? FileManager.default.removeItem(at: Self.path(name))
+        downloaded.remove(name)
+        syncFailed.remove(name)
+        autoSync()
+    }
+
     /// Nothing else going on: the newest ride of the last 8 weeks that is not on the phone yet.
     private func autoSync() {
         guard ready, phase == .idle, !syncPaused, !syncOff, let r = nextSyncRide() else { return }
