@@ -303,7 +303,10 @@ final class IntervalsLoop: ObservableObject {
 
     /// Downloaded rides not up yet, newest first; `all` also takes the ones from before the toggle was turned on.
     private func candidates(_ rides: RideBrowser, all: Bool) -> [String] {
-        rides.downloaded.filter { uploaded[$0] == nil && !(rejected.contains($0) && tried.contains($0)) && (all || eligible($0)) }.sorted(by: >)
+        rides.downloaded.filter {
+            uploadCandidate(uploaded: uploaded[$0] != nil, rejected: rejected.contains($0), triedThisLaunch: tried.contains($0),
+                            eligible: eligible($0), all: all)
+        }.sorted(by: >)
     }
 
     /// How many rides "Upload older rides" would send.

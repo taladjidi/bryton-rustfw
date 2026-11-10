@@ -21,6 +21,9 @@ bar (public repo docs/how-it-works.md, "How a ride is saved"):
   progress and zeroed its directory entry, so nothing could be recovered. Keep the ride in progress until the
   finished file is written and read back whole; finish by rename; keep two recovery records; never zero a deleted
   entry.
+- **The phone app never deletes or overwrites a ride's file:** a damaged copy is set aside as `.fit.bad` (up to
+  three: `.fit.bad.2`, `.fit.bad.3`) and read again from the unit; tools/lint.py checks every file removal or move
+  in app/ios (2026-11-10).
 - **Tested before any ride build:** host tests that cut the write at every point and check the resume, and on
   the unit a start, a restart mid-ride, then a save.
 

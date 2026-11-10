@@ -425,15 +425,21 @@ final class RideBrowser: ObservableObject {
     @discardableResult
     func reread(_ name: String) -> Bool {
         let url = Self.path(name)
-        guard ready, rides.contains(where: { $0.name == name }), let data = try? Data(contentsOf: url), !fitWhole(bytes: data)
+        guard let data = try? Data(contentsOf: url),
+              rereadCopy(copyWhole: fitWhole(bytes: data), unitLists: rides.contains(where: { $0.name == name }), linkReady: ready)
         else { return false }
-        let bad = url.appendingPathExtension("bad")
-        try? FileManager.default.removeItem(at: bad)
-        guard (try? FileManager.default.moveItem(at: url, to: bad)) != nil else { return false }
+        guard let bad = Self.setAside(url), (try? FileManager.default.moveItem(at: url, to: bad)) != nil else { return false }
         downloaded.remove(name)
         syncFailed.remove(name)
         autoSync()
         return true
+    }
+
+    /// The first free name a damaged copy is set aside under: `.fit.bad`, then `.fit.bad.2` and `.fit.bad.3`. Nil when
+    /// all three exist, so nothing is overwritten and the ride stays where it is.
+    static func setAside(_ url: URL) -> URL? {
+        ["bad", "bad.2", "bad.3"].lazy.map { URL(fileURLWithPath: url.path + "." + $0) }
+            .first { !FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// Nothing else going on: the newest ride of the last 8 weeks that is not on the phone yet.

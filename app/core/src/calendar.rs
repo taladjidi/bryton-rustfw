@@ -333,6 +333,21 @@ pub fn upload_outcome(status: u16, json: Vec<u8>) -> Option<Uploaded> {
     Some(Uploaded { activity_id: if ok { id } else { String::new() }, duplicate: status == 200 })
 }
 
+/// Whether the phone's copy of a ride is set aside (kept as `.fit.bad`) and read again from the unit. Only when the
+/// copy is not whole, the unit still lists the ride and the link is ready: a whole copy, or a ride the unit no longer
+/// holds, is never touched (the 45989b4f regression, 2026-11-10).
+#[uniffi::export]
+pub fn reread_copy(copy_whole: bool, unit_lists: bool, link_ready: bool) -> bool {
+    !copy_whole && unit_lists && link_ready
+}
+
+/// Whether a downloaded ride is sent to Intervals.icu now: not uploaded yet, and not refused in a launch that already
+/// tried it once (a rejected ride gets one try a launch). `all` also takes the rides from before the toggle.
+#[uniffi::export]
+pub fn upload_candidate(uploaded: bool, rejected: bool, tried_this_launch: bool, eligible: bool, all: bool) -> bool {
+    !(uploaded || rejected && tried_this_launch) && (all || eligible)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +535,31 @@ mod tests {
         for st in [0u16, 204, 302, 401, 403, 409, 422, 429, 500] {
             assert_eq!(upload_outcome(st, b"{}".to_vec()), None);
         }
+    }
+
+    #[test]
+    fn reread_only_a_damaged_copy_of_a_listed_ride() {
+        for bits in 0u8..8 {
+            let (whole, lists, ready) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
+            assert_eq!(reread_copy(whole, lists, ready), !whole && lists && ready, "{bits:03b}");
+        }
+        assert!(!reread_copy(false, false, true), "the unit no longer holds it: never touched");
+        assert!(!reread_copy(true, true, true), "a whole copy: never touched");
+        assert!(reread_copy(false, true, true));
+    }
+
+    #[test]
+    fn upload_candidates() {
+        for bits in 0u8..32 {
+            let b = |i: u8| bits & (1 << i) != 0;
+            let (up, rej, tried, elig, all) = (b(0), b(1), b(2), b(3), b(4));
+            let want = !(up || rej && tried) && (all || elig);
+            assert_eq!(upload_candidate(up, rej, tried, elig, all), want, "{bits:05b}");
+        }
+        assert!(!upload_candidate(true, false, false, true, true), "already uploaded: never again");
+        assert!(!upload_candidate(false, true, true, true, true), "a rejected ride gets one try a launch");
+        assert!(upload_candidate(false, true, false, true, false), "a rejected ride gets one try a launch");
+        assert!(!upload_candidate(false, false, false, false, false), "older rides wait for the button");
     }
 
     #[test]
