@@ -149,8 +149,12 @@ struct WeeklyPanel: View, Equatable {
         let shown = selected.flatMap { s in weeks.first { Fmt.week($0.firstDay) == s } } ?? current
         let unit = shown.hasHrLoad ? "Load*" : "TSS"
         VStack(alignment: .leading, spacing: 10) {
-            Text(shown.firstDay == current.firstDay ? "This week" : "Week of \(Fmt.week(shown.firstDay))")
-                .font(.subheadline).foregroundStyle(.secondary)
+            CardHeader(title: shown.firstDay == current.firstDay ? "This week" : "Week of \(Fmt.week(shown.firstDay))") {
+                Picker("Bars", selection: $byLoad) {
+                    Text("Load").tag(true)
+                    Text("Time").tag(false)
+                }
+            }
             // four columns, or two by two when the type is large (a column would wrap its label mid-word)
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline) { stats(shown, unit) }
@@ -159,11 +163,6 @@ struct WeeklyPanel: View, Equatable {
                     GridRow { stat("\(shown.load)", unit); stat("\(shown.rides)", shown.rides == 1 ? "ride" : "rides") }
                 }
             }
-            Picker("Bars", selection: $byLoad) {
-                Text("Load").tag(true)
-                Text("Time").tag(false)
-            }
-            .pickerStyle(.segmented)
             if weeks.allSatisfy({ $0.rides == 0 }) {
                 Text("No rides in the last 8 weeks.").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: chartHeight / 2, alignment: .center)
@@ -221,7 +220,7 @@ struct WeeklyPanel: View, Equatable {
     private func stat(_ v: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(v).numeral(.title3)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(label).font(.caption).foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
     }

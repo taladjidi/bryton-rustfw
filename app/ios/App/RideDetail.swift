@@ -230,7 +230,7 @@ struct RideDetail: View {
                             .accessibilityLabel("Route map, \(Fmt.distance(r.summary.distanceM))")
                             .overlay(alignment: .bottomTrailing) {
                                 if RideMap.usesIGN(prep.coords) {
-                                    Link("© IGN", destination: RideMap.creditURL).font(.caption2).padding(.horizontal, 4)
+                                    Link("© IGN", destination: RideMap.creditURL).font(.caption).padding(.horizontal, 4)
                                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 4)).padding(4)
                                 }
                             }
@@ -269,6 +269,7 @@ struct RideDetail: View {
                 ProgressView().padding(40)
             }
         }
+        .background(Color(.systemGroupedBackground))
         #if DEBUG
         .onChange(of: ride != nil) { _, _ in
             // launch argument for the Simulator screenshots: -demo-scroll graphs|laps
@@ -333,11 +334,12 @@ struct RideDetail: View {
 
     @ViewBuilder private var graphs: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Axis", selection: $byTime) {
-                Text("Distance").tag(false)
-                Text("Time").tag(true)
+            CardHeader(title: "Graphs") {
+                Picker("Axis", selection: $byTime) {
+                    Text("Distance").tag(false)
+                    Text("Time").tag(true)
+                }
             }
-            .pickerStyle(.segmented)
             ForEach(prep.series) { s in
                 MetricChart(series: s, byTime: byTime, selX: $selX, slices: s.id.hasPrefix("Altitude") ? prep.climbSlices : [])
             }
@@ -369,6 +371,8 @@ struct MetricChart: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(series.id).font(.subheadline.bold())
+                // the x unit is said once, here, not under the axis
+                Text(byTime ? "over min" : "over \(Fmt.distUnit)").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let sx = selX, let p = Prep.nearest(series.pts, sx, { $0.x }) {
                     // "12.4 km · 187 W": where, and the value
@@ -393,7 +397,7 @@ struct MetricChart: View {
                 }
             }
             .chartXSelection(value: $selX)
-            .chartXAxisLabel(byTime ? "min" : Fmt.distUnit, position: .bottom, alignment: .trailing)
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
             .chartYScale(domain: series.domain)
             .chartOverlay { proxy in
                 // the cursor line, drawn here so the chart's 2000 marks are not rebuilt on every drag tick
@@ -413,6 +417,7 @@ struct MetricChart: View {
             .accessibilityValue(
                 "lowest \(Fmt.dec(series.lo, 0)), highest \(Fmt.dec(series.hi, 0)), average \(Fmt.dec(series.mean, 0))")
         }
+        .card()
     }
 }
 
@@ -594,6 +599,7 @@ struct ZoneBars: View {
                 .accessibilityElement(children: .combine)
             }
         }
+        .card()
     }
 
     /// "0 to 111 W", "152 to 205 W", "over 300 W".
@@ -614,11 +620,13 @@ struct CurveChart: View {
             Chart(points, id: \.secs) { p in
                 BarMark(x: .value("Duration", Fmt.span(p.secs)), y: .value("W", p.watts))
                     .foregroundStyle(Tok.power)
-                    .annotation(position: .top) { Text("\(p.watts)").font(.caption2) }
+                    .annotation(position: .top) { Text("\(p.watts)").font(.caption) }
             }
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
             .frame(height: height)
             .accessibilityLabel("Power curve")
             .accessibilityValue(points.map { "\(Fmt.span($0.secs)) \($0.watts) W" }.joined(separator: ", "))
         }
+        .card()
     }
 }

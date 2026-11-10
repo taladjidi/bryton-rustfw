@@ -133,6 +133,7 @@ struct WbalChart: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text("W' balance (kJ)").font(.subheadline.bold())
+                Text("over min").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let m = minJ { Text("lowest \(Fmt.dec(Double(m) / 1000)) kJ").font(.caption).foregroundStyle(.secondary) }
             }
@@ -143,9 +144,10 @@ struct WbalChart: View {
                 LineMark(x: .value("min", Double(p.tS) / 60), y: .value("kJ", Double(p.wbalJ) / 1000))
                     .foregroundStyle(Tok.zone(6))
             }
-            .chartXAxisLabel("min")
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
             .frame(height: height)
         }
+        .card()
     }
 }
 
@@ -163,6 +165,7 @@ struct DecouplingRow: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .card()
     }
 }
 
@@ -182,7 +185,10 @@ struct DfaChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("DFA alpha1").font(.subheadline.bold())
+            HStack {
+                Text("DFA alpha1").font(.subheadline.bold())
+                Text("over min").font(.caption).foregroundStyle(.secondary)
+            }
             Chart {
                 ForEach(points.indices, id: \.self) { i in
                     LineMark(x: .value("min", Double(points[i].tS) / 60), y: .value("a1", points[i].a1)).foregroundStyle(Tok.zone(1))
@@ -190,7 +196,6 @@ struct DfaChart: View {
                 RuleMark(y: .value("VT1", vt1)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4])).foregroundStyle(Tok.ok)
                 RuleMark(y: .value("VT2", vt2)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4])).foregroundStyle(Tok.alarm)
             }
-            .chartXAxisLabel("min")
             .chartYScale(domain: 0...max(1.5, ((points.map(\.a1).max() ?? 0) * 4).rounded(.up) / 4))
             .frame(height: height)
             // the two thresholds sit close together: named under the chart, where they cannot overprint the lines
@@ -200,6 +205,7 @@ struct DfaChart: View {
             }
             .font(.caption).foregroundStyle(.secondary)
         }
+        .card()
     }
 }
 

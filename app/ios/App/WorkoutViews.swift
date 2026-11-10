@@ -183,7 +183,7 @@ struct ZoneLegend: View {
                 Text("No power target")
             }
         }
-        .font(.caption2).foregroundStyle(.secondary)
+        .font(.caption).foregroundStyle(.secondary)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Zone colours, Z1 to Z7, and grey for a step with no power target")
     }

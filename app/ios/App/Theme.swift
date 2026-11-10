@@ -33,10 +33,12 @@ enum Tok {
 
 /// Series colours of the ride charts: none is the alarm red.
 extension Tok {
-    static let speed = zone(1)
+    static let speed = zone(7)  // the ramp's neutral slate: zone 1's teal is a zone, and a speed line is not
     static let heartRate = zone(5)
     static let power = accent
     static let cadence = zone(2)
+    /// Fatigue (ATL) beside fitness (CTL, the accent): a purple, not zone 5's maroon, which sits next to the orange.
+    static let fatigue = zone(6)
 }
 
 /// A notice: an icon and text in a token, so colour is never the only cue.
@@ -53,8 +55,13 @@ struct Notice: View {
 
 /// A tile or card background.
 extension View {
+    /// A chart or panel as a card: the grouped list's row colour on the page's grouped background, flat, no shadow.
+    func card() -> some View {
+        padding().background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: Tok.radiusCard))
+    }
+
     func tile() -> some View {
-        padding(8).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: Tok.radiusTile))
+        padding(8).background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: Tok.radiusTile))
     }
 }
 
@@ -96,4 +103,55 @@ private struct Numeral: ViewModifier {
 extension View {
     /// Big numbers: the unit's face, tabular, scaled with Dynamic Type relative to `style`.
     func numeral(_ style: Font.TextStyle) -> some View { modifier(Numeral(style)) }
+}
+
+/// A home section's title: one style for every section (the default header grey is about 3.5:1 on the grouped background).
+struct SectionTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View { Text(text).font(.headline).foregroundStyle(.primary).textCase(nil) }
+}
+
+/// A list row that acts (an "All ..." row, New, Import): the icon column is the same on every one, so the text lines up.
+struct ActionRow: View {
+    let title: String
+    let icon: String
+
+    var body: some View { Label(title, systemImage: icon).foregroundStyle(Tok.accent) }
+}
+
+/// A card's title with its one control (the segmented picker) at the trailing edge; stacked when the type is large.
+struct CardHeader<Control: View>: View {
+    let title: String
+    @ViewBuilder let control: Control
+    @Environment(\.dynamicTypeSize) private var type
+
+    var body: some View {
+        let layout = type.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
+        layout {
+            Text(title).font(.subheadline.bold())
+            if !type.isAccessibilitySize { Spacer(minLength: 8) }
+            control.pickerStyle(.segmented).frame(maxWidth: type.isAccessibilitySize ? .infinity : 190)
+        }
+    }
+}
+
+/// The bike computer drawn as a pixel grid: a body outline and a pixel "7" on its screen. One colour (the foreground
+/// style), for the unit card and the empty states; rides keep the `bicycle` symbol.
+struct UnitGlyph: View {
+    @ScaledMetric(relativeTo: .title2) private var side: CGFloat = 30
+
+    var body: some View {
+        Canvas { ctx, size in
+            let u = size.width / 10  // a 10 x 10 pixel grid
+            var path = Path()
+            func cell(_ x: Int, _ y: Int) { path.addRect(CGRect(x: CGFloat(x) * u, y: CGFloat(y) * u, width: u, height: u)) }
+            for y in 0..<10 { for x in 1..<9 where x == 1 || x == 8 || y == 0 || y == 9 { cell(x, y) } }
+            for (x, y) in [(3, 2), (4, 2), (5, 2), (6, 2), (6, 3), (5, 4), (5, 5), (4, 6), (4, 7)] { cell(x, y) }
+            ctx.fill(path, with: .foreground)
+        }
+        .frame(width: side, height: side)
+        .accessibilityHidden(true)
+    }
 }

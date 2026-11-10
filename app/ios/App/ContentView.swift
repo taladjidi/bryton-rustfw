@@ -380,16 +380,15 @@ struct RideProgress: View {
             ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
             let layout = big ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
             layout {
-                Text("\(rides.progress.received / 1024) of \(rides.progress.total / 1024) KB").lineLimit(1).minimumScaleFactor(0.7)
+                Text("\(rides.progress.received / 1024) of \(rides.progress.total / 1024) KB").lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(.secondary)
                 if !big { Spacer() }
-                Text("\(Fmt.dec(Double(rides.progress.bytesPerS) / 1024)) KB/s").lineLimit(1).minimumScaleFactor(0.7)
+                Text("\(Fmt.dec(Double(rides.progress.bytesPerS) / 1024)) KB/s").lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(.secondary)
                 Button("Cancel", role: .cancel) { rides.cancel() }
-                    .buttonStyle(.bordered).controlSize(big ? .regular : .small).font(.subheadline)
+                    .buttonStyle(.bordered).controlSize(big ? .regular : .small).font(.subheadline).tint(Tok.accent)
                     .frame(maxWidth: big ? .infinity : nil)
                     .contentShape(Rectangle())
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
         }
     }
 }

@@ -87,7 +87,7 @@ struct FitnessView: View {
                 if let last = d.days.last {
                     let stats = Group {
                         stat("Fitness", Fmt.dec(last.ctl, 0), Tok.accent)
-                        stat("Fatigue", Fmt.dec(last.atl, 0), Tok.zone(5))
+                        stat("Fatigue", Fmt.dec(last.atl, 0), Tok.fatigue)
                         stat("Form", Fmt.signed(last.tsb), Tok.form(last.tsb))
                         if let e = d.eftp { stat("eFTP", "\(Fmt.dec(e, 0)) W", Tok.accent) }
                     }
@@ -116,6 +116,7 @@ struct FitnessView: View {
             }
             .padding()
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("Fitness")
         .navigationBarTitleDisplayMode(.inline)
         // the key itself is never an id: a new key counts as keyVersion
@@ -150,21 +151,25 @@ struct FitnessView: View {
                 LineMark(x: .value("Day", date(d.day)), y: .value("Load", d.atl), series: .value("s", "Fatigue (ATL)"))
                     .foregroundStyle(by: .value("Series", "Fatigue (ATL)"))
             }
-            .chartForegroundStyleScale(["Fitness (CTL)": Tok.accent, "Fatigue (ATL)": Tok.zone(5)])
+            .chartForegroundStyleScale(["Fitness (CTL)": Tok.accent, "Fatigue (ATL)": Tok.fatigue])
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
             .frame(height: tall)
         }
+        .card()
     }
 
     private func formChart(_ days: [FitnessDay]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Form (TSB)").font(.subheadline.bold())
             Chart(days, id: \.day) { d in
-                AreaMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(2).opacity(0.3))
-                LineMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(2))
+                AreaMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(7).opacity(0.3))
+                LineMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(7))
                 RuleMark(y: .value("zero", 0)).foregroundStyle(Color.secondary)
             }
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
             .frame(height: short)
         }
+        .card()
     }
 
     private func power(_ curve: [CurvePoint]) -> some View {
@@ -173,10 +178,12 @@ struct FitnessView: View {
             Chart(curve, id: \.secs) { p in
                 BarMark(x: .value("Duration", Fmt.span(p.secs)), y: .value("W", p.watts))
                     .foregroundStyle(Tok.power)
-                    .annotation(position: .top) { Text("\(p.watts)").font(.caption2) }
+                    .annotation(position: .top) { Text("\(p.watts)").font(.caption) }
             }
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
             .frame(height: mid)
         }
+        .card()
     }
 
     private func fetchRemote() async {
