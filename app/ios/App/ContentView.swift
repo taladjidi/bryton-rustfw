@@ -337,18 +337,21 @@ struct RideRow: View, Equatable {
                 rides.download(ride)
             }
         } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "bicycle").font(.title3).foregroundStyle(Tok.accent).frame(width: glyph).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
-                    Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
-                    if uploaded {
-                        Label("Intervals.icu", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Tok.ok)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "bicycle").font(.title3).foregroundStyle(Tok.accent).frame(width: glyph).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
+                        Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
+                        if uploaded {
+                            Label("Intervals.icu", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Tok.ok)
+                        }
                     }
-                    if active { RideProgress(rides: rides) }
+                    Spacer(minLength: 4)
+                    if let b = brief { Text(Fmt.distance(b.distanceM)).numeral(.title3).fixedSize() }
                 }
-                Spacer(minLength: 4)
-                if let b = brief { Text(Fmt.distance(b.distanceM)).numeral(.title3).fixedSize() }
+                // the row's whole width: beside the glyph the counts and Cancel wrapped a letter a line
+                if active { RideProgress(rides: rides) }
             }
         }
         .foregroundStyle(.primary)
