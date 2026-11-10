@@ -50,6 +50,10 @@ struct FitnessView: View {
     @EnvironmentObject private var profile: Profile
     private var ftp: Int { profile.ftp }
     private var maxHR: Int { profile.maxHR }
+    /// Chart heights, scaled with Dynamic Type.
+    @ScaledMetric private var tall: CGFloat = 180
+    @ScaledMetric private var short: CGFloat = 120
+    @ScaledMetric private var mid: CGFloat = 150
     /// Intervals.icu's answer, fetched once per key and athlete (a change of FTP or a new ride does not ask again).
     @State private var remote: FitnessData?
     @State private var note: String?
@@ -148,7 +152,7 @@ struct FitnessView: View {
                     .foregroundStyle(by: .value("Series", "Fatigue (ATL)"))
             }
             .chartForegroundStyleScale(["Fitness (CTL)": Tok.accent, "Fatigue (ATL)": Tok.zone(5)])
-            .frame(height: 180)
+            .frame(height: tall)
         }
     }
 
@@ -160,7 +164,7 @@ struct FitnessView: View {
                 LineMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(2))
                 RuleMark(y: .value("zero", 0)).foregroundStyle(Color.secondary)
             }
-            .frame(height: 120)
+            .frame(height: short)
         }
     }
 
@@ -172,7 +176,7 @@ struct FitnessView: View {
                     .foregroundStyle(Tok.power)
                     .annotation(position: .top) { Text("\(p.watts)").font(.caption2) }
             }
-            .frame(height: 150)
+            .frame(height: mid)
         }
     }
 

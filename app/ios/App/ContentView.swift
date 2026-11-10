@@ -316,6 +316,7 @@ struct RideRow: View, Equatable {
     let active: Bool
     let locked: Bool
     @EnvironmentObject private var profile: Profile
+    @ScaledMetric(relativeTo: .title3) private var glyph: CGFloat = 28
 
     init(rides: RideBrowser, ride: RideEntry, brief: RideBrief?, downloaded: Bool, uploaded: Bool, active: Bool, locked: Bool) {
         (self.rides, self.ride, self.brief, self.downloaded, self.uploaded, self.active, self.locked) =
@@ -337,7 +338,7 @@ struct RideRow: View, Equatable {
             }
         } label: {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "bicycle").font(.title3).foregroundStyle(Tok.accent).frame(width: 28).accessibilityHidden(true)
+                Image(systemName: "bicycle").font(.title3).foregroundStyle(Tok.accent).frame(width: glyph).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
                     Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)

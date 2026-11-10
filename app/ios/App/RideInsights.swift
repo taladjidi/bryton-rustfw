@@ -125,6 +125,7 @@ struct ClimbsSection: View {
 struct WbalChart: View {
     let points: [WbalPoint]
     let minJ: Int32?
+    @ScaledMetric private var height: CGFloat = 110
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -141,7 +142,7 @@ struct WbalChart: View {
                     .foregroundStyle(Tok.zone(6))
             }
             .chartXAxisLabel("min")
-            .frame(height: 110)
+            .frame(height: height)
         }
     }
 }
@@ -167,6 +168,7 @@ struct DfaChart: View {
     let points: [DfaPoint]
     let vt1: Double
     let vt2: Double
+    @ScaledMetric private var height: CGFloat = 130
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -186,7 +188,7 @@ struct DfaChart: View {
             }
             .chartXAxisLabel("min")
             .chartYScale(domain: 0...max(1.5, ((points.map(\.a1).max() ?? 0) * 4).rounded(.up) / 4))
-            .frame(height: 130)
+            .frame(height: height)
         }
     }
 }
@@ -202,6 +204,7 @@ struct CompareSection: View {
     @EnvironmentObject private var profile: Profile
     private var ftp: Int { profile.ftp }
     private var maxHR: Int { profile.maxHR }
+    @ScaledMetric private var curveHeight: CGFloat = 160
     @State private var other: (name: String, view: RideView, climbs: [ClimbStat])?
     @State private var loading = false
     @State private var picking: Task<Void, Never>?
@@ -266,7 +269,7 @@ struct CompareSection: View {
         }
         .chartXScale(domain: secs.map(label))
         .chartForegroundStyleScale([rows[0].0: Tok.accent, rows[1].0: Tok.zone(1)])
-        .frame(height: 160)
+        .frame(height: curveHeight)
     }
 
     @ViewBuilder private func shared(_ o: (name: String, view: RideView, climbs: [ClimbStat])) -> some View {

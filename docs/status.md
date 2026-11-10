@@ -888,16 +888,6 @@ On the unit: its awake time, and the last-known-position dot after a power cycle
 
 ### Power, sleep and board
 
-**Switch-off reaches system Standby (2026-11-07, main.rs `standby`: PDDS_D3 set too, as stock; BOARD.md 9)**
-
-Seen: not yet on the unit.
-
-On the unit:
-1. A switch-off, a power-key start, then the crumb (`standby_flags_word`, STANDBY_FLAGS_BKP) must show PWR_CPUCR SBF (bit 6) set; the power key still starts it.
-2. The 2 h off drain A/B: 2 h off on this image and on stock's, the battery history before and after each.
-
-Details: before it, the system sat in Stop and the cell lost about 58 % in 88 h (docs/power.md "Switched off").
-
 **Stop mode, phase 2b (2026-11-03, docs/power.md "Stop mode": Stop between a ride's passes)**
 
 Seen: simulator. **Off in the card-writing build** (`EMMC_WRITE=1`, the installed ride image) until this procedure passes; on in the plain build.
@@ -1257,6 +1247,10 @@ Fully seen; kept here for the numbers. The partly seen ones stay in their area a
   - the GNSS receiver after a stall: answering again at once after 15 s and 60 s stalls (label sampled every 0.5 s, three runs); a first look (four single screenshots, all in the blink's off half) had suggested a 2 min silence: not reproduced.
 - **The app's clock against the RTC (2026-11-01, main.rs `WAITED_US`, BOARD.md 6):** the WFI waits of the work (panel DMA, `delay_ms`) now count in `up_ms` and the uptime (time-outs, cadences counted in ms). The silent check: read `tools/dev.py info` (uptime) and the RTC time, wait 10 min on a screen that redraws (the main page), read both again; the two differences must agree within a second. Seen 2026-11-02: drift 0.033 % with the cable, 0.003 % without, over 20 min.
 - **A reset mid-ride and the resume (2026-10-24):** seen on the unit; a cut while a sector is written is covered by the host tests and the card's reliable write.
+- **Switch-off reaches system Standby (2026-11-07, main.rs `standby`: PDDS_D3 set too, as stock; BOARD.md 9):** the
+  crumb after a switch-off and a power-key start reads SBF set (RAM run of ec28cd4, then installed fbadb9b, FLASHLOG
+  #92); the owner reported on 2026-11-09 that there was no more battery drain while switched off. Before the fix, the
+  cell lost about 58 % in 88 h (docs/power.md "Switched off"). No measured figure for the drain yet.
 - **The power button starts the unit after a switch-off:** fixed in ea359a0 (IRQ 149 enabled before standby), seen on the unit 2026-10-25, installed and unplugged.
 - **The profiler (link/prof.rs, `tools/dev.py prof`, tools/profile.py):** seen on the unit 2026-10-29: section overhead 15 cycles; the rows sum to 1.508 % against 1.51 % awake. Idle overview 21.2 passes/s, 1.51 % awake; ride page 1 1.46 %; ride page 5 1.37 %; menu 2.69 %; ride discarded 4.98 %. Measured again in the evening on build 13fec4c after the review's repaint changes: idle overview 0.98 %, ride page 0.93 %, menu 1.37 % (21 passes/s with the cable in); README.md holds these.
 

@@ -211,7 +211,7 @@ private struct Bar: Identifiable {
 struct StepChart: View {
     let steps: [StepView]
     let ftp: Int
-    @ScaledMetric private var height: CGFloat = 180
+    @ScaledMetric var height: CGFloat = 180
 
     /// Power steps at their target's middle in watts; the others a quarter of the FTP, grey.
     private var bars: [Bar] {

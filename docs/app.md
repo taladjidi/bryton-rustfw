@@ -15,7 +15,7 @@ advertisement carries 0x180F is not verified.
 
 Reviewed 2026-11-08 (docs/review-app-ui-2026-11-08.md); parts A and B are done: the colours and the numeral
 face are the unit's, the numbers are formatted in one place (`Fmt`, metric or imperial), the P1, P2 and P3 findings are
-fixed or listed as left in the review's section 7. FTP, max HR and the units live in one `Profile` object (`Fmt.swift`),
+fixed or listed as left in the review's sections 7 and 8. Rides saved on the phone are listed while the unit is away. FTP, max HR and the units live in one `Profile` object (`Fmt.swift`),
 set in the profile sheet (the unit's own units setting is not in its PROFILE, so the phone cannot read it).
 
 - **Colour tokens**, one table in `app/core/src/theme.rs` (`TOKENS`), one Color Set per token in

@@ -60,6 +60,8 @@ final class RideBrowser: ObservableObject {
     private let client = FileClient()
     private var transport: FileTransport?
     private var ready = false
+    /// The unit's LIST answered at least once (until then `rides` holds only what the phone saved).
+    private var unitListed = false
     private var tick: Timer?
     private var busyRetries = 0
     private var wanted: String?
@@ -118,6 +120,24 @@ final class RideBrowser: ObservableObject {
 
     static var now: UInt64 { UInt64(ProcessInfo.processInfo.systemUptime * 1000) }
     static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+
+    init() {
+        rides = Self.phoneRides()
+        downloaded = Set(rides.map(\.name))
+    }
+
+    /// The rides saved on the phone (`YYMMDDhhmmss.fit` in Documents), newest first: the list works while the unit is
+    /// away, and a ride deleted from the unit stays listed.
+    static func phoneRides() -> [RideEntry] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: documents, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return files.compactMap { u -> RideEntry? in
+            let n = u.deletingPathExtension().lastPathComponent
+            guard u.pathExtension == "fit", n.count == 12, n.allSatisfy({ $0.isASCII && $0.isNumber }),
+                let size = (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap({ UInt32(exactly: $0) })
+            else { return nil }
+            return RideEntry(name: n, size: size)
+        }.sorted { $0.name > $1.name }
+    }
 
     func use(_ t: FileTransport, demo: Bool = false) {
         if let old = transport {
@@ -392,7 +412,7 @@ final class RideBrowser: ObservableObject {
         ready = true
         profileTried = false  // a new connection tries the pending profile again
         if sendError != nil && phase == .idle { refreshWorkouts() }  // a send ended while the link was down
-        if case .downloading = phase { resume() } else if phase == .workouts { if listingWorkouts { refreshWorkouts() } else { resume() } } else if rides.isEmpty { refresh() }
+        if case .downloading = phase { resume() } else if phase == .workouts { if listingWorkouts { refreshWorkouts() } else { resume() } } else if !unitListed { refresh() }
     }
 
     private func resume() {
@@ -607,7 +627,10 @@ final class RideBrowser: ObservableObject {
             workoutQueue = client.filesIn().map(\.name)
             nextWorkout()
         case .listed:
-            rides = client.entries().sorted { $0.name > $1.name }
+            let unit = client.entries()
+            let onUnit = Set(unit.map(\.name))
+            rides = (unit + Self.phoneRides().filter { !onUnit.contains($0.name) }).sorted { $0.name > $1.name }
+            unitListed = true
             downloaded = Set(rides.map(\.name).filter { FileManager.default.fileExists(atPath: Self.path($0).path) })
             phase = .idle
             refreshWorkouts()

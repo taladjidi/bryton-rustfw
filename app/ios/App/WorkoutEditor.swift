@@ -243,7 +243,7 @@ struct WorkoutEditor: View {
                     TextField("Name", text: $name)
                     switch shown {
                     case .success(let w):
-                        StepChart(steps: w.steps, ftp: ftp).frame(height: 150)
+                        StepChart(steps: w.steps, ftp: ftp, height: 150)
                         ZoneLegend(ftp: ftp)
                         HStack {
                             Text(Fmt.duration(UInt64(w.totalS)))
