@@ -538,6 +538,49 @@ fn a_window_ends_ok_short_of_the_file_and_the_boost_stays_for_the_next_read() {
     assert!(radio_normal(&sim) && !app.phone.files.boosted, "given back when no READ follows");
 }
 
+/// A file of `size` read whole from `from` over a link of `mtu`: (windows taken, bytes equal, END).
+fn windows_of(mtu: u16, size: usize, from: u32) -> (u32, bool, Option<(Status, u32)>) {
+    let (mut sim, mut app, control, data, ride) = fast_unit(mtu, size, |_| {});
+    let left = size as u32 - from;
+    let a = ask_whole(&mut sim, &mut app, (control, data), left, 120_000, |seq, o| Command::Read {
+        seq,
+        offset: from + o,
+        name: BIG,
+    });
+    (a.windows, a.bytes == ride[from as usize..], a.end)
+}
+
+#[test]
+fn a_file_of_one_or_two_windows_and_a_resume_across_a_boundary() {
+    for (mtu, w) in [(247u16, 32768usize), (23, 4096)] {
+        // exactly one window: its END is the file's end, and the boost is not held for a READ that will not come
+        assert_eq!(windows_of(mtu, w, 0), (1, true, Some((Status::Ok, w as u32))), "mtu {mtu}");
+        // exactly two: the second window is full and ends the file
+        assert_eq!(windows_of(mtu, 2 * w, 0), (2, true, Some((Status::Ok, 2 * w as u32))), "mtu {mtu}");
+        // one byte over a window
+        assert_eq!(windows_of(mtu, w + 1, 0).0, 2, "mtu {mtu}");
+        // a resume at 1234 reaches the boundary at w + 1234 and goes on to the end
+        assert_eq!(windows_of(mtu, 2 * w, 1234), (2, true, Some((Status::Ok, 2 * w as u32 - 1234))), "mtu {mtu}");
+    }
+}
+
+#[test]
+fn the_boost_is_not_held_after_a_window_that_ends_the_file() {
+    let (mut sim, mut app, control, data, _) = fast_unit(247, 32768, |_| {});
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
+    assert_eq!(a.end, Some((Status::Ok, 32768)));
+    run(&mut sim, &mut app, 300);
+    assert!(radio_normal(&sim) && !app.phone.files.boosted, "given back at once");
+}
+
+#[test]
+fn the_window_is_the_slow_one_when_the_fast_link_is_off_after_the_exchange() {
+    let (mut sim, mut app, control, data, _) = fast_unit(247, 100_000, |_| {});
+    app.phone.stored.fast = false; // the row went off; the MTU stays 247
+    let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 1, offset: 0, name: BIG }, 60_000);
+    assert_eq!(a.end, Some((Status::Ok, 4096)));
+}
+
 #[test]
 fn a_dropped_fast_transfer_resumes_byte_identical() {
     let (mut sim, mut app, control, data, ride) = fast_unit(247, 100_000, |_| {});
@@ -588,7 +631,8 @@ fn the_link_info_says_what_the_link_has_and_what_the_last_read_moved() {
     let (mtu, ext, l) = app.phone_link();
     assert!(ext && mtu == 247, "the extension was accepted, the MTU is the phone's");
     assert_eq!((l.dle, l.boost), (251, [0, 0, 0]), "data length in force, the three boost calls accepted");
-    assert_eq!(l.bytes, ride.len() as u32 - 3 * 32 * 1024, "the last READ's file bytes: its window");
+    assert_eq!(l.bytes, ride.len() as u32, "the file bytes of all the windows of the transfer");
+    assert!(l.ms * 2 > a.ms as u32 && l.ms < a.ms as u32 * 2, "{} ms against {}", l.ms, a.ms);
     assert!(
         l.sent > 0 && l.hvn > 0 && l.hvn <= l.sent,
         "{} frames, {} confirmed, sim completed {}",

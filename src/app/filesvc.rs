@@ -131,11 +131,18 @@ pub struct LinkInfo {
     pub turns: u32,
     /// The time of the READ's command, [`App`]'s `up_ms`.
     t0: u32,
+    /// The file offset the transfer began at (a window's resume point is this plus `bytes`).
+    start: u32,
 }
 
 impl LinkInfo {
     /// A READ begins at `now`.
-    fn begin(&mut self, now: u32) {
+    /// A READ that resumes where the last answer ended (the next window of one transfer) adds to the same totals.
+    fn begin(&mut self, now: u32, offset: u32) {
+        if self.bytes > 0 && offset == self.start.saturating_add(self.bytes) {
+            return;
+        }
+        self.start = offset;
         (self.bytes, self.ms, self.sent, self.hvn, self.full, self.turns, self.t0) = (0, 0, 0, 0, 0, 0, now);
     }
 
@@ -227,8 +234,8 @@ impl Job {
         Job::List { seq, folder, legacy, cur: None, files: None, day: [0; 8], ord: 0, walked: 0, count: 0 }
     }
 
-    fn read(seq: u8, folder: fs::Folder, key: fs::Key, offset: u32, mtu: u16) -> Job {
-        let left = if mtu > ble::ATT_MTU { WINDOW_FAST } else { WINDOW_SLOW };
+    fn read(seq: u8, folder: fs::Folder, key: fs::Key, offset: u32, fast: bool) -> Job {
+        let left = if fast { WINDOW_FAST } else { WINDOW_SLOW };
         Job::Read { seq, folder, key, offset, file: None, seek: Seek::new(), count: 0, left }
     }
 }
@@ -297,6 +304,7 @@ impl FileSvc {
                 full: 0,
                 turns: 0,
                 t0: 0,
+                start: 0,
             },
         }
     }
@@ -478,7 +486,11 @@ impl FileSvc {
             }
             Job::Read { folder, key, offset, file, seek, left, .. } => {
                 if *left == 0 {
-                    *hold_ms = HOLD_MS;
+                    // a file that ends with the window gets no hold: no READ follows
+                    let more = *blk_pos < *blk_len || file.as_ref().is_some_and(|x| *offset < x.size);
+                    if more {
+                        *hold_ms = HOLD_MS;
+                    }
                     return Err(Status::Ok); // the window is full: END OK, the phone asks again from its count
                 }
                 if *blk_pos >= *blk_len {
@@ -655,6 +667,8 @@ impl App {
             return;
         }
         let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
+        // the window follows the link in use: an MTU kept after the fast link went off is still a slow link
+        let fast = self.fast_ok() && self.phone.files.mtu > ble::ATT_MTU;
         let svc = &mut self.phone.files;
         svc.stall_ms = 0;
         let cmd = fs::Command::parse(written);
@@ -682,16 +696,16 @@ impl App {
                 svc.reset();
                 match fs::Key::new(fs::Folder::Activities, &name) {
                     Some(key) => {
-                        svc.job = Job::read(seq, fs::Folder::Activities, key, offset, svc.mtu);
-                        svc.info.begin(now);
+                        svc.job = Job::read(seq, fs::Folder::Activities, key, offset, fast);
+                        svc.info.begin(now, offset);
                     }
                     None => svc.finish(seq, Status::BadRequest, 0),
                 }
             }
             Ok(fs::Command::ReadIn { seq, folder, offset, key }) if !busy => {
                 svc.reset();
-                svc.job = Job::read(seq, folder, key, offset, svc.mtu);
-                svc.info.begin(now);
+                svc.job = Job::read(seq, folder, key, offset, fast);
+                svc.info.begin(now, offset);
             }
             Ok(
                 fs::Command::List { seq }
@@ -986,12 +1000,12 @@ impl App {
     }
 
     /// The answer's next frames, [`PER_PASS`] at most.
-    pub(crate) fn step_files(&mut self, b: &mut impl Board, conn: u16) {
+    pub(crate) fn step_files(&mut self, b: &mut impl Board, conn: u16, pass: bool) {
         let Some((_, data)) = self.phone.files.handles else { return };
         let (fast_ok, dt) = (self.fast_ok(), self.dt_ms);
         let svc = &mut self.phone.files;
         if svc.boosted && !svc.active() && svc.hold_ms > 0 && fast_ok {
-            svc.hold_ms = svc.hold_ms.saturating_sub(dt); // between two windows
+            svc.hold_ms = svc.hold_ms.saturating_sub(if pass { dt } else { 0 }); // only a pass's time counts: between two windows
         } else if svc.boosted && (!svc.active() || !fast_ok) {
             self.unboost(b, conn); // the answer ended (or the row went off): the normal parameters, whatever the way
         }

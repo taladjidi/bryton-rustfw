@@ -746,7 +746,10 @@ mod tests {
         }
         assert!(feed(c.list_in_command(UnitFolder::Courses, 1)).contains(&FileEvent::Listed));
         let size = u32::try_from(r.fit.len()).unwrap();
-        assert_eq!((c.files_in()[0].size, c.files_in_checks()[0]), (size, course_check(r.name, size)));
+        assert_eq!(
+            (c.files_in(UnitFolder::Courses)[0].size, c.files_in_checks(UnitFolder::Courses)[0]),
+            (size, course_check(r.name, size))
+        );
     }
 
     #[test]
