@@ -119,7 +119,6 @@ extension IntervalsClient {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let (data, status) = try await call(url, key: key, file: (tmp, "multipart/form-data; boundary=\(boundary)"))
         if let u = uploadOutcome(status: UInt16(clamping: status), json: data) { return u }
-        // a 200 that names no activity is not an upload either: refused() reports it as an error
         throw refused(status)
     }
 
@@ -191,6 +190,12 @@ final class IntervalsLoop: ObservableObject {
     /// Rides refused this launch: a rejected ride gets one more upload a launch (a ride Intervals.icu already holds is
     /// answered as a duplicate, then marked uploaded); only a copy failing its FIT CRC is read again from the unit.
     private var tried = Set<String>()
+    /// Rides whose upload ended in a Stop answer three times in a row: left out for the session so the ones behind them
+    /// go up (not `rejected`: nothing says the file is bad). `stops` counts the answers.
+    private var skipped = Set<String>()
+    private var stops: [String: Int] = [:]
+    /// The calendar was tried in this launch (the short gate ends with the first attempt, success or not).
+    private var calendarTriedThisLaunch = false
     private var events: [CalendarEvent] = []
     /// Events the unit cannot hold, by id: the stamp they had and why (not downloaded again until they change).
     private var refusedAt: [Int64: (stamp: String, why: String)] = [:]
@@ -271,7 +276,7 @@ final class IntervalsLoop: ObservableObject {
     /// The key appeared or went: the first key turns both features on, and only rides from now on go up.
     func keyChanged(_ has: Bool) {
         keyRefused = false
-        tried.removeAll()  // rides refused while the old key was wrong get their one try again
+        tried.removeAll()  // a ride refused in this launch gets its one try again
         guard has else { return }
         if d.object(forKey: "ivUpload") == nil { setUpload(true) }
         if d.object(forKey: "ivCalendar") == nil { setCalendar(true) }
@@ -334,7 +339,7 @@ final class IntervalsLoop: ObservableObject {
     /// Downloaded rides not up yet, newest first; `all` also takes the ones from before the toggle was turned on.
     private func candidates(_ rides: RideBrowser, all: Bool) -> [String] {
         rides.downloaded.filter {
-            uploadCandidate(uploaded: uploaded[$0] != nil, rejected: rejected.contains($0), triedThisLaunch: tried.contains($0),
+            !skipped.contains($0) && uploadCandidate(uploaded: uploaded[$0] != nil, rejected: rejected.contains($0), triedThisLaunch: tried.contains($0),
                             eligible: eligible($0), all: all)
         }.sorted(by: >)
     }
@@ -366,6 +371,7 @@ final class IntervalsLoop: ObservableObject {
                     rides?.reread(name)  // the phone cannot read its copy: a damaged one is read again from the unit
                     continue
                 }
+                stops[name] = nil
                 uploaded[name] = r.activityId
                 d.set(uploaded, forKey: "ivUploaded")
                 if rejected.remove(name) != nil { d.set(Array(rejected), forKey: "ivRejected") }
@@ -376,6 +382,14 @@ final class IntervalsLoop: ObservableObject {
                     keyRefused = true
                     uploadError = "Intervals.icu refused the key. Enter it again in the profile."
                     return
+                }
+                if !e.retry && !e.file {
+                    stops[name, default: 0] += 1
+                    if stops[name] ?? 0 >= 3 {
+                        skipped.insert(name)
+                        uploadError = "Intervals.icu keeps refusing the ride of \(RideBrowser.title(name)). \(e.text)"
+                        continue
+                    }
                 }
                 if e.retry || !e.file {
                     // a busy service, or an answer about the request or the account (404 athlete id, 409...): the pass
@@ -414,8 +428,9 @@ final class IntervalsLoop: ObservableObject {
         // at most hourly (an empty calendar counts too); the Simulator's demo always reads
         let tried = d.object(forKey: "ivCalTry") as? Date ?? .distantPast
         // nothing read yet this launch: a minute's pause only, so the planned list is not empty for an hour
-        if !force && !due && !Self.isDemo && now.timeIntervalSince(tried) < (calendarRead ? 3600 : 60) { return }
+        if !force && !due && !Self.isDemo && now.timeIntervalSince(tried) < (calendarTriedThisLaunch ? 3600 : 60) { return }
         calendarBusy = true
+        calendarTriedThisLaunch = true
         d.set(now, forKey: "ivCalTry")
         Task {
             await readCalendar(rides, key: key, today: now)

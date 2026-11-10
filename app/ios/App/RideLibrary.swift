@@ -17,6 +17,7 @@ final class RideLibrary: ObservableObject {
     private var unreadable = Set<String>()
     private var seenDownloaded = 0
     private var saveTask: Task<Void, Never>?
+    private var pendingSince: Date?
     private let file = RideBrowser.documents.appendingPathComponent("ride-summaries.txt")
     private let queue = DispatchQueue(label: "ride-analysis", qos: .utility)
     /// The weeks last worked out, for the inputs they were worked out for.
@@ -55,11 +56,22 @@ final class RideLibrary: ObservableObject {
 
     /// One write for a burst of analysed rides (a catch-up of many would rewrite the whole cache for each).
     private func scheduleSave() {
+        // at least every 10 s during a long catch-up
+        if pendingSince == nil { pendingSince = Date() }
+        if let t = pendingSince, Date().timeIntervalSince(t) >= 10 { return saveNow() }
         saveTask?.cancel()
         saveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if !Task.isCancelled { self?.save() }
+            if !Task.isCancelled { self?.saveNow() }
         }
+    }
+
+    /// Writes a pending cache now (the app goes to the background and may not come back).
+    func saveNow() {
+        guard pendingSince != nil else { return }
+        saveTask?.cancel()
+        pendingSince = nil
+        save()
     }
 
     private func save() {

@@ -88,10 +88,12 @@ final class RouteStore: ObservableObject {
                     fresh[stem] = (stamp, PhoneRoute(name: stem, view: v))
                 }
             }
+            let done = fresh
             await MainActor.run {
-                guard self.generation == started else { return }
-                self.cache = fresh
-                self.items = fresh.values.map(\.route).sorted { $0.name < $1.name }
+                // a keep or delete came meanwhile: this listing is older; look once more
+                guard self.generation == started else { return self.reload() }
+                self.cache = done
+                self.items = done.values.map(\.route).sorted { $0.name < $1.name }
             }
         }
     }

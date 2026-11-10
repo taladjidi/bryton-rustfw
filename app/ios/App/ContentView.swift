@@ -70,7 +70,7 @@ struct ContentView: View {
                 loop.uploadPass()  // a ride just synced goes up
             }
             .onChange(of: intervals.keyVersion) { _, _ in loop.keyChanged(intervals.hasKey) }
-            .onChange(of: scenePhase) { _, p in if p == .active { loop.foreground() } }
+            .onChange(of: scenePhase) { _, p in if p == .active { loop.foreground() } else if p == .background { library.saveNow() } }
             .onChange(of: rides.rides) { _, l in
                 library.catchUp(l, downloaded: rides.downloaded)
                 lastSync = Date()  // the unit just answered with its list

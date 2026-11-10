@@ -314,9 +314,9 @@ pub struct Uploaded {
     pub duplicate: bool,
 }
 
-/// The answer of `POST .../activities`: Some only for a 201 (created) or a 200 (a duplicate, which counts as
-/// uploaded) that names the activity. Any other answer (a 200 of some proxy or error page, an id unsafe in a URL) is
-/// None: it is not known to be an upload, and the caller reports an error instead of marking the ride sent.
+/// The answer of `POST .../activities`: Some for a 201 (created) or a 200 (all duplicates: "200 otherwise" in the
+/// API's spec, so a ride Intervals.icu already holds is uploaded whatever the body). The activity id is
+/// `activities[0].id` when present and safe in a URL, else empty. Other statuses are None.
 #[uniffi::export]
 pub fn upload_outcome(status: u16, json: Vec<u8>) -> Option<Uploaded> {
     if status != 200 && status != 201 {
@@ -330,8 +330,8 @@ pub fn upload_outcome(status: u16, json: Vec<u8>) -> Option<Uploaded> {
         _ => String::new(),
     };
     // the id goes into a URL: letters and digits only
-    let ok = !id.is_empty() && id.len() <= 20 && id.chars().all(|c| c.is_ascii_alphanumeric());
-    ok.then_some(Uploaded { activity_id: id, duplicate: status == 200 })
+    let ok = id.len() <= 20 && id.chars().all(|c| c.is_ascii_alphanumeric());
+    Some(Uploaded { activity_id: if ok { id } else { String::new() }, duplicate: status == 200 })
 }
 
 /// What an HTTP status means for a request to Intervals.icu.
@@ -565,14 +565,15 @@ mod tests {
             br#"{"icu_athlete_id":"i1","id":"x","activities":[{"id":"i987","icu_athlete_id":"i1"}]}"#.to_vec();
         let new = Uploaded { activity_id: "i987".into(), duplicate: false };
         assert_eq!(upload_outcome(201, created.clone()), Some(new.clone()));
-        // a duplicate answers 200 and counts as uploaded; an answer that names no activity does not
+        // a duplicate answers 200 and counts as uploaded, whatever the body (the id is then empty)
         assert_eq!(upload_outcome(200, created), Some(Uploaded { duplicate: true, ..new }));
-        assert_eq!(upload_outcome(200, b"{}".to_vec()), None);
-        assert_eq!(upload_outcome(201, b"{\"activities\":[]}".to_vec()), None);
-        assert_eq!(upload_outcome(200, b"garbage".to_vec()), None);
-        // an id that is not safe in a URL is no id
+        let none = |d| Some(Uploaded { activity_id: String::new(), duplicate: d });
+        assert_eq!(upload_outcome(200, b"{}".to_vec()), none(true));
+        assert_eq!(upload_outcome(200, b"{\"activities\":[]}".to_vec()), none(true));
+        assert_eq!(upload_outcome(200, b"garbage".to_vec()), none(true));
+        // an id that is not safe in a URL becomes empty, never an error
         let evil = br#"{"activities":[{"id":"../x?y"}]}"#.to_vec();
-        assert_eq!(upload_outcome(201, evil), None);
+        assert_eq!(upload_outcome(201, evil), none(false));
         for st in [0u16, 204, 302, 401, 403, 409, 422, 429, 500] {
             assert_eq!(upload_outcome(st, b"{}".to_vec()), None);
         }
@@ -731,10 +732,14 @@ mod tests {
             match upload_outcome(st, j) {
                 Some(u) => {
                     assert!(st == 200 || st == 201);
-                    assert!(!u.activity_id.is_empty() && u.activity_id.chars().all(|c| c.is_ascii_alphanumeric()));
-                    with_id += 1;
+                    assert!(u.activity_id.chars().all(|c| c.is_ascii_alphanumeric()));
+                    if u.activity_id.is_empty() {
+                        without += 1;
+                    } else {
+                        with_id += 1;
+                    }
                 }
-                None => without += 1,
+                None => assert!(st != 200 && st != 201),
             }
         }
         assert!(with_id > 100 && without > 100, "{with_id} {without}");
