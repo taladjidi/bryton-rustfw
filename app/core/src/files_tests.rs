@@ -186,18 +186,27 @@ fn unknown_stale_and_surplus_frames_are_ignored() {
 #[test]
 fn more_bytes_than_listed_is_refused() {
     let (c, _, ride) = setup(BIG_CHUNK);
-    let cmd = c.read_command("261101100000".into(), 0).unwrap();
+    let mut cmd = c.read_command("261101100000".into(), 0).unwrap();
     let big = vec![0u8; ride.len() + 1];
-    let mut last = FileEvent::Ignored;
-    for ch in big.chunks(BIG_CHUNK) {
-        let mut f = vec![0x82, cmd[1]];
-        f.extend_from_slice(ch);
-        last = c.on_data(f, 1);
-        if matches!(last, FileEvent::Failed { .. }) {
-            break;
+    // an overrun is asked again (a doubled notification, 2026-11-10 fuzz), three times, then refused
+    for round in 0..4 {
+        let mut last = FileEvent::Ignored;
+        for ch in big.chunks(BIG_CHUNK) {
+            let mut f = vec![0x82, cmd[1]];
+            f.extend_from_slice(ch);
+            last = c.on_data(f, 1);
+            if last != FileEvent::Progress {
+                break;
+            }
+        }
+        if round < 3 {
+            assert_eq!(last, FileEvent::Partial, "round {round}");
+            assert_eq!(c.progress().received, 0, "the overrun answer's bytes are dropped");
+            cmd = c.resume_command(1).unwrap();
+        } else {
+            assert_eq!(last, FileEvent::Failed { error: FileError::TooLong });
         }
     }
-    assert_eq!(last, FileEvent::Failed { error: FileError::TooLong });
 }
 
 /// Random and well-formed frames over a client in every state: no panic, and the decode paths are reached.
@@ -330,4 +339,27 @@ fn fit_whole_holds_for_a_ride_and_not_for_a_damaged_one() {
     ride[mid] ^= 1;
     assert!(!fit_whole(ride));
     assert!(!fit_whole(Vec::new()));
+}
+
+#[test]
+fn an_overrun_answer_is_dropped_and_its_rest_ignored() {
+    let (c, mut u, ride) = setup(20);
+    let mut t = 1000;
+    let cmd = c.read_command("261101100000".into(), t).unwrap();
+    let frames = u.handle(&cmd);
+    let (end, chunks) = frames.split_last().unwrap();
+    for f in chunks {
+        assert_eq!(c.on_data(f.clone(), t), FileEvent::Progress);
+    }
+    // the first chunk again (a doubled notification) overruns the size: the answer is dropped and asked again
+    assert_eq!(c.on_data(chunks[0].clone(), t), FileEvent::Partial);
+    assert_eq!(c.progress().received, 0);
+    // the rest of that answer carries the old seq: ignored, nothing appended
+    assert_eq!(c.on_data(chunks[1].clone(), t), FileEvent::Ignored);
+    assert_eq!(c.on_data(end.clone(), t), FileEvent::Ignored);
+    assert_eq!(c.progress().received, 0);
+    let cmd = c.resume_command(t).unwrap();
+    assert_eq!(&cmd[2..6], &0u32.to_le_bytes(), "READ from the bytes held before the answer");
+    assert_eq!(pump(&c, &mut u, &cmd, &mut t), FileEvent::Finished);
+    assert_eq!(c.file(), ride);
 }
