@@ -314,8 +314,9 @@ pub struct Uploaded {
     pub duplicate: bool,
 }
 
-/// The answer of `POST .../activities`: Some for 201 (created) and 200 (a duplicate, which counts as uploaded), None
-/// for anything else.
+/// The answer of `POST .../activities`: Some for a 201 (created) or a 200 (all duplicates: "200 otherwise" in the
+/// API's spec, so a ride Intervals.icu already holds is uploaded whatever the body). The activity id is
+/// `activities[0].id` when present and safe in a URL, else empty. Other statuses are None.
 #[uniffi::export]
 pub fn upload_outcome(status: u16, json: Vec<u8>) -> Option<Uploaded> {
     if status != 200 && status != 201 {
@@ -331,6 +332,31 @@ pub fn upload_outcome(status: u16, json: Vec<u8>) -> Option<Uploaded> {
     // the id goes into a URL: letters and digits only
     let ok = id.len() <= 20 && id.chars().all(|c| c.is_ascii_alphanumeric());
     Some(Uploaded { activity_id: if ok { id } else { String::new() }, duplicate: status == 200 })
+}
+
+/// What an HTTP status means for a request to Intervals.icu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum HttpClass {
+    /// 401 / 403: the key (or the athlete id) is refused; nothing runs until a new key.
+    Auth,
+    /// 429 and 5xx: the service is busy or down; the same request may work later.
+    Later,
+    /// 400 / 413 / 415 / 422 on an upload: this file is refused, whatever the key.
+    BadFile,
+    /// Anything else (404 for an athlete id, 405, 408, 409, 410, a redirect, a 2xx that was not expected): about the
+    /// request or the account, not the file. A whole pass stops; no ride is marked rejected for it.
+    Stop,
+}
+
+/// Sorts an HTTP status of Intervals.icu (see [`HttpClass`]).
+#[uniffi::export]
+pub fn http_class(status: u16) -> HttpClass {
+    match status {
+        401 | 403 => HttpClass::Auth,
+        429 | 500..=599 => HttpClass::Later,
+        400 | 413 | 415 | 422 => HttpClass::BadFile,
+        _ => HttpClass::Stop,
+    }
 }
 
 /// Whether the phone's copy of a ride is set aside (kept as `.fit.bad`) and read again from the unit. Only when the
@@ -520,18 +546,34 @@ mod tests {
     }
 
     #[test]
+    fn statuses_are_sorted() {
+        use HttpClass::*;
+        for (st, c) in
+            [(401, Auth), (403, Auth), (429, Later), (500, Later), (503, Later), (400, BadFile), (422, BadFile)]
+        {
+            assert_eq!(http_class(st), c, "{st}");
+        }
+        // a wrong athlete id or a conflict is not the ride's fault: it must never reject the queue
+        for st in [0u16, 200, 302, 404, 405, 408, 409, 410] {
+            assert_eq!(http_class(st), Stop, "{st}");
+        }
+    }
+
+    #[test]
     fn upload_answers() {
         let created =
             br#"{"icu_athlete_id":"i1","id":"x","activities":[{"id":"i987","icu_athlete_id":"i1"}]}"#.to_vec();
         let new = Uploaded { activity_id: "i987".into(), duplicate: false };
         assert_eq!(upload_outcome(201, created.clone()), Some(new.clone()));
-        // a duplicate answers 200, with or without an id; both count as uploaded
+        // a duplicate answers 200 and counts as uploaded, whatever the body (the id is then empty)
         assert_eq!(upload_outcome(200, created), Some(Uploaded { duplicate: true, ..new }));
-        assert_eq!(upload_outcome(200, b"{}".to_vec()), Some(Uploaded { activity_id: String::new(), duplicate: true }));
-        assert_eq!(upload_outcome(200, b"garbage".to_vec()).map(|u| u.activity_id), Some(String::new()));
-        // an id that is not safe in a URL is dropped, other statuses are not an upload
+        let none = |d| Some(Uploaded { activity_id: String::new(), duplicate: d });
+        assert_eq!(upload_outcome(200, b"{}".to_vec()), none(true));
+        assert_eq!(upload_outcome(200, b"{\"activities\":[]}".to_vec()), none(true));
+        assert_eq!(upload_outcome(200, b"garbage".to_vec()), none(true));
+        // an id that is not safe in a URL becomes empty, never an error
         let evil = br#"{"activities":[{"id":"../x?y"}]}"#.to_vec();
-        assert_eq!(upload_outcome(201, evil).map(|u| u.activity_id), Some(String::new()));
+        assert_eq!(upload_outcome(201, evil), none(false));
         for st in [0u16, 204, 302, 401, 403, 409, 422, 429, 500] {
             assert_eq!(upload_outcome(st, b"{}".to_vec()), None);
         }
@@ -690,10 +732,10 @@ mod tests {
             match upload_outcome(st, j) {
                 Some(u) => {
                     assert!(st == 200 || st == 201);
+                    assert!(u.activity_id.chars().all(|c| c.is_ascii_alphanumeric()));
                     if u.activity_id.is_empty() {
                         without += 1;
                     } else {
-                        assert!(u.activity_id.chars().all(|c| c.is_ascii_alphanumeric()));
                         with_id += 1;
                     }
                 }

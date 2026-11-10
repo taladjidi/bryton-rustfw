@@ -19,6 +19,8 @@ final class RideLibrary: ObservableObject {
     /// tried again; another copy of the same name (other size or date) is.
     private var unreadable: [String: (copy: String, fails: Int)] = [:]
     var onUnreadable: ((String) -> Void)?
+    private var saveTask: Task<Void, Never>?
+    private var pendingSince: Date?
     private let file = RideBrowser.documents.appendingPathComponent("ride-summaries.txt")
     private let queue = DispatchQueue(label: "ride-analysis", qos: .utility)
     /// The weeks last worked out, for the inputs they were worked out for.
@@ -55,6 +57,26 @@ final class RideLibrary: ObservableObject {
         return (briefs, sizes)
     }
 
+    /// One write for a burst of analysed rides (a catch-up of many would rewrite the whole cache for each).
+    private func scheduleSave() {
+        // at least every 10 s during a long catch-up
+        if pendingSince == nil { pendingSince = Date() }
+        if let t = pendingSince, Date().timeIntervalSince(t) >= 10 { return saveNow() }
+        saveTask?.cancel()
+        saveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled { self?.saveNow() }
+        }
+    }
+
+    /// Writes a pending cache now (the app goes to the background and may not come back).
+    func saveNow() {
+        guard pendingSince != nil else { return }
+        saveTask?.cancel()
+        pendingSince = nil
+        save()
+    }
+
     private func save() {
         let rows = briefs.keys.sorted().compactMap { k in briefs[k].map { "\(k) \(sizes[k] ?? 0) \(briefEncode(b: $0))" } }
         let text = (["definitions \(Self.definitions)"] + rows).joined(separator: "\n") + "\n"
@@ -81,7 +103,7 @@ final class RideLibrary: ObservableObject {
                     if let b {
                         self.briefs[r.name] = b
                         self.sizes[r.name] = r.size
-                        self.save()
+                        self.scheduleSave()
                     } else {
                         let fails = (self.unreadable[r.name]?.copy == copy ? self.unreadable[r.name]?.fails ?? 0 : 0) + 1
                         self.unreadable[r.name] = (copy, fails)

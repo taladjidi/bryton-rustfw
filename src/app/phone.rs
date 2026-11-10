@@ -627,7 +627,7 @@ impl App {
             }
             self.phone.battery_sent = level;
         }
-        self.step_files(b, conn);
+        self.step_files(b, conn, true);
         self.next_op(b, conn);
     }
 
@@ -819,7 +819,7 @@ impl App {
             Event::MtuRequest { conn, client } => self.mtu_reply(b, conn, client),
             Event::TxComplete { conn, count } if Some(conn) == self.phone.conn => {
                 self.phone.files.info.confirmed(count);
-                self.step_files(b, conn);
+                self.step_files(b, conn, false);
             }
             Event::ParamRequest { conn, id } => {
                 let _ = match id {

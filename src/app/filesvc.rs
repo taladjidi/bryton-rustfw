@@ -28,6 +28,11 @@
 //! while the card is lent to a computer, is answered BUSY; a transfer under way when one of those begins ends with
 //! BUSY, and nothing of the card is read from then on. The recording path never calls into this file.
 //!
+//! **Windows.** A READ answer ends after [`WINDOW_FAST`] (32 KB, fast link) or [`WINDOW_SLOW`] (4 KB, MTU 23) file bytes
+//! with END OK and the bytes the stack took, short of the file: the phone treats that as partial and asks again from its
+//! offset at once. The phone checks each answer's count, so a drop or a silence re-reads one window (about 2 s fast,
+//! 11 s slow), never the rest of a 3 MB ride. The boost is kept [`HOLD_MS`] after such an END for the next READ.
+//!
 //! **Bounded work:** [`PER_PASS`] frames a pass at most; a pass reads the card once per [`BLOCK`] of file bytes
 //! (a few chunks), or scans [`SCAN`] directory entries for the next ride. The stack queues one notification
 //! (`BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT`, recalled, inferred; [`nrf::FAST_QUEUE`] on the fast link), so the pass that
@@ -86,6 +91,15 @@ const RESTORE_TRIES: u8 = 20;
 const FAST_DLE: u16 = 251;
 /// A transfer whose frame the stack takes for this long is dropped.
 const STALL_MS: u32 = 5000;
+/// File bytes of one READ answer on the fast link, then END OK: at 16.6 KB/s about 2 s, so a drop or a silence costs
+/// the phone at most this much re-read (it checks each answer's count and asks again from its last checked byte), and
+/// 32 KB is 130 frames of 242 B against one END of 8 bytes. A ride of 3 MB is about 100 windows.
+const WINDOW_FAST: u32 = 32 * 1024;
+/// The same at MTU 23 (360 B/s): 4 KB is 11 s, the same order of loss for a drop, 230 frames of 18 B per END.
+const WINDOW_SLOW: u32 = 4 * 1024;
+/// How long the boost outlives a window's END: the phone's next READ follows at once (one round trip), and giving the
+/// parameters back between windows would cost two radio procedures per window and a slow start for each.
+const HOLD_MS: u32 = 3000;
 
 /// What the phone link really has, for `dev.py info` (src/link/dev.rs): the values the stack reported by events and the
 /// result codes of the boost calls, and the last READ's size, time and the stack's confirmations. Zero: not seen.
@@ -117,11 +131,18 @@ pub struct LinkInfo {
     pub turns: u32,
     /// The time of the READ's command, [`App`]'s `up_ms`.
     t0: u32,
+    /// The file offset the transfer began at (a window's resume point is this plus `bytes`).
+    start: u32,
 }
 
 impl LinkInfo {
     /// A READ begins at `now`.
-    fn begin(&mut self, now: u32) {
+    /// A READ that resumes where the last answer ended (the next window of one transfer) adds to the same totals.
+    fn begin(&mut self, now: u32, offset: u32) {
+        if self.bytes > 0 && offset == self.start.saturating_add(self.bytes) {
+            return;
+        }
+        self.start = offset;
         (self.bytes, self.ms, self.sent, self.hvn, self.full, self.turns, self.t0) = (0, 0, 0, 0, 0, 0, now);
     }
 
@@ -194,6 +215,8 @@ enum Job {
         seek: Seek,
         /// Bytes sent.
         count: u32,
+        /// File bytes this answer may still send before its window's END.
+        left: u32,
     },
     /// A workout or course being received: where it goes, its CRC-32 and the bytes received so far into the temporary
     /// file `h` (its size the file's). The bytes of the sector being filled wait in `blk`.
@@ -211,8 +234,9 @@ impl Job {
         Job::List { seq, folder, legacy, cur: None, files: None, day: [0; 8], ord: 0, walked: 0, count: 0 }
     }
 
-    fn read(seq: u8, folder: fs::Folder, key: fs::Key, offset: u32) -> Job {
-        Job::Read { seq, folder, key, offset, file: None, seek: Seek::new(), count: 0 }
+    fn read(seq: u8, folder: fs::Folder, key: fs::Key, offset: u32, fast: bool) -> Job {
+        let left = if fast { WINDOW_FAST } else { WINDOW_SLOW };
+        Job::Read { seq, folder, key, offset, file: None, seek: Seek::new(), count: 0, left }
     }
 }
 
@@ -240,6 +264,8 @@ pub(crate) struct FileSvc {
     /// The link's parameters as the phone last set them (the connect event, the last update outside a READ): what a
     /// READ gives back. None: not known, nothing is sent back (the link keeps whatever the phone chose).
     pub(crate) link: Option<ble::ConnParams>,
+    /// Time left to keep the boost after a window's END (the next READ is expected).
+    hold_ms: u32,
     /// Passes the restore has been tried ([`RESTORE_TRIES`]).
     restore_tries: u8,
     /// The longest value Data holds (the characteristic's max): the frame never passes it.
@@ -264,6 +290,7 @@ impl FileSvc {
             boosted: false,
             link: None,
             restore_tries: 0,
+            hold_ms: 0,
             max_frame: fs::FRAME_MAX,
             info: LinkInfo {
                 interval: 0,
@@ -277,6 +304,7 @@ impl FileSvc {
                 full: 0,
                 turns: 0,
                 t0: 0,
+                start: 0,
             },
         }
     }
@@ -312,6 +340,7 @@ impl FileSvc {
     /// The link is gone: nothing is answered.
     pub(crate) fn reset(&mut self) {
         (self.job, self.out_len, self.pending, self.blk_len, self.blk_pos, self.stall_ms) = (Job::Idle, 0, 0, 0, 0, 0);
+        self.hold_ms = 0;
     }
 
     /// Control's handle, when the service exists.
@@ -375,7 +404,7 @@ impl FileSvc {
     /// The work of [`FileSvc::fill`]; Err(status) ends the answer.
     fn build(&mut self, d: &mut impl fat::Disk, seq: u8) -> Result<bool, Status> {
         let max = self.frame_len();
-        let FileSvc { job, out, out_len, pending, blk, blk_len, blk_pos, .. } = self;
+        let FileSvc { job, out, out_len, pending, blk, blk_len, blk_pos, hold_ms, .. } = self;
         let mut f = [0; fs::FRAME_BIG];
         let io = |_| Status::Io;
         match job {
@@ -455,7 +484,15 @@ impl FileSvc {
                 }
                 Ok(false)
             }
-            Job::Read { folder, key, offset, file, seek, .. } => {
+            Job::Read { folder, key, offset, file, seek, left, .. } => {
+                if *left == 0 {
+                    // a file that ends with the window gets no hold: no READ follows
+                    let more = *blk_pos < *blk_len || file.as_ref().is_some_and(|x| *offset < x.size);
+                    if more {
+                        *hold_ms = HOLD_MS;
+                    }
+                    return Err(Status::Ok); // the window is full: END OK, the phone asks again from its count
+                }
                 if *blk_pos >= *blk_len {
                     let mut fat = fat::Fat::mount(d).map_err(io)?;
                     if file.is_none() {
@@ -472,12 +509,13 @@ impl FileSvc {
                     }
                 }
                 let data = blk.get(*blk_pos..*blk_len).unwrap_or(&[]);
-                let n = data.len().min(max.saturating_sub(2));
+                let n = data.len().min(max.saturating_sub(2)).min(*left as usize);
                 *out_len = Frame::Chunk { seq, data: data.get(..n).unwrap_or(&[]) }
                     .encode(f.get_mut(..max).unwrap_or(&mut []));
                 *out = f;
                 *blk_pos += n;
                 *pending = n as u32;
+                *left = left.saturating_sub(n as u32);
                 Ok(true)
             }
         }
@@ -629,6 +667,8 @@ impl App {
             return;
         }
         let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
+        // the window follows the link in use: an MTU kept after the fast link went off is still a slow link
+        let fast = self.fast_ok() && self.phone.files.mtu > ble::ATT_MTU;
         let svc = &mut self.phone.files;
         svc.stall_ms = 0;
         let cmd = fs::Command::parse(written);
@@ -656,16 +696,16 @@ impl App {
                 svc.reset();
                 match fs::Key::new(fs::Folder::Activities, &name) {
                     Some(key) => {
-                        svc.job = Job::read(seq, fs::Folder::Activities, key, offset);
-                        svc.info.begin(now);
+                        svc.job = Job::read(seq, fs::Folder::Activities, key, offset, fast);
+                        svc.info.begin(now, offset);
                     }
                     None => svc.finish(seq, Status::BadRequest, 0),
                 }
             }
             Ok(fs::Command::ReadIn { seq, folder, offset, key }) if !busy => {
                 svc.reset();
-                svc.job = Job::read(seq, folder, key, offset);
-                svc.info.begin(now);
+                svc.job = Job::read(seq, folder, key, offset, fast);
+                svc.info.begin(now, offset);
             }
             Ok(
                 fs::Command::List { seq }
@@ -960,9 +1000,13 @@ impl App {
     }
 
     /// The answer's next frames, [`PER_PASS`] at most.
-    pub(crate) fn step_files(&mut self, b: &mut impl Board, conn: u16) {
+    pub(crate) fn step_files(&mut self, b: &mut impl Board, conn: u16, pass: bool) {
         let Some((_, data)) = self.phone.files.handles else { return };
-        if self.phone.files.boosted && (!self.phone.files.active() || !self.fast_ok()) {
+        let (fast_ok, dt) = (self.fast_ok(), self.dt_ms);
+        let svc = &mut self.phone.files;
+        if svc.boosted && !svc.active() && svc.hold_ms > 0 && fast_ok {
+            svc.hold_ms = svc.hold_ms.saturating_sub(if pass { dt } else { 0 }); // only a pass's time counts: between two windows
+        } else if svc.boosted && (!svc.active() || !fast_ok) {
             self.unboost(b, conn); // the answer ended (or the row went off): the normal parameters, whatever the way
         }
         if !self.phone.secure || self.phone.stored.bond.is_none() || !self.phone.files.active() {

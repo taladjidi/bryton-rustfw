@@ -608,7 +608,7 @@ fn a_lost_continuation_does_not_freeze_the_power() {
 /// parameters come back afterwards.
 #[test]
 fn a_ride_downloads_on_the_fast_link_while_the_trainer_is_connected() {
-    use super::filesvc_tests::{BIG, ask, body};
+    use super::filesvc_tests::{BIG, body};
     let mut phone = PhoneSim::new(true);
     (phone.connect_at, phone.client_mtu) = (1000, 247);
     let ride = body(100_000);
@@ -630,8 +630,9 @@ fn a_ride_downloads_on_the_fast_link_while_the_trainer_is_connected() {
     sim.nordic.phone_subscribe(data + 1, true);
     run(&mut sim, &mut app, 200);
     sim.charge_wire = true;
-    let a =
-        ask(&mut sim, &mut app, control, data, crate::filesvc::Command::Read { seq: 1, offset: 0, name: BIG }, 30_000);
+    let a = super::filesvc_tests::ask_whole(&mut sim, &mut app, (control, data), 100_000, 30_000, |seq, offset| {
+        crate::filesvc::Command::Read { seq, offset, name: BIG }
+    });
     assert!(a.bytes == ride && a.end == Some((crate::filesvc::Status::Ok, 100_000)), "{:?}", a.end);
     std::println!("fast link with a trainer: 100000 B in {} ms", a.ms);
     run(&mut sim, &mut app, 500);
