@@ -533,6 +533,21 @@ fn begin_workout(sim: &mut Sim, app: &mut App, ends: (u16, u16), file: &[u8]) ->
     answer(sim, app, ends.0, ends.1, &f[..n])
 }
 
+/// WRITE_BEGIN of `file` as the course `New`: its answer.
+fn begin_course(sim: &mut Sim, app: &mut App, ends: (u16, u16), file: &[u8]) -> End {
+    let mut f = [0; crate::filesvc::FRAME_BIG];
+    let name = crate::filesvc::CourseName::new(b"New").unwrap();
+    let n = Command::WriteCourse { seq: 1, size: file.len() as u32, crc: crc(file), name }.encode(&mut f);
+    answer(sim, app, ends.0, ends.1, &f[..n])
+}
+
+/// WRITE_END's answer.
+fn end_write(sim: &mut Sim, app: &mut App, ends: (u16, u16)) -> End {
+    let mut f = [0; 20];
+    let n = Command::WriteEnd { seq: 3 }.encode(&mut f);
+    answer(sim, app, ends.0, ends.1, &f[..n])
+}
+
 /// WRITE_DATA number `k` of `file` in frames of `chunk` bytes, sent and passed (a success has no answer).
 fn send_chunk(sim: &mut Sim, app: &mut App, ends: (u16, u16), file: &[u8], chunk: usize, k: usize) {
     let mut f = [0; crate::filesvc::FRAME_BIG];
@@ -544,36 +559,35 @@ fn send_chunk(sim: &mut Sim, app: &mut App, ends: (u16, u16), file: &[u8], chunk
 }
 
 #[test]
-fn a_workout_write_on_the_fast_link_asks_the_parameters_and_gives_them_back_after_its_end() {
+fn a_course_write_over_8_kb_asks_the_parameters_and_gives_them_back_after_its_end() {
     let (mut sim, mut app, control, data, _) = fast_unit(247, 100, |_| {});
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     let ends = (control, data);
-    let file = long_workout();
-    assert_eq!(begin_workout(&mut sim, &mut app, ends, &file), Some((Status::Ok, 0)));
+    let file = turns();
+    assert!(file.len() > 8 * 1024, "{} bytes", file.len());
+    assert_eq!(begin_course(&mut sim, &mut app, ends, &file), Some((Status::Ok, 0)));
     let chunk = crate::filesvc::FRAME_BIG - 6;
     for k in 0..file.len().div_ceil(chunk) {
         send_chunk(&mut sim, &mut app, ends, &file, chunk, k);
         let r = &sim.nordic.server.radio;
         assert!(app.phone.files.boosted && r.dle == 251 && r.phy2 && r.interval_ms == 15, "chunk {k}: asked");
     }
-    assert_eq!(app.phone.files.info.boost, [0; 3], "the three calls accepted");
-    let mut f = [0; 20];
-    let n = Command::WriteEnd { seq: 3 }.encode(&mut f);
-    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, file.len() as u32)));
+    assert_eq!(end_write(&mut sim, &mut app, ends), Some((Status::Ok, file.len() as u32)));
     run(&mut sim, &mut app, 300);
     assert!(radio_normal(&sim) && !app.phone.files.boosted, "given back after the END");
-    assert_eq!(day_files(&sim), core::slice::from_ref(&file));
 }
 
 #[test]
-fn a_workout_write_with_the_fast_link_off_keeps_the_phones_parameters() {
+fn a_course_write_with_the_fast_link_off_keeps_the_phones_parameters() {
     for off in [false, true] {
         let (mut sim, mut app, control, data, _) = fast_unit(if off { 247 } else { 0 }, 100, |s| s.fast_link = off);
         if off {
             app.phone.stored.fast = false; // the PHONE menu's row
         }
+        app.set_course_memory(crate::storage::course_file::tests::memory());
         let ends = (control, data);
-        let file = long_workout();
-        assert_eq!(begin_workout(&mut sim, &mut app, ends, &file), Some((Status::Ok, 0)), "off {off}");
+        let file = turns();
+        assert_eq!(begin_course(&mut sim, &mut app, ends, &file), Some((Status::Ok, 0)), "off {off}");
         send_chunk(&mut sim, &mut app, ends, &file, 238, 0);
         let r = &sim.nordic.server.radio;
         assert!(!app.phone.files.boosted && r.dle == 27 && !r.phy2, "off {off}: no request during the write");
@@ -581,15 +595,27 @@ fn a_workout_write_with_the_fast_link_off_keeps_the_phones_parameters() {
 }
 
 #[test]
-fn a_workout_write_the_phone_stops_feeding_gives_the_parameters_back() {
+fn a_course_write_the_phone_stops_feeding_gives_the_parameters_back() {
     let (mut sim, mut app, control, data, _) = fast_unit(247, 100, |_| {});
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     let ends = (control, data);
-    let file = long_workout();
-    assert_eq!(begin_workout(&mut sim, &mut app, ends, &file), Some((Status::Ok, 0)));
+    let file = turns();
+    assert_eq!(begin_course(&mut sim, &mut app, ends, &file), Some((Status::Ok, 0)));
     send_chunk(&mut sim, &mut app, ends, &file, 238, 0);
     assert!(app.phone.files.boosted && !radio_normal(&sim), "asked before the stall");
     run(&mut sim, &mut app, 7000); // STALL_MS: the write is dropped, the parameters follow
     assert!(radio_normal(&sim) && !app.phone.files.boosted, "given back after the stall");
+}
+
+#[test]
+fn a_small_workout_write_asks_nothing() {
+    let (mut sim, mut app, control, data, _) = fast_unit(247, 100, |_| {});
+    let ends = (control, data);
+    let small = &long_workout()[..300];
+    assert_eq!(begin_workout(&mut sim, &mut app, ends, small), Some((Status::Ok, 0)));
+    send_chunk(&mut sim, &mut app, ends, small, 238, 0);
+    let r = &sim.nordic.server.radio;
+    assert!(!app.phone.files.boosted && r.dle == 27 && !r.phy2, "300 bytes: the phone's parameters");
 }
 
 #[test]

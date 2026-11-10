@@ -97,6 +97,10 @@ const STALL_MS: u32 = 5000;
 const WINDOW_FAST: u32 = 32 * 1024;
 /// The same at MTU 23 (360 B/s): 4 KB is 11 s, the same order of loss for a drop, 230 frames of 18 B per END.
 const WINDOW_SLOW: u32 = 4 * 1024;
+/// The smallest WRITE that asks for the boost: routes are tens of KB, a workout a few hundred bytes, the profile a few
+/// bytes. A short write ends before the phone applies the request, so its give-back would be refused (BUSY) for
+/// [`RESTORE_TRIES`] passes and the link would keep 15 to 30 ms and 2M PHY until the disconnect.
+const WRITE_BOOST: u32 = 8 * 1024;
 /// How long the boost outlives a window's END: the phone's next READ follows at once (one round trip), and giving the
 /// parameters back between windows would cost two radio procedures per window and a slow start for each.
 const HOLD_MS: u32 = 3000;
@@ -224,6 +228,8 @@ enum Job {
         seq: u8,
         to: Target,
         crc: u32,
+        /// The size WRITE_BEGIN announced: a small write is not worth the link's boost ([`WRITE_BOOST`]).
+        size: u32,
         got: u32,
         h: Handle,
     },
@@ -904,7 +910,7 @@ impl App {
                 svc.reset();
                 let mut fat = mount(&mut d)?;
                 let h = workout_write::begin(&mut fat, &mut d, &to, size, t)?;
-                (svc.job, svc.blk) = (Job::Write { seq, to, crc, got: 0, h }, [0; BLOCK]);
+                (svc.job, svc.blk) = (Job::Write { seq, to, crc, size, got: 0, h }, [0; BLOCK]);
                 Ok(())
             }
             fs::Command::WriteData { offset, data, .. } => {
@@ -1018,7 +1024,11 @@ impl App {
         }
         let svc = &self.phone.files;
         if !svc.boosted
-            && matches!(svc.job, Job::Read { .. } | Job::Write { .. })
+            && match svc.job {
+                Job::Read { .. } => true,
+                Job::Write { size, .. } => size > WRITE_BOOST,
+                _ => false,
+            }
             && svc.mtu > ble::ATT_MTU
             && self.fast_ok()
         {
