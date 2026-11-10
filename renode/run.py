@@ -192,7 +192,9 @@ def main():
         fails.append(f'{preview} is missing: run cargo test-host first (the pixel check needs it)')
     else:
         sim = bmp_rgb(preview)
-        for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, the empty notices (src/ui/)
+        # a ride build (EMMC_WRITE=1) finds no writable card here and says NOT SAVING in the notices: the strip only
+        ride = os.environ.get('EMMC_WRITE') == '1'
+        for y in list(range(22, 24)) + ([] if ride else list(range(272, 316))):  # the strip's line, the empty notices (src/ui/)
             bad = [x for x in range(W) if rgb(first, x, y) != sim[y][x]]
             if bad:
                 fails.append(f'row {y} differs from the simulator at x {bad[0]}..{bad[-1]}')

@@ -17,8 +17,10 @@ actor InsightCache {
     private var running2: [String: Task<RideView?, Never>] = [:]
 
     private func key(_ url: URL, _ extra: String) -> String {
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        return "\(url.lastPathComponent) \(size) \(extra)"
+        let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        // size and date: a ride read again from the unit can keep its size but not its date
+        let stamp = v?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        return "\(url.lastPathComponent) \(v?.fileSize ?? 0) \(stamp) \(extra)"
     }
 
     func insight(_ url: URL, weight: UInt16, cp: UInt16, wPrime: UInt16) async -> RideInsight? {
@@ -125,11 +127,13 @@ struct ClimbsSection: View {
 struct WbalChart: View {
     let points: [WbalPoint]
     let minJ: Int32?
+    @ScaledMetric private var height: CGFloat = 110
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text("W' balance (kJ)").font(.subheadline.bold())
+                Text("over min").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let m = minJ { Text("lowest \(Fmt.dec(Double(m) / 1000)) kJ").font(.caption).foregroundStyle(.secondary) }
             }
@@ -140,9 +144,10 @@ struct WbalChart: View {
                 LineMark(x: .value("min", Double(p.tS) / 60), y: .value("kJ", Double(p.wbalJ) / 1000))
                     .foregroundStyle(Tok.zone(6))
             }
-            .chartXAxisLabel("min")
-            .frame(height: 110)
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
+            .frame(height: height)
         }
+        .card()
     }
 }
 
@@ -160,6 +165,15 @@ struct DecouplingRow: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .card()
+    }
+}
+
+/// A dashed line sample and its name, for a chart's rule lines.
+private func legend(_ color: Color, _ text: String) -> some View {
+    HStack(spacing: 6) {
+        Rectangle().stroke(color, style: StrokeStyle(lineWidth: 2, dash: [4, 2])).frame(width: 20, height: 2)
+        Text(text)
     }
 }
 
@@ -167,27 +181,31 @@ struct DfaChart: View {
     let points: [DfaPoint]
     let vt1: Double
     let vt2: Double
+    @ScaledMetric private var height: CGFloat = 130
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("DFA alpha1").font(.subheadline.bold())
+            HStack {
+                Text("DFA alpha1").font(.subheadline.bold())
+                Text("over min").font(.caption).foregroundStyle(.secondary)
+            }
             Chart {
                 ForEach(points.indices, id: \.self) { i in
                     LineMark(x: .value("min", Double(points[i].tS) / 60), y: .value("a1", points[i].a1)).foregroundStyle(Tok.zone(1))
                 }
-                RuleMark(y: .value("VT1", vt1)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                    .foregroundStyle(Tok.ok).annotation(position: .top, alignment: .trailing) {
-                        Text("\(Fmt.dec(vt1, 2)) aerobic threshold").font(.caption2)
-                    }
-                RuleMark(y: .value("VT2", vt2)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
-                    .foregroundStyle(Tok.alarm).annotation(position: .top, alignment: .trailing) {
-                        Text("\(Fmt.dec(vt2, 2)) anaerobic threshold").font(.caption2)
-                    }
+                RuleMark(y: .value("VT1", vt1)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4])).foregroundStyle(Tok.ok)
+                RuleMark(y: .value("VT2", vt2)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4])).foregroundStyle(Tok.alarm)
             }
-            .chartXAxisLabel("min")
             .chartYScale(domain: 0...max(1.5, ((points.map(\.a1).max() ?? 0) * 4).rounded(.up) / 4))
-            .frame(height: 130)
+            .frame(height: height)
+            // the two thresholds sit close together: named under the chart, where they cannot overprint the lines
+            VStack(alignment: .leading, spacing: 2) {
+                legend(Tok.ok, "\(Fmt.dec(vt1, 2)) aerobic threshold")
+                legend(Tok.alarm, "\(Fmt.dec(vt2, 2)) anaerobic threshold")
+            }
+            .font(.caption).foregroundStyle(.secondary)
         }
+        .card()
     }
 }
 
@@ -202,6 +220,7 @@ struct CompareSection: View {
     @EnvironmentObject private var profile: Profile
     private var ftp: Int { profile.ftp }
     private var maxHR: Int { profile.maxHR }
+    @ScaledMetric private var curveHeight: CGFloat = 160
     @State private var other: (name: String, view: RideView, climbs: [ClimbStat])?
     @State private var loading = false
     @State private var picking: Task<Void, Never>?
@@ -266,7 +285,7 @@ struct CompareSection: View {
         }
         .chartXScale(domain: secs.map(label))
         .chartForegroundStyleScale([rows[0].0: Tok.accent, rows[1].0: Tok.zone(1)])
-        .frame(height: 160)
+        .frame(height: curveHeight)
     }
 
     @ViewBuilder private func shared(_ o: (name: String, view: RideView, climbs: [ClimbStat])) -> some View {

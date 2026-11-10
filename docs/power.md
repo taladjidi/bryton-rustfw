@@ -28,6 +28,8 @@ sheets, at their test conditions), none was measured on the unit.
   (read in its image, 2026-11-07). DS12930 gives the MCU a few uA there with the RTC on the LSE; the rest is whatever
   rail the floating GPIOs leave on (BOARD.md 9: unknown board pulls, the same as stock's), plus the Nordic in System
   OFF (0.3 uA) and the GNSS's backup (28 uA, below).
+- **After the fix (fbadb9b installed 2026-11-07):** the owner reported on 2026-11-09 that there was no more battery
+  drain while switched off; there is no figure yet.
 - **Measured before that fix (reported 2026-11-07):** off by AUTO OFF, the cell lost about 58 % in 88 h, about 8 mA, with
   PDDS_D3 left clear: the system sat in Stop (the next boot's crumb, PWR_CPUCR 0x1a3: STOPF, SBF clear), the MCU's
   2.8 mA (DS12930 table 42) plus what the GPIOs still held on. To measure after it: 2 h off, the battery history

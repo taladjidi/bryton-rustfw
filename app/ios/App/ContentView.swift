@@ -14,6 +14,7 @@ struct ContentView: View {
     @StateObject private var library = RideLibrary()
     @StateObject private var intervals = IntervalsSync()
     @StateObject private var loop = IntervalsLoop()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var profile = false
     @State private var fitness = false
     @State private var allRides = false
@@ -50,16 +51,17 @@ struct ContentView: View {
                 Section {
                     WeeklyPanel(library: library, missing: missing, openProfile: { profile = true }).equatable()
                 }
-                IntervalsSection(loop: loop).id("intervals")
                 if let m = rides.message ?? library.error {
                     Section { Notice(text: m) }
                 }
-                ridesSection
+                ridesSection  // the latest ride first, as Garmin Connect and Wahoo show it
+                IntervalsSection(loop: loop).id("intervals")
                 WorkoutSection(rides: rides).id("unit")
                 PhoneWorkoutSection(store: store) { editing = $0 }.id("phone")
                 RoutesSection(store: routes, rides: rides).id("routes")
                 UnitRoutesSection(store: routes, rides: rides).id("unitroutes")
             }
+            .listSectionSpacing(24)
             .onChange(of: scrollTo) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .top) } }
             }
@@ -69,6 +71,7 @@ struct ContentView: View {
                 loop.uploadPass()  // a ride just synced goes up
             }
             .onChange(of: intervals.keyVersion) { _, _ in loop.keyChanged(intervals.hasKey) }
+            .onChange(of: scenePhase) { _, p in if p == .active { loop.foreground() } else if p == .background { library.saveNow() } }
             .onChange(of: rides.rides) { _, l in
                 library.catchUp(l, downloaded: rides.downloaded)
                 lastSync = Date()  // the unit just answered with its list
@@ -92,6 +95,7 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 loop.attach(rides)
+                library.onUnreadable = { _ = rides.reread($0) }
                 rides.onRouteSent = { routes.remember($0) }
                 loop.keyChanged(intervals.hasKey)
                 await intervals.sync(rides: rides, force: false)
@@ -108,10 +112,14 @@ struct ContentView: View {
             .navigationDestination(isPresented: $fitness) { FitnessView(library: library) }
             .navigationDestination(isPresented: $allRides) { AllRidesList(rides: rides, library: library, loop: loop) }
             .toolbar {
-                Button { fitness = true } label: { Image(systemName: "chart.line.uptrend.xyaxis") }
-                    .accessibilityLabel("Fitness")
-                Button { profile = true } label: { Image(systemName: "person.crop.circle") }
-                    .accessibilityLabel("Profile")
+                // two items with their own names, not one unlabelled capsule
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Fitness") { fitness = true }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { profile = true } label: { Image(systemName: "person.crop.circle") }
+                        .accessibilityLabel("Profile")
+                }
             }
             #if DEBUG
             .onAppear {
@@ -181,18 +189,17 @@ struct ContentView: View {
             if !rides.rides.isEmpty {
                 Button { allRides = true } label: {
                     HStack {
-                        Text("All rides (\(rides.rides.count))")
+                        ActionRow(title: "All rides (\(rides.rides.count))", icon: "list.bullet")
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     }
                 }
-                .foregroundStyle(Tok.accent)
             }
         } header: {
             HStack {
-                Text("Rides")
+                SectionTitle("Rides")
                 Spacer()
-                if let line = rides.syncLine { Text(line).textCase(nil) }
+                if let line = rides.syncLine { Text(line).font(.footnote).textCase(nil) }
             }
         }
         .id("rides")
@@ -237,7 +244,7 @@ struct UnitHeader: View {
         VStack(alignment: .leading, spacing: 6) {
             let layout = type.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
             layout {
-                Image(systemName: "bicycle").font(.title2).foregroundStyle(Tok.accent).accessibilityHidden(true)
+                UnitGlyph().foregroundStyle(Tok.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(demo ? "Demo unit" : name.isEmpty ? "Bike computer" : name).font(.headline)
                     chip
@@ -316,6 +323,8 @@ struct RideRow: View, Equatable {
     let active: Bool
     let locked: Bool
     @EnvironmentObject private var profile: Profile
+    @Environment(\.dynamicTypeSize) private var type
+    @ScaledMetric(relativeTo: .title3) private var glyph: CGFloat = 28
 
     init(rides: RideBrowser, ride: RideEntry, brief: RideBrief?, downloaded: Bool, uploaded: Bool, active: Bool, locked: Bool) {
         (self.rides, self.ride, self.brief, self.downloaded, self.uploaded, self.active, self.locked) =
@@ -336,38 +345,56 @@ struct RideRow: View, Equatable {
                 rides.download(ride)
             }
         } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "bicycle").font(.title3).foregroundStyle(Tok.accent).frame(width: 28).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
-                    Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
-                    if uploaded {
-                        Label("Intervals.icu", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Tok.ok)
+            VStack(alignment: .leading, spacing: 8) {
+                let big = type.isAccessibilitySize
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "bicycle").font(.title3).foregroundStyle(Tok.accent).frame(width: glyph).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(brief.map { Fmt.start($0.startUnix) } ?? RideBrowser.title(ride.name))
+                        // at accessibility sizes the distance sits under the title: beside it the date wrapped a letter a line
+                        if big, let b = brief { Text(Fmt.distance(b.distanceM)).numeral(.title3) }
+                        Text(subtitle(brief)).font(.subheadline).foregroundStyle(.secondary)
+                        if uploaded {
+                            Label("Intervals.icu", systemImage: "checkmark.circle").font(.footnote).foregroundStyle(Tok.ok)
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                        }
                     }
-                    if active { RideProgress(rides: rides) }
+                    if !big {
+                        Spacer(minLength: 4)
+                        if let b = brief { Text(Fmt.distance(b.distanceM)).numeral(.title3).fixedSize() }
+                    }
                 }
-                Spacer(minLength: 4)
-                if let b = brief { Text(Fmt.distance(b.distanceM)).numeral(.title3).fixedSize() }
+                // the row's whole width: beside the glyph the counts and Cancel wrapped a letter a line
+                if active { RideProgress(rides: rides) }
             }
         }
         .foregroundStyle(.primary)
+        // a full-width bar under the text: its separator starts at the edge too
+        .alignmentGuide(.listRowSeparatorLeading) { d in active ? 0 : d[.listRowSeparatorLeading] }
     }
 }
 
+/// A download's bar, the counts and Cancel; at accessibility sizes one item a line.
 struct RideProgress: View {
     @ObservedObject var rides: RideBrowser
+    @Environment(\.dynamicTypeSize) private var type
 
     var body: some View {
-        ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
-        HStack {
-            Text("\(rides.progress.received / 1024) of \(rides.progress.total / 1024) KB")
-            Spacer()
-            Text("\(Fmt.dec(Double(rides.progress.bytesPerS) / 1024)) KB/s")
-            Button { rides.cancel() } label: { Label("Cancel", systemImage: "xmark.circle") }
-                .buttonStyle(.borderless).frame(minHeight: 44)
+        let big = type.isAccessibilitySize
+        VStack(alignment: .leading, spacing: 6) {
+            ProgressView(value: Double(rides.progress.received), total: Double(max(rides.progress.total, 1)))
+            let layout = big ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
+            layout {
+                Text("\(rides.progress.received / 1024) of \(rides.progress.total / 1024) KB").lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(.secondary)
+                if !big { Spacer() }
+                Text("\(Fmt.dec(Double(rides.progress.bytesPerS) / 1024)) KB/s").lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(.secondary)
+                Button("Cancel", role: .cancel) { rides.cancel() }
+                    .buttonStyle(.bordered).controlSize(big ? .regular : .small).font(.subheadline).tint(Tok.accent)
+                    .frame(maxWidth: big ? .infinity : nil)
+                    .contentShape(Rectangle())
+            }
+            .font(.caption)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
 }
 
@@ -401,6 +428,7 @@ struct EmptyRides: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            UnitGlyph().foregroundStyle(.secondary)
             Text(title).font(.headline)
             Text(help).font(.subheadline).foregroundStyle(.secondary)
             if state != .searching || demo {

@@ -28,9 +28,9 @@ struct ProfileSheet: View {
                 }
                 if profile.lthr > 0 || profile.weight > 0 || profile.wPrime > 0 {
                     Section {
-                        if profile.lthr > 0 { LabeledContent("Threshold heart rate", value: Fmt.bpm(profile.lthr)) }
-                        if profile.weight > 0 { LabeledContent("Weight", value: Fmt.weight(profile.weight)) }
-                        if profile.wPrime > 0 { LabeledContent("W'", value: "\(profile.wPrime) J") }
+                        if profile.lthr > 0 { valueRow("Threshold heart rate", Fmt.bpm(profile.lthr)) }
+                        if profile.weight > 0 { valueRow("Weight", Fmt.weight(profile.weight)) }
+                        if profile.wPrime > 0 { valueRow("W'", "\(profile.wPrime) J") }
                     } header: {
                         Text("From Intervals.icu")
                     } footer: {
@@ -38,13 +38,12 @@ struct ProfileSheet: View {
                     }
                 }
                 Section {
-                    Picker("Units", selection: $profile.imperial) {
-                        Text("Metric").tag(false)
-                        Text("Imperial").tag(true)
+                    CardHeader(title: "Units") {
+                        Picker("Units", selection: $profile.imperial) {
+                            Text("Metric").tag(false)
+                            Text("Imperial").tag(true)
+                        }
                     }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Units")
                 } footer: {
                     Text("Distance, speed, height and weight on this phone. The unit keeps its own setting, which the phone cannot read.")
                 }
@@ -90,6 +89,16 @@ struct ProfileSheet: View {
             }
         }
         .presentationDetents([.large])
+    }
+
+    /// A read-only value in the numeral face, as the other key numbers.
+    private func valueRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value).numeral(.title3)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// A typed value with a stepper beside it (13 taps from 200 W to 265 W is too many).
@@ -230,7 +239,7 @@ struct RideDetail: View {
                             .accessibilityLabel("Route map, \(Fmt.distance(r.summary.distanceM))")
                             .overlay(alignment: .bottomTrailing) {
                                 if RideMap.usesIGN(prep.coords) {
-                                    Link("© IGN", destination: RideMap.creditURL).font(.caption2).padding(.horizontal, 4)
+                                    Link("© IGN", destination: RideMap.creditURL).font(.caption).padding(.horizontal, 4)
                                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 4)).padding(4)
                                 }
                             }
@@ -269,6 +278,7 @@ struct RideDetail: View {
                 ProgressView().padding(40)
             }
         }
+        .background(Color(.systemGroupedBackground))
         #if DEBUG
         .onChange(of: ride != nil) { _, _ in
             // launch argument for the Simulator screenshots: -demo-scroll graphs|laps
@@ -333,11 +343,12 @@ struct RideDetail: View {
 
     @ViewBuilder private var graphs: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Axis", selection: $byTime) {
-                Text("Distance").tag(false)
-                Text("Time").tag(true)
+            CardHeader(title: "Graphs") {
+                Picker("Axis", selection: $byTime) {
+                    Text("Distance").tag(false)
+                    Text("Time").tag(true)
+                }
             }
-            .pickerStyle(.segmented)
             ForEach(prep.series) { s in
                 MetricChart(series: s, byTime: byTime, selX: $selX, slices: s.id.hasPrefix("Altitude") ? prep.climbSlices : [])
             }
@@ -369,6 +380,8 @@ struct MetricChart: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(series.id).font(.subheadline.bold())
+                // the x unit is said once, here, not under the axis
+                Text(byTime ? "over min" : "over \(Fmt.distUnit)").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let sx = selX, let p = Prep.nearest(series.pts, sx, { $0.x }) {
                     // "12.4 km · 187 W": where, and the value
@@ -393,7 +406,12 @@ struct MetricChart: View {
                 }
             }
             .chartXSelection(value: $selX)
-            .chartXAxisLabel(byTime ? "min" : Fmt.distUnit, position: .bottom, alignment: .trailing)
+            .chartYAxis {
+                AxisMarks(values: niceMarks(series.domain.lowerBound, series.domain.upperBound)) { v in
+                    AxisGridLine()
+                    AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d.rounded()))") } }
+                }
+            }
             .chartYScale(domain: series.domain)
             .chartOverlay { proxy in
                 // the cursor line, drawn here so the chart's 2000 marks are not rebuilt on every drag tick
@@ -413,6 +431,7 @@ struct MetricChart: View {
             .accessibilityValue(
                 "lowest \(Fmt.dec(series.lo, 0)), highest \(Fmt.dec(series.hi, 0)), average \(Fmt.dec(series.mean, 0))")
         }
+        .card()
     }
 }
 
@@ -519,6 +538,8 @@ struct LapList: View {
             Text("Laps").font(.subheadline.bold())
             ForEach(laps.indices, id: \.self) { i in LapRow(index: i + 1, lap: laps[i]) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
     }
 }
 
@@ -564,6 +585,7 @@ struct ZoneBars: View {
     let unit: String
     let color: (Int) -> Color
     @ScaledMetric(relativeTo: .caption) private var barHeight: CGFloat = 10
+    @ScaledMetric(relativeTo: .caption) private var valueWidth: CGFloat = 84
 
     var body: some View {
         let total = max(secs.reduce(0, +), 1)
@@ -577,16 +599,23 @@ struct ZoneBars: View {
                         Text(range(i)).font(.caption).foregroundStyle(.secondary)
                     }
                     HStack(spacing: 8) {
+                        // the track keeps a 0 % zone's row as tall as the others (an empty bar had no baseline)
                         GeometryReader { g in
-                            Capsule().fill(color(i + 1)).frame(width: max(g.size.width * Double(secs[i]) / Double(longest), secs[i] > 0 ? 4 : 0))
+                            ZStack(alignment: .leading) {
+                                Rectangle().fill(Color.secondary.opacity(0.15))
+                                Rectangle().fill(color(i + 1))
+                                    .frame(width: max(g.size.width * Double(secs[i]) / Double(longest), secs[i] > 0 ? 4 : 0))
+                            }
                         }
-                        .frame(height: barHeight)
-                        Text("\(Fmt.hm(secs[i]))  \(secs[i] * 100 / total) %").font(.caption.monospacedDigit()).fixedSize()
+                        .frame(maxWidth: .infinity).frame(height: barHeight)
+                        Text("\(Fmt.hm(secs[i]))  \(secs[i] * 100 / total) %").font(.caption.monospacedDigit())
+                            .lineLimit(1).fixedSize().frame(minWidth: valueWidth, alignment: .trailing)
                     }
                 }
                 .accessibilityElement(children: .combine)
             }
         }
+        .card()
     }
 
     /// "0 to 111 W", "152 to 205 W", "over 300 W".
@@ -607,11 +636,13 @@ struct CurveChart: View {
             Chart(points, id: \.secs) { p in
                 BarMark(x: .value("Duration", Fmt.span(p.secs)), y: .value("W", p.watts))
                     .foregroundStyle(Tok.power)
-                    .annotation(position: .top) { Text("\(p.watts)").font(.caption2) }
+                    .annotation(position: .top) { Text("\(p.watts)").font(.caption) }
             }
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
             .frame(height: height)
             .accessibilityLabel("Power curve")
             .accessibilityValue(points.map { "\(Fmt.span($0.secs)) \($0.watts) W" }.joined(separator: ", "))
         }
+        .card()
     }
 }

@@ -20,37 +20,25 @@ func zoneColor(_ z: UInt8) -> Color { z >= 1 && z <= 7 ? Tok.zone(Int(z)) : .sec
 /// The unit keeps names in capitals: "SWEET SPOT 3X10" as "Sweet spot 3x10".
 func pretty(_ name: String) -> String { name.prefix(1) + name.dropFirst().lowercased() }
 
+/// The next of a list by its YYYYMMDD day (today or later, the soonest), else the latest.
+func nextWorkout<T>(_ items: [T], day: (T) -> Int) -> T? {
+    let c = Calendar.current.dateComponents([.year, .month, .day], from: .now)
+    let today = (c.year ?? 0) * 10000 + (c.month ?? 0) * 100 + (c.day ?? 0)
+    return items.filter { day($0) >= today }.min { day($0) < day($1) } ?? items.max { day($0) < day($1) }
+}
+
+/// The home screen's "On the unit": the next planned workout, then the row that pushes all of them.
 struct WorkoutSection: View {
     @ObservedObject var rides: RideBrowser
-    @EnvironmentObject private var profile: Profile
-    private var ftp: Int { profile.ftp }
-    private var maxHR: Int { profile.maxHR }
-    @State private var deleting: WorkoutFile?
-    @EnvironmentObject private var loop: IntervalsLoop
+
+    private var next: [WorkoutFile] { nextWorkout(rides.workouts, day: { Int($0.key.prefix(8)) ?? 0 }).map { [$0] } ?? [] }
 
     var body: some View {
-        Section("On the unit") {
-            ForEach(rides.workouts) { f in
-                if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
-                    NavigationLink(value: WorkoutRoute(key: f.key)) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(pretty(w.name))
-                            if loop.sentHashes.contains(fileCrc(bytes: f.bytes)) {
-                                Text("from Intervals.icu").font(.caption).foregroundStyle(Tok.ok)
-                            }
-                            HStack {
-                                Text(Fmt.dayKey(f.key))
-                                Spacer()
-                                Text(Fmt.duration(UInt64(w.totalS)))
-                                if w.tss > 0 { Text("TSS \(w.tss)") }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    // only when nothing else uses the link: the same guard as a download
-                    .swipeActions { Button("Delete", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
-                    .contextMenu { Button("Delete from the unit", systemImage: "trash", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
+        Section(header: SectionTitle("On the unit")) {
+            WorkoutRows(rides: rides, list: next)
+            if !rides.workouts.isEmpty {
+                NavigationLink { AllWorkoutsList(rides: rides) } label: {
+                    ActionRow(title: "All workouts on the unit (\(rides.workouts.count))", icon: "list.bullet")
                 }
             }
             if rides.workouts.isEmpty {
@@ -58,10 +46,47 @@ struct WorkoutSection: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// The unit's workouts as rows: a tap opens the page, swipe and long press ask to delete (a copy on the phone stays).
+struct WorkoutRows: View {
+    @ObservedObject var rides: RideBrowser
+    let list: [WorkoutFile]
+    @EnvironmentObject private var profile: Profile
+    private var ftp: Int { profile.ftp }
+    private var maxHR: Int { profile.maxHR }
+    @State private var deleting: WorkoutFile?
+    @EnvironmentObject private var loop: IntervalsLoop
+
+    var body: some View {
+        ForEach(list) { f in
+            if let w = decodeWorkout(bytes: f.bytes, ftp: UInt16(clamping: ftp), maxHr: UInt16(clamping: maxHR)) {
+                NavigationLink(value: WorkoutRoute(key: f.key)) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pretty(w.name))
+                        if loop.sentHashes.contains(fileCrc(bytes: f.bytes)) {
+                            Text("from Intervals.icu").font(.caption).foregroundStyle(Tok.ok)
+                        }
+                        HStack {
+                            Text(Fmt.dayKey(f.key))
+                            Spacer()
+                            Text(Fmt.duration(UInt64(w.totalS)))
+                            if w.tss > 0 { Text("TSS \(w.tss)") }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                // only when nothing else uses the link: the same guard as a download
+                .swipeActions { Button("Delete", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
+                .contextMenu { Button("Delete from the unit", systemImage: "trash", role: .destructive) { deleting = f }.disabled(rides.phase != .idle) }
+            }
+        }
         #if DEBUG
         .onAppear {  // Simulator screenshot: -demo-delete asks to delete the first workout
             if CommandLine.arguments.contains("-demo-delete") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { deleting = rides.workouts.first }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { deleting = list.first }
             }
         }
         #endif
@@ -75,6 +100,17 @@ struct WorkoutSection: View {
         } message: {
             Text("A copy kept on the phone stays.")
         }
+    }
+}
+
+/// Every workout on the unit, pushed from the home screen's "All workouts on the unit" row.
+struct AllWorkoutsList: View {
+    @ObservedObject var rides: RideBrowser
+
+    var body: some View {
+        List { WorkoutRows(rides: rides, list: rides.workouts) }
+            .navigationTitle("All workouts")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -94,9 +130,9 @@ struct WorkoutDetail: View {
                     StepChart(steps: w.steps, ftp: ftp)
                     ZoneLegend(ftp: ftp)
                     HStack {
-                        Text(Fmt.duration(UInt64(w.totalS)))
+                        Text(Fmt.duration(UInt64(w.totalS))).numeral(.subheadline)
                         Spacer()
-                        if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)) }
+                        if w.tss > 0 { Text(Fmt.ifTss(w.intensityX100, w.tss)).numeral(.subheadline) }
                     }
                     if w.cut { Notice(text: "Longer than the unit keeps: the end is cut.").font(.caption) }
                     Button { showProfile = true } label: {
@@ -147,7 +183,7 @@ struct ZoneLegend: View {
                 Text("No power target")
             }
         }
-        .font(.caption2).foregroundStyle(.secondary)
+        .font(.caption).foregroundStyle(.secondary)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Zone colours, Z1 to Z7, and grey for a step with no power target")
     }
@@ -175,7 +211,7 @@ private struct Bar: Identifiable {
 struct StepChart: View {
     let steps: [StepView]
     let ftp: Int
-    @ScaledMetric private var height: CGFloat = 180
+    @ScaledMetric var height: CGFloat = 180
 
     /// Power steps at their target's middle in watts; the others a quarter of the FTP, grey.
     private var bars: [Bar] {
@@ -223,12 +259,12 @@ struct StepRow: View {
         HStack {
             Text("\(index)").numeral(.subheadline).foregroundStyle(.secondary).frame(minWidth: 28, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
-                Text(length)
-                Text(target).font(.caption).foregroundStyle(.secondary)
+                Text(length).numeral(.subheadline)
+                Text(target).font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer()
             if step.kind == .power { Circle().fill(zoneColor(step.powerZone)).frame(width: dot, height: dot) }
-            Text(intensity).font(.caption).foregroundStyle(.secondary)
+            Text(intensity).font(.subheadline).foregroundStyle(.secondary)
         }
     }
 

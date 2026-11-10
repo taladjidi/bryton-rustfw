@@ -17,6 +17,8 @@ pub mod demo;
 pub mod draft;
 pub mod files;
 #[cfg(test)]
+mod files_fuzz;
+#[cfg(test)]
 mod files_tests;
 pub mod fitness;
 pub mod fmt;

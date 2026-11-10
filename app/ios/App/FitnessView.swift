@@ -6,9 +6,6 @@ import Charts
 import SwiftUI
 
 extension IntervalsClient {
-    /// No cache or cookies on disk, as the profile's session.
-    private static let getSession = URLSession(configuration: .ephemeral)
-
     /// A GET of `path` (under /api/v1/athlete/{id}/) with its query, the answer's bytes or why not, in plain words.
     static func get(key: String, athlete: String, path: String, query: [URLQueryItem]) async throws -> Data {
         #if DEBUG
@@ -26,7 +23,7 @@ extension IntervalsClient {
         req.setValue("Basic " + Data("API_KEY:\(k)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
         let (data, resp): (Data, URLResponse)
         do {
-            (data, resp) = try await getSession.data(for: req)
+            (data, resp) = try await session.data(for: req)
         } catch {
             throw IntervalsFailure(text: "Could not reach Intervals.icu.")
         }
@@ -48,8 +45,13 @@ struct FitnessData {
 struct FitnessView: View {
     @ObservedObject var library: RideLibrary
     @EnvironmentObject private var profile: Profile
+    @EnvironmentObject private var intervals: IntervalsSync
     private var ftp: Int { profile.ftp }
     private var maxHR: Int { profile.maxHR }
+    /// Chart heights, scaled with Dynamic Type.
+    @ScaledMetric private var tall: CGFloat = 180
+    @ScaledMetric private var short: CGFloat = 120
+    @ScaledMetric private var mid: CGFloat = 150
     /// Intervals.icu's answer, fetched once per key and athlete (a change of FTP or a new ride does not ask again).
     @State private var remote: FitnessData?
     @State private var note: String?
@@ -78,13 +80,6 @@ struct FitnessView: View {
 
     private func date(_ day: Int64) -> Date { Date(timeIntervalSince1970: Double(day) * 86_400 + 43_200) }
 
-    private var hasKey: Bool {
-        #if DEBUG
-        if CommandLine.arguments.contains("-demo") { return true }
-        #endif
-        return Keychain.get("apikey") != nil
-    }
-
     var body: some View {
         let d = shown
         ScrollView {
@@ -92,7 +87,7 @@ struct FitnessView: View {
                 if let last = d.days.last {
                     let stats = Group {
                         stat("Fitness", Fmt.dec(last.ctl, 0), Tok.accent)
-                        stat("Fatigue", Fmt.dec(last.atl, 0), Tok.zone(5))
+                        stat("Fatigue", Fmt.dec(last.atl, 0), Tok.fatigue)
                         stat("Form", Fmt.signed(last.tsb), Tok.form(last.tsb))
                         if let e = d.eftp { stat("eFTP", "\(Fmt.dec(e, 0)) W", Tok.accent) }
                     }
@@ -121,12 +116,21 @@ struct FitnessView: View {
             }
             .padding()
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("Fitness")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(Keychain.get("apikey") ?? "") \(UserDefaults.standard.string(forKey: IntervalsSync.athleteKey) ?? "")") {
+        // the key itself is never an id: a new key counts as keyVersion
+        .task(id: "\(intervals.keyVersion) \(intervals.athlete)") {
             await fetchRemote()
         }
-        .task(id: "\(ftp) \(maxHR) \(library.briefs.count)") { computeLocal() }
+        .task(id: "\(ftp) \(maxHR) \(library.briefs.count)") {
+            // a catch-up changes the briefs once per ride: wait for the burst to end (the first run is at once)
+            if !local.days.isEmpty {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if Task.isCancelled { return }
+            }
+            computeLocal()
+        }
     }
 
     private func stat(_ label: String, _ value: String, _ color: Color) -> some View {
@@ -147,21 +151,25 @@ struct FitnessView: View {
                 LineMark(x: .value("Day", date(d.day)), y: .value("Load", d.atl), series: .value("s", "Fatigue (ATL)"))
                     .foregroundStyle(by: .value("Series", "Fatigue (ATL)"))
             }
-            .chartForegroundStyleScale(["Fitness (CTL)": Tok.accent, "Fatigue (ATL)": Tok.zone(5)])
-            .frame(height: 180)
+            .chartForegroundStyleScale(["Fitness (CTL)": Tok.accent, "Fatigue (ATL)": Tok.fatigue])
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
+            .frame(height: tall)
         }
+        .card()
     }
 
     private func formChart(_ days: [FitnessDay]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Form (TSB)").font(.subheadline.bold())
             Chart(days, id: \.day) { d in
-                AreaMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(2).opacity(0.3))
-                LineMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(2))
+                AreaMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(7).opacity(0.3))
+                LineMark(x: .value("Day", date(d.day)), y: .value("TSB", d.tsb)).foregroundStyle(Tok.zone(7))
                 RuleMark(y: .value("zero", 0)).foregroundStyle(Color.secondary)
             }
-            .frame(height: 120)
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
+            .frame(height: short)
         }
+        .card()
     }
 
     private func power(_ curve: [CurvePoint]) -> some View {
@@ -170,10 +178,12 @@ struct FitnessView: View {
             Chart(curve, id: \.secs) { p in
                 BarMark(x: .value("Duration", Fmt.span(p.secs)), y: .value("W", p.watts))
                     .foregroundStyle(Tok.power)
-                    .annotation(position: .top) { Text("\(p.watts)").font(.caption2) }
+                    .annotation(position: .top) { Text("\(p.watts)").font(.caption) }
             }
-            .frame(height: 150)
+            .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
+            .frame(height: mid)
         }
+        .card()
     }
 
     private func fetchRemote() async {

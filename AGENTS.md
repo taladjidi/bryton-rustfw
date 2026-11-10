@@ -21,6 +21,9 @@ bar (public repo docs/how-it-works.md, "How a ride is saved"):
   progress and zeroed its directory entry, so nothing could be recovered. Keep the ride in progress until the
   finished file is written and read back whole; finish by rename; keep two recovery records; never zero a deleted
   entry.
+- **The phone app never deletes or overwrites a ride's file:** a damaged copy is set aside as `.fit.bad` (up to
+  three: `.fit.bad.2`, `.fit.bad.3`) and read again from the unit; tools/lint.py checks every file removal or move
+  in app/ios (2026-11-10).
 - **Tested before any ride build:** host tests that cut the write at every point and check the resume, and on
   the unit a start, a restart mid-ride, then a save.
 
@@ -56,7 +59,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->814 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->822 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
@@ -155,6 +158,14 @@ mistake costs a ride: storage, the recorder, power, boot, hw.rs and security. On
 passes `./check.sh`. Agents never switch the main checkout: worktrees fork from `origin/main`, merges go through
 `runner`. A second review only for recorder, storage or boot changes (reviewer on Opus there); a worktree agent merges
 main first.
+
+**Review before push**for ride data and the transfer, quick fixes included: a change to the phone app's ride files
+(app/ios/App/RideBrowser.swift, RideLibrary.swift, IntervalsLoop.swift), app/core/src/files.rs, src/storage/ (the
+recorder, FAT, FIT) or src/app/filesvc.rs is pushed only after a `reviewer` pass cleared its last commit, named in the
+runner's brief as `reviewed: <sha>...`; the runner pushes only when each such path at HEAD equals its content in a
+reviewed sha that is an ancestor of HEAD. The gate alone is not enough (2026-11-10: a gated fix deleted the phone's copy
+of a ride on any upload refusal). Their decisions live in the tested core (app/core),
+not in Swift, and `app/core/src/files_fuzz.rs` must keep passing.
 
 ## Before every commit
 

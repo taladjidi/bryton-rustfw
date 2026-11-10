@@ -60,6 +60,8 @@ final class RideBrowser: ObservableObject {
     private let client = FileClient()
     private var transport: FileTransport?
     private var ready = false
+    /// The unit's LIST answered at least once (until then `rides` holds only what the phone saved).
+    private var unitListed = false
     private var tick: Timer?
     private var busyRetries = 0
     private var wanted: String?
@@ -118,6 +120,24 @@ final class RideBrowser: ObservableObject {
 
     static var now: UInt64 { UInt64(ProcessInfo.processInfo.systemUptime * 1000) }
     static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+
+    init() {
+        rides = Self.phoneRides()
+        downloaded = Set(rides.map(\.name))
+    }
+
+    /// The rides saved on the phone (`YYMMDDhhmmss.fit` in Documents), newest first: the list works while the unit is
+    /// away, and a ride deleted from the unit stays listed.
+    static func phoneRides() -> [RideEntry] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: documents, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return files.compactMap { u -> RideEntry? in
+            let n = u.deletingPathExtension().lastPathComponent
+            guard u.pathExtension == "fit", n.count == 12, n.allSatisfy({ $0.isASCII && $0.isNumber }),
+                let size = (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap({ UInt32(exactly: $0) })
+            else { return nil }
+            return RideEntry(name: n, size: size)
+        }.sorted { $0.name > $1.name }
+    }
 
     func use(_ t: FileTransport, demo: Bool = false) {
         if let old = transport {
@@ -279,6 +299,7 @@ final class RideBrowser: ObservableObject {
     private func yieldBackground() {
         yieldAuto()
         if phase == .workouts {
+            transport?.write(client.cancelCommand())  // a READ_IN under way would go on streaming to nobody
             client.abort()
             (listingWorkouts, workoutKey, workoutQueue, workoutsFresh, phase) = (false, nil, [], false, .idle)
         }
@@ -366,6 +387,11 @@ final class RideBrowser: ObservableObject {
 
     func download(_ r: RideEntry, auto isAuto: Bool = false) {
         if !isAuto { yieldAuto() }
+        if r.size > 16 << 20 {  // the core refuses it (RIDE_MAX): say so, and leave it out of the sync
+            message = "This ride is too large for the phone (over 16 MB)."
+            syncFailed.insert(r.name)
+            return
+        }
         guard ready, phase == .idle || phase == .failed, let t = transport, let cmd = client.readCommand(name: r.name, nowMs: Self.now) else { return }
         message = nil
         workoutsFresh = false
@@ -392,12 +418,34 @@ final class RideBrowser: ObservableObject {
         ready = true
         profileTried = false  // a new connection tries the pending profile again
         if sendError != nil && phase == .idle { refreshWorkouts() }  // a send ended while the link was down
-        if case .downloading = phase { resume() } else if phase == .workouts { if listingWorkouts { refreshWorkouts() } else { resume() } } else if rides.isEmpty { refresh() }
+        if case .downloading = phase { resume() } else if phase == .workouts { if listingWorkouts { refreshWorkouts() } else { resume() } } else if !unitListed { refresh() }
     }
 
     private func resume() {
         guard let cmd = client.resumeCommand(nowMs: Self.now) else { return }
         transport?.write(cmd)
+    }
+
+    /// The phone's copy of a ride fails its FIT CRC and the unit still lists the ride: set aside as `.fit.bad` (kept,
+    /// never deleted) so the sync reads it again. False when the copy is whole or the unit cannot give it again.
+    @discardableResult
+    func reread(_ name: String) -> Bool {
+        let url = Self.path(name)
+        guard let data = try? Data(contentsOf: url),
+              rereadCopy(copyWhole: fitWhole(bytes: data), unitLists: rides.contains(where: { $0.name == name }), linkReady: ready)
+        else { return false }
+        guard let bad = Self.setAside(url), (try? FileManager.default.moveItem(at: url, to: bad)) != nil else { return false }
+        downloaded.remove(name)
+        syncFailed.remove(name)
+        autoSync()
+        return true
+    }
+
+    /// The first free name a damaged copy is set aside under: `.fit.bad`, then `.fit.bad.2` and `.fit.bad.3`. Nil when
+    /// all three exist, so nothing is overwritten and the ride stays where it is.
+    static func setAside(_ url: URL) -> URL? {
+        ["bad", "bad.2", "bad.3"].lazy.map { URL(fileURLWithPath: url.path + "." + $0) }
+            .first { !FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// Nothing else going on: the newest ride of the last 8 weeks that is not on the phone yet.
@@ -580,6 +628,10 @@ final class RideBrowser: ObservableObject {
 
     private func data(_ d: Data) {
         let event = client.onData(value: d, nowMs: Self.now)
+        switch event {
+        case .progress, .listed, .finished: busyRetries = 0  // the unit answered: BUSY counts in a row only
+        default: break
+        }
         // a read the rider or a yield cancelled: what was already on the way must not finish or resume it
         if wanted == nil && workoutKey == nil && phase != .workouts {
             switch event {
@@ -591,7 +643,7 @@ final class RideBrowser: ObservableObject {
         case .ignored, .entry: break
         case .listed where listingRoutes:
             listingRoutes = false
-            let list = client.filesIn(), checks = client.filesInChecks()
+            let list = client.filesIn(folder: .courses), checks = client.filesInChecks(folder: .courses)
             unitRoutes = zip(list, checks).map { UnitRoute(key: $0.name, size: $0.size, check: $1) }
             (routesListed, routesFresh, phase, routeListError) = (true, true, .idle, nil)
         case .busy where phase == .routes:
@@ -604,10 +656,13 @@ final class RideBrowser: ObservableObject {
                 ? "This unit's software does not list routes yet." : "The unit could not list its routes: \(Self.text(e))"
         case .listed where listingWorkouts:
             listingWorkouts = false
-            workoutQueue = client.filesIn().map(\.name)
+            workoutQueue = client.filesIn(folder: .workout).map(\.name)
             nextWorkout()
         case .listed:
-            rides = client.entries().sorted { $0.name > $1.name }
+            let unit = client.entries()
+            let onUnit = Set(unit.map(\.name))
+            rides = (unit + Self.phoneRides().filter { !onUnit.contains($0.name) }).sorted { $0.name > $1.name }
+            unitListed = true
             downloaded = Set(rides.map(\.name).filter { FileManager.default.fileExists(atPath: Self.path($0).path) })
             phase = .idle
             refreshWorkouts()
@@ -673,8 +728,9 @@ final class RideBrowser: ObservableObject {
         case .partial:
             if !isWorkoutPhase { progress = client.progress() }
             resume()  // the answer ended early but brought bytes: ask for the rest
-        case .failed(.notFound) where workoutKey != nil:
-            // one workout gone since the list: skip it, read the others
+        case .failed(let e) where workoutKey != nil && (e == .notFound || e == .countMismatch):
+            // one workout gone since the list, or damaged (CRC failed after the redos): skip it, read the others
+            if e == .countMismatch { message = "A workout file on the unit is damaged and was skipped." }
             workoutQueue.removeFirst()
             nextWorkout()
         case .failed(let e):
@@ -694,12 +750,14 @@ final class RideBrowser: ObservableObject {
 
     private func fail(_ m: String) {
         retry?.cancel()
+        let background = auto
         if auto, let w = wanted { syncFailed.insert(w) }
         auto = false
         wanted = nil
         (listingWorkouts, workoutKey, workoutQueue) = (false, nil, [])
         message = m
-        phase = .failed
+        // a background failure must not park the sync, the calendar and the profile push, which wait for .idle
+        phase = background ? .idle : .failed
     }
 
     private func finish() {

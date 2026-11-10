@@ -10,23 +10,15 @@ struct IntervalsSection: View {
 
     var body: some View {
         if intervals.hasKey {
-            Section("Intervals.icu") {
+            Section(header: SectionTitle("Intervals.icu")) {
                 row("Rides", loop.uploading ? "Uploading…" : upload)
                 if let e = loop.uploadError { Notice(text: e).font(.footnote) }
                 row("Calendar", calendar)
                 if let e = loop.calendarError { Notice(text: e).font(.footnote) }
-                ForEach(loop.planned) { p in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(pretty(p.name))
-                            Spacer()
-                            Text(Fmt.dayKey(p.day)).foregroundStyle(.secondary)
-                        }
-                        switch p.state {
-                        case .onUnit: Text("On the unit").font(.caption).foregroundStyle(Tok.ok)
-                        case .waiting: Text("Waiting for the unit").font(.caption).foregroundStyle(.secondary)
-                        case .refused(let why): Notice(text: "Not sent: \(why)").font(.caption)
-                        }
+                if let next = nextWorkout(loop.planned, day: { Int($0.day) ?? 0 }) { PlannedRows(list: [next]) }
+                if !loop.planned.isEmpty {
+                    NavigationLink { AllPlanned(loop: loop) } label: {
+                        ActionRow(title: "All planned (\(loop.planned.count))", icon: "list.bullet")
                     }
                 }
             }
@@ -46,6 +38,39 @@ struct IntervalsSection: View {
 
     private func row(_ k: String, _ v: String) -> some View {
         HStack { Text(k).foregroundStyle(.secondary); Spacer(); Text(v) }.font(.subheadline)
+    }
+}
+
+/// Planned workouts, one row each: the name, its day, and where it stands on the unit.
+struct PlannedRows: View {
+    let list: [PlannedItem]
+
+    var body: some View {
+        ForEach(list) { p in
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(pretty(p.name))
+                    Spacer()
+                    Text(Fmt.dayKey(p.day)).foregroundStyle(.secondary)
+                }
+                switch p.state {
+                case .onUnit: Text("On the unit").font(.caption).foregroundStyle(Tok.ok)
+                case .waiting: Text("Waiting for the unit").font(.caption).foregroundStyle(.secondary)
+                case .refused(let why): Notice(text: "Not sent: \(why)").font(.caption)
+                }
+            }
+        }
+    }
+}
+
+/// Every planned workout, pushed from the Intervals.icu section's "All planned" row.
+struct AllPlanned: View {
+    @ObservedObject var loop: IntervalsLoop
+
+    var body: some View {
+        List { PlannedRows(list: loop.planned) }
+            .navigationTitle("Planned")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 

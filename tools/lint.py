@@ -250,8 +250,78 @@ def ruff(root):
     return found or [f"lint: ruff: exit {p.returncode}: {p.stderr[:200]}"]
 
 
+RIDE_FILE = "app/ios/App/RideBrowser.swift"
+# every removal, move or replacement of a file in app/ios is listed here with its reason; any other is a hit.
+# Key: (file, first line of the call, stripped). An entry that matches nothing is a hit too.
+ALLOW_FILES = {
+    ("app/ios/App/IntervalsLoop.swift", "defer { try? FileManager.default.removeItem(at: tmp) }"):
+        "the upload's temp multipart file, not a ride",
+    ("app/ios/App/RouteStore.swift", "try? FileManager.default.removeItem(at: Self.file(r.name))"):
+        "a planned route's file, not a ride",
+    ("app/ios/App/WorkoutEditor.swift", "do { try FileManager.default.removeItem(at: Self.dir.appendingPathComponent(old)) } catch {"):
+        "a workout's old file, not a ride",
+    ("app/ios/App/WorkoutEditor.swift", "try? FileManager.default.removeItem(at: Self.dir.appendingPathComponent(file))"):
+        "a workout's own file, not a ride",
+    (RIDE_FILE, "try client.file().write(to: url, options: .atomic)"):
+        "finish(): writes a downloaded ride whole, atomically (a temp file, then a rename)",
+}
+FILE_CALL = re.compile(r"\b(removeItem|trashItem|replaceItemAt|moveItem)\(|\.write\(to:")
+
+
+def ride_hits(name, text, allow):
+    """-> (hits, used) for one Swift file. Every file removal, move or replacement that is not a key of `allow`
+    (file, first line) is a hit, and so is a write that names a ride's path (`RideBrowser.path(`, or `Self.path(` /
+    `url` in RideBrowser.swift) unless allowed. A call is joined over its continuation lines up to its closing paren.
+    A move is fine only inside RideBrowser's func reread. Textual: a variable that holds a ride's path is not followed,
+    so such a call is a hit unless it is allowed."""
+    lines = text.split("\n")
+    funcs = [(m.start(), m.group(1)) for m in re.finditer(r"\bfunc (\w+)", text)]
+    hits, used = [], set()
+    for m in FILE_CALL.finditer(text):
+        start = m.start()
+        opened = text.index("(", start)
+        depth, end = 0, opened
+        for j in range(opened, len(text)):
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        call = " ".join(text[start : end + 1].split())
+        line = text.count("\n", 0, start) + 1
+        first = lines[line - 1].strip()
+        kind = m.group(1) or "write(to:"
+        if kind == "write(to:":
+            ride = "RideBrowser.path(" in call or (name == RIDE_FILE and re.search(r"Self\.path\(|\burl\b", call))
+            if not ride:
+                continue
+        elif kind == "moveItem" and name == RIDE_FILE and next((f for p, f in reversed(funcs) if p < start), "") == "reread":
+            continue
+        if (name, first) in allow:
+            used.add((name, first))
+            continue
+        hits.append(
+            f"lint: ride-delete: {name}:{line}: {kind} is not allowed: the app never deletes a ride's file "
+            "(AGENTS.md, never lose a ride; 2026-11-10); allowed only by ALLOW_FILES"
+        )
+    return hits, used
+
+
+def ride_delete(root):
+    hits, used = [], set()
+    for n in files(root):
+        if n.startswith("app/ios/") and n.endswith(".swift"):
+            h, u = ride_hits(n, (root / n).read_text(errors="replace"), ALLOW_FILES)
+            hits += h
+            used |= u
+    hits += [f"lint: ride-delete: tools/lint.py:0: stale ALLOW_FILES entry `{f}`: {l}" for f, l in ALLOW_FILES if (f, l) not in used]
+    return hits
+
+
 def run(root):
-    return unused_pub(root) + dashes(root) + keys(root) + tools_dead(root) + ruff(root)
+    return unused_pub(root) + dashes(root) + keys(root) + tools_dead(root) + ruff(root) + ride_delete(root)
 
 
 def selftest():
@@ -298,6 +368,28 @@ def selftest():
             assert tools_dead(root) == []
     finally:
         ALLOW, ALLOW_DEAD = saved
+    must_fail = [
+        ("app/ios/App/Other.swift", "let f = RideBrowser.path(n)\ntry? FileManager.default.removeItem(at: f)"),
+        ("app/ios/App/Other.swift", "try? FileManager.default.trashItem(at: f, resultingItemURL: nil)"),
+        ("app/ios/App/Other.swift", "try? FileManager.default.replaceItemAt(a, withItemAt: b)"),
+        ("app/ios/App/Other.swift", "try? FileManager.default.removeItem(\n    at: RideBrowser.path(n))"),
+        ("app/ios/App/Other.swift", "try text.write(to: RideBrowser.path(n), options: .atomic)"),
+        (RIDE_FILE, "try? FileManager.default.removeItem(at: bad)"),
+        (RIDE_FILE, "func other() {\n    try? FileManager.default.moveItem(at: url, to: bad)\n}"),
+        (RIDE_FILE, "func reread(_ n: String) {\n    try? client.file().write(to: Self.path(n))\n}"),
+    ]
+    for name, text in must_fail:
+        hits, _ = ride_hits(name, text, ALLOW_FILES)
+        assert hits, (name, text)
+    must_pass = [
+        (RIDE_FILE, "func reread(_ n: String) {\n    guard (try? FileManager.default.moveItem(at: url, to: bad)) != nil else { return false }\n}"),
+        ("app/ios/App/RouteStore.swift", "try? FileManager.default.removeItem(at: Self.file(r.name))"),
+        (RIDE_FILE, "try client.file().write(to: url, options: .atomic)"),
+        ("app/ios/App/Other.swift", "try text.write(to: file, atomically: true, encoding: .utf8)"),
+    ]
+    for name, text in must_pass:
+        hits, _ = ride_hits(name, text, ALLOW_FILES)
+        assert hits == [], (name, text, hits)
     selftest_keys()
     print("lint selftest: ok")
 

@@ -33,10 +33,14 @@ enum Tok {
 
 /// Series colours of the ride charts: none is the alarm red.
 extension Tok {
-    static let speed = zone(1)
+    /// A slate of its own (zone 7 is pinned to the firmware's constant by a test): 3:1 or more on the card, light and dark.
+    static let speed = Color(UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0.58, green: 0.54, blue: 0.68, alpha: 1) : UIColor(red: 0.35, green: 0.40, blue: 0.52, alpha: 1) })
     static let heartRate = zone(5)
     static let power = accent
     static let cadence = zone(2)
+    /// Fatigue (ATL) beside fitness (CTL, the accent): a purple, not zone 5's maroon, which sits next to the orange.
+    static let fatigue = zone(6)
 }
 
 /// A notice: an icon and text in a token, so colour is never the only cue.
@@ -53,8 +57,13 @@ struct Notice: View {
 
 /// A tile or card background.
 extension View {
+    /// A chart or panel as a card: the grouped list's row colour on the page's grouped background, flat, no shadow.
+    func card() -> some View {
+        padding().background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: Tok.radiusCard))
+    }
+
     func tile() -> some View {
-        padding(8).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: Tok.radiusTile))
+        padding(8).background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: Tok.radiusTile))
     }
 }
 
@@ -96,4 +105,93 @@ private struct Numeral: ViewModifier {
 extension View {
     /// Big numbers: the unit's face, tabular, scaled with Dynamic Type relative to `style`.
     func numeral(_ style: Font.TextStyle) -> some View { modifier(Numeral(style)) }
+}
+
+/// A home section's title: one style for every section (the default header grey is about 3.5:1 on the grouped background).
+struct SectionTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View { Text(text).font(.headline).foregroundColor(Color(.label)).textCase(nil) }
+}
+
+/// A list row that acts (an "All ..." row, New, Import): the icon column is the same on every one, so the text lines up.
+struct ActionRow: View {
+    let title: String
+    let icon: String
+
+    var body: some View { Label(title, systemImage: icon).foregroundStyle(Tok.accent) }
+}
+
+/// A card's title with its one control (the segmented picker) at the trailing edge; stacked when the type is large.
+struct CardHeader<Control: View>: View {
+    let title: String
+    @ViewBuilder let control: Control
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Text(title).font(.subheadline.bold()).lineLimit(1)
+                Spacer(minLength: 8)
+                control.pickerStyle(.segmented).frame(maxWidth: 190)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.subheadline.bold())
+                control.pickerStyle(.segmented)
+            }
+        }
+    }
+}
+
+/// A portrait bike computer drawn on a 12 x 12 pixel grid: the body with its corners cut, a one-cell screen frame with a
+/// small bar chart inside, a side button and a chin. One colour (the foreground style), for the unit card and the empty
+/// states; rides keep the `bicycle` symbol.
+struct UnitGlyph: View {
+    @ScaledMetric(relativeTo: .title2) private var side: CGFloat = 30
+
+    var body: some View {
+        Canvas { ctx, size in
+            let u = size.width / 12
+            var path = Path()
+            func cell(_ x: Int, _ y: Int) { path.addRect(CGRect(x: CGFloat(x) * u, y: CGFloat(y) * u, width: u, height: u)) }
+            for y in 0...11 {
+                for x in 2...9 {
+                    let corner = (x == 2 || x == 9) && (y == 0 || y == 11)
+                    if !corner && (x == 2 || x == 9 || y == 0 || y == 11) { cell(x, y) }
+                }
+            }
+            for x in 3...8 { for y in [2, 7] { cell(x, y) } }  // the screen frame
+            for y in 3...6 { for x in [3, 8] { cell(x, y) } }
+            for (x, h) in [(4, 1), (5, 3), (6, 2), (7, 4)] { for k in 0..<h { cell(x, 6 - k) } }  // bars
+            cell(10, 3); cell(10, 4)  // side button
+            cell(5, 9); cell(6, 9)  // chin
+            ctx.fill(path, with: .foreground)
+        }
+        .frame(width: side, height: side)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Axis marks at round values: the multiples of the smallest 1, 2 or 5 x 10^n step that leave at most 5 marks inside
+/// `lo...hi` (at least 2: the step halves otherwise). Swift Charts' own `desiredCount` is only a hint and gave six
+/// labels on a speed axis; marks computed from the domain's ends gave 265 / 205 / 145 / 85, which no chart app shows.
+/// 2.5 steps are left out: the labels are whole numbers.
+func niceMarks(_ lo: Double, _ hi: Double) -> [Double] {
+    guard hi > lo, abs(lo) < 1e9, abs(hi) < 1e9 else { return [lo] }
+    func marks(_ step: Double) -> [Double] {
+        let first = (lo / step).rounded(.up)
+        let last = (hi / step).rounded(.down)
+        return last >= first ? (Int(first)...Int(last)).map { Double($0) * step } : []
+    }
+    var pow10 = pow(10.0, floor(log10(hi - lo)) - 1)
+    var found: [Double] = []
+    outer: while pow10 <= hi - lo {
+        for m in [1.0, 2.0, 5.0] {
+            found = marks(m * pow10)
+            if found.count <= 5 { break outer }
+        }
+        pow10 *= 10
+    }
+    if found.count < 2 { found = marks(max(pow10 / 2, .ulpOfOne)) }
+    return found
 }

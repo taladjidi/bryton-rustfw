@@ -15,7 +15,7 @@ advertisement carries 0x180F is not verified.
 
 Reviewed 2026-11-08 (docs/review-app-ui-2026-11-08.md); parts A and B are done: the colours and the numeral
 face are the unit's, the numbers are formatted in one place (`Fmt`, metric or imperial), the P1, P2 and P3 findings are
-fixed or listed as left in the review's section 7. FTP, max HR and the units live in one `Profile` object (`Fmt.swift`),
+fixed or listed as left in the review's sections 7 and 8. Rides saved on the phone are listed while the unit is away. FTP, max HR and the units live in one `Profile` object (`Fmt.swift`),
 set in the profile sheet (the unit's own units setting is not in its PROFILE, so the phone cannot read it).
 
 - **Colour tokens**, one table in `app/core/src/theme.rs` (`TOKENS`), one Color Set per token in
@@ -295,6 +295,8 @@ BLE_GATTS_EVT_SC_CONFIRM (0x54) after every indication, and Bryton's chip app ha
 (`nrf_emu_hangs_on_the_service_changed_confirm`, `tools/nrf_emu.py`). So the table stays stable instead.
 
 ## Workouts
+
+The home screen shows the next planned workout on the unit (today's or the soonest later one, else the latest), the most recently saved workout on the phone and the next planned Intervals.icu workout, each with an "All ... (N)" row that pushes the full list.
 
 The planned workouts on the unit, seen from the phone (roadmap 9), and since 2026-11-07 sent and deleted from it
 (the firmware's side; the app's editor is the next step).

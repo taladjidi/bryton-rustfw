@@ -375,8 +375,18 @@ Done:
   lb) set in the profile sheet; the unit's own setting is not part of its PROFILE, so it cannot be read from it.
 
 Not done:
-- **H6** (saved rides while the unit is away) needs the library to scan Documents at launch: a behaviour change, left.
 - **R13** the axis picker stays with the content (the review said fine for five charts). **W6's Edit mode** on the
   home lists: the context menu was taken instead.
-- **Hard-coded sizes** (`width: 24`, `28`, 8 pt tile padding): left, they track Dynamic Type through their text.
 - **IntervalsClient `#if DEBUG`:** checked, the three `-demo` reads are all inside `#if DEBUG` (lines 58, 121, 161).
+- **The firmware's DARK zones 6 and 7** (3.1 and 2.8:1 on black, section 3.2): unchanged on the unit, a look change
+  for the owner to decide and to see on the panel; the app already uses OUTDOOR's values in dark.
+
+## 8. Status after part C (2026-11-08)
+
+Done in code, not yet built or seen in the Simulator:
+- **H6** `RideBrowser` lists the rides saved on the phone (`YYMMDDhhmmss.fit` in Documents) at launch, and the unit's
+  LIST adds them to its own: a ride opens with the unit away, and one deleted from the unit stays listed. The list is
+  asked for once per launch (`unitListed`), as before when it was empty.
+- **Hard-coded sizes:** the chart heights left literal (fitness 180 / 120 / 150, W' balance 110, DFA 130, compared
+  curve 160, the editor's step chart 150, now a `StepChart` argument) and the ride row's glyph column are
+  `@ScaledMetric`.
