@@ -486,9 +486,16 @@ impl Session {
         self.rest_len > 0
     }
 
+    /// Forgets the bytes [`Session::pending`] holds: a new client (a bus reset, a DTR change) never runs the last
+    /// one's commands.
+    pub fn drop_pending(&mut self) {
+        self.rest_len = 0;
+    }
+
     /// Takes bytes from the computer; `stats` is for `info`. Returns at the first command with an effect, the bytes
     /// after it kept for the next call ([`Session::pending`]).
     pub fn feed(&mut self, data: &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
+        debug_assert!(!self.pending() || data.is_empty(), "new bytes fed while bytes are pending");
         // the clock is the main loop's: `load` sees a gap between packets, not the time of the connection
         if self.load.take_if(|l| stats.uptime_ms.wrapping_sub(l.seen_ms) > LOAD_STALL_MS).is_some() {
             (self.len, self.overflow) = (0, false);
@@ -497,27 +504,36 @@ impl Session {
         if let Some(l) = &mut self.load {
             l.seen_ms = stats.uptime_ms;
         }
-        let mut held = [0u8; REST];
-        let n = core::mem::take(&mut self.rest_len);
-        held.iter_mut().zip(&self.rest).take(n).for_each(|(o, &b)| *o = b);
-        let mut first = held.get(..n).unwrap_or(&[]);
-        let mut data = data;
-        let mut effect = self.eat(&mut first, app, stats, h);
-        if effect == Effect::None {
-            effect = self.eat(&mut data, app, stats, h);
-        }
-        for left in [first, data] {
-            let end = self.rest_len + left.len();
-            match self.rest.get_mut(self.rest_len..end) {
-                Some(slot) => {
-                    slot.copy_from_slice(left);
-                    self.rest_len = end;
-                }
-                // only a caller that feeds more while bytes are pending gets here (the link never does)
-                None => h.send(b"err input lost\n"),
+        if self.pending() {
+            // copied out, since `eat` refills `rest`; only when bytes are pending
+            let mut held = [0u8; REST];
+            let n = core::mem::take(&mut self.rest_len);
+            held.iter_mut().zip(&self.rest).take(n).for_each(|(o, &b)| *o = b);
+            let mut first = held.get(..n).unwrap_or(&[]);
+            let effect = self.eat(&mut first, app, stats, h);
+            self.keep(first, h);
+            if effect != Effect::None {
+                self.keep(data, h);
+                return effect;
             }
         }
+        let mut data = data;
+        let effect = self.eat(&mut data, app, stats, h);
+        self.keep(data, h);
         effect
+    }
+
+    /// Adds `left` to the bytes pending for the next call.
+    fn keep(&mut self, left: &[u8], h: &mut impl Host) {
+        let end = self.rest_len + left.len();
+        match self.rest.get_mut(self.rest_len..end) {
+            Some(slot) => {
+                slot.copy_from_slice(left);
+                self.rest_len = end;
+            }
+            // only a caller that feeds more while bytes are pending gets here (the link never does)
+            None => h.send(b"err input lost\n"),
+        }
     }
 
     /// Runs `data` up to the first command with an effect; `data` is left at the bytes after it.

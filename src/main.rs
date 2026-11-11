@@ -2165,6 +2165,20 @@ const STOP: u32 = match option_env!("DIAG_STOP") {
     None => 0,
 };
 
+/// The build flags as this image has them, for tools/pack.py: it finds this static by name in the ELF's symbol table
+/// and refuses a ride image (EMMC_WRITE) with a diagnostic flag. A plain static kept by `black_box` in `main`, not a
+/// `#[unsafe(no_mangle)]` or `link_section` one: those are unsafe attributes, which this file may not hold
+/// (AGENTS.md, Safe Rust). Words: "BFLG", EMMC_WRITE, DIAG_STOP, USB_HS, USB_PACE_US, POWER_STEPS, FAST_LINK.
+static BUILD_FLAGS: [u32; 7] = [
+    u32::from_le_bytes(*b"BFLG"),
+    EMMC_WRITE as u32,
+    STOP,
+    !usb::FULL_SPEED as u32,
+    usb::PACE_US,
+    POWER_STEPS,
+    FAST_LINK as u32,
+];
+
 // const evaluation: an index past the end fails the build (and `i < b.len()` guards it)
 #[allow(clippy::indexing_slicing)]
 const fn parse_u32(s: &str) -> u32 {
@@ -2322,6 +2336,7 @@ fn stack_fault(canary: u32) -> u32 {
 
 fn main() -> ! {
     wr(hw::stack_canary(), bryton_rustfw::STACK_CANARY); // before anything runs deep: the stack is near its top
+    core::hint::black_box(&BUILD_FLAGS); // its address taken: the static and its symbol stay in the ELF for pack.py
     mpu_init();
     checkpoint(1);
     dwt_init();

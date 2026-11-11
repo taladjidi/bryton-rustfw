@@ -9,9 +9,11 @@ The stock updater (BOARD.md 10) takes IMG.bin as a raw image, skipping gunzip, w
 area and reads it back to check that sum; the bootloader then copies 6 MB of that area to SDRAM 0xd0000000 and
 jumps to the reset vector, without any check. Every rule is re-checked here before writing.
 
-A ride build (EMMC_WRITE=1 in the environment) is refused with a diagnostic build flag also set (DIAG_STOP stops the
-boot and waits for a cable; USB_HS and USB_PACE_US are USB experiments, docs/install.md "never install"), unless
-PACK_VARIANT=1 says it is meant; POWER_STEPS (a planned variant, docs/status.md) is printed, never silent.
+A ride build (EMMC_WRITE=1) is refused with a diagnostic build flag also set (DIAG_STOP stops the boot and waits for
+a cable; USB_HS and USB_PACE_US are USB experiments, docs/install.md "never install"), unless PACK_VARIANT=1 says it
+is meant; a POWER_STEPS other than the ride build's default (a planned variant, docs/status.md) is printed, never
+silent. The flags are the image's own, read from the ELF (main.rs `BUILD_FLAGS`, found by name in its symbol table);
+the environment is the fallback for an ELF without that symbol.
 
   python3 tools/pack.py selftest
 """
@@ -22,18 +24,46 @@ ELF = os.path.join(ROOT, 'target', 'thumbv7em-none-eabihf', 'release', 'bryton-r
 OUT = os.path.join(ROOT, 'out')
 BASE, SPAN = 0xd0000000, 0x00100000           # load address, and the 1 MB image (link.x SDRAM region)
 MIN_SIZE = 0x100001
-NEVER_RIDE = ('DIAG_STOP', 'USB_HS', 'USB_PACE_US')   # set at all (even empty or 0): the build is a variant
+FLAGS = ('EMMC_WRITE', 'DIAG_STOP', 'USB_HS', 'USB_PACE_US', 'POWER_STEPS', 'FAST_LINK')   # main.rs BUILD_FLAGS
+MARK = int.from_bytes(b'BFLG', 'little')
+NEVER_RIDE = ('DIAG_STOP', 'USB_HS', 'USB_PACE_US')
+RIDE_POWER_STEPS = 0x3f   # main.rs POWER_STEPS with EMMC_WRITE and no POWER_STEPS
 
 
-def ride_flags(env):
-    """(refused, noted): the diagnostic flags a ride build (EMMC_WRITE=1) carries; both empty for any other build."""
-    try:
-        ride = int(env.get('EMMC_WRITE', '0'), 0) == 1
-    except ValueError:
-        ride = False
-    if not ride:
+def elf_flags(e):
+    """The image's own build flags (main.rs BUILD_FLAGS, by name in .symtab) as {name: value}; None without them."""
+    shoff, = struct.unpack_from('<I', e, 0x20)
+    shentsize, shnum = struct.unpack_from('<HH', e, 0x2e)
+    # name, type, flags, addr, offset, size, link, info, addralign, entsize
+    secs = [struct.unpack_from('<10I', e, shoff + i * shentsize) for i in range(shnum)]
+    for sec in secs:
+        if sec[1] != 2 or sec[6] >= shnum:   # SHT_SYMTAB, and its string table
+            continue
+        names = secs[sec[6]][4]
+        for off in range(sec[4], sec[4] + sec[5] - 15, 16):
+            name, value, size, _info, _other, shndx = struct.unpack_from('<IIIBBH', e, off)
+            start = names + name
+            if size != 4 * (1 + len(FLAGS)) or shndx >= shnum or b'11BUILD_FLAGS' not in e[start:e.find(b'\0', start)]:
+                continue
+            words = struct.unpack_from(f'<{1 + len(FLAGS)}I', e, secs[shndx][4] + value - secs[shndx][3])
+            if words[0] == MARK:
+                return dict(zip(FLAGS, words[1:]))
+    return None
+
+
+def env_flags(env):
+    """The fallback: the flags as the environment would set them. EMMC_WRITE parsed as main.rs `parse_u32` (decimal);
+    a diagnostic flag set at all (even empty or 0) counts; POWER_STEPS None when unset or not a number."""
+    num = lambda v: int(env[v]) if env.get(v, '').isdigit() else None
+    return {'EMMC_WRITE': int(num('EMMC_WRITE') == 1), **{v: int(v in env) for v in NEVER_RIDE},
+            'POWER_STEPS': num('POWER_STEPS') if 'POWER_STEPS' in env else RIDE_POWER_STEPS}
+
+
+def ride_flags(flags):
+    """(refused, noted): the flags a ride build (EMMC_WRITE=1) should not carry; both empty for any other build."""
+    if flags.get('EMMC_WRITE') != 1:
         return [], []
-    return [v for v in NEVER_RIDE if v in env], [v for v in ('POWER_STEPS',) if v in env]
+    return [v for v in NEVER_RIDE if flags.get(v)], [v for v in ('POWER_STEPS',) if flags.get(v) != RIDE_POWER_STEPS]
 
 
 def load_segments(path):
@@ -52,12 +82,16 @@ def load_segments(path):
 
 
 def main():
-    refused, noted = ride_flags(os.environ)
+    flags, src = elf_flags(open(ELF, 'rb').read()), 'the ELF'
+    if flags is None:
+        flags, src = env_flags(os.environ), 'the environment (no BUILD_FLAGS in the ELF)'
+    print(f'build flags from {src}: ' + ' '.join(f'{k}={v}' for k, v in flags.items()))
+    refused, noted = ride_flags(flags)
     if refused and os.environ.get('PACK_VARIANT') != '1':
         sys.exit(f'pack.py: a ride build (EMMC_WRITE=1) with {" ".join(refused)} set: it must not be installed. '
-                 'Unset them, or PACK_VARIANT=1 to pack this variant on purpose')
+                 'Build it without them, or PACK_VARIANT=1 to pack this variant on purpose')
     for v in refused + noted:
-        print(f'pack.py: ride build variant: {v}={os.environ[v]}')
+        print(f'pack.py: ride build variant: {v}={flags[v]}')
     raw = bytearray(SPAN)
     end = 0
     for paddr, data in load_segments(ELF):
@@ -90,14 +124,47 @@ def main():
           f'IMG.bin {len(img)} B, sum {img[-4:].hex()} -> {OUT}')
 
 
+def fake_elf(words, name=b'_ZN13bryton_rustfw11BUILD_FLAGS17h0123456789abcdefE', addr=0xd0001000):
+    """An ELF32 with a .rodata holding `words` and a .symtab naming them (the selftest's)."""
+    data = struct.pack(f'<{len(words)}I', *words)
+    strtab = b'\0' + name + b'\0'
+    symtab = bytes(16) + struct.pack('<IIIBBH', 1, addr, len(data), 1, 0, 1)
+    body, offs = b'', []
+    for part in (data, symtab, strtab):
+        offs.append(52 + len(body))
+        body += part
+    shoff = 52 + len(body)
+    head = b'\x7fELF\x01\x01' + bytes(26) + struct.pack('<I', shoff) + bytes(10) + struct.pack('<HHH', 40, 4, 0)
+    secs = bytes(40) + b''.join(struct.pack('<10I', 0, t, 0, a, o, n, link, 0, 4, es) for t, a, o, n, link, es in (
+        (1, addr, offs[0], len(data), 0, 0), (2, 0, offs[1], len(symtab), 3, 16), (3, 0, offs[2], len(strtab), 0, 0)))
+    assert len(head) == 52
+    return head + body + secs
+
+
 def selftest():
-    assert ride_flags({}) == ([], [])
-    assert ride_flags({'DIAG_STOP': '3', 'USB_HS': '1', 'POWER_STEPS': '0'}) == ([], [])   # not a ride build
-    assert ride_flags({'EMMC_WRITE': '0', 'DIAG_STOP': '3'}) == ([], [])
-    assert ride_flags({'EMMC_WRITE': 'x', 'DIAG_STOP': '3'}) == ([], [])
-    assert ride_flags({'EMMC_WRITE': '1'}) == ([], [])
-    assert ride_flags({'EMMC_WRITE': '1', 'DIAG_STOP': '', 'USB_PACE_US': '0'}) == (['DIAG_STOP', 'USB_PACE_US'], [])
-    assert ride_flags({'EMMC_WRITE': '0x1', 'USB_HS': '1', 'POWER_STEPS': '127'}) == (['USB_HS'], ['POWER_STEPS'])
+    ride = [MARK, 1, 0, 0, 0, RIDE_POWER_STEPS, 0]
+    assert elf_flags(fake_elf(ride)) == dict(zip(FLAGS, ride[1:]))
+    assert ride_flags(elf_flags(fake_elf(ride))) == ([], [])
+    stop = [MARK, 1, 3, 0, 0, RIDE_POWER_STEPS, 0]   # EMMC_WRITE=1 DIAG_STOP=3 cargo build: whatever pack.py's env
+    assert ride_flags(elf_flags(fake_elf(stop))) == (['DIAG_STOP'], [])
+    assert ride_flags(elf_flags(fake_elf([MARK, 1, 0, 1, 100, 127, 1]))) == (['USB_HS', 'USB_PACE_US'], ['POWER_STEPS'])
+    assert ride_flags(elf_flags(fake_elf([MARK, 0, 3, 1, 0, 0x7f, 1]))) == ([], [])   # not a ride build
+    assert elf_flags(fake_elf(ride, name=b'_ZN13bryton_rustfw5OTHER17h0123456789abcdefE')) is None
+    assert elf_flags(fake_elf([0] + ride[1:])) is None   # no marker
+    assert elf_flags(fake_elf(ride[:-1])) is None        # the wrong size
+    # the fallback: the environment
+    assert ride_flags(env_flags({})) == ([], [])
+    assert ride_flags(env_flags({'DIAG_STOP': '3', 'USB_HS': '1', 'POWER_STEPS': '0'})) == ([], [])
+    assert ride_flags(env_flags({'EMMC_WRITE': '0', 'DIAG_STOP': '3'})) == ([], [])
+    assert ride_flags(env_flags({'EMMC_WRITE': 'x', 'DIAG_STOP': '3'})) == ([], [])
+    assert ride_flags(env_flags({'EMMC_WRITE': '0x1', 'DIAG_STOP': '3'})) == ([], [])   # parse_u32: decimal only
+    assert ride_flags(env_flags({'EMMC_WRITE': '01', 'DIAG_STOP': '3'})) == (['DIAG_STOP'], [])
+    assert ride_flags(env_flags({'EMMC_WRITE': '1'})) == ([], [])
+    assert ride_flags(env_flags({'EMMC_WRITE': '1', 'POWER_STEPS': '63'})) == ([], [])
+    assert ride_flags(env_flags({'EMMC_WRITE': '1', 'DIAG_STOP': '', 'USB_PACE_US': '0'})) == (
+        ['DIAG_STOP', 'USB_PACE_US'], [])
+    assert ride_flags(env_flags({'EMMC_WRITE': '1', 'USB_HS': '1', 'POWER_STEPS': '127'})) == (
+        ['USB_HS'], ['POWER_STEPS'])
     print('pack.py selftest: ok')
 
 

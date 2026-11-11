@@ -381,6 +381,13 @@ fn a_packet_of_several_commands_runs_them_all() {
     assert_eq!(s.feed(&[], &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(s.feed(b"re\n", &app, Stats::default(), &mut pc), Effect::None);
     assert!(pc.got.starts_with(b"ok\nwhere "), "{:?}", pc.got);
+    // a new client (usb.rs: a bus reset, a DTR change) drops what the last one left: its key never comes
+    pc.got.clear();
+    assert_eq!(s.feed(b"key lap\nkey start\n", &app, Stats::default(), &mut pc), Effect::Key(Press::Short(Key::Lap)));
+    s.drop_pending();
+    assert!(!s.pending());
+    assert_eq!(s.feed(b"where\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert!(pc.got.starts_with(b"ok\nwhere "), "{:?}", pc.got);
 }
 
 /// An upload the computer abandoned does not swallow the next commands: after 5 s without a byte it is dropped, with an error line.
