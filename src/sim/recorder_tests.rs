@@ -1426,6 +1426,49 @@ fn a_ride_survives_a_power_loss_that_clears_the_backup_registers() {
     }
 }
 
+/// The clock lost with the backup domain and no phone (the review of 2026-11-11, R3): a fix with a valid time between
+/// rides sets the RTC to UTC, the offset to 0, so the next ride is named and dated in the current year, not in 2000.
+/// A ride resuming after the loss is never moved (its times must not jump), nor is a clock already right.
+#[test]
+fn a_fix_sets_a_clock_lost_with_the_backup_domain_between_rides() {
+    let now = crate::epoch_s((2026, 11, 11, 8, 0, 0));
+    let mut sim = Sim::new(0, 0, 0).power_loss();
+    sim.emmc.image = crate::fat::tests::image();
+    (sim.gnss.fix, sim.gnss_utc) = (Some(5000), Some(now));
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 10_000);
+    assert_eq!(sim.rtc_sets, 1, "set once, at the first fix");
+    assert_eq!(app.gps.aid.offset_15min, Some(0), "the RTC on UTC: the phone sets the zone later");
+    assert!((crate::rtc_epoch_s(&mut sim) - now).abs() <= 11, "the RTC at the sky's time");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let name = std::string::String::from(core::str::from_utf8(&app.rec.clean.name()).unwrap());
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    assert!(name.starts_with("261111"), "named in the current year: {name}");
+    let times = record_times(&sim.emmc.image, &std::format!("Activities/{name}.fit"));
+    let fit_now = crate::fit::fit_time(crate::from_epoch_s(now));
+    assert!(times.first().is_some_and(|&t| t >= fit_now && t < fit_now + 120), "dated now: {times:?}");
+    assert_eq!(sim.rtc_sets, 1, "never during the ride");
+
+    // a ride left open by the loss: resumed on the clock as it restarted, never moved while it is open
+    let (mut sim, _) = power_lost_ride(false);
+    (sim.gnss.fix, sim.gnss_utc) = (Some(5000), Some(now));
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    assert_eq!(sim.rtc_sets, 0, "a ride resumed: its clock left alone");
+
+    // a clock already right (2026) is never moved by a fix
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(5000);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 10_000);
+    assert_eq!((sim.rtc_sets, app.gps.aid.offset_15min), (0, Some(8)));
+}
+
 /// A ride of 125 s, its checkpoints on the card, the power lost with the backup domain at 125 s or, `torn`,
 /// in the middle of its second checkpoint's first write: the unit after it, and the app that recorded it.
 fn power_lost_ride(torn: bool) -> (Sim, App) {

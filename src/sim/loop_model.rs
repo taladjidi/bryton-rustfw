@@ -26,6 +26,8 @@ pub struct LoopModel {
     pub link: Option<SimLink>,
     /// USB starts asked.
     pub usb_starts: u32,
+    /// USB power-downs asked (a cable pulled while busy).
+    pub usb_stops: u32,
     /// Resets, stack faults, the staged image's run (its size) asked.
     pub resets: u32,
     pub faults: u32,
@@ -193,6 +195,9 @@ impl LoopBoard for Sim {
     fn usb_start(&mut self) -> Option<SimLink> {
         self.main.usb_starts += 1;
         self.main.link.take()
+    }
+    fn usb_stop(&mut self) {
+        self.main.usb_stops += 1;
     }
     fn reset(&mut self) {
         self.main.resets += 1;

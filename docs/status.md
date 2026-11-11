@@ -467,6 +467,7 @@ On the unit, with the owner:
 1. Before and after a full drain, a `tools/dev.py peek` of RCC_BDCR (0x58024470: LSEON, LSERDY, RTCSEL, RTCEN) and RTC_PRER (0x58004010): whether the drain resets the backup domain at all (no coin cell seen). The values stock leaves were read on 2026-11-11 (BOARD.md 8: LSEDRV 0b11, the highest drive, which `rtc_start` now sets before it turns the LSE on); after the drain the boot must show no CLOCK NOT RUNNING and RCC_BDCR 0x0000811b again.
 2. A ride recorded a few minutes, the battery run flat (or VBAT cut), the boot: no CLOCK NOT RUNNING, the clock counting from 2000-01-01, RIDE RESUMED, paused at the last checkpoint, then the save; both copies (`\Activities`, `\Rustfw\Activities`) with records after the resume, and the next ride's full copy with records too.
 3. A first start of this firmware on a unit that never ran it: nothing resumed, stock's settings imported.
+4. After the loss with no ride left, outdoors, no phone: the first fix with a valid time sets the RTC to UTC (app/gps.rs `learn_aid`: only between rides, only while the RTC reads earlier than the build year), so the next ride is named in the current year (`YYMMDD` of today, the hour in UTC until the phone sets the zone); a ride resumed after the loss keeps the 2000 clock to its save. Simulator: `a_fix_sets_a_clock_lost_with_the_backup_domain_between_rides`.
 
 Details: a boot with none of this firmware's backup registers set reads the ride's record once (read only) and resumes a ride left open as the marker's path does (a card that does not answer then: the resume pending, stock's settings imported once it answers with no ride).
 
@@ -895,6 +896,12 @@ On the unit: its awake time, and the last-known-position dot after a power cycle
 
 ### Power, sleep and board
 
+**A cable pulled mid-ride, and no battery reading (the audit of 2026-11-11, B4 and B8)**
+
+Seen: simulator (`a_cable_pulled_mid_ride_powers_usb_down`, `a_lost_battery_reading_is_retried_and_still_switches_off`).
+
+On the unit: a ride started, the cable in for a minute (the USB dot), then out: no restart, the dot gone, `tools/dev.py info` after the ride (cable in again: no USB until the reset that follows the ride's end, so plug in, wait for the save, unplug, plug in) with ride Stops counted after the unplug; the ride's power at the unplug against one never plugged (usb.rs `power_down`: VOS3, HSI48 off, the PHY off). The ADC retry (`adc_init` from `poll_battery`) cannot be provoked on the unit without a broken ADC: BATTERY UNKNOWN must never show on a healthy unit.
+
 **Stop mode, phase 2b (2026-11-03, docs/power.md "Stop mode": Stop between a ride's passes)**
 
 Seen: simulator. **Off in the card-writing build** (`EMMC_WRITE=1`, the installed ride image) until this procedure passes; on in the plain build.
@@ -1250,7 +1257,7 @@ Still to see: the imperial pages (a human check).
 ### Seen on the unit
 
 Fully seen; kept here for the numbers. The partly seen ones stay in their area above.
-- **Every second of a stall is on the timer (2026-11-02, no cap; 10 s before):** the ride's seconds are counted from the RTC (`catch_up_seconds`); the last `REPEAT_S` (5) of a stall are ticked with the pass's readings, as before, the older ones go on the timer at once (as the ride was moving or auto-paused before it) with no records, the file's times jumping over them (Garmin's SDK and fitdecode read it; the session's elapsed and timer times include the stall), and a checkpoint follows at once. A step of the RTC forward by over an hour (`CLOCK_STEP_S`) or back counts one second; the phone's set (the only RTC setter, refused during a ride) moves the count with it; the GPS never sets the RTC. Seen in the simulator (`a_stall_of_10_min_is_all_on_the_timer`, the budget row "catch-up of a 10 min stall") and on the unit 2026-11-02 (`dev.py stall`: 60 s, 6 s, 4 s; the list below).
+- **Every second of a stall is on the timer (2026-11-02, no cap; 10 s before):** the ride's seconds are counted from the RTC (`catch_up_seconds`); the last `REPEAT_S` (5) of a stall are ticked with the pass's readings, as before, the older ones go on the timer at once (as the ride was moving or auto-paused before it) with no records, the file's times jumping over them (Garmin's SDK and fitdecode read it; the session's elapsed and timer times include the stall), and a checkpoint follows at once. A step of the RTC forward by over an hour (`CLOCK_STEP_S`) or back counts one second; the phone's set (refused during a ride) moves the count with it, and so does the GPS's, only between rides and only of a clock lost with the backup domain (earlier than the build year). Seen in the simulator (`a_stall_of_10_min_is_all_on_the_timer`, the budget row "catch-up of a 10 min stall") and on the unit 2026-11-02 (`dev.py stall`: 60 s, 6 s, 4 s; the list below).
 - **Seen on the unit 2026-11-02 (indoors, receiver searching, no fix):**
   - a long stall on a ride (`bench stall`): 60 s gave a jump of 56 s in the records, then 5 ticked; 6 s a jump of 2 s; 4 s none; the session's elapsed and timer totals were exact;
   - the power button wake with the radio back; the AUTO OFF banner, its beeps at 10 s and 5 s, and a key cancelling it;

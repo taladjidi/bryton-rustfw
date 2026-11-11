@@ -6,7 +6,8 @@ machine LoadPlatformDescription @renode/s510.repl
 # that clock): the firmware's 200 MHz core clock (src/main.rs CPU_HZ) makes 1 s of SysTick 1 s of virtual time.
 nvic Frequency 200000000
 # Renode's STM32 ADC model throws on the first conversion of channel 19 (VREFINT): without it the battery reads
-# unknown, the path the firmware takes when ADC3 does not come up.
+# unknown, the path the firmware takes when ADC3 does not come up (BATTERY UNKNOWN in the notices from the third
+# reading, 20 s, after the seconds run.py compares).
 sysbus Unregister sysbus.adc3
 sysbus LoadELF $elf
 cpu VectorTableOffset 0xd0000000

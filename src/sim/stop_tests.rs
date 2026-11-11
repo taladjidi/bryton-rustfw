@@ -479,6 +479,33 @@ fn riding() -> (Sim, App, MainLoop<SimLink>) {
     (sim, app, main)
 }
 
+/// A power bank plugged in mid-ride, then pulled (the review of 2026-11-11, B4): USB powered down at once and the link
+/// dropped, so the ride's Stops come back; no reset while the ride runs (the reset after it, as before); a card lent
+/// to the computer that went is taken back.
+#[test]
+fn a_cable_pulled_mid_ride_powers_usb_down() {
+    let (mut sim, mut app, mut main) = riding();
+    (sim.main.link, sim.main.vbus) = (Some(SimLink::default()), true);
+    let t = sim.ms;
+    until(&mut sim, &mut app, &mut main, t + 5000);
+    assert_eq!(sim.main.usb_starts, 1);
+    let n = sim.main.ride_stops;
+    until(&mut sim, &mut app, &mut main, t + 10_000);
+    assert_eq!(sim.main.ride_stops, n, "no ride Stop with the cable in");
+    app.emmc.lend_read_only();
+    sim.main.vbus = false;
+    until(&mut sim, &mut app, &mut main, t + 20_000);
+    assert_eq!(sim.main.usb_stops, 1, "USB powered down at the unplug, once");
+    assert!(sim.main.ride_stops > n, "the ride's Stops again");
+    assert_eq!(sim.main.resets, 0, "no reset during the ride");
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    assert!(!app.emmc.lent(), "the card back from the computer that went");
+    assert_eq!(app.strip.usb, crate::ui::UsbDot::Off);
+    sim.main.vbus = true; // plugged in again: no USB until the reset after the ride (its buffers are once-cells)
+    until(&mut sim, &mut app, &mut main, t + 25_000);
+    assert_eq!((sim.main.usb_starts, sim.main.resets), (1, 0));
+}
+
 #[test]
 fn each_blocker_keeps_a_ride_pass_out_of_stop() {
     type Blocker = (&'static str, fn(&mut Sim, &mut App));

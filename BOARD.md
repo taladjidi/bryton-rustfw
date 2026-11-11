@@ -838,7 +838,10 @@ From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt
   90: 4060 4067 4074 4084 4092 4101 4111 4120 4130 4140
 ```
   This firmware's percent is this table's (drivers/battery.rs `percent`; `tenths` interpolates between the steps).
-  Below 3.3 V three readings in a row (10 s apart) on battery, the firmware switches off, as stock does at 0 %.
+  Below 3.3 V three readings in a row (10 s apart) on battery, the firmware switches off (drivers/battery.rs
+  `EMPTY_MV`): lower than stock's 0 %, which is below 3450 mV; the voltage stock itself switches off at is not traced.
+  No reading (`adc_init` or a conversion timed out) means no switch-off: the app runs `adc_init` again at each of
+  the first three misses, then once a minute, and says BATTERY UNKNOWN when the third reading still has none.
 - **Charging:** PG14 is the charge enable, active low. The bootloader leaves it an output, low: **charging is on
   whenever USB power is present** (seen: MODER output, ODR bit 14 = 0). Stock switches it with a temperature
   window from the barometer: charge only if 0 < T < 50 C (5 < T after "too cold", T < 45 after "too hot"). This

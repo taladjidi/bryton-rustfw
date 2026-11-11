@@ -549,6 +549,38 @@ fn battery_in_the_strip_and_off_when_empty() {
     assert!(sim.standby && !sim.display_on, "empty: switched off");
 }
 
+/// No battery reading during a ride (the ADC not up: main.rs `adc_init` timed out; the review of 2026-11-11, B8):
+/// BATTERY UNKNOWN said once, the ADC brought up again, then an empty cell switches the unit off as usual (before,
+/// the switch-off never ran and the ride ended by brown-out). A dead ADC is retried, but not at every reading.
+#[test]
+fn a_lost_battery_reading_is_retried_and_still_switches_off() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    // ADC lost, and its first two bring-ups failing
+    (sim.adc_down, sim.adc_init_fails, sim.battery_mv) = (true, 2, Some(3100));
+    run(&mut sim, &mut app, 2 * u64::from(BATTERY_MS));
+    assert_eq!(sim.adc_inits, 2, "retried at each reading");
+    assert!(!app.notes.list.iter().any(|n| n.as_str().ends_with("BATTERY UNKNOWN")), "not yet");
+    run(&mut sim, &mut app, u64::from(BATTERY_MS));
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("BATTERY UNKNOWN")), "the third miss");
+    assert_eq!(sim.adc_inits, 3, "the third retry brings it up");
+    assert!(!sim.standby);
+    run(&mut sim, &mut app, 3 * u64::from(BATTERY_MS));
+    assert!(sim.standby && !sim.display_on, "empty: switched off");
+    let unknown = app.notes.list.iter().filter(|n| n.as_str().ends_with("BATTERY UNKNOWN")).count();
+    assert_eq!(unknown, 1, "said once");
+
+    // the ADC stays dead (a VREFINT that never converts): a few retries, then one a minute
+    let (mut sim, mut app) = started();
+    sim.adc_fail = Some(19);
+    run(&mut sim, &mut app, 30 * u64::from(BATTERY_MS));
+    assert!((6..=10).contains(&sim.adc_inits), "{} retries in 5 minutes", sim.adc_inits);
+}
+
 /// Away from the overview, a notice is a banner for a while: the page above it keeps updating; when it goes,
 /// what it covered is drawn again. A key dismisses it and acts (Start on a ride must start it).
 #[test]

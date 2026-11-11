@@ -33,6 +33,8 @@ pub trait LoopBoard: Board {
     fn vbus(&mut self) -> bool;
     /// Starts USB: the link, or None if it did not come up.
     fn usb_start(&mut self) -> Option<Self::Link>;
+    /// USB fully off, the link dropped first (usb.rs `power_down`); nothing brings it back but a reset.
+    fn usb_stop(&mut self);
     /// System reset (never returns on the unit).
     fn reset(&mut self);
     /// Runs the image the dev link staged, `size` bytes, after quieting the wake lines an older image's sleep does not
@@ -176,6 +178,15 @@ impl<L: UsbLink> MainLoop<L> {
             Cable::Reset => {
                 b.reset();
                 return 0;
+            }
+            // unplugged during a ride or its save: USB powered down now (a reset would cost the ride's checkpoint
+            // gap), not at the ride's end; a plug-in again gets no USB until that reset (its buffers are once-cells)
+            Cable::Stop => {
+                if self.link.take().is_some() {
+                    (self.recover, self.seen_up) = (None, false);
+                    b.usb_stop();
+                    app.usb_gone(b);
+                }
             }
             Cable::Keep => {}
         }

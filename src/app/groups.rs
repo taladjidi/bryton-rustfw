@@ -536,6 +536,8 @@ pub(crate) struct Saver {
     pub(crate) usb_snapped: bool,
     /// BATTERY SAVER AUTO's state as the rider was last told.
     pub(crate) saver_said: bool,
+    /// Battery polls in a row with no reading (BATTERY UNKNOWN said at the first; the ADC brought up again).
+    pub(crate) adc_misses: u16,
 }
 
 impl Saver {
@@ -547,6 +549,7 @@ impl Saver {
             saver_auto: false,
             usb_snapped: false,
             saver_said: false,
+            adc_misses: 0,
         }
     }
 }

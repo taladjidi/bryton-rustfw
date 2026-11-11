@@ -1992,6 +1992,9 @@ impl Board for S510 {
     fn adc_read(&mut self, channel: u8) -> Option<u16> {
         adc_read(u32::from(channel))
     }
+    fn adc_init(&mut self) -> bool {
+        adc_init()
+    }
     fn vrefint_cal(&mut self) -> u16 {
         rd(VREFINT_CAL) as u16
     }
@@ -2079,6 +2082,9 @@ impl bryton_rustfw::LoopBoard for S510 {
     }
     fn usb_start(&mut self) -> Option<usb::Link> {
         usb::start()
+    }
+    fn usb_stop(&mut self) {
+        usb::power_down();
     }
     fn reset(&mut self) {
         system_reset();

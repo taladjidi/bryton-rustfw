@@ -217,6 +217,15 @@ pub struct Sim {
     pub adc_n: u8,
     /// A channel that answers `None` (a failed conversion), or none.
     pub adc_fail: Option<u8>,
+    /// The ADC not enabled (main.rs `adc_init` timed out): every reading `None` until [`Board::adc_init`].
+    pub adc_down: bool,
+    /// Times [`Board::adc_init`] ran.
+    pub adc_inits: u32,
+    /// The next this many [`Board::adc_init`] fail (the ADC stays down).
+    pub adc_init_fails: u32,
+    /// The receiver's UTC at the simulated time 0, seconds since 1970, when the sky's time is not the RTC's less 2 h
+    /// (the RTC lost with the backup domain: the satellites still know the date).
+    pub gnss_utc: Option<i64>,
     /// The main loop's side of the board ([`LoopBoard`]: loop_model.rs).
     pub main: LoopModel,
 }
@@ -1095,6 +1104,10 @@ impl Sim {
             adc_calls: [0; 4],
             adc_n: 0,
             adc_fail: None,
+            adc_down: false,
+            adc_inits: 0,
+            adc_init_fails: 0,
+            gnss_utc: None,
             main: LoopModel::default(),
         }
     }
@@ -1442,7 +1455,7 @@ impl Board for Sim {
         }
         self.adc_n = self.adc_n.saturating_add(1);
         // VDDA 3.3 V: VREFINT reads its calibration value; the pin sees the battery through the divider by 1.5
-        if self.adc_fail == Some(channel) {
+        if self.adc_down || self.adc_fail == Some(channel) {
             return None;
         }
         let mv = self.battery_mv?;
@@ -1451,6 +1464,16 @@ impl Board for Sim {
 
     fn vrefint_cal(&mut self) -> u16 {
         24_000
+    }
+
+    fn adc_init(&mut self) -> bool {
+        self.adc_inits += 1;
+        if self.adc_init_fails > 0 {
+            self.adc_init_fails -= 1;
+            return false;
+        }
+        self.adc_down = false;
+        true
     }
 
     fn gnss_power(&mut self, on: bool) {
@@ -1474,7 +1497,10 @@ impl Board for Sim {
         self.paid_at_gnss = self.paid_ns;
         let (tr, dr) = self.rtc();
         let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
-        let utc = crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600; // the RTC runs on UTC + 2 h
+        let utc = match self.gnss_utc {
+            Some(t0) => t0 + (self.ms / 1000) as i64,
+            None => crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600, // the RTC runs on UTC + 2 h
+        };
         self.gnss.transfer(self.ms, utc, buf);
     }
 

@@ -71,7 +71,8 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   does not) or it lands in `.data`, in DTCM. The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road
   ahead inflates tiles into.
 - **USB costs power** (VOS1, the PHY, the core), so it runs only while a cable is in: started when PC13 goes
-  high, and unplugging resets the unit, which brings it up without USB.
+  high, and unplugging resets the unit, which brings it up without USB (during a ride: USB powered down, the reset
+  after it).
 - **Measure before and after** a change that could cost: image size, and on the unit, time awake per loop
   (DWT cycle counter). Write the number in the commit message.
 - **Next steps down in power, in order of gain:**

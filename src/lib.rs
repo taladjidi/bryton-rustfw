@@ -136,6 +136,9 @@ pub trait Board {
     /// One 16-bit reading of ADC3 channel `channel` (BOARD.md 12; 1: the battery, 19: VREFINT); None if the ADC did
     /// not come up. Takes about a quarter of a millisecond.
     fn adc_read(&mut self, channel: u8) -> Option<u16>;
+    /// ADC3 brought up again from reset (BOARD.md 12, "Bring-up order"): true when it is enabled. Up to about 200 ms
+    /// (the calibration's time-out; 82 ms seen on the unit).
+    fn adc_init(&mut self) -> bool;
     /// VREFINT_CAL: VREFINT as read at VDDA = 3.3 V (factory value, BOARD.md 12).
     fn vrefint_cal(&mut self) -> u16;
     /// GNSS receiver power (PI6, BOARD.md 13).
