@@ -1,7 +1,11 @@
 //! A tiny INI reader for stock's settings files (`\System\*.ini`, ghidra/STORAGE_AND_MAPS.md 2.1): `[Section]`
 //! lines and `Key=Value` lines, LF or CRLF. Stock leaves a NUL byte at the end of some files, sometimes with text
 //! after it: a NUL ends a line like LF. Lookups scan the text from the start (the files are a few KB); a line
-//! longer than [`LINE`] bytes is skipped. A leading UTF-8 BOM is skipped, and a value ends at a `;` after a space (a comment). Names compare without regard to ASCII case.
+//! longer than [`LINE`] bytes is skipped. A leading UTF-8 BOM is skipped.
+//!
+//! Values are comment-stripped: a value ends at " ;" or a tab and `;` (a `;` inside a word is kept), so a free-text
+//! field (a sensor's Name, BTName) that may hold such text needs a raw getter added here before it is read.
+//! Names compare without regard to ASCII case.
 
 /// The longest line read.
 pub const LINE: usize = 512;
@@ -27,6 +31,8 @@ fn comment(v: &[u8]) -> &[u8] {
 }
 
 /// The value of `key` in section `section` of `text`, spaces around it removed; the first if there are several.
+/// A trailing comment (" ;" or tab and `;`, to the end of the line) is stripped from the value, so this is not for
+/// free text that may contain one: add a raw getter for that.
 ///
 /// ```
 /// use bryton_rustfw::ini::get;

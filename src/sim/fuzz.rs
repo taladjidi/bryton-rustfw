@@ -1395,7 +1395,7 @@ fn ini_files() {
         "rightlongpress",
     ];
     let mut reached = [0usize; 6];
-    let (mut bom, mut commented) = (0, 0);
+    let (mut bom, mut commented) = (0usize, 0usize);
     for seed in 1..=2000u32 {
         // many short files (a lookup takes a section's first copy), of sections and key = value lines (an INI's structure), each value one of: a small number, a list of field
         // ids, a huge number, raw bytes
@@ -1404,21 +1404,24 @@ fn ini_files() {
         // a UTF-8 BOM before the first section, as a Windows editor saves it
         if seed % 7 == 0 {
             t.extend_from_slice(b"\xEF\xBB\xBF");
-            bom += 1;
         }
+        let mut wheels: Vec<(&str, u32)> = Vec::new(); // each section's first wheel written
         if seed % 2 == 0 {
             // first, as stock writes them (a lookup takes a section's first copy): sensor blocks (an ANT+ type,
             // active, an id some past 20 bits, a wheel, the buttons), W' and the pressure at sea level
             let mut r = xorshift(seed);
             for k in 0..1 + r() % 4 {
                 let id = if r().is_multiple_of(4) { r() >> 12 << 4 } else { r() % 100_000 };
-                commented += 1; // the wheel line below ends in a comment
+                let (section, wheel) = (SECTIONS[11 + (r() as usize + k as usize) % 8], 900 + r() % 2500);
+                if !wheels.iter().any(|w| w.0 == section) {
+                    wheels.push((section, wheel));
+                }
                 t.extend_from_slice(
                     std::format!(
                         "[{}]\r\nHWType={}\r\nactive=1\r\nID={id}\r\nWheel={} ;mm\r\nleftpress={}\r\nrightpress={}\r\n",
-                        SECTIONS[11 + (r() as usize + k as usize) % 8],
+                        section,
                         u32::from(r() % 7 == 6),
-                        900 + r() % 2500,
+                        wheel,
                         r() % 6,
                         r() % 6
                     )
@@ -1433,6 +1436,11 @@ fn ini_files() {
                 )
                 .as_bytes(),
             );
+        }
+        // counted where the value is read back: the comment must not reach the wheel
+        for (s, w) in &wheels {
+            assert_eq!(crate::ini::get(&t, s, "Wheel"), Some(std::format!("{w}").as_bytes()), "seed {seed}");
+            commented += 1;
         }
         if seed % 3 == 0 {
             // data pages and reminders as stock writes them, for the first-copy lookups
@@ -1476,6 +1484,16 @@ fn ini_files() {
                 _ => t.extend((0..c % 16).map(|_| v.next().unwrap_or(0))),
             }
             t.extend_from_slice(b"\r\n");
+        }
+        if let Some(plain) = t.strip_prefix(b"\xEF\xBB\xBF") {
+            // a BOM changes nothing: every lookup equals the file without it
+            for s in SECTIONS {
+                for k in KEYS {
+                    let (a, b) = (crate::ini::get(&t, s, k), crate::ini::get(plain, s, k));
+                    assert_eq!(a, b, "seed {seed} {s} {k}");
+                    bom += usize::from(a.is_some());
+                }
+            }
         }
         let mut i = crate::stock::import(&t, &t, &t);
         assert!(i.device(&t) <= 2, "ActBike: one of stock's three bikes");
