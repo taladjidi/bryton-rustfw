@@ -503,7 +503,8 @@ fn a_cable_pulled_mid_ride_powers_usb_down() {
     assert_eq!(app.strip.usb, crate::ui::UsbDot::Off);
     sim.main.vbus = true; // plugged in again: no USB until the reset after the ride (its buffers are once-cells)
     until(&mut sim, &mut app, &mut main, t + 25_000);
-    assert_eq!((sim.main.usb_starts, sim.main.resets), (1, 0));
+    assert_eq!((sim.main.usb_starts, sim.main.usb_stops, sim.main.resets), (1, 1, 0));
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("USB AFTER THE RIDE")), "the rider told");
 }
 
 #[test]

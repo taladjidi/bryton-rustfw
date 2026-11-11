@@ -173,8 +173,10 @@ impl App {
             if n == 3 {
                 self.alarm_notice("BATTERY UNKNOWN");
             }
-            if n <= 3 || n.is_multiple_of(6) {
+            if n <= 3 || n >= 9 {
                 let _ = b.adc_init();
+                // after the third, one each 6 readings, for ever (the count never saturates)
+                self.saver.adc_misses = n.min(3);
             }
         } else {
             self.saver.adc_misses = 0;

@@ -900,7 +900,11 @@ On the unit: its awake time, and the last-known-position dot after a power cycle
 
 Seen: simulator (`a_cable_pulled_mid_ride_powers_usb_down`, `a_lost_battery_reading_is_retried_and_still_switches_off`).
 
-On the unit: a ride started, the cable in for a minute (the USB dot), then out: no restart, the dot gone, `tools/dev.py info` after the ride (cable in again: no USB until the reset that follows the ride's end, so plug in, wait for the save, unplug, plug in) with ride Stops counted after the unplug; the ride's power at the unplug against one never plugged (usb.rs `power_down`: VOS3, HSI48 off, the PHY off). The ADC retry (`adc_init` from `poll_battery`) cannot be provoked on the unit without a broken ADC: BATTERY UNKNOWN must never show on a healthy unit.
+Seen also: `a_pull_on_the_summary_takes_a_written_card_back` (a card lent and written, taken back at the pull).
+
+On the unit:
+1. A ride started, the cable in for a minute (the USB dot), then out: no restart, the dot gone. Cable in again during the ride: USB AFTER THE RIDE, no USB; at the ride's end (summary closed) the unit restarts and USB comes up with the cable in. Then `tools/dev.py info`: ride Stops counted after the unplug; the ride's power after the unplug against one never plugged (usb.rs `stop`: VOS3, HSI48 off, the PHY off, PA2 left high).
+2. The battery reading with USB off: `tools/dev.py bat` (or the strip's percent) before and after `tools/dev.py stop --usboff` (which drives PA2 low too, unlike a mid-ride unplug): if the reading falls, PA2 feeds the divider or the ADC's reference, which is why `stop` leaves it alone (BOARD.md 4). The ADC retry (`adc_init` from `poll_battery`) cannot be provoked on the unit without a broken ADC: BATTERY UNKNOWN must never show on a healthy unit.
 
 **Stop mode, phase 2b (2026-11-03, docs/power.md "Stop mode": Stop between a ride's passes)**
 

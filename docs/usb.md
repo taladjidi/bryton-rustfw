@@ -77,8 +77,9 @@ This page has what is known, what was tried, and what to ask or try next. Last u
   - **Only an unplug brings it back:** this firmware resets the whole unit on unplug, PHY included (PA7 is driven
     again from reset).
     During a ride or its save the reset waits for the ride's end, but USB is powered down at the unplug (usb.rs
-    `power_down`, app/main_loop.rs `Cable::Stop`); a cable put back before that reset gets no USB (the stack's
-    buffers are once-cells), until an unplug after the ride.
+    `stop`, app/main_loop.rs `Cable::Stop`; PA2 left high, BOARD.md 4); a cable put back before that reset gets no
+    USB (the stack's buffers are once-cells) and the banner USB AFTER THE RIDE; the reset at the ride's end comes
+    whether the cable is in or not, and brings USB up with it.
 - **What this suggests (inferred):**
   - The fault is on the unit's side: stock does it too, on a sound cable.
   - Traffic matters: low throughput at high speed held; 7 MB/s fails within seconds.

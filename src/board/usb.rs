@@ -307,10 +307,23 @@ fn power_up() {
 /// low drops the link, inferred to be the PHY's supply), HSI48 off, the regulator back to VOS3 (PWR_D3CR VOS 01, as
 /// stock's SystemClock_Config, VOSRDY awaited). Only before a reset: nothing brings it back but [`start`].
 pub fn power_down() {
+    off(true);
+}
+
+/// [`power_down`] with PA2 left as it is, for a cable pulled during a ride (app/main_loop.rs `Cable::Stop`): PA2's
+/// purpose is unknown (BOARD.md 4), and stock sets it high with the battery ADC's set-up, so it may feed the battery's
+/// divider or the ADC's reference (inferred): driven low mid-ride, a reading under `EMPTY_MV` would switch the unit off.
+pub fn stop() {
+    off(false);
+}
+
+fn off(pa2_low: bool) {
     modify(RCC_AHB1RSTR, 0, 1 << 25);
     modify(RCC_AHB1ENR, (1 << 25) | (1 << 26), 0);
     pin_set(PHY_ENABLE.0, PHY_ENABLE.1, false);
-    pin_set(Port::A, 2, false);
+    if pa2_low {
+        pin_set(Port::A, 2, false);
+    }
     modify(RCC_CR, 1 << 12, 0);
     modify(PWR_D3CR, 3 << 14, 1 << 14);
     wait(|| rd(PWR_D3CR) & (1 << 13) != 0, 10);

@@ -562,3 +562,35 @@ fn give_up_save_frees_a_stuck_save() {
         assert_eq!(app.notes.text.as_str(), "USB DRIVE ON", "writable again");
     }
 }
+
+/// The cable pulled while the ride's summary shows (busy: no reset; the review of 2026-11-11, B4), the card lent
+/// read-write, written and held mounted by the computer: USB powered down, the card taken back without the eject the
+/// computer can no longer send, and the restart its changed volume needs asked for; USB not started again.
+#[test]
+fn a_pull_on_the_summary_takes_a_written_card_back() {
+    let (mut sim, mut app) = started(true);
+    app.settings.ready_check = false;
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    assert!(app.busy() && app.ride_settled(), "the summary, the ride saved");
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    let mut h = Host::default();
+    command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]); // UNIT ATTENTION
+    let at = (sim.emmc.image.len() / 512) as u32 - 2;
+    h.out = [vec![0xa5; 512]].into();
+    assert_eq!(command(&mut sim, &mut app, &mut h, 2, 512, false, &rw10(0x2a, at, 1)).1, 0, "written");
+    command(&mut sim, &mut app, &mut h, 3, 0, false, &[0x1e, 0, 0, 0, 1, 0]); // mounted: removal prevented
+    let mut main = crate::MainLoop::new(<Sim as Board>::CPU_HZ, 80);
+    (sim.main.link, sim.main.vbus) = (Some(super::loop_model::SimLink::default()), true);
+    main.pass(&mut app, &mut sim);
+    assert_eq!(sim.main.usb_starts, 1);
+    sim.main.vbus = false;
+    main.pass(&mut app, &mut sim);
+    assert_eq!((sim.main.usb_stops, sim.main.resets), (1, 0));
+    assert!(!app.drive_lent() && app.restart_wanted(), "the card back; a restart, since the volume changed");
+    main.pass(&mut app, &mut sim);
+    assert_eq!(sim.main.usb_starts, 1, "USB not started again");
+}

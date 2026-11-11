@@ -158,6 +158,8 @@ pub struct Sim {
     pub reset_bytes: u32,
     /// Times the RTC was set.
     pub rtc_sets: u32,
+    /// Times a set was asked, taken or not (a stopped RTC refuses it).
+    pub rtc_set_tries: u32,
     /// RTC backup registers (they survive an app restart, as on the unit).
     pub backup: [u32; 32],
     /// The battery voltage the ADC sees, mV (None: the ADC did not come up), and USB power.
@@ -1074,6 +1076,7 @@ impl Sim {
             expect_reset_bytes: false,
             reset_bytes: 0,
             rtc_sets: 0,
+            rtc_set_tries: 0,
             backup: core::array::from_fn(|i| if i == 18 { 5 << 28 | 1 << 22 } else { 0 }), // AUTO OFF off: tests idle long
             battery_mv: Some(3900),
             charger: false,
@@ -1363,6 +1366,7 @@ impl Board for Sim {
     }
 
     fn rtc_set(&mut self, tr: u32, dr: u32) {
+        self.rtc_set_tries += 1;
         if self.rtc_stopped {
             return;
         }

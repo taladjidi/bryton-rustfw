@@ -2084,7 +2084,7 @@ impl bryton_rustfw::LoopBoard for S510 {
         usb::start()
     }
     fn usb_stop(&mut self) {
-        usb::power_down();
+        usb::stop();
     }
     fn reset(&mut self) {
         system_reset();
