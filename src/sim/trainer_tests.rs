@@ -2040,6 +2040,10 @@ fn trainer_cadence_shows_beside_a_meter_without_cadence() {
     *app.radio.heard_ms.at_mut(Kind::Power) = 0;
     app.fold_trainer();
     assert_eq!(app.live.get(Metric::Cadence), Some(85), "no meter cadence: the trainer's");
+    app.trainer.reading.cadence = Some(86);
+    app.fold_trainer();
+    assert_eq!(app.live.get(Metric::Cadence), Some(86), "and renewed at once, not once a second");
+    app.trainer.reading.cadence = Some(85);
     app.live.set(Metric::Cadence, 70); // the meter sends one
     app.fold_trainer();
     assert_eq!(app.live.get(Metric::Cadence), Some(70), "the meter's, under a second old, stands");

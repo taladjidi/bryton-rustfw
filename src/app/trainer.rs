@@ -162,10 +162,10 @@ impl App {
             }
         }
         // a meter that sends no cadence leaves the trainer's: held back only while a cadence is under a second old
-        // (the meter's at 4 Hz; the trainer's own write is renewed every second)
+        // (the meter's at 4 Hz; the trainer's own write, `set_lent`, does not count)
         let meter_cadence = heard(Kind::Power) && self.live.age_ms(Metric::Cadence).is_some_and(|a| a < 1000);
         if let (Some(c), false) = (r.cadence, meter_cadence || heard(Kind::Cadence) || heard(Kind::SpeedCadence)) {
-            self.live.set(Metric::Cadence, u16::from(c));
+            self.live.set_lent(Metric::Cadence, u16::from(c));
         }
         if let (Some(v), false) = (r.speed_x10, heard(Kind::Speed) || heard(Kind::SpeedCadence)) {
             self.live.set(Metric::Speed, v);

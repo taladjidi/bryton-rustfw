@@ -1092,3 +1092,57 @@ fn gauge_fields() {
     run(&mut sim, &mut app, 5000);
     assert!(sim.pixels - px < 3000, "a lost strap costs nothing more: {} px", sim.pixels - px);
 }
+
+/// Two bad fixes in a row (90 km/h in an 8 m/s ride) add no distance and set no max speed, and the next real fix is
+/// taken at once.
+#[test]
+fn gps_speed_spikes_are_dropped_and_the_next_fix_taken() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 20_000);
+    let before = app.ride.dist_m();
+    sim.gnss.fix = Some(25_000);
+    run(&mut sim, &mut app, 2_500);
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3_000);
+    assert_eq!(app.live.get(Metric::Speed), Some(288), "the real fix after the spikes");
+    assert!(app.ride.max_speed_x10() <= 288, "max speed {} x10", app.ride.max_speed_x10());
+    assert!(app.ride.dist_m() - before < 8 * 9, "distance {} m in 5.5 s at 8 m/s", app.ride.dist_m() - before);
+}
+
+/// FTP is not edited from the menu while a ride is open: Select on the row leaves it and says so.
+#[test]
+fn ftp_row_is_refused_in_a_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    let ftp = app.settings.ftp;
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::menu_tests::to_row(&mut sim, &mut app, crate::menu::Row::Set(crate::menu::Setting::Ftp));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page)); // a step if the row were being edited
+    assert_eq!((app.settings.ftp, app.notes.text.as_str()), (ftp, "NOT DURING A RIDE"));
+}
+
+/// An FTP the ramp test found during the ride is held until the ride is over, then set: the result is not lost.
+#[test]
+fn a_held_ramp_ftp_is_set_when_the_ride_is_over() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.ramp.held = Some(255);
+    run(&mut sim, &mut app, 2000);
+    assert_ne!(app.settings.ftp, 255, "held while the ride is open");
+    app.press(&mut sim, Press::Long(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    if app.ride.state() == ride::State::Idle {
+        assert_eq!((app.settings.ftp, app.ramp.held), (255, None), "set once the ride is over");
+    }
+}

@@ -85,7 +85,23 @@ impl App {
             return;
         }
         if let Some(o) = self.ramp.result.take() {
+            if self.frozen_in_ride(menu::Setting::Ftp) {
+                self.ramp.held = Some(Self::applied_ftp(&o)); // the result is not lost: set when the ride ends
+                return self.say("FTP SET AFTER THE RIDE");
+            }
             self.settings.ftp = Self::applied_ftp(&o);
+            self.save_misc(b);
+            self.say("FTP SET");
+        }
+    }
+
+    /// Once a pass: an APPLY held through the ride is set when the ride is over.
+    pub(crate) fn ramp_apply_held(&mut self, b: &mut impl Board) {
+        if self.ramp.held.is_none() || self.frozen_in_ride(menu::Setting::Ftp) || !self.settings_ready(b) {
+            return;
+        }
+        if let Some(ftp) = self.ramp.held.take() {
+            self.settings.ftp = ftp;
             self.save_misc(b);
             self.say("FTP SET");
         }

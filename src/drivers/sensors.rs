@@ -328,14 +328,24 @@ pub struct Live {
     age_ms: [u32; 16],
     /// The values as of the last [`Live::snapshot`]: what the pages show.
     shown: [Option<u16>; 16],
+    /// Bit per [`Metric`]: the value was last written by [`Live::set_lent`] (the trainer's), not a sensor.
+    lent: u16,
 }
 
 impl Live {
     /// Sets `m` to `v`, fresh.
     pub fn set(&mut self, m: Metric, v: u16) {
+        self.lent &= !(1 << (m as u16 & 15));
         if let (Some(x), Some(a)) = (self.values.get_mut(m as usize), self.age_ms.get_mut(m as usize)) {
             (*x, *a) = (Some(v), 0);
         }
+    }
+
+    /// Sets `m` to `v`, fresh, as a stand-in for a sensor that does not send it (the trainer's cadence beside a power
+    /// meter without one): [`Live::age_ms`] does not count it.
+    pub fn set_lent(&mut self, m: Metric, v: u16) {
+        self.set(m, v);
+        self.lent |= 1 << (m as u16 & 15);
     }
 
     /// Drops `m`: the sensor sent it invalid.
@@ -350,9 +360,11 @@ impl Live {
         self.values.get(m as usize).copied().flatten()
     }
 
-    /// The age (ms) of the value of `m`, None when it has none.
+    /// The age (ms) of the value of `m` as a sensor sent it, None when it has none or it is a stand-in
+    /// ([`Live::set_lent`]).
     pub fn age_ms(&self, m: Metric) -> Option<u32> {
-        self.get(m).and(self.age_ms.get(m as usize).copied())
+        let sensor = self.lent >> (m as u16 & 15) & 1 == 0;
+        self.get(m).filter(|_| sensor).and(self.age_ms.get(m as usize).copied())
     }
 
     /// The value of `m` as of the last [`Live::snapshot`]: what a page shows. The sensors broadcast at 4 Hz and the

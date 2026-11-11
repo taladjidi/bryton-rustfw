@@ -73,6 +73,9 @@ impl App {
         }
         self.gps.ms = self.gps.ms.saturating_add(self.real_ms);
         self.gps.pvt_ms = self.gps.pvt_ms.saturating_add(self.dt_ms);
+        if let Some((_, age)) = self.gps.ok_speed.as_mut() {
+            *age = age.saturating_add(self.dt_ms);
+        }
         let mut send = if self.gps.ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
         self.gps.wait = self.gps.wait.saturating_sub(self.dt_ms);
         if send.is_some() || self.gps.wait == 0 {
@@ -123,7 +126,10 @@ impl App {
                     self.note_ack(a);
                 }
                 if let Some(pvt) = pvt {
-                    let speed = pvt.speed_x10(self.gps.pvt.as_ref());
+                    let speed = pvt.speed_x10(self.gps.ok_speed);
+                    if speed.is_some() {
+                        self.gps.ok_speed = Some((pvt.speed_mm_s, 0));
+                    }
                     self.gps.pvt = Some(pvt);
                     self.gps.pvt_ms = 0;
                     pvt_read = true;

@@ -1704,11 +1704,26 @@ fn ubx_frames() {
             let mut f = std::vec![0xb5, 0x62, class, id, len as u8, (len >> 8) as u8];
             f.extend((0..len).map(|_| r()));
             if r() % 50 == 0 {
-                // a corrupt header (length 0xffff) and noise: the next valid frame must still come out
+                // a corrupt header (length 0xffff), noise (no sync byte), then a valid NAV-PVT, all through the shared
+                // parser: the PVT must still come out
                 f.splice(4..6, [0xff, 0xff]);
-                let mut p = crate::gnss::Parser::new();
-                f.iter().take(6).for_each(|&x| _ = p.push(x));
-                assert!(p.idle(), "an over-long length resyncs");
+                f.truncate(6);
+                f.extend((0..2000).map(|_| r() % 0xb0));
+                let mut g = std::vec![0xb5, 0x62, 0x01, 0x07, 92, 0];
+                g.extend((0..92).map(|_| r()));
+                let (mut a, mut b) = (0u8, 0u8);
+                for &x in &g[2..] {
+                    a = a.wrapping_add(x);
+                    b = b.wrapping_add(a);
+                }
+                g.extend([a, b]);
+                let mut got = None;
+                for x in f.into_iter().chain(g) {
+                    if let Some((c, i, p)) = parser.push(x) {
+                        got = crate::gnss::pvt(c, i, p);
+                    }
+                }
+                assert!(got.is_some(), "the PVT after a corrupt length decodes");
                 resyncs += 1;
                 continue;
             }

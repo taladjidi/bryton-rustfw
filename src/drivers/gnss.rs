@@ -7,6 +7,12 @@
 /// Largest payload kept (NAV-PVT is 92 bytes); a longer frame is read through and dropped.
 pub const MAX: usize = 100;
 
+/// A ground speed under this (mm/s, 0.3 km/h) is the receiver's noise at a standstill: 0.
+pub const NOISE_MM_S: u32 = 83;
+
+/// A speed older than this (ms) is no reference for the next fix's (the receiver in cyclic tracking).
+pub const SPIKE_REF_MS: u32 = 2500;
+
 /// Reassembles UBX frames from the SPI byte stream.
 pub struct Parser {
     buf: [u8; MAX],
@@ -404,11 +410,18 @@ impl Pvt {
         self.fix_ok && (self.fix == 2 || self.fix == 3)
     }
 
-    /// The ground speed in km/h x 10, rounded; None without a good fix, or when it is 15 m/s off the previous good
-    /// fix's (a bad fix, not a rider: it would add metres and set the max speed).
-    pub fn speed_x10(&self, prev: Option<&Pvt>) -> Option<u16> {
-        let spike = prev.is_some_and(|q| q.good() && q.speed_mm_s.abs_diff(self.speed_mm_s) > 15_000);
-        let v = self.speed_mm_s.saturating_mul(36).saturating_add(500) / 1000;
+    /// The ground speed in km/h x 10, rounded; None without a good fix, or when it is more than 15 m/s off `ok`, the
+    /// last speed taken (mm/s) and its age (ms): a bad fix, not a rider, which would add metres and set the max
+    /// speed. Within [`SPIKE_REF_MS`] the limit is the same however long ago (two bad fixes in a row both fail); past
+    /// it the reference is too old to judge by (cyclic tracking).
+    pub fn speed_x10(&self, ok: Option<(u32, u32)>) -> Option<u16> {
+        let spike = ok.is_some_and(|(v, age)| age <= SPIKE_REF_MS && v.abs_diff(self.speed_mm_s) > 15_000);
+        // a stopped receiver's speed noise (14 to 27 mm/s seen) must not round up to 0.1 km/h: a moving test is `> 0`
+        let v = if self.speed_mm_s < NOISE_MM_S {
+            0
+        } else {
+            self.speed_mm_s.saturating_mul(36).saturating_add(500) / 1000
+        };
         (self.good() && !spike).then_some(v.min(u32::from(u16::MAX)) as u16)
     }
 }
@@ -502,8 +515,11 @@ mod tests {
         let at = |mm_s| Pvt { fix: 3, fix_ok: true, speed_mm_s: mm_s, ..pvt(0x01, 0x07, &sample(3, 0)).unwrap() };
         assert_eq!(at(6944).speed_x10(None), Some(250), "24.998 km/h");
         assert_eq!(at(6972).speed_x10(None), Some(251), "25.099 km/h rounds up, not down");
-        assert_eq!(at(25_000).speed_x10(Some(&at(5000))), None, "a spike");
-        assert_eq!(at(5100).speed_x10(Some(&at(5000))), Some(184));
+        assert_eq!(at(25_000).speed_x10(Some((5000, 1000))), None, "a spike");
+        assert_eq!(at(25_000).speed_x10(Some((5000, 5000))), Some(900), "a reference too old to judge by");
+        assert_eq!(at(25_000).speed_x10(Some((5000, 2000))), None, "a second spike in a row");
+        assert_eq!(at(20).speed_x10(None), Some(0), "standstill noise reads 0, not 0.1 km/h");
+        assert_eq!(at(5100).speed_x10(Some((5000, 1000))), Some(184));
         assert_eq!(Pvt { fix: 0, ..at(5000) }.speed_x10(None), None);
     }
 
