@@ -60,6 +60,8 @@ pub trait LoopBoard: Board {
     fn idle_stop(&mut self, ms: u32, ride: bool) -> (u32, u32);
     /// The ride's Stop is built in (main.rs `POWER_STEPS` bit 6), for `info`.
     const RIDE_STOP_BUILT: bool;
+    /// main.rs `POWER_STEPS` (the build's sleep steps), for `info`.
+    const POWER_STEPS: u32;
     /// Drops what the Nordic chip sent (nobody reads it).
     fn nrf_flush(&mut self);
     /// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`bytes`).
@@ -278,7 +280,8 @@ impl<L: UsbLink> MainLoop<L> {
                     if let Some(l) = &mut self.link {
                         before_poll = b.timer_elapsed_us(slice);
                         before_cycles = b.cycles();
-                        match l.poll(&mut self.session, app, b, self.policy.stats()) {
+                        let stats = Stats { power_steps: B::POWER_STEPS, ..self.policy.stats() };
+                        match l.poll(&mut self.session, app, b, stats) {
                             Effect::Key(p) => press = Some(p),
                             Effect::Reset => {
                                 l.linger(50);

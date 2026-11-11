@@ -251,6 +251,7 @@ impl LoopPolicy {
                 slices: [0; 5],
                 stops: [0; 6],
                 ride_stop: false,
+                power_steps: 0,
                 usb_recoveries: 0,
             },
             stops: Stops {
@@ -558,6 +559,7 @@ mod tests {
                 slices: p.stats().slices,
                 stops: [0; 6],
                 ride_stop: false,
+                power_steps: 0,
                 usb_recoveries: 0
             }
         );
@@ -574,6 +576,7 @@ mod tests {
                 slices: p.stats().slices,
                 stops: [0; 6],
                 ride_stop: false,
+                power_steps: 0,
                 usb_recoveries: 0,
             }
         );

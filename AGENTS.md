@@ -59,7 +59,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->837 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->840 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
@@ -197,7 +197,7 @@ seconds, and the run ends with all of them and a total:
   tests wrote: `fsck_msdos -n` / `fsck.vfat -n` (an independent FAT checker) on the volumes in `target/fat/*.img` (`*_lost.img`: a cut that leaves a lost chain on purpose, orphan clusters allowed and nothing else),
   `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python; on main or `--full` they and the fsck tool are required) and `tools/walk.py selftest`;
-- **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `sync.py`, `assist.py`, `segments.py`,
+- **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `pack.py`, `sync.py`, `assist.py`, `segments.py`,
   `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py`, `iaprecover.py`, `fetch_firmware.py` and
   `theme.py selftest`, and
   `tools/font.py` regenerating `src/ui/fonts.rs` into a temporary file with `cmp` failing on a diff (skipped without PIL);

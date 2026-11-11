@@ -25,8 +25,8 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py stackfault               run the stack past its canary on purpose (no ride open): the unit must reset
                                   with the fault marker (peek 0x580040c4 reads 0xfa0000nn within a minute)
-  dev.py stall S                  sleep the loop S seconds (1..120) in one go (test only, never on a real ride): the recorder sees a gap
-                                  in RTC seconds (src/link/dev.rs `bench stall`)
+  dev.py stall S                  sleep the loop S seconds (1..120; 1..5 with a ride open) in one go (test only, never on a real
+                                  ride): the recorder sees a gap in RTC seconds (src/link/dev.rs `bench stall`)
   dev.py srefresh [MS]            Stop mode step 1 (no ride open): the SDRAM in self-refresh around one CSleep WFI of
                                   MS ms (default 100), the image CRC compared; `srefresh ok ...` when all went right
   dev.py stop [MS] [--usboff|--keep]  Stop mode step 2 (no ride open; from RAM, `dev.py run`): USB off, Stop for MS ms
@@ -539,7 +539,8 @@ def main():
     p = sub.add_parser('stepbench', help='run App::step N times back to back (2..16, default 8) and print each in us and the '
                        'first-to-rest ratio: a ratio well over 1 means the pass is code fetch')
     p.add_argument('n', nargs='?', type=int, default=8)
-    p = sub.add_parser('stall', help='sleep the unit\'s main loop S seconds (1..120) in one go (test only, never on a real ride): '
+    p = sub.add_parser('stall', help='sleep the unit\'s main loop S seconds (1..120; 1..5 with a ride open) in one go (test only, never on a '
+                       'real ride): '
                        'the recorder must take the gap on its RTC seconds')
     p.add_argument('seconds', type=int)
     p = sub.add_parser('srefresh', help='Stop step 1 (no ride open): the SDRAM in self-refresh around one CSleep WFI of MS '

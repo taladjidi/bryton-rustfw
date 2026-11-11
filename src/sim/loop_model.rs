@@ -182,6 +182,7 @@ impl Sim {
 impl LoopBoard for Sim {
     type Link = SimLink;
     const RIDE_STOP_BUILT: bool = true; // a test turns it off at run time (`ride_stop_off`)
+    const POWER_STEPS: u32 = 0x7f;
     fn canary(&mut self) -> u32 {
         if self.main.overflowed { 0 } else { crate::STACK_CANARY }
     }

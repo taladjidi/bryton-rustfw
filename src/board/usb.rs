@@ -38,7 +38,7 @@ const DCFG: u32 = OTG_HS + 0x800;
 const GPVNDCTL: u32 = OTG_HS + 0x034;
 /// Experiment switch (docs/install.md): microseconds to wait after each bulk IN packet of the drive, to see whether
 /// the high-speed drop depends on the rate. 0 (the default) is off; clamped to 10 ms.
-const PACE_US: u32 = parse_us(option_env!("USB_PACE_US"));
+pub(crate) const PACE_US: u32 = parse_us(option_env!("USB_PACE_US"));
 
 // const evaluation: an index past the end fails the build (and `i < b.len()` guards it)
 #[allow(clippy::indexing_slicing)]
@@ -94,7 +94,7 @@ fn snapshot(event: u8) -> UsbSnap {
 }
 /// Full speed (12 Mbit/s, 64-byte bulk packets) unless built with USB_HS=1: high-speed transfers drop on this unit
 /// (docs/usb.md; stock's drive too), full speed held for GBs of copies. The PHY itself does high speed (2026-10-31).
-const FULL_SPEED: bool = option_env!("USB_HS").is_none();
+pub(crate) const FULL_SPEED: bool = option_env!("USB_HS").is_none();
 /// Bulk packet size: 512 at high speed, 64 at full speed (USB 2.0 5.8.3).
 const MPS: usize = if FULL_SPEED { 64 } else { 512 };
 const RCC_AHB1RSTR: u32 = RCC + 0x080;
@@ -396,7 +396,8 @@ impl UsbLink for Link {
     /// its protocol.
     fn poll(&mut self, s: &mut Session, app: &mut App, board: &mut impl Board, stats: Stats) -> Effect {
         let mut effect = Effect::None;
-        if self.dev.poll(&mut [&mut self.cdc, &mut self.msc]) {
+        // bytes a command with an effect left in the session run without waiting for a USB event
+        if self.dev.poll(&mut [&mut self.cdc, &mut self.msc]) || s.pending() {
             let mut buf = [0u8; 512];
             if core::mem::take(&mut self.msc.reset) {
                 app.drive_reset();
@@ -405,6 +406,7 @@ impl UsbLink for Link {
             let (bus_reset, dtr) = (core::mem::take(&mut self.msc.bus_reset), self.cdc.dtr());
             if bus_reset || dtr != self.dtr {
                 self.dead = false;
+                s.drop_pending(); // the last client's commands are not this one's
             }
             self.dtr = dtr;
             if bus_reset {
@@ -416,6 +418,10 @@ impl UsbLink for Link {
                 self.worked = true;
             }
             while effect == Effect::None {
+                if s.pending() {
+                    effect = s.feed(&[], app, stats, self);
+                    continue;
+                }
                 match self.cdc.read_packet(&mut buf) {
                     Ok(n) if n > 0 => {
                         self.dead = false;

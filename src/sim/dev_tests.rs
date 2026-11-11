@@ -86,7 +86,7 @@ fn info_answers() {
     assert_eq!(
         format!("{head} appup N, {tail}").as_bytes(),
         format!(
-            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, loop early 0 0 0 0 0 stops 0 0 0 0 0 0 appup N, radio resets 0 resyncs 0, ant events lost 0, ant HR 0 SPEED 0 CAD 0 SPD+CAD 0 POWER 0 SHIFT 0 DI2 0 TRAIN 0, climb tile us last 0 max 0 slice max 0, auto off held 65, ride idle, card writes yes, ride stop built no, usb recoveries 0, phone link mtu 23 int 0 phy 0 dle 0 ext 0 boost 0 0 0 last read 0 B 0 ms hvn 0 sent 0 full 0 turns 0\n",
+            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, loop early 0 0 0 0 0 stops 0 0 0 0 0 0 appup N, radio resets 0 resyncs 0, ant events lost 0, ant HR 0 SPEED 0 CAD 0 SPD+CAD 0 POWER 0 SHIFT 0 DI2 0 TRAIN 0, climb tile us last 0 max 0 slice max 0, auto off held 65, ride idle, card writes yes, ride stop built no, power steps 0x00000000, usb recoveries 0, phone link mtu 23 int 0 phy 0 dle 0 ext 0 boost 0 0 0 last read 0 B 0 ms hvn 0 sent 0 full 0 turns 0\n",
             env!("CARGO_PKG_VERSION"),
             env!("GIT_DESCRIBE")
         )
@@ -322,6 +322,10 @@ fn ride_open_refuses_the_risky_commands() {
         "bench step 4",
         "sector 3",
         "poke 0x40013014 1",
+        "ls /",
+        "get /Activities/a.fit 0 16",
+        "emmc",
+        "bench stall 6",
     ] {
         pc.got.clear();
         assert_eq!(s.feed(format!("{cmd}\n").as_bytes(), &app, Stats::default(), &mut pc), Effect::None, "{cmd}");
@@ -336,6 +340,54 @@ fn ride_open_refuses_the_risky_commands() {
     pc.got.clear();
     s.feed(b"bench 0 4 1001\n", &app, Stats::default(), &mut pc);
     assert!(pc.got.starts_with(b"err usage: bench"), "{:?}", pc.got);
+}
+
+/// An image whose upload began with no ride does not run when a ride started before its last byte: the ride stays.
+#[test]
+fn an_upload_finished_in_a_ride_does_not_run() {
+    let (mut sim, mut app) = app_at(9, 0, 0);
+    let img = image(4096);
+    let sum = img.iter().map(|&b| u32::from(b)).fold(0u32, u32::wrapping_add);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    s.feed(format!("load {} {sum}\n", img.len()).as_bytes(), &app, Stats::default(), &mut pc);
+    assert_eq!(pc.got, b"ready\n");
+    s.feed(&img[..1000], &app, Stats::default(), &mut pc);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    pc.got.clear();
+    assert_eq!(s.feed(&img[1000..], &app, Stats::default(), &mut pc), Effect::None);
+    assert_eq!(pc.got, b"err ride open\n");
+    // the same image with no ride runs
+    let (_, idle) = app_at(9, 0, 0);
+    assert_eq!(load(&mut s, &idle, &mut Pc::default(), &img, sum), Effect::Run(4096));
+}
+
+/// Two commands with an effect in one packet: the second waits in the session and runs on the next call, never lost.
+#[test]
+fn a_packet_of_several_commands_runs_them_all() {
+    let (_, app) = app_at(9, 0, 0);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    let e = s.feed(b"key start\nkey back long\nwhere\n", &app, Stats::default(), &mut pc);
+    assert_eq!(e, Effect::Key(Press::Short(Key::Start)));
+    assert!(s.pending());
+    assert_eq!(s.feed(&[], &app, Stats::default(), &mut pc), Effect::Key(Press::Long(Key::Back)));
+    assert!(s.pending());
+    assert_eq!(s.feed(&[], &app, Stats::default(), &mut pc), Effect::None);
+    assert!(!s.pending());
+    assert!(pc.got.starts_with(b"ok\nok\nwhere "), "{:?}", pc.got);
+    // a line cut by the effect's packet end goes on with the next packet
+    pc.got.clear();
+    assert_eq!(s.feed(b"key lap\nwhe", &app, Stats::default(), &mut pc), Effect::Key(Press::Short(Key::Lap)));
+    assert_eq!(s.feed(&[], &app, Stats::default(), &mut pc), Effect::None);
+    assert_eq!(s.feed(b"re\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert!(pc.got.starts_with(b"ok\nwhere "), "{:?}", pc.got);
+    // a new client (usb.rs: a bus reset, a DTR change) drops what the last one left: its key never comes
+    pc.got.clear();
+    assert_eq!(s.feed(b"key lap\nkey start\n", &app, Stats::default(), &mut pc), Effect::Key(Press::Short(Key::Lap)));
+    s.drop_pending();
+    assert!(!s.pending());
+    assert_eq!(s.feed(b"where\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert!(pc.got.starts_with(b"ok\nwhere "), "{:?}", pc.got);
 }
 
 /// An upload the computer abandoned does not swallow the next commands: after 5 s without a byte it is dropped, with an error line.
@@ -370,23 +422,29 @@ fn a_long_line_is_refused() {
     assert!(pc.got.starts_with(b"where "), "{:?}", pc.got);
 }
 
-/// `bench stall <s>` runs during a ride: the sleep is one gap, the ride's timer takes it on the next pass, and the
-/// session answers `stall <ms>`. `bench step` is still refused in the ride.
+/// `bench stall <s>` runs during a ride up to 5 s (longer is refused): the sleep is one gap, the ride's timer takes
+/// it on the next pass, and the session answers `stall <ms>`. With no ride, up to 120 s. `bench step` is still
+/// refused in the ride.
 #[test]
 fn bench_stall_runs_during_a_ride() {
+    let (_, idle) = app_at(9, 0, 0);
     let (mut sim, mut app) = app_at(9, 0, 0);
     app.press(&mut sim, crate::Press::Short(crate::Key::Start));
     assert_eq!(app.ride.state(), crate::ride::State::Running);
     let t = app.ride.timer_s();
     let (mut s, mut pc) = (Session::new(), Pc::default());
-    let e = s.feed(b"bench stall 30\n", &app, Stats::default(), &mut pc);
-    assert_eq!(e, Effect::BenchStall(30));
+    assert_eq!(s.feed(b"bench stall 120\n", &idle, Stats::default(), &mut pc), Effect::BenchStall(120));
+    assert_eq!(s.feed(b"bench stall 6\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert_eq!(pc.got, b"err ride open\n");
+    pc.got.clear();
+    let e = s.feed(b"bench stall 5\n", &app, Stats::default(), &mut pc);
+    assert_eq!(e, Effect::BenchStall(5));
     assert!(app.serve(&mut sim, &mut pc, &s, e));
     let answer = std::str::from_utf8(&pc.got).unwrap_or("");
     let ms: u32 = answer.trim().strip_prefix("stall ").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
-    assert!((29_000..=31_000).contains(&ms), "{answer:?}");
+    assert!((4_500..=5_500).contains(&ms), "{answer:?}");
     app.step(&mut sim);
-    assert!(app.ride.timer_s().abs_diff(t + 30) <= 1, "timer {} after {t}", app.ride.timer_s());
+    assert!(app.ride.timer_s().abs_diff(t + 5) <= 1, "timer {} after {t}", app.ride.timer_s());
     pc.got.clear();
     assert_eq!(s.feed(b"bench step 2\n", &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(pc.got, b"err ride open\n");

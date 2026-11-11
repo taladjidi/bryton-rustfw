@@ -37,7 +37,7 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
                                   # time-out only (the link is not served during a Stop, so `idlestop 0` may never get
                                   # there); the drop at its end is not logged; then ./dev.py info: `idle Stops ...`
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
-                                  # reset / load / find / bench / sector / poke answer `err ride open` while a ride or its save is
+                                  # reset / load / find / bench / sector / poke / ls / get / emmc answer `err ride open` while a ride or its save is
                                   # open; a wedged recorder needs the four-button restart (Engineer Mode gesture, AGENTS.md)
     tools/profile.py --run        # run a build from RAM, then scripted scenarios (idle, pages, menu, a ride
                                   # discarded), a markdown table each

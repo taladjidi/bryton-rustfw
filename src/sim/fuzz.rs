@@ -542,7 +542,7 @@ fn dev_link_input() {
         b"prof ",
         b" -",
     ];
-    let mut maps = 0;
+    let (mut maps, mut drained) = (0, 0);
     // `where` on screens chosen by the seed: menus with the cursor up to 3 past the last row, ride pages, others
     let (mut wheres, mut menu_wheres) = (0, 0);
     let menus = [
@@ -587,15 +587,24 @@ fn dev_link_input() {
                 buf.push(b);
             }
             if k % 64 == 63 {
-                maps += usize::from(matches!(
-                    session.feed(&buf, &app, Stats::default(), &mut pc),
-                    crate::dev::Effect::BenchMap(..) | crate::dev::Effect::BenchStep(_)
-                ));
+                // as the USB link does: the bytes after an effect are fed (with nothing new) before the next packet
+                let mut e = session.feed(&buf, &app, Stats::default(), &mut pc);
+                loop {
+                    maps +=
+                        usize::from(matches!(e, crate::dev::Effect::BenchMap(..) | crate::dev::Effect::BenchStep(_)));
+                    if !session.pending() {
+                        break;
+                    }
+                    drained += 1;
+                    e = session.feed(&[], &app, Stats::default(), &mut pc);
+                }
+                assert!(!pc.got.windows(14).any(|w| w == b"err input lost"), "{seed} {k}");
                 buf.clear();
                 pc.got.clear();
             }
         }
     }
+    assert!(drained > 50, "bytes after an effect fed {drained} times");
     // `bench map` lines by structure (random bytes almost never make one): numbers valid, negative, huge, broken
     let tokens: [&str; 8] = ["7", "-250", "99", "0x10", "-", "4294967296", "-2147483648", "60"];
     let (mut session, mut pc) = (Session::new(), super::Pc::default());
@@ -680,14 +689,17 @@ fn dev_link_ride_open() {
             6 if c[1] % 3 == 0 => std::format!("bench srefresh {}\n", 1 + u32::from(c[2]) * 100),
             6 if c[1] % 3 == 1 => std::format!("bench stop {}\n", 1 + u32::from(c[2]) * 100),
             6 => std::format!("sector {}\n", c[2]),
-            7 => std::format!("poke {a} {}\n", c[3]),
+            7 if c[1] % 2 == 0 => std::format!("poke {a} {}\n", c[3]),
+            7 if c[2] % 3 == 0 => "ls /Activities\n".into(),
+            7 if c[2] % 3 == 1 => std::format!("get /x.fit {} {}\n", c[3], 1 + c[4]),
+            7 => "emmc\n".into(),
             8 => std::format!("peek {a}\n"),
-            9 if c[1] % 3 == 0 => std::format!("bench stall {}\n", c[2] % 130),
+            9 if c[1] % 3 == 0 => std::format!("bench stall {}\n", c[2] % 9),
             9 if c[1] % 3 == 1 => std::format!("bench stallx {}\n", c[2] % 130),
             _ => std::format!("{}\n", "x".repeat(usize::from(c[4]))),
         };
         let e = session.feed(line.as_bytes(), &app, Stats::default(), &mut pc);
-        stalls += usize::from(matches!(e, Effect::BenchStall(1..=120)));
+        stalls += usize::from(matches!(e, Effect::BenchStall(1..=5)));
         assert!(!line.starts_with("bench stallx") || e == Effect::None, "{line:?}");
         assert!(
             !matches!(
@@ -704,6 +716,10 @@ fn dev_link_ride_open() {
                     | Effect::BenchSrefresh(_)
                     | Effect::BenchStop(..)
                     | Effect::BenchIdleStop(_)
+                    | Effect::BenchStall(6..)
+                    | Effect::Ls
+                    | Effect::Get(..)
+                    | Effect::Emmc
             ),
             "{line:?} got out with a ride open"
         );
@@ -716,7 +732,7 @@ fn dev_link_ride_open() {
     assert!(pc.regs.is_empty(), "a poke reached the board with a ride open");
     assert!(refused > 100 && other > 500, "refusals reached: {refused} of {other}");
     assert!(nrfoff > 20, "`bench nrfoff` refused {nrfoff} times");
-    assert!(stalls > 20, "`bench stall` reached {stalls} times");
+    assert!(stalls > 10, "`bench stall` reached {stalls} times");
 }
 
 /// The dev link by structure: addresses at and around the range edges, counts at the bounds, long lines, uploads at

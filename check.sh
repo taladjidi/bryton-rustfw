@@ -231,6 +231,7 @@ lane_P() {  # the Python tools' self-tests
         step "lint.py selftest" python3 -I tools/lint.py selftest
         step "numbers.py selftest" python3 -I tools/numbers.py selftest
         step "dev.py selftest" python3 -I tools/dev.py selftest
+        step "pack.py selftest" python3 -I tools/pack.py selftest
         step "sync.py selftest" python3 -I tools/sync.py selftest  # a fake Intervals.icu and Strava on 127.0.0.1
         step "assist.py selftest" python3 -I tools/assist.py selftest
         step "segments.py selftest" python3 -I tools/segments.py selftest
