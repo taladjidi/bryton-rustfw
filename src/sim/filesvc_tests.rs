@@ -795,8 +795,10 @@ fn the_link_info_says_what_the_link_has_and_what_the_last_read_moved() {
     assert_eq!((l.dle, l.boost), (251, [0, 0, 0]), "data length in force, the three boost calls accepted");
     assert_eq!(l.bytes, ride.len() as u32, "the file bytes of all the windows of the transfer");
     assert!(l.ms * 2 > a.ms as u32 && l.ms < a.ms as u32 * 2, "{} ms against {}", l.ms, a.ms);
+    // `sent` counts READ frames; the stack also confirms each window's END frame, which is not one (and whether the
+    // last ones landed before this read depends on pass timing: a banner's redraw moved it). `bytes` above is exact.
     assert!(
-        l.sent > 0 && l.hvn > 0 && l.hvn <= l.sent + 2, // the last frames of the window before a READ that resumes it may confirm after the counters restart
+        l.sent > 0 && l.hvn > 0 && l.hvn <= l.sent + a.windows as u32,
         "{} frames, {} confirmed, sim completed {}",
         l.sent,
         l.hvn,
