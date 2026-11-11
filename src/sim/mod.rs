@@ -1673,6 +1673,8 @@ mod stop_tests;
 #[cfg(test)]
 mod storage_tests;
 #[cfg(test)]
+mod task_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod walk_tests;

@@ -16,7 +16,12 @@ impl Count {
     /// A tap on the middle of menu row `row` of the menu shown (its screen of rows).
     fn tap_row(&mut self, sim: &mut Sim, app: &mut App, row: usize) {
         self.0 += 1;
-        let y = ui::LIST_Y + (row % ui::MENU_ROWS) as u32 * ui::MENU_ROW + ui::MENU_ROW / 2;
+        // the rows shown now: the window shifts once the selection reaches the last screen
+        let first = match app.screen() {
+            Screen::Menu(m, sel) => menu::first_shown(sel, ui::MENU_ROWS, app.rows(m)),
+            _ => 0,
+        };
+        let y = ui::LIST_Y + (row - first) as u32 * ui::MENU_ROW + ui::MENU_ROW / 2;
         app.input(sim, Input::Touch(Gesture::Tap(120, y as u16)));
     }
 }
