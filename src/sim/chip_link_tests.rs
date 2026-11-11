@@ -289,8 +289,8 @@ fn nine_pairings_in_a_row_never_exceed_8_live_contexts() {
     assert!((1..=8).contains(&most), "{most} live contexts at most");
 }
 
-/// A call timed out; its answer arrives while the next call's send is held by CTS (the in-flight event frame keeps
-/// the response waiting). The drain in `send` swallows it, so the next call gets its own answer.
+/// A call timed out; its answer waits behind an event frame in flight. The next call waits for it (the event kept, the
+/// answer dropped) before it sends, so it gets its own answer.
 #[test]
 fn a_late_answer_arriving_while_the_send_is_held_is_swallowed() {
     let mut s = chip();

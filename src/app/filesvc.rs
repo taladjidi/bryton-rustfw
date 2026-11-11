@@ -1044,8 +1044,13 @@ impl App {
             }
             let svc = &mut self.phone.files;
             let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
-            if ble::notify(b, &mut self.rx, conn, data, frame).is_err() {
-                if matches!(svc.job, Job::Read { .. }) {
+            let refused_unsent = self.rx.stalled || self.rx.broken; // `call` sends nothing then
+            if let Err(e) = ble::notify(b, &mut self.rx, conn, data, frame) {
+                if e == nrf::Error::Timeout && !refused_unsent && matches!(svc.job, Job::Read { .. }) {
+                    // the frame may have gone (its answer late) or not: never sent twice, END says what was taken
+                    // and the phone asks again from what it holds
+                    svc.abort(Status::Ok);
+                } else if matches!(svc.job, Job::Read { .. }) {
                     svc.info.full = svc.info.full.saturating_add(1);
                 }
                 break; // the queue is full (or Data is not subscribed): the same frame next pass

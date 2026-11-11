@@ -329,6 +329,9 @@ impl Fat {
         if let Some(n) = self.free_clusters(d)? {
             return Ok(Some(n));
         }
+        if self.fsinfo == 0 {
+            return Ok(None); // no FSInfo sector: a count would have nowhere to go, and would be read again each time
+        }
         self.sync_fats(d)?;
         self.free_clusters(d)
     }
