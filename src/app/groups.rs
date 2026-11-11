@@ -132,6 +132,9 @@ pub(crate) struct Gps {
     pub(crate) pvt: Option<gnss::Pvt>,
     /// Since the last fix, ms.
     pub(crate) pvt_ms: u32,
+    /// The last speed taken (mm/s) and its age (ms): what the next fix's speed is checked against
+    /// ([`gnss::Pvt::speed_x10`]).
+    pub(crate) ok_speed: Option<(u32, u32)>,
     /// Since the app's first step: the receiver is powered at [`GNSS_ON_MS`], its configuration and aiding sent
     /// once from [`GNSS_CONFIG_MS`].
     pub(crate) ms: u32,
@@ -183,6 +186,7 @@ impl Gps {
             parser: gnss::Parser::new(),
             pvt: None,
             pvt_ms: 0,
+            ok_speed: None,
             ms: 0,
             sent: 0,
             reconfig: false,
@@ -243,6 +247,8 @@ pub(crate) struct Radio {
     pub(crate) misses: [u8; Kind::ALL.len()],
     /// Channels that sent data while searching: ask the chip which sensor it found.
     pub(crate) ask: u8,
+    /// The device a search heard, until the rider confirms it on the sensor's row (nothing of it is used before).
+    pub(crate) found: [Option<nrf::SensorId>; Kind::ALL.len()],
     /// The sensors heard in the NEARBY search.
     pub(crate) nearby: nrf::Nearby,
     /// The NEARBY search is running.
@@ -288,6 +294,7 @@ impl Radio {
             lost: 0,
             heard: 0,
             broadcasts: [0; Kind::ALL.len()],
+            found: [None; Kind::ALL.len()],
         }
     }
 
@@ -318,8 +325,8 @@ impl Radio {
         (lost, back)
     }
 
-    /// A ride starts: the channels resting search again at the next pass, from the first rest (a strap put on just
-    /// before Start is found at once, not after a long rest).
+    /// A ride starts or resumes: the channels resting search again at the next pass, from the first rest (a strap put
+    /// on just before Start is found at once, not after a long rest; a power meter out of range during a pause, too).
     pub(crate) fn wake_rested(&mut self) {
         for (r, m) in self.resting_ms.iter_mut().zip(&mut self.misses) {
             if *r != u32::MAX {
@@ -450,6 +457,8 @@ pub(crate) struct RampState {
     pub(crate) result: Option<ramp::Outcome>,
     /// The result screen is due (shown at the next pass).
     pub(crate) show: bool,
+    /// An APPLY made during the ride: the FTP to set once the ride is over (the ride's TSS and zone times keep one FTP).
+    pub(crate) held: Option<u16>,
 }
 
 /// The ride recorders and what goes with the ride being recorded (app/riding.rs, storage/recorder/mod.rs).
@@ -569,6 +578,8 @@ impl Quick {
 pub(crate) struct MenuInput {
     /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
     pub(crate) editing: bool,
+    /// MAX HR when its editing began: leaving it unchanged keeps "from age" ([`App::setting_edited`]).
+    pub(crate) max_hr_start: u16,
     /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
     /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
     pub(crate) chosen: bool,
@@ -594,6 +605,7 @@ impl MenuInput {
     pub(crate) fn new() -> Self {
         MenuInput {
             editing: false,
+            max_hr_start: 0,
             chosen: false,
             confirm: None,
             give_up_step: 0,

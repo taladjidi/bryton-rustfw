@@ -57,7 +57,7 @@ fn the_d500_is_paired_and_read() {
     assert_eq!(app.trainer.reading.modes, Some(7), "page 54 came back");
     assert_eq!(
         [Metric::Power, Metric::Cadence, Metric::Speed].map(|m| app.live.get(m)),
-        [Some(150), Some(90), Some(226)]
+        [Some(150), Some(90), Some(227)]
     );
     let row =
         app.menu_row(Menu::Sensors, super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::BtTrainer)).unwrap();

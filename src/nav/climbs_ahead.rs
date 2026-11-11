@@ -100,8 +100,8 @@ struct P {
     lon: i32,
     /// The map's elevation, m ([`NO_ELEV`] until filled).
     elev: i16,
-    /// Smoothed, dm.
-    smooth: i16,
+    /// Smoothed, dm (an i32: a pass above 3276.7 m does not fit an i16).
+    smooth: i32,
     /// Metres from the start of the trace.
     along: u16,
 }
@@ -382,9 +382,9 @@ impl Ahead {
         Some(match path.get(i).filter(|_| i > 0) {
             Some(b) if b.along > a.along => {
                 let (da, span) = (i64::from(d.saturating_sub(u32::from(a.along))), i64::from(b.along - a.along));
-                i32::from(a.smooth) + ((i64::from(b.smooth) - i64::from(a.smooth)) * da / span) as i32
+                a.smooth + ((i64::from(b.smooth) - i64::from(a.smooth)) * da / span) as i32
             }
-            _ => i32::from(a.smooth),
+            _ => a.smooth,
         })
     }
 
@@ -764,7 +764,7 @@ impl Ahead {
         };
         let raw: [i16; PATH] = core::array::from_fn(|i| self.path.get(i).map_or(0, |p| p.elev));
         for (i, p) in self.path.iter_mut().take(n).enumerate() {
-            p.smooth = raw.get(i).copied().unwrap_or(0).saturating_mul(10);
+            p.smooth = i32::from(raw.get(i).copied().unwrap_or(0)) * 10;
             if k == 0 || i < 4 * k || i + 4 * k > count {
                 continue;
             }
@@ -777,7 +777,7 @@ impl Ahead {
             }
             // dm: acc / 231 m x 10, rounded half away from zero
             let v = (acc * 10 * 2 + 231 * acc.signum()) / (231 * 2);
-            p.smooth = v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+            p.smooth = v;
         }
     }
 }
@@ -920,12 +920,20 @@ pub(crate) mod tests {
             a.path[i].elev = (i * 2) as i16;
         }
         a.smooth();
-        assert!((28..71).all(|i| a.path[i].smooth.abs_diff(i as i16 * 20) <= 1), "a line stays a line");
+        assert!((28..71).all(|i| a.path[i].smooth.abs_diff(i as i32 * 20) <= 1), "a line stays a line");
         // 50 nodes 10 m apart are 490 m: raw
         a.n = 50;
         a.path[49].along = 490;
         a.smooth();
-        assert!((0..50).all(|i| a.path[i].smooth == a.path[i].elev * 10));
+        assert!((0..50).all(|i| a.path[i].smooth == i32::from(a.path[i].elev) * 10));
+        // audit T1: a pass above 3276.7 m (32767 dm) is not cut
+        for i in 0..100 {
+            a.path[i].elev = 3000 + (i as i16) * 5;
+        }
+        a.n = 100;
+        a.path[99].along = 990;
+        a.smooth();
+        assert_eq!(a.path[99].smooth, 34950);
     }
 
     /// At a junction the trace keeps to the road it is on (the same way) although the other road goes straighter:

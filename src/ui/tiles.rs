@@ -168,6 +168,8 @@ pub struct Basemap {
     fat: Option<Fat>,
     /// The card or the volume failed: no basemap until the next power-up.
     failed: bool,
+    /// Views in a row that ended on a card error ([`IO_ERRORS`] latch `failed`).
+    io_errors: u8,
     /// `Zoom<z>\H` and `Zoom<z>\P` of the last zoom looked at.
     dirs: Option<(u8, Option<(File, File)>)>,
     slots: [Slot; SLOTS],
@@ -246,6 +248,7 @@ impl Basemap {
             mem: None,
             fat: None,
             failed: false,
+            io_errors: 0,
             dirs: None,
             slots: [Slot { key: (0, 0, 0), feats: 0, used: 0 }; SLOTS],
             tick: 0,
@@ -298,9 +301,14 @@ impl Basemap {
         }
         self.stats = Stats::default();
         self.map = match self.draw(d, area, view, origin) {
-            Ok(drawn) => drawn,
-            Err(_) => {
-                self.failed = true; // the card or the volume: not again this power-up
+            Ok(drawn) => {
+                self.io_errors = 0;
+                drawn
+            }
+            Err(e) => {
+                // the card or the volume, three reads in a row: not again this power-up; a damaged file is not that
+                self.io_errors = self.io_errors.saturating_add(u8::from(e == fat::Error::Io));
+                self.failed |= self.io_errors >= IO_ERRORS;
                 false
             }
         };
@@ -314,7 +322,13 @@ impl Basemap {
             return Ok(false);
         }
         if self.fat.is_none() {
-            self.fat = Some(Fat::mount(d)?);
+            match Fat::mount(d) {
+                Ok(f) => self.fat = Some(f),
+                Err(e) => {
+                    self.failed = e != fat::Error::Io; // no volume: not again this power-up
+                    return Err(e);
+                }
+            }
         }
         let frame = Frame::new(view, origin, w, h);
         // IGN's tiles where the packs have them, stock's under them where they do not
@@ -538,7 +552,7 @@ impl Osm {
                 let file = match fat.find(d, dir, osm::name(z, x, y).as_str()) {
                     Ok(f) => {
                         let mut h = [0u8; 16];
-                        (fat.read_at(d, &f, 0, &mut h)? == h.len() && osm::header_ok(&h, z, x, y)).then_some(f)
+                        (soft(fat.read_at(d, &f, 0, &mut h))? == h.len() && osm::header_ok(&h, z, x, y)).then_some(f)
                     }
                     Err(fat::Error::Io) => return Err(fat::Error::Io),
                     Err(_) => None,
@@ -553,8 +567,19 @@ impl Osm {
         };
         let Some(f) = file else { return Ok(None) };
         let mut e = [0u8; 16];
-        let n = fat.read_at(d, &f, osm::entry_at(x, y), &mut e)?;
+        let n = soft(fat.read_at(d, &f, osm::entry_at(x, y), &mut e))?;
         Ok(if n == e.len() { osm::entry(e, f.size).map(|e| (f, e)) } else { None })
+    }
+}
+
+/// Card errors in a row that turn the basemap off until the next power-up.
+const IO_ERRORS: u8 = 3;
+
+/// A pack read that failed on a damaged file (not the card) reads as nothing: the tile is missing, stock's shows there.
+fn soft(r: Result<usize, fat::Error>) -> Result<usize, fat::Error> {
+    match r {
+        Err(e) if e != fat::Error::Io => Ok(0),
+        r => r,
     }
 }
 
@@ -574,7 +599,7 @@ impl Ign {
         let file = match fat.find(d, dir, ign::name(z, x, y).as_str()) {
             Ok(f) => {
                 let mut h = [0u8; 16];
-                (fat.read_at(d, &f, 0, &mut h)? == h.len() && ign::header_ok(&h, z, x, y)).then_some(f)
+                (soft(fat.read_at(d, &f, 0, &mut h))? == h.len() && ign::header_ok(&h, z, x, y)).then_some(f)
             }
             Err(fat::Error::Io) => return Err(fat::Error::Io),
             Err(_) => None,
@@ -592,7 +617,7 @@ impl Ign {
         let Some(i) = self.pack(fat, d, t)? else { return Ok(None) };
         let Some(f) = self.packs.get(i).and_then(|p| p.file) else { return Ok(None) };
         let mut e = [0u8; 8];
-        let n = fat.read_at(d, &f, ign::entry_at(t.1, t.2), &mut e)?; // in the first cluster: no chain walked
+        let n = soft(fat.read_at(d, &f, ign::entry_at(t.1, t.2), &mut e))?; // in the first cluster: no chain walked
         Ok(if n == e.len() { ign::entry(e, f.size).map(|at| (i, at)) } else { None })
     }
 
@@ -1493,6 +1518,37 @@ pub(crate) mod tests {
         let reads = d.1;
         b.render(&mut d, AREA, View { cx: 9, ..v }, ORIGIN);
         assert_eq!(d.1, reads, "failed: not tried again");
+    }
+
+    /// A card that fails its reads while `.1` is set.
+    struct Flaky(Ram, bool);
+
+    impl Disk for Flaky {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), fat::Error> {
+            if self.1 { Err(fat::Error::Io) } else { self.0.read(lba, buf) }
+        }
+    }
+
+    /// Audit A3: one passing card error does not turn the map off; three views in a row do.
+    #[test]
+    fn a_passing_card_error_does_not_latch_the_map_off() {
+        let mut d = Flaky(Ram(image(), 0), true);
+        let mut b = basemap();
+        let v = View { cx: 0, cy: 0, mpp16: 48, rot: 0 };
+        b.render(&mut d, AREA, v, ORIGIN);
+        assert!(matches!(b.layer(AREA, v, ORIGIN), Layer::NoMap));
+        d.1 = false;
+        let v2 = View { cx: 9, ..v };
+        b.render(&mut d, AREA, v2, ORIGIN);
+        assert!(matches!(b.layer(AREA, v2, ORIGIN), Layer::Map(_)), "the map comes back");
+        d.1 = true;
+        for k in 0..3 {
+            b.render(&mut d, AREA, View { cx: 20 + k, ..v }, ORIGIN);
+        }
+        d.1 = false;
+        let v3 = View { cx: 99, ..v };
+        b.render(&mut d, AREA, v3, ORIGIN);
+        assert!(matches!(b.layer(AREA, v3, ORIGIN), Layer::NoMap), "three errors in a row: off");
     }
 
     /// Tile x and y of zoom `z` at a latitude and longitude, by the OSM wiki's formula (std's floats).

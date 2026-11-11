@@ -1045,7 +1045,7 @@ impl Imported {
                     }
                 }
                 let wheel = number(t, section, "Wheel", 0).filter(|w| (1000..=3000).contains(w));
-                if (k == 1 || k == 3) && self.wheel_mm.is_none() {
+                if (k == 1 || k == 3) && number(t, section, "active", 0) == Some(1) && self.wheel_mm.is_none() {
                     self.wheel_mm = wheel.map(|w| w as u16);
                 }
             }
@@ -1689,6 +1689,9 @@ pub(crate) mod tests {
         let got = (i.ftp, i.max_hr, i.weight_dg, i.cp, i.w_prime);
         assert_eq!(got, (Some(265), Some(188), Some(725), Some(255), Some(21_000)));
         assert_eq!(i.wheel_mm, Some(2105));
+        let old =
+            b"[SPDSensor1]\nWheel=2096\nID=5\nHWType=0\nactive=0\n[SPDSensor2]\nWheel=2136\nID=6\nHWType=0\nactive=1\n";
+        assert_eq!(import(user, old, bike).wheel_mm, Some(2136), "an inactive pairing's wheel is not taken");
         assert_eq!(i.sensors[0], Some(SensorId { device: 1234, trans: 0 }), "the first with an ID");
         assert_eq!(i.sensors[1], Some(SensorId { device: 4464, trans: 0x10 }), "20-bit device number 70000");
         assert_eq!(i.sensors[4], None, "a BLE power meter");

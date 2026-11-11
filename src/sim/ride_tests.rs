@@ -398,6 +398,39 @@ fn power_lr(_: u64) -> [u8; 8] {
     [0x10, 1, 0x80 | 48, 85, 0, 0, 0x2c, 0x01]
 }
 
+/// A power meter: 170 W, then from 15 s of simulated time 184 W (FTP 200: zone 3 ends at 181 W, 4 starts at 182).
+fn power_step(ms: u64) -> [u8; 8] {
+    [0x10, 1, 0xff, 0xff, 0, 0, if ms < 15_000 { 170 } else { 184 }, 0]
+}
+
+/// FTP, max HR and LTHR are not edited while a ride is open: its TSS and zone times would change for the past.
+#[test]
+fn ride_scoring_settings_are_frozen_in_a_ride() {
+    use crate::menu::Setting;
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    assert!(![Setting::Ftp, Setting::MaxHr, Setting::Lthr].iter().any(|&s| app.frozen_in_ride(s)));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    assert!([Setting::Ftp, Setting::MaxHr, Setting::Lthr].iter().all(|&s| app.frozen_in_ride(s)));
+    assert!(!app.frozen_in_ride(Setting::Font));
+}
+
+/// The time in zone counts the zone ridden, not the held one: 184 W within the hold margin of zone 3 is zone 4.
+#[test]
+fn time_in_zone_follows_the_power_ridden() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(ride_route);
+    sim.gnss.fix = Some(8000);
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_step, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 80_000);
+    assert_eq!(app.zones[0].shown(), 3, "the bar holds zone 3");
+    assert!(app.zone_s.power_s(4) > Some(40), "zone 4 counted: {:?}", app.zone_s.power_s(4));
+}
+
 /// The derived fields (power.rs, ride.rs): a ride at 300 W on the GPS route (8 m/s, climbing 0.2 m/s) with a
 /// strap and a dual-sided power meter, at the default FTP (200 W), weight (75 kg) and W' (20 kJ). After two
 /// minutes the fields show the values worked out by hand, W' balance in its draining colour, and the screen
@@ -1105,4 +1138,60 @@ fn zone_times_and_hrtss_go_on_after_a_reset() {
         assert!(app.zone_s.hr_s(z) >= before.0.hr_s(z), "zone {z}: {:?} of {:?}", app.zone_s, before.0);
     }
     assert!(app.hrtss.sum >= before.1, "hrTSS {} of {}", app.hrtss.sum, before.1);
+}
+
+/// Two bad fixes in a row (90 km/h in an 8 m/s ride) add no distance and set no max speed, and the next real fix is
+/// taken at once.
+#[test]
+fn gps_speed_spikes_are_dropped_and_the_next_fix_taken() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 20_000);
+    let before = app.ride.dist_m();
+    sim.gnss.fix = Some(25_000);
+    run(&mut sim, &mut app, 2_500);
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3_000);
+    assert_eq!(app.live.get(Metric::Speed), Some(288), "the real fix after the spikes");
+    assert!(app.ride.max_speed_x10() <= 288, "max speed {} x10", app.ride.max_speed_x10());
+    assert!(app.ride.dist_m() - before < 8 * 9, "distance {} m in 5.5 s at 8 m/s", app.ride.dist_m() - before);
+}
+
+/// FTP is not edited from the menu while a ride is open: Select on the row leaves it and says so.
+#[test]
+fn ftp_row_is_refused_in_a_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    let ftp = app.settings.ftp;
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::menu_tests::to_row(&mut sim, &mut app, crate::menu::Row::Set(crate::menu::Setting::Ftp));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page)); // a step if the row were being edited
+    assert_eq!((app.settings.ftp, app.notes.text.as_str()), (ftp, "NOT DURING A RIDE"));
+}
+
+/// An FTP the ramp test found during the ride is held until the ride is over, then set: the result is not lost.
+#[test]
+fn a_held_ramp_ftp_is_set_when_the_ride_is_over() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.ramp.held = Some(255);
+    run(&mut sim, &mut app, 2000);
+    assert_ne!(app.settings.ftp, 255, "held while the ride is open");
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    run(&mut sim, &mut app, 2000);
+    assert_ne!(app.settings.ftp, 255, "still held while the ride is paused");
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ride.state(), ride::State::Idle);
+    assert_eq!((app.settings.ftp, app.ramp.held), (255, None), "set once the ride is over");
 }

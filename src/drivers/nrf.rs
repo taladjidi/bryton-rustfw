@@ -1112,17 +1112,24 @@ impl Nearby {
     /// or its signal moved to another 4 dBm bucket (a jitter inside one is not worth a redraw).
     pub fn add(&mut self, r: &AdvReport) -> bool {
         let known = self.devices.iter().take(self.count).position(|d| d.addr == r.addr);
-        let new = known.is_none() && self.count < Self::MAX;
-        let Some(d) = (match known {
-            Some(i) => self.devices.get_mut(i),
-            None if new => {
+        // full: a device louder than the weakest one takes its place (addresses that change fill the list at home)
+        let slot = match known {
+            Some(i) => Some(i),
+            None if self.count < Self::MAX => {
                 self.count += 1;
-                self.devices.get_mut(self.count - 1)
+                Some(self.count - 1)
             }
-            None => None,
-        }) else {
+            None => (0..self.count)
+                .min_by_key(|&i| self.devices.get(i).map_or(0, |d| d.rssi))
+                .filter(|&i| self.devices.get(i).is_some_and(|d| d.rssi < r.rssi)),
+        };
+        let new = known.is_none() && slot.is_some();
+        let Some(d) = slot.and_then(|i| self.devices.get_mut(i)) else {
             return false;
         };
+        if new {
+            *d = Device { addr: r.addr, rssi: r.rssi, name: [0; Device::NAME], name_len: 0, maker: None };
+        }
         d.addr = r.addr;
         // the list draws the signal in buckets of 4 dBm and sorts by it: a move into another bucket is a change
         let moved = d.rssi >> 2 != r.rssi >> 2;
@@ -1440,5 +1447,9 @@ mod tests {
             n.add(&report(10 + i, -60, &[]));
         }
         assert_eq!(n.count(), Nearby::MAX);
+        // audit A5: full, a louder newcomer takes the weakest's place; a weaker one is not listed
+        assert!(!n.add(&report(99, -90, &[])));
+        assert!(n.add(&report(100, -30, &[])));
+        assert!(n.strongest().any(|d| d.addr[0] == 100) && n.count() == Nearby::MAX);
     }
 }

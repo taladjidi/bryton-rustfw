@@ -435,6 +435,9 @@ impl App {
                 }
                 return self.update_quick(b);
             }
+            // as on the curve: the ride's keys work from here
+            Input::Select if self.ride.state() != ride::State::Idle => return self.start_key(b),
+            Input::Prev if self.ride.state() != ride::State::Idle => return self.lap(),
             _ => return,
         }
         self.reshow(b, shown);

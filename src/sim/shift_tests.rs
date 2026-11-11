@@ -55,6 +55,10 @@ fn select_sensor(sim: &mut Sim, app: &mut App, row: usize) {
         app.press(sim, Press::Short(Key::Page));
     }
     app.press(sim, Press::Short(Key::Start));
+    run(sim, app, 1500);
+    if let Some(&kind) = Kind::ALL.get(row) {
+        app.confirm_found(sim, kind); // the search only asks; the rider confirms
+    }
 }
 
 /// Pairing the Di2: Shimano's key on network 1 and channel 6 assigned to it at start; Start on its row finds it,

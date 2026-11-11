@@ -328,14 +328,24 @@ pub struct Live {
     age_ms: [u32; 16],
     /// The values as of the last [`Live::snapshot`]: what the pages show.
     shown: [Option<u16>; 16],
+    /// Bit per [`Metric`]: the value was last written by [`Live::set_lent`] (the trainer's), not a sensor.
+    lent: u16,
 }
 
 impl Live {
     /// Sets `m` to `v`, fresh.
     pub fn set(&mut self, m: Metric, v: u16) {
+        self.lent &= !(1 << (m as u16 & 15));
         if let (Some(x), Some(a)) = (self.values.get_mut(m as usize), self.age_ms.get_mut(m as usize)) {
             (*x, *a) = (Some(v), 0);
         }
+    }
+
+    /// Sets `m` to `v`, fresh, as a stand-in for a sensor that does not send it (the trainer's cadence beside a power
+    /// meter without one): [`Live::age_ms`] does not count it.
+    pub fn set_lent(&mut self, m: Metric, v: u16) {
+        self.set(m, v);
+        self.lent |= 1 << (m as u16 & 15);
     }
 
     /// Drops `m`: the sensor sent it invalid.
@@ -348,6 +358,13 @@ impl Live {
     /// The current value of `m`, if fresh enough.
     pub fn get(&self, m: Metric) -> Option<u16> {
         self.values.get(m as usize).copied().flatten()
+    }
+
+    /// The age (ms) of the value of `m` as a sensor sent it, None when it has none or it is a stand-in
+    /// ([`Live::set_lent`]).
+    pub fn age_ms(&self, m: Metric) -> Option<u32> {
+        let sensor = self.lent >> (m as u16 & 15) & 1 == 0;
+        self.get(m).filter(|_| sensor).and(self.age_ms.get(m as usize).copied())
     }
 
     /// The value of `m` as of the last [`Live::snapshot`]: what a page shows. The sensors broadcast at 4 Hz and the
@@ -398,7 +415,7 @@ impl Revs {
         let (dt, dn) = (time.wrapping_sub(t0), count.wrapping_sub(n0));
         if dt == 0 {
             self.idle = self.idle.saturating_add(1);
-            return (self.idle == Self::IDLE).then_some(0);
+            return (self.idle >= Self::IDLE).then_some(0);
         }
         self.idle = 0;
         // in u64: dn x 6 144 000 passes u32 above 699 revolutions (a counter that jumped: a battery change, a
@@ -499,10 +516,10 @@ pub struct Decoders {
 /// Wheel revolutions per minute x 100 to km/h x 10, for a wheel of `wheel_mm` circumference.
 ///
 /// ```
-/// assert_eq!(bryton_rustfw::sensors::speed_x10(20_000, 2105), 252, "200 rpm on a 700x25 wheel: 25.26 km/h");
+/// assert_eq!(bryton_rustfw::sensors::speed_x10(20_000, 2105), 253, "200 rpm on a 700x25 wheel: 25.26 km/h");
 /// ```
 pub fn speed_x10(rpm100: u32, wheel_mm: u16) -> u16 {
-    (u64::from(rpm100) * u64::from(wheel_mm) * 6 / 1_000_000).min(u64::from(u16::MAX)) as u16
+    ((u64::from(rpm100) * u64::from(wheel_mm) * 6 + 500_000) / 1_000_000).min(u64::from(u16::MAX)) as u16
 }
 
 impl Decoders {
@@ -780,6 +797,9 @@ mod tests {
             assert_eq!(r.update(376, 0), None);
         }
         assert_eq!(r.update(376, 0), Some(0), "no event for about 3 s: stopped");
+        for _ in 0..40 {
+            assert_eq!(r.update(376, 0), Some(0), "and it stays 0, so the value never goes stale");
+        }
     }
 
     /// One interval per new beat (the time wrapping), two from page 4 after one missed broadcast, none after

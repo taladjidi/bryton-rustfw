@@ -249,6 +249,7 @@ impl App {
         }
         self.watch.owed = open;
         (self.radio.scanning, self.radio.ask) = (false, 0);
+        self.radio.found = [None; Kind::ALL.len()]; // the restart closed the searches
         (self.radio.resting_ms, self.radio.misses) = ([u32::MAX; Kind::ALL.len()], [0; Kind::ALL.len()]);
         self.radio.heard_ms = [u32::MAX; Kind::ALL.len()]; // a sensor back counts as after a drop-out (decoders restart)
         self.radio.sensors = [Sensor::Off; Kind::ALL.len()];

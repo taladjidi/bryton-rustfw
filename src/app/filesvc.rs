@@ -777,7 +777,9 @@ impl App {
 
     /// PROFILE_SET: the answer's status and count. A value must be in the menu's range, or be the one held (so a
     /// profile read and sent back unchanged is never refused), or be 0 for the LTHR (unset). Values the unit already
-    /// holds answer OK, count 0, even in a ride. BUSY also while a setting is being edited in the menu. Each field is
+    /// holds answer OK, count 0, even in a ride. BUSY (`busy`: a ride open or being saved, or the card lent) for any change,
+    /// FTP, max HR and LTHR included, so a ride's TSS and zone times keep one value; BUSY also while a setting is being
+    /// edited in the menu. Each field is
     /// assigned only when it differs. Applied as the menus do (`setting_edited`, then
     /// `save_misc`): the file is written between rides, the registers hold it until then.
     #[inline(never)]
@@ -822,7 +824,7 @@ impl App {
         (s.zones_lthr, s.female) = (p.zones_lthr, p.female);
         if p.max_hr != now.max_hr {
             s.max_hr = b8(p.max_hr);
-            self.setting_edited(menu::Setting::MaxHr);
+            self.setting_edited(menu::Setting::MaxHr, now.max_hr.into());
         }
         self.save_misc(b);
         self.notice("PROFILE FROM PHONE");

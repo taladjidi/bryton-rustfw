@@ -142,6 +142,10 @@ fn pairs_sensors_from_the_menu() {
     }
     app.press(&mut sim, Press::Short(Key::Start)); // speed + cadence: search
     run(&mut sim, &mut app, 3000);
+    assert_eq!(sim.backup[Kind::Hr.backup()], 0, "heard, not paired before the confirm");
+    app.confirm_found(&mut sim, Kind::Hr);
+    app.confirm_found(&mut sim, Kind::SpeedCadence);
+    run(&mut sim, &mut app, 3000);
     assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "strap paired and kept");
     assert_eq!(sim.backup[Kind::SpeedCadence.backup()], SensorId { device: 555, trans: 0xf1 }.to_word());
     assert_consistent(&sim, &app);
@@ -187,6 +191,11 @@ fn keeps_the_paired_sensor_until_forgotten() {
     assert_eq!(closes(&sim), 2, "closed");
     assert_eq!(sim.backup[Kind::Hr.backup()], 0, "forgotten");
     app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.backup[Kind::Hr.backup()], 0, "heard, asked, not paired");
+    assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "999 OK?");
+    sim.save("sensor_confirm");
+    app.press(&mut sim, Press::Short(Key::Start)); // the rider confirms
     run(&mut sim, &mut app, 1000);
     assert_eq!(sim.backup[Kind::Hr.backup()], SensorId { device: 999, trans: 0xf1 }.to_word(), "paired anew");
 }
@@ -813,4 +822,123 @@ fn date_rows_fit_in_each_format() {
         label.push_str(" 23:59");
         assert!(ui::LABEL.width(label.as_str()) <= ui::W - 8 - 4 - 20 - 2, "{f:?}");
     }
+}
+
+/// A ride paused while its power meter is out of range: the meter's channel rests after its searches time out (60,
+/// 120, 240 s), and when the ride resumes the channel must search again at once, as a ride's Start does. Measured on
+/// the unit 2026-11-11: power came back about 190 s after the restart, inside a 240 s rest.
+#[test]
+fn a_resumed_ride_searches_the_power_meter_at_once() {
+    fn power(_t: u64) -> [u8; 8] {
+        [0x10, 1, 0xff, 85, 0, 0, 210, 0]
+    }
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Power.backup()] = Kind::Power.to_word(SensorId { device: 7, trans: 5 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(app.live.get(Metric::Power), Some(210), "heard");
+    app.start_pause(); // the ride starts
+    run(&mut sim, &mut app, 2000);
+    app.start_pause(); // paused
+    run(&mut sim, &mut app, 1000);
+    let meter = sim.nordic.sensors.pop().expect("the meter");
+    run(&mut sim, &mut app, 400_000); // silent: three timed-out searches, the last rest (240 s) under way
+    assert_eq!(app.live.get(Metric::Power), None, "lost");
+    sim.nordic.sensors.push(meter);
+    app.start_pause(); // resumed
+    let t0 = sim.ms;
+    while app.live.get(Metric::Power).is_none() && sim.ms < t0 + 200_000 {
+        run(&mut sim, &mut app, 250);
+    }
+    let back = sim.ms - t0;
+    assert!(back <= 10_000, "power back {back} ms after the resume");
+}
+
+/// The sensors menu with a strap of device number `id` near and its HR row searching, `pages` rows down.
+fn searching_unit(id: u16, pages: usize) -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id, data: hr72, network: 0, ack: &[] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x79, id, data: spd_cad, network: 0, ack: &[] });
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Sensors));
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..pages {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start)); // search
+    run(&mut sim, &mut app, 2000);
+    (sim, app)
+}
+
+/// Audit A6: the device a search heard waits for the rider. Back on its row refuses it (the search stops); Off, or
+/// a new search, never finds it already there; the search time-out forgets it; a tap on the row confirms it.
+#[test]
+fn a_found_device_waits_and_is_refused_by_back_or_forgotten() {
+    let (mut sim, mut app) = searching_unit(999, 0);
+    let hr = Kind::Hr as usize;
+    assert_eq!(app.radio.found[hr].map(|i| i.device), Some(999));
+    assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "999 OK?");
+    app.press(&mut sim, Press::Short(Key::Back)); // the first Back puts the banner away
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, 0), "Back refused the device, the menu stays");
+    assert_eq!((app.radio.sensors[hr], app.radio.found[hr]), (Sensor::Off, None));
+    // Off or a new search: no old candidate
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 2000);
+    assert!(app.radio.found[hr].is_some());
+    app.set_sensor(&mut sim, Kind::Hr, Sensor::Off);
+    assert_eq!(app.radio.found[hr], None, "Off forgets it");
+    app.set_sensor(&mut sim, Kind::Hr, Sensor::Search);
+    assert_eq!(app.radio.found[hr], None, "and a new search does not start with it");
+    // the search time-out
+    run(&mut sim, &mut app, 2000);
+    assert!(app.radio.found[hr].is_some());
+    sim.nordic.sensors.clear();
+    run(&mut sim, &mut app, 40_000);
+    assert_eq!(app.radio.found[hr], None, "the search timed out");
+    assert_eq!(sim.backup[Kind::Hr.backup()], 0, "nothing was paired");
+}
+
+/// Audit A6: a tap on the row confirms the device it asks about.
+#[test]
+fn a_tap_on_the_row_confirms_the_found_device() {
+    let (mut sim, mut app) = searching_unit(999, 0);
+    let y = crate::ui::LIST_Y + crate::ui::MENU_ROW / 2;
+    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap(120, y as u16)));
+    run(&mut sim, &mut app, 500);
+    assert_eq!(sim.backup[Kind::Hr.backup()], SensorId { device: 999, trans: 0xf1 }.to_word());
+}
+
+/// Audit A6: the banner with the longest kind and number fits the notes' line (40 with the time) and the screen.
+#[test]
+fn the_found_banner_fits_with_the_longest_kind_and_number() {
+    let (sim, app) = searching_unit(65535, 3);
+    assert_eq!(app.notes.text.as_str(), "SPD+CAD 65535 FOUND\nSTART: PAIR");
+    let l = app.notes.list[0].as_str();
+    assert!(l.ends_with("START: PAIR"), "{l}");
+    sim.save("sensor_found_banner");
+}
+
+/// Audit A2: MAX HR stepped by hand, then left: BORN changed later does not move it.
+#[test]
+fn a_max_hr_stepped_by_hand_stays_when_born_changes() {
+    let (mut sim, mut app) = started();
+    app.settings.birth_year = 1986;
+    app.settings.max_hr = 180;
+    app.settings.max_hr_age = true;
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Lap)); // 181
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(!app.settings.max_hr_age, "set by hand");
+    let by_hand = app.settings.max_hr;
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::BirthYear));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.settings.max_hr, by_hand);
 }

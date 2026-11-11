@@ -27,7 +27,7 @@ pub const SEARCH_REST_MS: u32 = 60_000;
 /// Each search in a row that finds nothing doubles the rest after it, up to this: a sensor left at home (a power
 /// meter on the other bike) then searches about 40 s in 280 instead of 40 in 100 (the chip's high-priority search,
 /// 10 s by default, before the 30 s low-priority one), about 1 mA less per absent sensor (docs/power.md, estimated).
-/// A sensor heard, the rider's own action in SENSORS, or a ride's Start (the channels resting search again at once)
+/// A sensor heard, the rider's own action in SENSORS, or a ride's Start or Resume (the channels resting search again at once)
 /// start from [`SEARCH_REST_MS`] again.
 pub const SEARCH_REST_MAX_MS: u32 = 4 * SEARCH_REST_MS;
 
@@ -107,6 +107,7 @@ impl App {
         *self.radio.misses.at_mut(kind) = 0; // the rider's action: from the first rest again
         *self.radio.sensors.at_mut(kind) = Sensor::Off;
         *self.radio.heard_ms.at_mut(kind) = u32::MAX;
+        *self.radio.found.at_mut(kind) = None; // a device a search heard before is not this search's
         self.decoders.forget_ids(kind); // the percent and maker of the sensor it was
         let id = match want {
             Sensor::Off => None,
@@ -206,6 +207,14 @@ impl App {
         } else if let Some((ch, data)) = nrf::ant_broadcast(p)
             && let Some(kind) = Kind::from_channel(ch)
         {
+            if self.radio.sensors.at(kind) == Sensor::Search {
+                // a wildcard search hears any sensor near: only its number is taken, to ask the rider
+                // (not while one waits for the rider: each ask is a blocking command to the chip)
+                if self.radio.found.at(kind).is_none() {
+                    self.radio.ask |= 1 << ch;
+                }
+                return false;
+            }
             if self.radio.heard_ms.at(kind) >= sensors::STALE_MS {
                 // back after a drop-out: its counters may have moved on by any amount; the beats before it
                 // are not part of this series (and the beat time may have wrapped, a false interval)
@@ -236,12 +245,10 @@ impl App {
             let heard = self.radio.broadcasts.at_mut(kind);
             *heard = heard.saturating_add(1);
             *self.radio.misses.at_mut(kind) = 0;
-            if self.radio.sensors.at(kind) == Sensor::Search {
-                self.radio.ask |= 1 << ch;
-            }
         } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
             // its search timed out: reopened after a rest, longer for each search in a row that found nothing
             *self.radio.resting_ms.at_mut(kind) = 0;
+            *self.radio.found.at_mut(kind) = None;
             let m = self.radio.misses.at_mut(kind);
             *m = m.saturating_add(1);
         } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {
