@@ -389,6 +389,8 @@ pub struct Settings {
     /// MAP (DISPLAY): HEADING UP turns the map to the course above a walking speed ([`crate::map::Track::orient`]); NORTH
     /// UP in a file that predates it (data 167).
     pub map_up: bool,
+    /// MAP AT TURN: the map page opens by itself near a turn of the course followed (app/nearturn.rs).
+    pub map_turn: bool,
     /// UNITS (DISPLAY): the fields show miles, mph and feet (data 100); the FIT file stays metric. METRIC in a file
     /// that predates it.
     pub imperial: bool,
@@ -697,6 +699,7 @@ impl Settings {
             tz: 0,
             dst: Dst::Off,
             map_up: false,
+            map_turn: true,
             imperial: false,
             temp_f: false,
             auto_pause: 0,
@@ -996,6 +999,7 @@ impl Settings {
             },
             Setting::ClimbsMedium => l.push_str(if self.climbs_medium { "MEDIUM+" } else { "ALL" }),
             Setting::MapUp => l.push_str(if self.map_up { "HEADING UP" } else { "NORTH UP" }),
+            Setting::MapTurn => l.push_str(if self.map_turn { "ON" } else { "OFF" }),
             Setting::ClimbPage => l.push_str(if self.climb_page { "ON" } else { "OFF" }),
             Setting::QuickStatus => l.push_str(if self.quick_status { "ON" } else { "OFF" }),
             Setting::DateFormat => l.push_str(match self.date_fmt {
@@ -1155,6 +1159,7 @@ impl Settings {
             Setting::ClimbsMedium => self.climbs_medium = !self.climbs_medium,
             Setting::ClimbPage => self.climb_page = !self.climb_page,
             Setting::MapUp => self.map_up = !self.map_up,
+            Setting::MapTurn => self.map_turn = !self.map_turn,
             Setting::QuickStatus => self.quick_status = !self.quick_status,
             Setting::DateFormat => self.date_fmt = self.date_fmt.next(),
             Setting::DaylightSaving => self.dst = self.dst.next(),

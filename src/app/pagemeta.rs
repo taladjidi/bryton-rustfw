@@ -203,6 +203,7 @@ impl App {
             && secs > 0
             && self.ride.state() == ride::State::Running
             && self.more_on.is_none()
+            && self.near.back.is_none()
             && self.notes.ms.is_none();
         if !idle {
             self.sw.auto_ms = 0;

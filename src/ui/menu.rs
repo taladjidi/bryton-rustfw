@@ -128,6 +128,8 @@ pub enum Setting {
     ClimbsMedium,
     /// CLIMB PAGE (BIKE): the climb page is on or off (off, it is skipped in the paging).
     ClimbPage,
+    /// MAP AT TURN (DISPLAY): a followed course shows the map page by itself when a turn is near, on or off.
+    MapTurn,
     /// QUICK STATUS (PAGES): a tap on a plain field of a ride page opens the overlay, on or off.
     QuickStatus,
     /// DATE FORMAT (DISPLAY): D/M/Y, M/D/Y or Y-M-D.
@@ -317,6 +319,7 @@ impl Setting {
             Setting::TimeZone => "ZONE",
             Setting::DaylightSaving => "SUMMER TIME",
             Setting::MapUp => "MAP",
+            Setting::MapTurn => "MAP AT TURN",
             Setting::PowerMatch => "POWER MATCH",
             Setting::GnssSystems => "GNSS",
             Setting::BatterySaver => "BATT SAVER",
@@ -962,7 +965,7 @@ pub const ALERTS: [Row; 16] = [
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 14] = [
+pub const DISPLAY: [Row; 15] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Touch),
@@ -975,6 +978,7 @@ pub const DISPLAY: [Row; 14] = [
     Row::Set(Setting::TimeZone),
     Row::Set(Setting::DaylightSaving),
     Row::Set(Setting::MapUp),
+    Row::Set(Setting::MapTurn),
     Row::Set(Setting::Temp),
     Row::Set(Setting::Sound),
 ];
