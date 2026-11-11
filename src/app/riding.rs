@@ -46,11 +46,13 @@ impl App {
         self.tones.play(if ev == ride::Event::Pause { &BEEP_PAUSE } else { &BEEP_START });
         // a new ride: the ready card replaces RIDE STARTED (the recording starts below, at the press, in either case)
         if ev != ride::Event::Start || !self.ready_card() {
-            self.say(match ev {
+            let text = match ev {
                 ride::Event::Start => "RIDE STARTED",
                 ride::Event::Pause => "PAUSED: HOLD START TO END",
                 _ => "RESUMED",
-            });
+            };
+            // a start stays Info: the notices it adds (INDOOR RIDE...) replace it; a pause or resume is the key's answer
+            self.say_as(text, if ev == ride::Event::Start { Banner::Info } else { Banner::Key });
         }
         if ev == ride::Event::Start {
             self.reset_ride_curve();
@@ -306,7 +308,7 @@ impl App {
             Input::Select => sel,
             Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) if !discard => {
                 self.leave_menus();
-                self.say("PAUSED"); // a manual pause never resumes by itself: say it stays
+                self.say_as("PAUSED", Banner::Key); // a manual pause never resumes by itself: say it stays
                 return self.show(b);
             }
             Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => 2, // KEEP
@@ -710,7 +712,7 @@ impl App {
         if was == ride::State::Paused && self.ride.state() == ride::State::Running {
             // a resumed ride gone on by itself once ridden: said as a Start resume is
             self.tones.play(&BEEP_START);
-            self.say("RESUMED");
+            self.say_as("RESUMED", Banner::Key);
         }
         self.auto_pause_notice();
         // only the seconds the timer ran, keyed by the wall clock: a stop longer than FILL_S ends the efforts

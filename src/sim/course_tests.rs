@@ -1359,7 +1359,7 @@ fn navigate_to_the_start() {
     // the label says what the value is, and goes back to NEXT TURN once the course is joined (its own box redrawn)
     app.pages[0] = PageCfg {
         layout: 6,
-        fields: [Field::NextTurn, Field::ToGo, Field::Speed, Field::Time, Field::Time, Field::Time],
+        fields: [Field::NextTurn, Field::Map, Field::Speed, Field::Time, Field::Time, Field::Time],
     }
     .into();
     app.screen = Screen::Ride(0);
@@ -1376,7 +1376,9 @@ fn navigate_to_the_start() {
     run(&mut sim, &mut app, 8000);
     assert!(!app.to_start_now(), "joined");
     assert_consistent(&sim, &app);
-    assert_ne!(before, label_px(&sim));
+    // the label's own rows (under the strip and its line), in the first box: NEXT TURN is not TO START
+    let label = |v: &[Vec<u16>]| v[26..38].iter().map(|r| r[..100].to_vec()).collect::<Vec<_>>();
+    assert_ne!(label(&before), label(&label_px(&sim)), "the label changed at the join, a map in the page or not");
     sim.save("course_joined_label");
 }
 

@@ -19,8 +19,11 @@ pub const READY_BANNER_MS: u32 = 3000;
 pub(crate) enum Banner {
     /// What a key just did, a notice.
     Info,
-    /// AUTO PAUSED / RESUMED: under what a key said (a key notice replaces it), under a lap's summary (it waits behind it).
+    /// AUTO PAUSED / RESUMED: under what a key said ([`Banner::Key`] replaces it), under a lap's summary (it waits behind it).
     Auto,
+    /// What a key's own answer says (PAUSED, RESUMED, RECORDING): replaces AUTO PAUSED and a lap's summary; any other
+    /// notice ([`Banner::Info`]) waits behind AUTO PAUSED.
+    Key,
     /// A lap's summary: stays [`LAP_BANNER_MS`], over what a key said, under a turn, a workout step or an alarm.
     Summary,
     /// The ready card at a ride's start: stays [`READY_BANNER_MS`], over what a key said, under everything the ride says.
@@ -776,7 +779,9 @@ impl App {
                 ui::draw_cell_frame(&mut Panel(b, self.area(), self.look()), bx, ui::ACCENT);
             }
         }
-        self.to_start_shown = ts;
+        if due {
+            self.to_start_shown = ts; // not on a pass that skipped the boxes (a map page looks at its map only)
+        }
     }
 
     /// The way to the course's start shows in NEXT TURN's place (not joined yet).

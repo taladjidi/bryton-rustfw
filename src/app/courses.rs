@@ -115,14 +115,14 @@ impl App {
         self.say("READING COURSE");
     }
 
-    /// Backing out of COURSES ends a pending RIDE A COURSE: the next course followed is an ordinary one.
+    /// Backing out of COURSES ends a pending TRAINER COURSE: the next course followed is an ordinary one.
     pub(crate) fn drop_ride_it(&mut self) {
         if let (Screen::Menu(Menu::Courses, _), Some(c)) = (self.screen, self.courses.as_deref_mut()) {
             c.ride_it = false;
         }
     }
 
-    /// RIDE A COURSE (WORKOUTS): lists the courses; the one picked is ridden on the trainer ([`App::begin_virtual`]).
+    /// TRAINER COURSE (WORKOUTS): lists the courses; the one picked is ridden on the trainer ([`App::begin_virtual`]).
     pub(crate) fn pick_course(&mut self, b: &mut impl Board) {
         if !self.trainer_heard() {
             return self.say("NEEDS TRAINER\nPAIR ONE: SENSORS");
@@ -463,11 +463,16 @@ impl App {
         let same = |o: &&storage::course_file::Entry| o.name() == e.name();
         let all = (0..c.list.len()).filter_map(|i| c.list.get(i));
         if all.clone().filter(same).count() > 1 {
-            if all.clone().filter(same).any(|o| o.gpx != e.gpx) {
+            // by kind, and its place among those of the same kind and name when the kind repeats
+            let kind = |o: &&storage::course_file::Entry| same(o) && o.gpx == e.gpx;
+            let mixed = all.clone().filter(same).any(|o| o.gpx != e.gpx);
+            if mixed {
                 value.push_str(if e.gpx { " GPX" } else { " FIT" });
             } else {
                 value.push_str(" #");
-                value.push_u32(1 + all.take(k).filter(same).count() as u32);
+            }
+            if all.clone().filter(kind).count() > 1 {
+                value.push_u32(1 + all.take(k).filter(kind).count() as u32);
             }
         }
         Some(if c.on == Some(e.file) { ui::GREEN } else { ui::WHITE })

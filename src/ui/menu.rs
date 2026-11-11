@@ -586,7 +586,7 @@ pub enum Row {
     WorkoutStart,
     /// The FTP ramp test (ramp.rs, app/ramp.rs): Select starts it, with a trainer heard.
     RampTest,
-    /// RIDE A COURSE (app/courses.rs): Select lists the courses; the one picked is ridden on the trainer.
+    /// TRAINER COURSE (app/courses.rs): Select lists the courses; the one picked is ridden on the trainer.
     RideCourse,
     /// Step `n` of the workout shown: Select starts the workout from it.
     Step(usize),
