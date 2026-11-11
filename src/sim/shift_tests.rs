@@ -71,7 +71,7 @@ fn di2_pairs_and_shows_gear_and_battery() {
     let mut app = App::start_with(&mut sim, Some(KEY), Some(DI2_KEY));
     assert!(sim.nordic.got.contains(&[&[6, 0xcc, 1][..], &DI2_KEY].concat()), "Shimano's key on network 1");
     assert!(sim.nordic.got.contains(&vec![6, 0xc2, 6, 0, 1, 0]), "channel 6 on network 1");
-    assert_eq!(sensor_row(&app, 6), "DI2 OFF");
+    assert_eq!(sensor_row(&app, 6), "DI2 ADD");
     select_sensor(&mut sim, &mut app, Kind::Di2 as usize);
     assert!(sim.nordic.got.contains(&vec![6, 0xd3, 6, 0, 0, 1, 0]), "any Di2");
     run(&mut sim, &mut app, 3000);
@@ -313,7 +313,7 @@ fn one_shifting_system_at_a_time() {
     select_sensor(&mut sim, &mut app, Kind::Shifting as usize);
     assert!(sim.nordic.got.contains(&vec![6, 0xc5, 6]), "the Di2's channel closed");
     run(&mut sim, &mut app, 3000);
-    assert_eq!(sensor_row(&app, 6), "DI2 OFF");
+    assert_eq!(sensor_row(&app, 6), "DI2 ADD");
     assert_eq!(sensor_row(&app, 5), "SHIFTING CONNECTED");
     assert_eq!(sim.backup[14], Kind::Shifting.to_word(SensorId { device: 77, trans: 0xf1 }));
 }

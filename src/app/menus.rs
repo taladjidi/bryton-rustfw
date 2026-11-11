@@ -489,7 +489,7 @@ impl App {
                 match (self.ant, self.radio.sensors.get(k)?) {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
                     (true, _) if kind.network() == 1 && !self.di2 => value.push_str("NO KEY"),
-                    (true, Sensor::Off) => value.push_str("OFF"),
+                    (true, Sensor::Off) => value.push_str("ADD"),
                     (true, Sensor::Search) => match self.radio.found.at(kind) {
                         Some(id) => {
                             value.push_u32(u32::from(id.device));
