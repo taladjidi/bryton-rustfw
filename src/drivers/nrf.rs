@@ -71,7 +71,8 @@ pub struct Rx {
     /// The oldest event kept is `kept[head]`: a ring, so a pop moves nothing.
     head: usize,
     kept_n: usize,
-    /// The op of a call that timed out, whose answer may still come: the next call swallows one answer of that op.
+    /// The op of a call that timed out, whose answer may still come: the next call waits for it (and drops it) before
+    /// it sends.
     pub(crate) late: Option<u8>,
     /// ANT queue overflows the SoftDevice reported (EVENT_QUE_OVERFLOW): ANT events lost between the chip and us.
     /// Survives a reset (a count for `dev.py info`, next to the radio resets).
@@ -151,7 +152,7 @@ impl Rx {
     }
 
     /// The last packet answered op `answer` (a response's op): true, and the swallow cleared, if that is the late
-    /// answer of a call that timed out. Every reader of the stream asks (a send's drain, the main read).
+    /// answer of a call that timed out. The main read asks (a call waits for it before it sends).
     pub fn swallow(&mut self, answer: Option<u8>) -> bool {
         let late = answer.is_some() && answer == self.late;
         if late {
@@ -317,7 +318,8 @@ pub enum Error {
 /// byte moved either way for [`TIMEOUT_MS`] (the chip is hung: a reset cures it), then `Err(Timeout)`; each wait
 /// sleeps 1 ms, nothing spins. If some bytes went and not all, the chip is mis-framed: `rx.broken` is set, the
 /// watchdog resets it at once and no frame is sent to it before. What arrives meanwhile is treated as in [`call`]'s
-/// wait: BLE and ANT events kept, an answer to a call that timed out swallowed (`rx.late`), the rest dropped.
+/// wait: BLE and ANT events kept, the rest dropped (no answer of a timed-out call is still due: [`call`] waits for it
+/// before it sends).
 #[inline(never)] // its 386-byte frame in its own stack frame
 pub fn send(b: &mut impl Board, rx: &mut Rx, payload: &[u8]) -> Result<(), Error> {
     if rx.broken || rx.stalled {
@@ -339,11 +341,9 @@ pub fn send(b: &mut impl Board, rx: &mut Rx, payload: &[u8]) -> Result<(), Error
 /// ATT value.
 const MAX_CMD: usize = 384;
 
-/// A packet arrived while a command is being sent: an answer of a timed-out call is swallowed, events are kept.
+/// A packet arrived while a command is being sent: events are kept.
 fn rx_byte(rx: &mut Rx, x: u8) {
-    let Some(p) = rx.push(x) else { return };
-    let answer = if let [RESP, o, ..] = *p { Some(o) } else { None };
-    if !rx.swallow(answer) {
+    if rx.push(x).is_some() {
         rx.keep_last();
     }
 }
@@ -422,9 +422,18 @@ impl Stall {
 /// ATT MTU of 247 plus headers, about 264 B each, 25 KB; a larger MTU needs a larger value.
 const FLOOD_BYTES: u32 = 0x8000;
 
+/// Why a [`wait`] gave up.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GaveUp {
+    /// `limit_ms` of waiting.
+    Silence,
+    /// [`FLOOD_BYTES`] of other packets: what was waited for may still be queued behind them.
+    Flood,
+}
+
 /// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of waiting (the 1 ms pauses summed: a chip that chatters but never answers still times out), or
-/// 64 KB of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
-fn wait<T>(b: &mut impl Board, rx: &mut Rx, limit_ms: u32, mut f: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
+/// [`FLOOD_BYTES`] of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
+fn wait<T>(b: &mut impl Board, rx: &mut Rx, limit_ms: u32, mut f: impl FnMut(&[u8]) -> Option<T>) -> Result<T, GaveUp> {
     let mut buf = [0; 1];
     let (mut idle_ms, mut bytes) = (0, 0u32);
     while idle_ms < limit_ms && bytes < FLOOD_BYTES {
@@ -436,12 +445,12 @@ fn wait<T>(b: &mut impl Board, rx: &mut Rx, limit_ms: u32, mut f: impl FnMut(&[u
             rx.paused_ms = rx.paused_ms.saturating_add(1);
         } else if let Some(p) = rx.push(buf[0]) {
             if let Some(t) = f(p) {
-                return Some(t);
+                return Ok(t);
             }
             rx.keep_last();
         }
     }
-    None
+    Err(if idle_ms < limit_ms { GaveUp::Flood } else { GaveUp::Silence })
 }
 
 /// Sends the command `payload` (`[type][op][arguments]`) and waits for its response; copies the outputs into `out`
@@ -451,44 +460,48 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
     if rx.broken || rx.stalled {
         return Err(Error::Timeout); // no frame goes to a mis-framed chip; the watchdog resets it (not a time-out)
     }
-    // a failed send leaves `rx.late` as the drain left it (an answer swallowed there stays swallowed)
     let paused = rx.paused_ms;
-    let sent = send(b, rx, payload);
     let op = payload.get(1).copied();
-    // a call that timed out may still be answered: that late answer is not this call's (the next channel's open has
-    // the same op), so one answer of its op is swallowed. If it never came, this call fails once (it swallowed the
-    // real answer) and does not arm another: the next call is clean.
-    let armed = if sent.is_ok() { rx.late.take() } else { None };
-    let mut late = armed;
-    let response = |p: &[u8]| match *p {
-        [RESP, o, ..] if late == Some(o) => {
-            late = None;
-            None
-        }
-        [RESP, o, r0, r1, r2, r3, ref outputs @ ..] if Some(o) == op => {
-            Some(match u32::from_le_bytes([r0, r1, r2, r3]) {
-                0 => {
-                    let len = outputs.len().min(out.len());
-                    out.iter_mut().zip(outputs).for_each(|(o, &s)| *o = s);
-                    Ok(len)
+    // a call that timed out may still be answered, and the chip answers in order: that answer comes before this
+    // one's and must not be taken for it (the next channel's open has the same op). So nothing is sent while it may
+    // still come: it is waited for first (the call's one budget) and dropped. Swallowing it during this call's wait
+    // instead lost the count after two time-outs in a row (the second's answer then went to the third call: frames
+    // lost and doubled, review 2026-11-11). If it never comes, this call fails unsent and the next one is clean; if a
+    // burst of other packets stopped the wait, it may still be queued behind them: still owed, the call fails unsent.
+    let drained = match rx.late.take() {
+        None => Ok(()),
+        Some(l) => wait(b, rx, TIMEOUT_MS, |p| matches!(*p, [RESP, o, ..] if o == l).then_some(())).map_err(|why| {
+            if why == GaveUp::Flood {
+                rx.late = Some(l);
+            }
+            Error::Timeout
+        }),
+    };
+    let r = drained.and_then(|()| {
+        send(b, rx, payload).and_then(|()| {
+            let response = |p: &[u8]| match *p {
+                [RESP, o, r0, r1, r2, r3, ref outputs @ ..] if Some(o) == op => {
+                    Some(match u32::from_le_bytes([r0, r1, r2, r3]) {
+                        0 => {
+                            let len = outputs.len().min(out.len());
+                            out.iter_mut().zip(outputs).for_each(|(o, &s)| *o = s);
+                            Ok(len)
+                        }
+                        code => Err(Error::Code(code)),
+                    })
                 }
-                code => Err(Error::Code(code)),
+                _ => None,
+            };
+            let left = TIMEOUT_MS.saturating_sub(rx.paused_ms - paused);
+            wait(b, rx, left, response).unwrap_or_else(|_| {
+                rx.late = op; // sent and not answered: its answer may still come
+                Err(Error::Timeout)
             })
-        }
-        _ => None,
-    };
-    let r = match sent {
-        Ok(()) => {
-            wait(b, rx, TIMEOUT_MS.saturating_sub(rx.paused_ms - paused), response).unwrap_or(Err(Error::Timeout))
-        }
-        Err(e) => Err(e), // the chip took no whole command: nothing to wait for
-    };
+        })
+    });
     if r == Err(Error::Timeout) {
         rx.stalled = true;
         rx.timeouts = rx.timeouts.saturating_add(1);
-        if sent.is_ok() {
-            rx.late = op.filter(|_| armed.is_none() || late.is_some()); // not after a swallow
-        }
     }
     if let (Err(e), Some(op)) = (r, op) {
         rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
@@ -971,7 +984,7 @@ pub fn ant_ack(b: &mut impl Board, rx: &mut Rx, ch: u8, data: [u8; 8]) -> Result
 pub fn ant_close(b: &mut impl Board, rx: &mut Rx, ch: u8) -> Result<(), Error> {
     call(b, rx, &[ANT_CMD, 0xc5, ch], &mut [])?;
     let closed = |p: &[u8]| (ant_closed(p) == Some(ch)).then_some(());
-    wait(b, rx, TIMEOUT_MS, closed).ok_or(Error::Timeout)
+    wait(b, rx, TIMEOUT_MS, closed).map_err(|_| Error::Timeout)
 }
 
 /// The sensor channel `ch` locked onto (`sd_ant_channel_id_get`, op 0xd4, seen on the unit): the reply's outputs
@@ -1242,23 +1255,75 @@ mod tests {
         assert!(rx.stalled, "the time-out stalls the rest of the pass");
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: refused at once");
         rx.span_end(); // the next span
-        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: its answer swallowed");
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: A's answer never came");
         rx.span_end();
         assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "C: clean");
     }
 
+    /// Two calls in a row answered after their time-out (600 ms): each later call still gets its own answer, never
+    /// the one before's (review 2026-11-11: B's answer went to C, and so on, until the burst ended).
     #[test]
-    fn a_late_answer_read_during_a_send_is_swallowed_there() {
+    fn two_late_answers_in_a_row_are_never_the_next_calls() {
+        let mut sim = crate::sim::Sim::new(9, 0, 0);
+        let _app = crate::App::start(&mut sim, None);
+        let (mut rx, mut out) = (Rx::new(), [0; 16]);
+        let ask = [CMD, SD_BLE_VERSION_GET, 1];
+        sim.nordic.slow_ms = 600;
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "A: late");
+        rx.span_end();
+        sim.nordic.refuse = Some(SD_BLE_VERSION_GET); // B's answer, when it comes, is a refusal
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: late too");
+        rx.span_end();
+        (sim.nordic.slow_ms, sim.nordic.refuse) = (0, None);
+        for c in ["C", "D"] {
+            assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "{c} gets its own answer, not B's refusal");
+            rx.span_end();
+        }
+        assert_eq!(rx.late, None);
+    }
+
+    #[test]
+    fn a_late_answer_read_by_the_main_read_is_swallowed() {
         let mut rx = Rx::new();
         rx.late = Some(0x65);
-        for b in [6, 0, RESP, 0x66, 0, 0, 0, 0] {
-            rx_byte(&mut rx, b); // another op's answer: not the late one
-        }
+        let read = |rx: &mut Rx, frame: [u8; 8]| {
+            let mut swallowed = false;
+            for b in frame {
+                if let Some(p) = rx.push(b) {
+                    let answer = if let [RESP, o, ..] = *p { Some(o) } else { None };
+                    swallowed = rx.swallow(answer); // as app/radio.rs's read does
+                }
+            }
+            swallowed
+        };
+        assert!(!read(&mut rx, [6, 0, RESP, 0x66, 0, 0, 0, 0]), "another op's answer: not the late one");
         assert_eq!(rx.late, Some(0x65));
-        for b in [6, 0, RESP, 0x65, 5, 0, 0, 0] {
-            rx_byte(&mut rx, b);
+        assert!(read(&mut rx, [6, 0, RESP, 0x65, 5, 0, 0, 0]));
+        assert_eq!(rx.late, None, "swallowed, so the next answer of that op is the real one");
+    }
+
+    /// A burst of scan reports past [`FLOOD_BYTES`] ahead of a late answer: the wait for it stops on the burst, the
+    /// call fails unsent and the answer is still owed; the next call takes it, then its own.
+    #[test]
+    fn a_late_answer_behind_a_burst_is_still_owed() {
+        let mut sim = crate::sim::Sim::new(9, 0, 0);
+        let _app = crate::App::start(&mut sim, None);
+        let (mut rx, mut out) = (Rx::new(), [0; 16]);
+        let ask = [CMD, SD_BLE_VERSION_GET, 1];
+        rx.late = Some(SD_BLE_VERSION_GET);
+        let mut report = std::vec![32u8, 0, BLE_EVT, EVT_ADV_REPORT as u8];
+        report.resize(34, 0);
+        for _ in 0..FLOOD_BYTES as usize / report.len() + 1 {
+            report.iter().for_each(|&b| sim.nordic.stray(b));
         }
-        assert_eq!(rx.late, None, "swallowed in the drain, so the next answer of that op is the real one");
+        [6, 0, RESP, SD_BLE_VERSION_GET, 5, 0, 0, 0].iter().for_each(|&b| sim.nordic.stray(b)); // late: an error code
+        let asked = |sim: &crate::sim::Sim| sim.nordic.got.iter().filter(|p| p[..] == ask).count();
+        let before = asked(&sim);
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "stopped by the burst");
+        assert_eq!((rx.late, asked(&sim)), (Some(SD_BLE_VERSION_GET), before), "still owed, nothing sent");
+        rx.span_end();
+        assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "the late refusal dropped, then its own answer");
+        assert_eq!(rx.late, None);
     }
 
     #[test]

@@ -303,7 +303,16 @@ fi
 # The live numbers of the docs (markers, AGENTS.md Docs) need the ELF (lane F) and the test list (lane H). They are
 # written on main (or --full), by the merge step; a branch only reports the stale ones, so it never commits marker
 # churn that conflicts on merge.
-if [ $full = 1 ] || [ "$br" = main ]; then
+# A build flag set in the environment, even empty, makes the image a variant: its size must not be written. Keep the
+# names in step with `grep -rho 'option_env!("[A-Z_]*")' src`.
+flagged=""
+for v in EMMC_WRITE FAST_LINK DIAG_STOP POWER_STEPS USB_HS USB_PACE_US; do
+    eval "[ -n \"\${$v+x}\" ]" && flagged="$flagged $v"
+done
+if [ -n "$flagged" ]; then
+    echo "numbers: build flag(s)$flagged set, so this image is a variant: --check only, markers not written"
+    step "numbers.py --check" sh -c 'python3 -I tools/numbers.py --check || true'
+elif [ $full = 1 ] || [ "$br" = main ]; then
     step "numbers.py --write" python3 -I tools/numbers.py --write
 else
     echo "numbers (information only, written on main):"

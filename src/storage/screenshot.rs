@@ -16,7 +16,8 @@
 //! ```
 //!
 //! **Write order** (AGENTS.md, golden rule: the card is shared with the ride): the free space is checked first (the
-//! file and the recorder's [`FULL_RESERVE`], FSInfo's count; none known: nothing written), then the folder looked up
+//! file and the recorder's [`FULL_RESERVE`], FSInfo's count, the FAT counted when it is unknown; no FSInfo: nothing
+//! written), then the folder looked up
 //! (it must exist: stock ships `\Screenshot`, and it is never made here, since the root's directory sector holds
 //! `\Activities` and `\System` and a picture must not write it), then the file's clusters and pixels as a chain
 //! no entry names yet, and only then its entry, whole, with its size ([`Fat::link`]). So a power cut leaves either
@@ -138,10 +139,10 @@ pub struct Shot {
 impl Shot {
     /// Room checked, the folder found (never made: [`Error::NotFound`] when the folder is missing or is a plain file,
     /// nothing written), `name` free in it: [`Error::Refused`] when the card has not the file's room and
-    /// [`FULL_RESERVE`] left (FSInfo's count; unknown counts as none); None when the name is taken (a shot in the same
+    /// [`FULL_RESERVE`] left (FSInfo's count, counted when unknown); None when the name is taken (a shot in the same
     /// second).
     pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, name: &str) -> Result<Option<Shot>, Error> {
-        let free = fat.free_clusters(d)?.map_or(0, u64::from) * u64::from(fat.cluster_bytes());
+        let free = fat.free_clusters_counted(d)?.map_or(0, u64::from) * u64::from(fat.cluster_bytes());
         if free < u64::from(SIZE) + FULL_RESERVE {
             return Err(Error::Refused);
         }
