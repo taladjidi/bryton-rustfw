@@ -640,7 +640,7 @@ fn hash(screen: &[u16]) -> u64 {
 }
 
 /// The built-in themes draw as they did before the metrics: the main menu and a ride page in DARK hash to the values
-/// taken from the same test on the commit before (main, 2026-10-30). The RTC is frozen (`Sim::frozen_s`) at the second
+/// taken from the same test on the commit before (main, 2026-10-30; the menu's again on 2026-11-11, when PLACES moved up). The RTC is frozen (`Sim::frozen_s`) at the second
 /// the reference was taken at, so the strip's clock does not depend on how long the transfers take.
 #[test]
 fn dark_draws_as_before_the_metrics() {
@@ -658,7 +658,7 @@ fn dark_draws_as_before_the_metrics() {
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 1100);
     let ride = hash(&sim.screen);
-    assert_eq!((menu, ride), (0x459e_03bf_94ad_1ce1, 0x6176_419e_836c_48ae));
+    assert_eq!((menu, ride), (0x8a62_1460_8fd3_8359, 0x6176_419e_836c_48ae));
 }
 
 /// `THEME_FILE=<file> cargo test-host -- --ignored theme_preview`: the file, parsed as the card would parse it, drawn on

@@ -48,8 +48,10 @@ impl Notices {
         }
         let up = self.ms.is_some().then_some((self.text, self.kind));
         let (show, wait) = match up {
-            // a notice of what a key did replaces a lap summary (dropped, not queued)
-            Some(up) if up.1 == Banner::Summary && kind == Banner::Info => ((l, kind), None),
+            // a notice of what a key did replaces a lap summary (dropped, not queued), and so does any other notice
+            Some(up) if up.1 == Banner::Summary && matches!(kind, Banner::Info | Banner::Key) => ((l, kind), None),
+            // the key's answer must not wait 4 s behind AUTO PAUSED, a state the page already shows
+            Some(up) if up.1 == Banner::Auto && kind == Banner::Key => ((l, kind), None),
             Some(up) if up.1 > kind => (up, Some((l, kind))),
             Some(up) if up.1 < kind && !(up.1.is_cue() && kind.is_cue()) => ((l, kind), Some(up)),
             _ => ((l, kind), None),
@@ -678,6 +680,28 @@ mod tests {
             n.show_waiting();
             assert_eq!(n.text.as_str(), "STEP 2", "and the step after it");
         }
+    }
+
+    #[test]
+    fn another_notice_does_not_drop_auto_paused() {
+        let mut n = Notices::new();
+        n.say("AUTO PAUSED", Banner::Auto);
+        n.say("NO GPS FIX", Banner::Info);
+        assert_eq!(n.text.as_str(), "AUTO PAUSED", "it stays");
+        n.ms = None;
+        n.show_waiting();
+        assert_eq!(n.text.as_str(), "NO GPS FIX", "the notice comes after it");
+    }
+
+    #[test]
+    fn a_key_notice_replaces_auto_paused() {
+        let mut n = Notices::new();
+        n.say("AUTO PAUSED", Banner::Auto);
+        n.say("LAP", Banner::Key);
+        assert_eq!(n.text.as_str(), "LAP", "the key's answer shows at once");
+        n.ms = None;
+        n.show_waiting();
+        assert_eq!(n.text.as_str(), "LAP", "and AUTO PAUSED does not come back");
     }
 
     #[test]

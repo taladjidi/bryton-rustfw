@@ -586,7 +586,7 @@ pub enum Row {
     WorkoutStart,
     /// The FTP ramp test (ramp.rs, app/ramp.rs): Select starts it, with a trainer heard.
     RampTest,
-    /// RIDE A COURSE (app/courses.rs): Select lists the courses; the one picked is ridden on the trainer.
+    /// TRAINER COURSE (app/courses.rs): Select lists the courses; the one picked is ridden on the trainer.
     RideCourse,
     /// Step `n` of the workout shown: Select starts the workout from it.
     Step(usize),
@@ -661,7 +661,7 @@ impl Row {
             Row::Stock(r) => r.label(),
             Row::WorkoutStart => "START",
             Row::RampTest => "RAMP TEST",
-            Row::RideCourse => "RIDE A COURSE",
+            Row::RideCourse => "TRAINER COURSE",
             Row::Phone(r) => r.label(),
             Row::Pick(field) => field.label(),
             Row::Ride(r) => match r {
@@ -874,17 +874,18 @@ pub const FITNESS: [StockRow; 20] = {
     ]
 };
 
-/// The main menu (off a ride): what to ride (workouts, courses, segments), what was ridden, then the set-up; seven rows, the list scrolls.
+/// The main menu (off a ride): what to ride (workouts, courses, places), what was ridden, the pages and the
+/// settings fill the six rows that show; the list scrolls to the rest (2026-11-11: PLACES and SETTINGS were below).
 pub const MAIN: [Row; 9] = [
     Row::Open(Menu::Workouts),
     Row::Open(Menu::Courses),
-    Row::Open(Menu::Segments),
+    Row::Open(Menu::Places),
     Row::Open(Menu::History),
     Row::Open(Menu::Pages),
-    Row::Open(Menu::Sensors),
-    Row::Open(Menu::Phone),
     Row::Open(Menu::Settings),
-    Row::Open(Menu::Places),
+    Row::Open(Menu::Phone),
+    Row::Open(Menu::Sensors),
+    Row::Open(Menu::Segments),
 ];
 
 /// PAGES: one list per profile's set, then the settings of the pages and the quick overlay's fields.

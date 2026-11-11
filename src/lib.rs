@@ -257,6 +257,8 @@ pub struct App {
     pmc: app::pmc::State,
     /// The title a menu was drawn with (app/menus.rs `title_print`).
     menu_title_print: u32,
+    /// NEXT TURN's boxes are labelled TO START (the way to the course's start shows): what they were drawn with.
+    to_start_shown: bool,
     /// The quick panel's drawn state (app/quick.rs).
     quick: Quick,
     /// The Bluetooth trainer's link (app/ftms.rs).
@@ -643,6 +645,7 @@ impl App {
             curve_ready: false,
             pmc: app::pmc::State::new(),
             menu_title_print: 0,
+            to_start_shown: false,
             quick: Quick::new(),
             ftms: Ftms::default(),
             prof: prof::Prof::default(),

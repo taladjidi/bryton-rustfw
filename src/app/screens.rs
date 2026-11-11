@@ -19,8 +19,11 @@ pub const READY_BANNER_MS: u32 = 3000;
 pub(crate) enum Banner {
     /// What a key just did, a notice.
     Info,
-    /// AUTO PAUSED / RESUMED: over what a key said, under a lap's summary (it waits behind it, not replaces it).
+    /// AUTO PAUSED / RESUMED: under what a key said ([`Banner::Key`] replaces it), under a lap's summary (it waits behind it).
     Auto,
+    /// What a key's own answer says (PAUSED, RESUMED, RECORDING): replaces AUTO PAUSED and a lap's summary; any other
+    /// notice ([`Banner::Info`]) waits behind AUTO PAUSED.
+    Key,
     /// A lap's summary: stays [`LAP_BANNER_MS`], over what a key said, under a turn, a workout step or an alarm.
     Summary,
     /// The ready card at a ride's start: stays [`READY_BANNER_MS`], over what a key said, under everything the ride says.
@@ -371,13 +374,18 @@ impl App {
                 ui::draw_notices(c, n.get(..shown).unwrap_or(&[]));
             }
             (Widget::Field(f), d) => {
-                ui::draw_field_frame_bar(
-                    c,
-                    bx,
-                    self.avg_field(f),
-                    if let Drawn::Value(_, _, bar) = d { bar } else { ui::BLACK },
-                    (self.settings.imperial, self.settings.temp_f),
-                );
+                let shown = self.avg_field(f);
+                let label = if f == Field::NextTurn && self.to_start_now() {
+                    "TO START"
+                } else {
+                    shown.label_in(self.settings.imperial, self.settings.temp_f)
+                };
+                ui::draw_field_frame_as(c, bx, shown, label);
+                if let Drawn::Value(_, _, bar) = d
+                    && bar != ui::BLACK
+                {
+                    ui::draw_zone_bar(c, bx, bar);
+                }
                 match d {
                     Drawn::Map(m) => {
                         let base = (self.first_map() == Some(i)).then_some(&self.basemap);
@@ -644,6 +652,7 @@ impl App {
         if self.screen == Screen::Nearby {
             self.menu.list_shown = ui::list_prints(&self.radio.nearby); // drawn whole by draw_screen
         }
+        self.to_start_shown = self.to_start_now();
         if let Screen::Menu(menu, sel) = self.screen {
             let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
             self.menu_title_print = title_print(self.menu_title(menu).as_str());
@@ -681,6 +690,7 @@ impl App {
         let widgets = self.widgets(); // built once a pass that looks
         let first = widgets.clone().position(|(_, w)| w == Widget::Field(Field::Map));
         let selected = if let Screen::Edit(_, k) = self.screen { Some(k) } else { None };
+        let ts = self.to_start_now();
         for (i, (bx, w)) in widgets.enumerate() {
             let Some(&old) = self.drawn.get(i) else { break };
             if !due && !matches!(old, Drawn::Map(_)) {
@@ -736,6 +746,11 @@ impl App {
                 }
                 (Widget::Field(f), Drawn::Value(was, was_fg, was_bar)) => {
                     let (text, fg, bar) = (self.field_text(f), self.field_color(f), self.field_bar(f));
+                    if f == Field::NextTurn && ts != self.to_start_shown {
+                        // the way to the start shows, or the turns do: the label alone
+                        let (was, now) = (Self::next_turn_label(self.to_start_shown), Self::next_turn_label(ts));
+                        ui::redraw_field_label(&mut Panel(b, self.area(), self.look()), bx, was, now);
+                    }
                     if bar != was_bar {
                         ui::draw_zone_bar(&mut Panel(b, self.area(), self.look()), bx, bar); // a zone changed: the bar only
                     }
@@ -769,6 +784,19 @@ impl App {
                 ui::draw_cell_frame(&mut Panel(b, self.area(), self.look()), bx, ui::ACCENT);
             }
         }
+        if due {
+            self.to_start_shown = ts; // not on a pass that skipped the boxes (a map page looks at its map only)
+        }
+    }
+
+    /// The way to the course's start shows in NEXT TURN's place (not joined yet).
+    pub(crate) fn to_start_now(&self) -> bool {
+        self.on_course().is_some_and(|(c, at)| c.to_start(at).is_some())
+    }
+
+    /// NEXT TURN's label, or TO START's.
+    fn next_turn_label(to_start: bool) -> &'static str {
+        if to_start { "TO START" } else { Field::NextTurn.label() }
     }
 
     /// Row `y` of the screen as the app drew it: the screenshot source.

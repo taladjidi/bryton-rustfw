@@ -528,7 +528,7 @@ MENU
    +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
    +- WORKOUT >        while a step runs: NEXT STEP (makes a lap, through `step_lap`, as the Lap key does), STOP WORKOUT (the ride goes on)
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on), REVERSE COURSE
-   +- COURSES >        pick or switch a course (not on a virtual ride, which picks through WORKOUTS > RIDE A COURSE)
+   +- COURSES >        pick or switch a course (not on a virtual ride, which picks through WORKOUTS > TRAINER COURSE)
    +- WORKOUTS >       the planned workouts, RAMP TEST, RIDE A COURSE
    +- SENSORS >        the same menu as off the ride
    +- BRIGHTNESS       changed in place
@@ -575,7 +575,7 @@ MENU
   DISPLAY > GAUGE POWER; DEVICE > LIGHT % / LIGHT OFF / TOUCH -> DISPLAY > BRIGHTNESS / OFF AFTER / TOUCH; DEVICE >
   WHEEL MM -> BIKE > WHEEL; DEVICE > GPS, NEARBY BLE, USB DRIVE, ABOUT -> SYSTEM > GPS, BLE NEARBY, USB DRIVE, ABOUT;
   ALERTS > EAT MIN, DRINK MIN, HR OVER -> SETTINGS > ALERTS > EAT, DRINK, HR ABOVE; STOCK DATA > IMPORT -> SYSTEM >
-  IMPORT FROM STOCK; STOCK DATA's other rows -> HISTORY > FITNESS; PHONE -> SENSORS > PHONE. WORKOUTS, COURSES,
+  IMPORT FROM STOCK; STOCK DATA's other rows -> HISTORY > FITNESS; PHONE -> PHONE. WORKOUTS, COURSES,
   HISTORY, PAGES, SENSORS (the ANT rows, DI2 KEYS) stay where they were. The settings are kept as before (same
   backup registers, same formats).
 
@@ -1134,13 +1134,13 @@ The register layout, for the words still written:
 ## Phone (BLE, no app)
 
 The unit pairs with a phone as a Bluetooth accessory, with nothing to install on the phone:
-- **Pairing:** SENSORS > PHONE > PAIR advertises for a minute ("S510"; the phone sees a HID accessory, appearance generic HID);
+- **Pairing:** PHONE > PAIR advertises for a minute ("S510"; the phone sees a HID accessory, appearance generic HID);
   pair from the phone's Bluetooth settings (Just Works: no code). One phone is kept (its key and the notifications
   it enabled), in `\Rustfw\ble.bin` on the card, read 3 s after the start; FORGET erases it. A build that may not
   write the card keeps it until switched off. Not paired, the unit does not advertise at all; paired and not
   connected, it advertises once a second so the phone comes back by itself.
 - **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
-  as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. SENSORS > PHONE >
+  as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. PHONE >
   REMOTE is the full player (the quick panel has its main buttons, one swipe down from any page): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
   time, and buttons: previous, play / pause, next, then skip back, volume down, volume up, skip forward (AMS's skip:
   the app sets how far, often 15 or 30 s in a podcast app; there is no "go to a position"). Keys: Start play / pause,

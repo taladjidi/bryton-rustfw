@@ -99,7 +99,7 @@ impl Walk {
         sim.save(&format!("walk/{name}"));
         // The GPS screen's UTC is the last epoch's: the second it shows depends on where the read fell, which the transfers'
         // time moves. Its value box is left out of that screen's hash (x from 120, the rows of UTC and below).
-        let gps = self.cur.ends_with("gps");
+        let gps = self.cur.ends_with("GPS");
         let h = (0..sim.screen.len())
             .filter(|i| !(gps && i % W as usize >= 120 && i / W as usize >= 270))
             .fold(0x811c_9dc5, |h, i| crate::fnv(h, &sim.screen[i].to_le_bytes()));
