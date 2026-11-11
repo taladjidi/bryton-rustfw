@@ -258,6 +258,11 @@ fn tasks() -> Vec<Task> {
             );
             done(&r, !r.app.page_on(COURSE), "stop")
         }),
+        t("map at turn off, keys", IDLE, 23, || {
+            let mut r = Run::new(false);
+            r.path(false, &[Row::Open(Menu::Settings), Row::Open(Menu::Display), Row::Set(menu::Setting::MapTurn)]);
+            done(&r, !r.app.settings.map_turn, "map at turn")
+        }),
         t("brightness in a ride, keys", RIDING, 7, || {
             let mut r = Run::new(true);
             let before = r.app.settings.light_level;

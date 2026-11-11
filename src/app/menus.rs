@@ -734,9 +734,10 @@ impl App {
                 }
                 // a course: its name over its length, the whole name to tell the courses apart; a tick marks the one
                 // followed (green alone is no mark for a colour-blind rider)
-                if matches!(row, Some(menu::Row::Course(_))) {
+                if let Some(menu::Row::Course(k)) = row {
                     let on = color == ui::GREEN;
-                    return ui::draw_workout_row(c, slot, (label.as_str(), value.as_str()), i == sel, &[], on);
+                    let sub = self.course_sub(k, value.as_str());
+                    return ui::draw_workout_row(c, slot, (label.as_str(), sub.as_str()), i == sel, &[], on);
                 }
                 ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel && !inert);
                 if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =
@@ -783,6 +784,9 @@ impl App {
                 }
                 if with_value || cut || workout {
                     eat(value.as_str().as_bytes());
+                }
+                if let Some(menu::Row::Course(k)) = self.row(menu, i) {
+                    eat(self.course_sub(k, "").as_str().as_bytes());
                 }
                 if with_value || workout || value.as_str().is_empty() {
                     eat(&color.to_le_bytes());

@@ -315,6 +315,8 @@ pub struct App {
     set_shown: ride::Profile,
     /// The climb page is in the round, the page it follows, and the climb handled: its start (m) and whether the page opened, or was skipped, for it.
     climb: ClimbPage,
+    /// The map page opened near a turn, and the page to go back to (app/nearturn.rs).
+    near: NearTurn,
     /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
@@ -566,6 +568,7 @@ impl App {
             pages_set: ride::Profile::Road,
             set_shown: ride::Profile::Road,
             climb: ClimbPage::new(),
+            near: NearTurn::new(),
             more_on: None,
             store,
             sw: Switches::new(),
@@ -779,6 +782,7 @@ impl App {
         self.settle_segment(b); // before the climb: a segment that starts with a climb takes the screen
         self.settle_climb(b);
         self.auto_scroll(b, pass_ms);
+        self.settle_near_turn(b, pass_ms);
         self.ramp_apply_held(b);
         if core::mem::take(&mut self.ramp.show) {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page

@@ -85,6 +85,10 @@ pub struct Entry {
     pub dist_m: Option<u32>,
     /// Its length was measured (else not yet).
     pub measured: bool,
+    /// Its first point (lat, lon, degrees x 1e-7), read with the length ([`Entry::start`]). Not an `Option`, and zeros
+    /// until read: 4 bytes each less, and a constant the linker keeps out of the course memory's frame
+    /// (tools/stack_check.py).
+    start: (i32, i32),
 }
 
 impl Entry {
@@ -95,7 +99,13 @@ impl Entry {
         gpx: false,
         dist_m: None,
         measured: false,
+        start: (0, 0),
     };
+
+    /// Its first point (lat, lon), once its length was measured (a file read whole, with points): COURSES sorts by the way to it.
+    pub fn start(&self) -> Option<(i32, i32)> {
+        self.dist_m.filter(|_| self.measured).map(|_| self.start)
+    }
 
     /// Its name, without the extension.
     pub fn name(&self) -> &str {
@@ -156,7 +166,7 @@ impl List {
                 if let Some(o) =
                     old.iter().take(old_len).find(|o| o.measured && o.file == e.file && o.name() == e.name())
                 {
-                    (e.dist_m, e.measured) = (o.dist_m, true);
+                    (e.dist_m, e.measured, e.start) = (o.dist_m, true, o.start);
                 }
                 if let Some(slot) = self.e.get_mut(self.len) {
                     *slot = e;
@@ -165,6 +175,22 @@ impl List {
             }
         }
         Ok(())
+    }
+
+    /// Courses nearest first, by the way from `from` (lat, lon) to each start; those with no start read yet after
+    /// them, each group in its order (an insertion sort: stable, 64 at most, no allocation).
+    pub fn sort_by_start(&mut self, from: (i32, i32)) {
+        let key = |e: &Entry| e.start().map_or(u32::MAX, |s| crate::places::dist_bearing(from, s).0);
+        for i in 1..self.len {
+            let mut j = i;
+            while j > 0
+                && let Some([a, b]) = self.e.get_mut(j - 1..=j)
+                && key(b) < key(a)
+            {
+                core::mem::swap(a, b);
+                j -= 1;
+            }
+        }
     }
 
     /// The first course whose length is not known yet.
@@ -313,7 +339,7 @@ enum Job {
     /// None.
     Idle,
     /// Course `k`'s length so far.
-    Measure { k: usize, s: Stream, odo: Odometer },
+    Measure { k: usize, s: Stream, odo: Odometer, first: Option<(i32, i32)> },
     /// Course `k` read into the model, to follow it.
     Load { k: usize, s: Stream },
 }
@@ -349,6 +375,8 @@ pub struct Courses {
     pub stale: bool,
     /// Some: a virtual ride on the course, from this ride distance (m); the trainer's distance places the rider.
     pub base_m: Option<u32>,
+    /// Where the rider was when COURSES last sorted its list (lat, lon): the "AWAY" distances are from here.
+    pub from: Option<(i32, i32)>,
     job: Job,
 }
 
@@ -369,6 +397,7 @@ impl Courses {
             ride_it: false,
             stale: false,
             base_m: None,
+            from: None,
             job: Job::Idle,
         }
     }
@@ -428,7 +457,7 @@ impl Courses {
     fn next_job(&mut self) {
         let next = self.list.unmeasured().and_then(|k| Some((k, Stream::new(self.list.get(k)?))));
         if let (Job::Idle, Some((k, s))) = (&self.job, next) {
-            self.job = Job::Measure { k, s, odo: Odometer::new() };
+            self.job = Job::Measure { k, s, odo: Odometer::new(), first: None };
         }
     }
 
@@ -442,10 +471,11 @@ impl Courses {
         let fat = Fat::mount(d);
         let progress = match &mut self.job {
             Job::Idle => Progress::Idle,
-            Job::Measure { k, s, odo } => {
+            Job::Measure { k, s, odo, first } => {
                 let done = fat.and_then(|mut fat| {
                     s.step(&mut fat, d, budget, &mut |it| {
                         if let Item::Point(pt) = it {
+                            first.get_or_insert((pt.lat, pt.lon));
                             odo.step(pt);
                         }
                     })
@@ -455,6 +485,7 @@ impl Courses {
                 }
                 if let Some(e) = self.list.e.get_mut(..self.list.len).and_then(|e| e.get_mut(*k)) {
                     e.dist_m = odo.len_m().filter(|_| done.is_ok()); // a file not read whole has no length
+                    e.start = first.unwrap_or((0, 0));
                     e.measured = true;
                 }
                 Progress::Measured

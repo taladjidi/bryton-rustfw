@@ -26,6 +26,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input` (global arms, then one `input_<screen>` per screen), `touch`.
   - `editor.rs`: the page editor on the page (`Screen::Edit`, its actions, keep or drop), pages added and deleted,
     and `\Rustfw\pages.bin` (read after the start, written between rides, the backup registers after it).
+  - `nearturn.rs`: MAP AT TURN: the map page opens by itself within 150 m of a turn of the course followed and the rider's page comes back after.
   - `pagemeta.rs`: the page switches (SHOW, MOVE UP / DOWN, RENAME, the road set's names and OFF mask in `pages.bin`) and AUTO SCROLL.
   - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
     the ride card, the basemap, `render_row` (screenshots). `src/app/fields.rs`: a ride field's text and colour, number

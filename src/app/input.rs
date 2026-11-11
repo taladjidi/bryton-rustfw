@@ -199,7 +199,7 @@ impl Screen {
 }
 
 /// Places in the round of the ride pages: the workout page, the pages, then the course page.
-const ROUND: usize = PAGES + 2;
+pub(crate) const ROUND: usize = PAGES + 2;
 
 /// Ride page `n`'s place in the round.
 pub(crate) fn place(n: usize) -> usize {
@@ -211,7 +211,7 @@ pub(crate) fn place(n: usize) -> usize {
 }
 
 /// The ride page at place `k` in the round.
-fn page_at(k: usize) -> usize {
+pub(crate) fn page_at(k: usize) -> usize {
     match k {
         0 => WORKOUT,
         k if k > PAGES => COURSE,

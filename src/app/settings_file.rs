@@ -61,7 +61,7 @@ const DATA_AT: usize = 28;
 
 /// Bytes of settings this build lays out (the length its copies say, module doc): a new setting appends its bytes and
 /// raises it (`SettingsCopy::data` lays out exactly this many, a test says so); a copy holds up to 480.
-pub(crate) const SETTINGS_LEN: usize = 173;
+pub(crate) const SETTINGS_LEN: usize = 174;
 const _: () = assert!(DATA_AT + SETTINGS_LEN <= CRC_AT);
 
 /// The numbers kept, in the file's order (after the wheel): never reordered, a new one appended at the end of the
@@ -185,6 +185,7 @@ impl SettingsCopy {
         put(&[s.gnss_systems as u8]);
         put(&[s.steep_descent as u8]);
         put(&[s.saver as u8]);
+        put(&[u8::from(s.map_turn)]);
         (data, n, dropped)
     }
 
@@ -331,6 +332,8 @@ impl SettingsCopy {
             data.next().map(usize::from).filter(|&v| v < STEEP_DESCENT_PCT.len()).unwrap_or(d.steep_descent);
         // BATTERY SAVER (byte 172, after STEEP DESCENT): a file without it, or a byte out of range, reads OFF
         s.saver = data.next().and_then(SaverMode::from_byte).unwrap_or(d.saver);
+        // MAP AT TURN (after BATTERY SAVER): a file without it reads ON
+        s.map_turn = flag(data.next(), d.map_turn);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq, words, settings: s })
     }

@@ -461,6 +461,7 @@ fn course_cues_ride() {
     let k = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "ZIGZAG").unwrap();
     app.follow_course(k);
     run(&mut sim, &mut app, 200);
+    app.settings.map_turn = false; // the page stays where it is: this test counts the strip's pixels
     assert_eq!(app.screen(), Screen::Ride(crate::COURSE));
     let text = |app: &App| std::string::String::from(app.field_text(Field::NextTurn).as_str());
     assert_eq!(text(&app), "--", "no fix yet");
@@ -654,6 +655,7 @@ fn climb_page_in_the_round() {
         let mut app = App::start(&mut sim, None);
         app.set_map_memory(crate::tiles::tests::memory());
         app.set_course_memory(crate::storage::course_file::tests::memory());
+        app.settings.map_turn = false; // the climb page's own paging, not the map near a turn
         if own {
             app.pages[0] = PageCfg { layout: 1, fields: [Field::Climb; 6] }.into();
         }
@@ -1802,6 +1804,103 @@ fn courses_cursor_while_measuring_matches_the_panel() {
                 sim.sleep_ms(10);
                 assert_consistent(&sim, &app);
             }
+        }
+    }
+}
+
+/// With a fix, COURSES lists the nearest start first and says how far each one is; the list sorts when it opens and
+/// once its lengths are in.
+#[test]
+fn courses_sorted_by_the_way_to_their_start() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(course_route);
+    sim.gnss.fix = Some(0);
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1500);
+    let c = app.courses.as_deref().unwrap();
+    let from = c.from.expect("a fix at the sort");
+    let away: Vec<u32> = (0..c.list.len())
+        .filter_map(|i| c.list.get(i)?.start().map(|s| crate::places::dist_bearing(from, s).0))
+        .collect();
+    assert!(away.len() >= 5, "{away:?}");
+    assert!(away.windows(2).all(|w| w[0] <= w[1]), "nearest first: {away:?}");
+    let sub = app.course_sub(0, "5.0 KM");
+    assert!(sub.as_str().ends_with(" AWAY") && sub.as_str().starts_with("5.0 KM "), "{}", sub.as_str());
+    assert!(sub.as_str().len() <= 16, "{}", sub.as_str());
+    assert_consistent(&sim, &app);
+    sim.save("courses_by_distance");
+
+    // no fix: no distance, today's order
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1500);
+    assert_eq!(app.course_sub(0, "5.0 KM").as_str(), "5.0 KM");
+}
+
+/// MAP AT TURN: on a page with no map, a turn within 150 m brings the map page by itself, and the rider's page comes
+/// back some seconds after the turn; not when the setting is off, nor for a rider who paged away.
+#[test]
+fn map_at_turn_comes_and_goes() {
+    for mode in 0..3 {
+        // 0: on, 1: off, 2: the rider pages away while it is up
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.gnss.route = Some(zigzag_route);
+        let mut app = App::start(&mut sim, None);
+        app.set_map_memory(crate::tiles::tests::memory());
+        app.set_course_memory(crate::storage::course_file::tests::memory());
+        app.open_courses(&mut sim);
+        run(&mut sim, &mut app, 1000);
+        let list = &app.courses.as_deref().unwrap().list;
+        let k = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "ZIGZAG").unwrap();
+        app.follow_course(k);
+        run(&mut sim, &mut app, 200);
+        app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+        app.pages[2] = PageCfg {
+            layout: 1,
+            fields: [Field::Map, Field::Speed, Field::Time, Field::Time, Field::Time, Field::Time],
+        }
+        .into();
+        app.settings.map_turn = mode != 1;
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        (app.depth, app.screen) = (0, Screen::Ride(0));
+        app.show(&mut sim);
+        let cue = app.courses.as_deref().unwrap().course.cues()[0].at_m;
+        let to = |sim: &mut Sim, app: &mut App, m: u32| {
+            while sim.ms < u64::from(m) * 125 {
+                run(sim, app, 250);
+            }
+        };
+        to(&mut sim, &mut app, cue - 175);
+        assert_eq!(app.screen(), Screen::Ride(0), "far from the turn");
+        to(&mut sim, &mut app, cue - 120);
+        assert_eq!(app.screen(), if mode == 1 { Screen::Ride(0) } else { Screen::Ride(2) }, "mode {mode}: near");
+        if mode == 2 {
+            app.press(&mut sim, Press::Short(Key::Page));
+            let there = app.screen();
+            to(&mut sim, &mut app, cue + 300);
+            assert_ne!(there, Screen::Ride(0));
+            assert_ne!(app.screen(), Screen::Ride(0), "a rider who paged away is not sent back");
+        } else if mode == 0 {
+            to(&mut sim, &mut app, cue + 5);
+            assert_eq!(app.screen(), Screen::Ride(2), "held at the turn");
+            assert_consistent(&sim, &app);
+            sim.save("map_at_turn");
+            to(&mut sim, &mut app, cue + 300);
+            assert_eq!(app.screen(), Screen::Ride(0), "back on the rider's page");
+            assert_consistent(&sim, &app);
         }
     }
 }
