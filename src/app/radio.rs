@@ -206,6 +206,11 @@ impl App {
         } else if let Some((ch, data)) = nrf::ant_broadcast(p)
             && let Some(kind) = Kind::from_channel(ch)
         {
+            if self.radio.sensors.at(kind) == Sensor::Search {
+                // a wildcard search hears any sensor near: only its number is taken, to ask the rider
+                self.radio.ask |= 1 << ch;
+                return false;
+            }
             if self.radio.heard_ms.at(kind) >= sensors::STALE_MS {
                 // back after a drop-out: its counters may have moved on by any amount; the beats before it
                 // are not part of this series (and the beat time may have wrapped, a false interval)
@@ -236,12 +241,10 @@ impl App {
             let heard = self.radio.broadcasts.at_mut(kind);
             *heard = heard.saturating_add(1);
             *self.radio.misses.at_mut(kind) = 0;
-            if self.radio.sensors.at(kind) == Sensor::Search {
-                self.radio.ask |= 1 << ch;
-            }
         } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
             // its search timed out: reopened after a rest, longer for each search in a row that found nothing
             *self.radio.resting_ms.at_mut(kind) = 0;
+            *self.radio.found.at_mut(kind) = None;
             let m = self.radio.misses.at_mut(kind);
             *m = m.saturating_add(1);
         } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {

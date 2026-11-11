@@ -142,6 +142,10 @@ fn pairs_sensors_from_the_menu() {
     }
     app.press(&mut sim, Press::Short(Key::Start)); // speed + cadence: search
     run(&mut sim, &mut app, 3000);
+    assert_eq!(sim.backup[Kind::Hr.backup()], 0, "heard, not paired before the confirm");
+    app.confirm_found(&mut sim, Kind::Hr);
+    app.confirm_found(&mut sim, Kind::SpeedCadence);
+    run(&mut sim, &mut app, 3000);
     assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "strap paired and kept");
     assert_eq!(sim.backup[Kind::SpeedCadence.backup()], SensorId { device: 555, trans: 0xf1 }.to_word());
     assert_consistent(&sim, &app);
@@ -187,6 +191,11 @@ fn keeps_the_paired_sensor_until_forgotten() {
     assert_eq!(closes(&sim), 2, "closed");
     assert_eq!(sim.backup[Kind::Hr.backup()], 0, "forgotten");
     app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.backup[Kind::Hr.backup()], 0, "heard, asked, not paired");
+    assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "999 OK?");
+    sim.save("sensor_confirm");
+    app.press(&mut sim, Press::Short(Key::Start)); // the rider confirms
     run(&mut sim, &mut app, 1000);
     assert_eq!(sim.backup[Kind::Hr.backup()], SensorId { device: 999, trans: 0xf1 }.to_word(), "paired anew");
 }

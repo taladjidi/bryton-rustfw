@@ -487,7 +487,13 @@ impl App {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
                     (true, _) if kind.network() == 1 && !self.di2 => value.push_str("NO KEY"),
                     (true, Sensor::Off) => value.push_str("OFF"),
-                    (true, Sensor::Search) => value.push_str("SEARCHING"),
+                    (true, Sensor::Search) => match self.radio.found.at(kind) {
+                        Some(id) => {
+                            value.push_u32(u32::from(id.device));
+                            value.push_str(" OK?");
+                        }
+                        None => value.push_str("SEARCHING"),
+                    },
                     // heard lately: connected; paired but silent: looked for again
                     (true, Sensor::Paired(_)) => {
                         let heard = self.radio.heard(kind);
@@ -1069,7 +1075,7 @@ impl App {
     }
 
     /// A number setting's editing ended: what follows from it (BORN gives MAX HR, a MAX HR by hand is no longer the age's).
-    pub(crate) fn setting_edited(&mut self, s: menu::Setting) {
+    pub(crate) fn setting_edited(&mut self, s: menu::Setting, max_hr_before: u16) {
         match s {
             menu::Setting::BirthYear => match self.settings.max_hr_from_age(self.date.0) {
                 None if self.settings.birth_year > 0 => self.say("SET THE CLOCK"),
@@ -1082,7 +1088,7 @@ impl App {
                 }
                 _ => {}
             },
-            menu::Setting::MaxHr => self.settings.max_hr_age = false, // set by hand: no longer the age's
+            menu::Setting::MaxHr if self.settings.max_hr != max_hr_before => self.settings.max_hr_age = false, // by hand
             _ => {}
         }
     }
@@ -1094,6 +1100,7 @@ impl App {
         }
         if s.number().is_some() {
             self.menu.editing = !self.menu.editing;
+            self.menu.max_hr_start = self.settings.max_hr;
             if self.menu.editing && s == menu::Setting::Altitude {
                 match self.screen {
                     Screen::Menu(Menu::Place(k), _) => self.place_alt_edit_start(k), // the place's altitude
@@ -1101,7 +1108,7 @@ impl App {
                 }
             }
             if !self.menu.editing {
-                self.setting_edited(s);
+                self.setting_edited(s, self.menu.max_hr_start);
                 self.save_misc(b);
             }
         } else if matches!(s, menu::Setting::Theme | menu::Setting::DayTheme | menu::Setting::NightTheme) {
@@ -1139,7 +1146,10 @@ impl App {
         let heard = self.radio.heard(kind);
         match self.radio.sensors.get(k).copied() {
             Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
-            Some(Sensor::Search) => self.set_sensor(b, kind, Sensor::Off),
+            Some(Sensor::Search) => match self.radio.found.at(kind) {
+                Some(id) => self.pair_found(b, kind, id),
+                None => self.set_sensor(b, kind, Sensor::Off),
+            },
             // paired but silent: Select searches for it again now (not after its rest); Select once more
             // forgets it
             Some(Sensor::Paired(id)) if !heard && self.menu.confirm != Some((menu, sel)) => {

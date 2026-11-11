@@ -39,6 +39,8 @@ pub struct TouchChip {
     pub wedged: bool,
     /// As `wedged`, but a reset does not help.
     pub wedged_hard: bool,
+    /// Extra ms the chip stays in Init after a reset (a chip not ready at boot).
+    pub init_extra_ms: u64,
     /// Resets released so far.
     pub resets: u32,
     pub(super) finger: FingerScript,
@@ -65,6 +67,7 @@ impl TouchChip {
             wedged: false,
             wedged_hard: false,
             resets: 0,
+            init_extra_ms: 0,
             finger: Box::new(|_| None),
             finger2: Box::new(|_| None),
             extra: Vec::new(),
@@ -99,7 +102,7 @@ impl TouchChip {
     }
 
     fn ready(&self, ms: u64) -> bool {
-        !self.dead && self.run_since.is_some_and(|t| ms >= t + INIT_MS)
+        !self.dead && self.run_since.is_some_and(|t| ms >= t + INIT_MS + self.init_extra_ms)
     }
 
     fn touched(&self, ms: u64) -> bool {
@@ -123,7 +126,7 @@ impl TouchChip {
         }
         let mut regs = [0u8; 0x40];
         regs[0x00] = 0x05; // version
-        regs[0x01] = if self.dead || ms < t + INIT_MS { 0x01 } else { 0x00 }; // Normal, else Init
+        regs[0x01] = if self.dead || ms < t + INIT_MS + self.init_extra_ms { 0x01 } else { 0x00 }; // Normal, else Init
         regs[0x04..0x07].copy_from_slice(&[0x01, 0xf0, 0x40]); // 240 x 320
         regs[0x0c..0x10].copy_from_slice(&[0, 0, 1, 2]);
         regs[0x3f] = 2;

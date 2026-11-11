@@ -80,6 +80,8 @@ pub fn init(b: &mut impl Board) -> bool {
     false
 }
 
+/// A point still for this long is stuck, not a finger.
+pub const STUCK_MS: u32 = 30_000;
 /// A slide farther than this, in pixels on either axis, is a drag, not a tap or a hold (stock: 10).
 pub const DRAG_PX: i32 = 10;
 /// A finger still for this long is a hold (stock: 600 ms).
@@ -153,7 +155,13 @@ pub struct Recogniser {
 impl Recogniser {
     /// A finger was down at the last sample: keep reading until it is lifted (the release makes the gesture).
     pub fn down(&self) -> bool {
-        self.finger.is_some()
+        self.finger.is_some() && !self.stuck()
+    }
+
+    /// The point has not moved for [`STUCK_MS`]: water, a pocket or a bad contact, not a finger. It is ignored until
+    /// it lifts (it neither keeps the unit awake nor polled fast).
+    pub fn stuck(&self) -> bool {
+        self.finger.is_some_and(|f| f.ms >= STUCK_MS && !f.dragged)
     }
 
     /// The drag just released (its start point and vector, pixels), whatever gesture it made (a swipe or none),
@@ -237,6 +245,22 @@ mod tests {
     use super::*;
     extern crate std;
     use std::vec::Vec;
+
+    /// Audit D3: a point that stays 30 s without moving is not a finger until it lifts.
+    #[test]
+    fn a_stuck_point_is_not_a_finger_after_30_s() {
+        let mut r = Recogniser::default();
+        for _ in 0..299 {
+            r.feed(Some((50, 60)), 100);
+        }
+        assert!(r.down(), "29.8 s: still a finger");
+        r.feed(Some((50, 60)), 100);
+        r.feed(Some((50, 60)), 100);
+        assert!(!r.down() && r.stuck(), "30 s without moving");
+        r.feed(None, 100);
+        r.feed(Some((50, 60)), 100);
+        assert!(r.down(), "lifted and put down again: a finger");
+    }
 
     /// Feeds `points` one per 50 ms, then a release; every gesture given.
     fn run(points: &[(u16, u16)]) -> Vec<Gesture> {

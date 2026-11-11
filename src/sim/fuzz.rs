@@ -2369,7 +2369,7 @@ const MENU_TREE_OWNED: [(&str, u32); 32] = [
     ("CourseNow", 0),
     ("auto scrolled", 0),
     ("Bike", 1),
-    ("Gps", 1),
+    ("Gps", 3),
     ("Phone", 1),
     ("Steps", 1),
     ("WorkoutNow", 2),
@@ -8356,4 +8356,36 @@ fn profile_commands() {
     }
     std::println!("profile fuzz: {reached:?} (PROFILE frames, SETs applied, settings changed)");
     assert!(reached.iter().all(|&n| n >= thr(10)), "reached {reached:?}");
+}
+
+/// Audit A6: an ANT+ search hears straps of any device number (by chance): none is paired or decoded before the
+/// rider confirms, and the confirm pairs the one asked about. Asserts the search reached the ask.
+#[test]
+fn an_ant_search_pairs_nothing_before_the_confirm() {
+    use crate::sensors::Kind;
+    use crate::{App, Sensor};
+    let mut asked = 0u32;
+    for seed in 1..=8u32 {
+        let mut v = bytes(seed, 64);
+        let mut sim = Sim::new(9, 0, 0);
+        sim.own_settings();
+        for _ in 0..1 + v.next().unwrap_or(0) % 3 {
+            let id = 1 + u16::from(v.next().unwrap_or(0)) * 7;
+            sim.nordic.sensors.push(super::AntSensor {
+                device_type: 0x78,
+                id,
+                data: super::tests::hr72,
+                network: 0,
+                ack: &[],
+            });
+        }
+        let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+        app.set_sensor(&mut sim, Kind::Hr, Sensor::Search);
+        super::run(&mut sim, &mut app, 5000);
+        assert_eq!(app.radio.sensors[Kind::Hr as usize], Sensor::Search, "seed {seed}: still searching");
+        assert_eq!(sim.backup[Kind::Hr.backup()], 0, "seed {seed}: nothing paired");
+        assert_eq!(app.live.get(crate::sensors::Metric::Hr), None, "seed {seed}: nothing decoded");
+        asked += u32::from(app.radio.found[Kind::Hr as usize].is_some());
+    }
+    assert!(asked >= 8, "the search asked in {asked} of 8 seeds");
 }

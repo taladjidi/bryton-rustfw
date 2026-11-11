@@ -477,3 +477,18 @@ fn strap_name_and_battery() {
     app.press(&mut sim, Press::Short(Key::Start));
     sim.save("sensors_names");
 }
+
+/// Audit A1: during a ride the quick panel passes Start (pause) and Lap to the ride, as the curve does.
+#[test]
+fn the_quick_panel_passes_start_and_lap_to_a_running_ride() {
+    let (mut sim, mut app) = quick_unit(false);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 5000);
+    swipe(&mut app, &mut sim, crate::touch::Dir::Down);
+    assert_eq!(app.screen(), Screen::Quick);
+    let laps = app.ride.laps();
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!((app.ride.laps(), app.screen()), (laps + 1, Screen::Quick), "a lap, the panel stays");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Paused);
+}

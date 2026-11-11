@@ -55,17 +55,38 @@ impl App {
         for kind in Kind::ALL {
             if self.radio.ask & 1 << kind.channel() != 0
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
+                && self.radio.found.at(kind) != Some(id)
             {
-                *self.radio.sensors.at_mut(kind) = Sensor::Paired(id);
-                self.decoders.forget_ids(kind); // another sensor's percent and maker, if it had sent them
-                self.keep_pairing(b, kind, id);
-                let mut l = Line::<20>::new();
+                *self.radio.found.at_mut(kind) = Some(id);
+                let mut l = Line::<40>::new();
                 l.push_str(kind.name());
-                l.push_str(" PAIRED");
+                l.push_str(" ");
+                l.push_u32(u32::from(id.device));
+                l.push_str(" FOUND\nSTART ON ITS ROW");
                 self.notice(l.as_str());
             }
         }
         self.radio.ask = 0;
+    }
+
+    /// Tests: the rider's confirm of the device a search heard, if one was.
+    #[cfg(test)]
+    pub(crate) fn confirm_found(&mut self, b: &mut impl Board, kind: Kind) {
+        if let Some(id) = self.radio.found.at(kind) {
+            self.pair_found(b, kind, id);
+        }
+    }
+
+    /// The rider confirmed the device a search heard: pair it.
+    pub(crate) fn pair_found(&mut self, b: &mut impl Board, kind: Kind, id: nrf::SensorId) {
+        *self.radio.found.at_mut(kind) = None;
+        *self.radio.sensors.at_mut(kind) = Sensor::Paired(id);
+        self.decoders.forget_ids(kind); // another sensor's percent and maker, if it had sent them
+        self.keep_pairing(b, kind, id);
+        let mut l = Line::<20>::new();
+        l.push_str(kind.name());
+        l.push_str(" PAIRED");
+        self.notice(l.as_str());
     }
 
     /// The banner's time goes on by `pass_ms`; it is drawn once, and the screen under it comes back when it goes.
