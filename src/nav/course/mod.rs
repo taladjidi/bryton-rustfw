@@ -1039,9 +1039,8 @@ impl Course {
             |d: Option<Hit>, a: Option<Hit>| d.filter(|d| a.is_none_or(|a| d.off_m <= a.off_m.saturating_add(TIE_M)));
         let mut hit = tie(toward, any).or(any);
         // moving against the pass for OPP_FIXES in a row: look for the same road's other leg
-        if dir.is_some() {
-            t.opp = if toward.is_none() && any.is_some() { t.opp.saturating_add(1) } else { 0 };
-        }
+        // (consecutive fixes: one that does not move, or goes the pass's way, starts the count again)
+        t.opp = if dir.is_some() && tie(toward, any).is_none() && any.is_some() { t.opp.saturating_add(1) } else { 0 };
         let lost = t.off_m.is_none() || hit.is_none_or(|h| h.off_m > LOST_M);
         let flip = t.opp >= OPP_FIXES;
         if (lost && t.lost_s.is_multiple_of(SEARCH_S)) || flip {
@@ -1051,7 +1050,11 @@ impl Course {
             if flip {
                 t.opp = 0;
                 hit = tie(wide_dir, hit).or(hit);
-            } else if let Some(w) = wide.filter(|w| hit.is_none_or(|h| w.off_m.saturating_add(TIE_M) < h.off_m)) {
+            }
+            if lost
+                && t.lost_s.is_multiple_of(SEARCH_S)
+                && let Some(w) = wide.filter(|w| hit.is_none_or(|h| w.off_m.saturating_add(TIE_M) < h.off_m))
+            {
                 hit = Some(w);
             }
         }
@@ -1553,6 +1556,19 @@ pub(crate) mod tests {
             let (lat, lon) = fix(x, 2.0);
             assert_ne!(c.follow(&mut t, lat, lon), Some(Event::Off));
             assert!(t.along_m.abs_diff(1064) <= 12, "jitter: {t:?}");
+        }
+        // drifts of 6 m against the pass, 3 m jitter between, over and over while stopped: never 3 in a row
+        let mut t = Tracker::default();
+        for k in 0..8 {
+            let (lat, lon) = fix(1000.0 + 8.0 * f64::from(k), 2.0);
+            c.follow(&mut t, lat, lon);
+        }
+        for _ in 0..4 {
+            for x in [1050.0, 1056.0, 1053.0] {
+                let (lat, lon) = fix(x, 2.0);
+                assert_ne!(c.follow(&mut t, lat, lon), Some(Event::Off));
+                assert!(t.along_m.abs_diff(1053) <= 12, "stopped: {t:?}");
+            }
         }
         // a U-turn mid-leg of a course with no second pass: no jump, no alarm
         let c1 = course(&lines(&[(0.0, 0.0, 0.0), (3000.0, 0.0, 0.0)], 10.0));
