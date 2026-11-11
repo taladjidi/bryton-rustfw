@@ -2,11 +2,27 @@
 
 Hardware facts this firmware relies on, learned by reverse engineering the stock firmware (OS R039, bootloader
 R002) for interoperability. Items marked **inferred** were deduced, not traced. Register names are from the
-STM32H747 reference manual (RM0399). Sections are referred to from the code as "BOARD.md N".
+STM32H747 reference manual (RM0399), which this file and the code cite throughout; the MCU is an STM32H750 (section
+1), whose manual is RM0433. The two match for the peripherals used here (inferred: the addresses and fields used
+have worked on the unit); where they differ, section 1 says so. The board's parts and their datasheets:
+[docs/datasheets.md](docs/datasheets.md) (`tools/datasheets.py` fetches them). Sections are referred to from the code as "BOARD.md N".
 
 ## 1. MCU and clocks
 
-- STM32H747, Cortex-M7 only (the M4 is never started).
+- **STM32H750IBK6**: single-core Cortex-M7, 128 KB flash, UFBGA176+25 (the FCC filing's internal photos, FCC ID
+  YDM-CA2404; datasheet DS12556 Rev 8). This file used to say STM32H747, with no source: both report DEV_ID 0x450
+  in DBGMCU_IDCODE, and nothing here used what only the H747 has. The 128 KB bootloader (section 2) fills the
+  H750's flash exactly. What differs from the H747 for this firmware:
+  - no Cortex-M4: PWR_CPU2CR (read by hw.rs `stop`) and the D3 sharing between two CPUs (section 1, Stop mode) do
+    not apply; that register is reserved here (inferred: reading it did not fault on the unit);
+  - no DSI host: its page (0x50000000) is a reserved hole, yet src/link/dev.rs `IO` (built from stm32h747xx.h) lets
+    the dev link's peek reach it (section 3);
+  - no SMPS, the LDO only (DS12556 has no SMPS): this firmware never writes PWR_CR3, so the bootloader's supply
+    setting stays;
+  - the electrical figures are DS12556's, not DS12930's (the H747's). DS12556 gives two sets, for silicon
+    revisions Y (tables 23 to 29) and V (tables 121 to 126); this file quotes Y's. The unit's revision is
+    DBGMCU_IDCODE REV_ID (0x5c001000 bits 31:16: 0x1003 Y, 0x2003 V; RM0433 DBGMCU, inferred, not read on the
+    unit yet).
 - HSE 25 MHz (inferred from the PLL ranges). LSE 32.768 kHz, for the RTC.
 - As the bootloader leaves it (and as the stock OS sets it): PLL1 from HSE, M 5, N 160, P 4, Q 8, R 8.
   - SYSCLK = PLL1P = **CPU 200 MHz**.
@@ -14,8 +30,8 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   - Regulator VOS3 in normal use; VOS1 is needed for USB.
 - The bootloader uses the same PLL1 and bus setup as the OS, so code started by it runs at 200 MHz.
 - **While the core sleeps** (WFI = CSleep: the CPU clock stops, a peripheral keeps its clocks while its LPEN bit
-  is set; RM0399 RCC). Sleep at VOS3, 200 MHz, LDO: 16.5 mA with every peripheral off, 47.1 mA with all on
-  (DS12930 table 44). This firmware (main.rs `sleep_power_init`, `POWER_STEPS`) clears every RCC_xxxLPENR bit but
+  is set; RM0399 RCC). Sleep at VOS3, 200 MHz: 15.5 mA typical with every peripheral off (DS12556 table 23, at
+  25 C; its all-on figure is not in that table: the H747's DS12930 table 44 gave 47.1 mA). This firmware (main.rs `sleep_power_init`, `POWER_STEPS`) clears every RCC_xxxLPENR bit but
   FMC, SDMMC1, the TCMs, AXI SRAM, D2 SRAMs, SRAM4, BKPRAM, USB1 OTG HS + ULPI, LPTIM1, USART2, TIM1, SYSCFG, RTC
   (the flash interface and the GPIO ports included), and stops PLL2 (unless FMCSEL or SDMMCSEL is on it) and PLL3:
   nothing it uses runs from them. **Inferred, not yet seen on the unit.** Which PLLs and peripherals the
@@ -31,9 +47,10 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   CSI, then PLL1..3, each ready flag the bit above its enable: stm32h747xx.h), then SYSCLK's source (RCC_CFGR SW,
   awaited in SWS), after the regulator is ready (PWR_D3CR VOSRDY bit 13 and PWR_CSR1 ACTVOSRDY bit 13). Stock does the
   same order in its idle hook's wake (bryton repo ghidra/HARDWARE.md 13: SystemClock_Config, VOSRDY first, then HSE and
-  PLL1 M 5 N 160 P 4, SYSCLK = PLL1P), its regulator left at SVOS3 (PWR_CR1 SVOS 11, the reset value). The M4's
-  PWR_CPU2CR (PWR + 0x14: PDDS_D3 bit 2, RUN_D3 bit 11) must also let D3 stop (inferred, RM0399 PWR): the bench
-  reports it, and PWR_CPUCR STOPF (bit 5) says whether the system was in Stop.
+  PLL1 M 5 N 160 P 4, SYSCLK = PLL1P), its regulator left at SVOS3 (PWR_CR1 SVOS 11, the reset value). The bench
+  also reports PWR_CPU2CR (PWR + 0x14), the H747's M4 side, written when the MCU was taken for an H747: on the H750
+  there is no M4 to hold D3, so it does not explain the Stop not reached (above). PWR_CPUCR STOPF (bit 5) says
+  whether the system was in Stop.
 
 ## 2. Boot hand-off
 
@@ -91,13 +108,23 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 | AXI SRAM | 0x24000000 | 512 KB | |
 | SRAM1 to 3 | 0x30000000 | 288 KB | |
 | SRAM4 | 0x38000000 | 64 KB | survives a reset, not standby |
-| SDRAM (FMC bank 2) | 0xd0000000 | 64 MB | 16-bit mobile SDR SDRAM, 50 MHz; no remap |
+| SDRAM (FMC bank 2) | 0xd0000000 | 64 MB | Alliance Memory AS4C32M16MS-6BIN, 16-bit mobile SDR SDRAM, 50 MHz; no remap |
 
 - The image runs in place from SDRAM 0xd0000000, code and constants included.
 - This firmware's image is 1 MB at most (`link.x`). SDRAM from 0xd0800000 is its staging area for RAM-run.
 - **Reserved holes of the peripheral space bus-fault** (seen on the unit 2026-11-03: a dev link `peek 0x584244a8`, a
   typo for RCC_D3AMR 0x580244a8, reset the unit and its USB did not come back): the dev link's peek and poke now reach
-  only the 1 KB pages stm32h747xx.h puts a peripheral in (src/link/dev.rs `IO`).
+  only the 1 KB pages stm32h747xx.h puts a peripheral in (src/link/dev.rs `IO`). The MCU is an H750 (section 1):
+  of those pages, DSI (0x50000000) has no peripheral on it, so a peek there would likely bus-fault too (inferred,
+  not tried); the list is still to be checked against stm32h750xx.h.
+- **The SDRAM part** (AS4C32M16MS datasheet rev 1.0, June 2016, preliminary: features and table 2): 512 Mbit, 4
+  banks of 8M x 16, 54-ball FBGA, VDD and VDDQ 1.8 V, CAS latency 2 or 3, 8192 refreshes per 64 ms, self refresh
+  with partial array (PASR) and temperature compensation, deep power-down. The part fitted is the **-6BIN**
+  (the owner's reading of the chip; table 2: 166 MHz, industrial, -40 to 85 C), so the FMC's 50 MHz is well inside
+  it. Currents (maxima, at its
+  fastest clock): 10 mA precharged standby with CKE high (ICC2N), 20 mA with a bank open (ICC3N); self refresh 300 uA
+  up to 45 C, 600 uA up to 85 C (ICC6, the whole array); deep power-down 10 uA, after which it needs a full
+  initialisation (what the bootloader does).
 - **SDRAM self-refresh** (for Stop, hw.rs `stop`; **seen on the unit 2026-11-03**: entered and left around a 1 s
   CSleep WFI, the image's CRC unchanged): FMC_SDCMR (0x52004150) MODE 101 with
   CTB2 (bank 2) and NRFS 0, the value 0x0d in its low bits, as stock's `Pwr_SdramSelfRefresh` (bryton repo
@@ -120,8 +147,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
                                       |                            |
      USB VBUS (1 = plugged) --------->| PC13 WKUP4                 |
      battery --[ / 1.5 ]------------->| PC3_C  ADC3 channel 1      |
-     charger enable (low = on) <------| PG14                       |
-     charger status ----------------->| PF6  (meaning not traced)  |
+     charger ENB (low = on) <---------| PG14  ETA6003              |
+     charger STAT (inferred) -------->| PF6  (meaning not traced)  |
                                       |                            |
      USB ULPI PHY (AF10)              |                            |
        enable  <----------------------| PA7   high = running       |
@@ -131,7 +158,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
        NXT     ---------------------->| PH4                        |
        DIR     ---------------------->| PI11                       |
                                       |                            |
-                                      |         STM32H747          |
+                                      |         STM32H750          |
                                       |                            |
        ST7789 panel 240 x 320         |                            |
          SCK   <----------------------| PG11  SPI1 (AF5)           |
@@ -191,12 +218,12 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PA2 | output, high (seen on the unit 2026-11-02, untouched here); purpose unknown. Stock sets it high at board init (with the battery ADC's set-up) and low only when it boots into USB mass storage; never at switch-off or in its stop mode. A candidate rail enable (not the radio's as far as stock shows): not driven here. Driven low on 2026-11-02: the USB dev link dropped after a few seconds, nothing else seen (inferred: the USB HS PHY's ULPI enable or supply); standby current still owed | 11 |
 | PA3 PA5 | USB ULPI D0, CK (AF10) | 7 |
 | PA6 | Nordic chip reset, low = reset | 11 |
-| PA7 | USB ULPI PHY enable / reset, high = running (inferred) | 7 |
+| PA7 | USB ULPI PHY's RESETB, high = running (inferred from the USB3320's pins) | 7 |
 | PA10 | buzzer: TIM1 channel 3 PWM (AF1); a plain low output between tones | 14 |
 | PB0 PB1 PB5 PB10..PB13 | USB ULPI D1 D2 D7 D3..D6 (AF10) | 7 |
 | PB2 | key 0x02 lap, active low | 5 |
 | PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
-| PB6 PB7 | I2C1 SCL, SDA: the touch controller (AF4, open drain, no pull) | 17 |
+| PB6 PB7 | I2C1 SCL, SDA: the ST1624 touch controller (AF4, open drain, no pull) | 17 |
 | PB15 | output, high (seen on the unit 2026-11-02): SDRAM power enable (inferred: the bootloader sets it before the FMC init); untouched | 3 |
 | PC0 | USB ULPI STP (AF10) | 7 |
 | PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
@@ -211,7 +238,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PD12 PD13 | I2C4 SCL, SDA: the sensor bus (AF4, open drain, no pull; plain GPIO for the bus clear, 16) | 16 |
 | PE2 PE4 PE5 PE6 | SPI4 SCK (pull-down), chip select, MISO, MOSI to the GNSS (AF5; PE4 by hand here) | 13 |
 | PE3 | key 0x08 page, active low | 5 |
-| PF6 | charger status input (not traced) | 12 |
+| PF6 | charger status input: the ETA6003's open-drain STAT (inferred, not traced) | 12 |
 | PF7 | GNSS line (EXTI in stock; unused here) | 13 |
 | PF8 | eMMC reset or power (inferred); left as the bootloader leaves it | 15 |
 | PF9 | ambient light sensor interrupt (EXTI falling, pull-up in stock; unused here) | 16 |
@@ -220,9 +247,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PG10 | panel chip select (SPI1 NSS, driven by hand) | 6 |
 | PG11 | SPI1 SCK (panel), AF5 | 6 |
 | PG13 | backlight, high = on (LPTIM1_OUT, AF1, in stock) | 6 |
-| PG14 | charge enable, active low (left low by the bootloader) | 12 |
+| PG14 | the ETA6003's charge enable ENB, active low (left low by the bootloader) | 12 |
 | PH2 | buzzer amplifier enable, high = on | 14 |
-| PH3 | touch controller reset, high = run (the chip answers once it is high: seen on the unit) | 17 |
+| PH3 | the ST1624 touch controller's RESET, high = run (the chip answers once it is high: seen on the unit) | 17 |
 | PH4 | USB ULPI NXT (AF10) | 7 |
 | PH8 | Nordic request line (EXTI wake-up in stock; unused here) | 11 |
 | PI3 | panel reset, low = reset (inferred) | 6 |
@@ -257,7 +284,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 
 ## 6. Display
 
-- 240 x 320 panel, **ST7789-class controller** (inferred from the command set), RGB565.
+- 240 x 320 panel, **ST7789-class controller** (inferred from the command set), RGB565. The module is made for
+  Bryton; the controller's datasheet: docs/datasheets.md.
 - Commands over **SPI1** (0x40013000): 8 bit, transmit only, CPOL 1, CPHA 1 (mode 3), MSB first, D/C on PG9.
 - SPI1 with software NSS (SSM): CR1.SSI must be 1 **before** CFG2.MASTER is set. Otherwise the internal NSS is
   low, the mode fault clears MASTER, and the SPI takes 16 bytes into its FIFO and never clocks (seen on the unit,
@@ -271,7 +299,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   PLL1 always runs, and its Q output feeds the SDMMC too, so nothing is switched on for it), MBR /2: **50 MHz**. The
   ST7789VW's serial write cycle is 16 ns at least (tSCYCW: 62.5 MHz; ST7789VW datasheet V1.0, serial interface
   characteristics); the older ST7789V datasheet V1.3 says 66 ns (15 MHz), so 50 MHz is inside the VW figure only, and
-  the unit's controller is then the newer die (it works at 50 MHz; which die is not known); SPI1's master clock goes to 80 MHz (DS12930 table 119). It was 8 MHz (HSI / 8), then 16 (HSI / 4,
+  the unit's controller is then the newer die (it works at 50 MHz; which die is not known); SPI1's master clock goes to 90 MHz, 133 MHz with VDD at 2.7 V or more (DS12556 table 94). It was 8 MHz (HSI / 8), then 16 (HSI / 4,
   2026-10-25). Without POWER_STEPS bit 3, or if PLL1's Q output is off (RCC_PLLCFGR DIVQ1EN), HSI / 8 as before.
 - **Pixel runs by DMA** (hw.rs `PanelDma`, main.rs `lcd_ram`): DMA1 stream 0, DMAMUX1 channel 0 on request 38
   (spi1_tx_dma; RM0399 DMAMUX1 table, stm32h7xx_hal_dma.h `DMA_REQUEST_SPI1_TX`), memory to peripheral, 32-bit both
@@ -337,12 +365,23 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 ## 7. USB
 
 - **USB1 OTG_HS (0x40040000) with an external ULPI PHY**, high speed. Pins in section 4, all AF10.
-- **The PHY:** ULPI vendor ID 0x0424, product ID 0x0007 (ULPI registers 0 to 3), Microchip (SMSC) USB33x0, a
-  high-speed PHY (USB3300 or USB3320: inferred, they share the ID). Read on the unit on 2026-10-31 through
+- **The PHY:** Microchip (SMSC) **USB3320** (the FCC filing's internal photos). ULPI vendor ID 0x0424, product ID
+  0x0007 (ULPI registers 0 to 3: the datasheet's values, USB3320 datasheet rev 1.0 table 7.1; the USB3300 shares
+  them). Read on the unit on 2026-10-31 through
   OTG_GPVNDCTL (0x40040034; Synopsys DWC_otg: RegData 7:0, RegAddr 21:16, RegWr 22, NewRegReq 25, VStsDone 27):
   write NewRegReq with the address, read back once VStsDone is set. Function Control (reg 4) 0x40 on a high-speed
-  build: the high-speed transceiver selected.
-- PHY enable PA7: high, then 200 ms before the core is used.
+  build: the high-speed transceiver selected (XcvrSelect 00, SuspendM set; its reset value is 0x41, full speed).
+- **The PHY's supplies** (datasheet table 2.1, 3.3 to 3.5): VBAT in, its own regulator out on VDD33 (3.0 to 3.6 V,
+  2.2 uF); VDD18 an external 1.8 V (1.6 to 2.0 V); VDDIO the ULPI side's, 1.8 to 3.3 V. Which board rail feeds VDD18
+  is not known (PA2, section 4, is a candidate enable: inferred).
+- **What it draws** (table 4.1, typical): high-speed transfer 11.1 mA on VDD33, 29.4 mA on VDD18, 5.9 mA on VDDIO,
+  about 46 mA in all; full speed about 34 mA; held in reset (RESETB low) about 19 uA, its low-power mode (SuspendM
+  0) about 50 uA. Why USB runs only with the cable in (AGENTS.md).
+- **PA7 drives the PHY's RESETB** (inferred: PA7 high = running matches the pin): RESETB low suspends the PHY and
+  tri-states every ULPI output; held low 1 us or more, it resets the ULPI registers and the state machines (table
+  2.1, pin 27). After it rises, the PHY's clock output starts within its suspend recovery time, TSTART: 3.49 ms at
+  most, at the slowest reference clock (table 4.2; the board's reference frequency, set by the REFSEL pins, is not
+  known). This firmware: PA7 high, then 200 ms before the core is used, far more than TSTART.
 - Clocks: OTG HS and OTG HS ULPI in RCC_AHB1ENR. Kernel clock 48 MHz (stock: PLL3Q; this firmware: HSI48).
 - Needs VOS1 (PWR_D3CR VOS = 3).
 - VBUS sensing is off in the core: VBUS is read on **PC13**, not on the OTG VBUS pin.
@@ -576,15 +615,18 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   release, panics the test unless it sets `expect_reset_bytes`. The switch-off during a reset resets the chip once
   more (about 1 s), then powers it down ("Power off" below).
 - **Power off (this firmware, 2026-11-02; drivers/nrf.rs `system_off`, main.rs `nrf_park`):**
-  - *The part:* an nRF52832 (inferred: the image runs S332 v5, which supports the nRF52832 and nRF52840, and its stack
-    tops below 0x20010000, the 64 KB of the nRF52832 QFAA; bryton-S510-mods ghidra/nordic-app.md).
+  - *The part:* an **nRF52832** (the FCC filing's internal photos), as inferred before from the image: it runs
+    S332 v5, which supports the nRF52832 and nRF52840, and its stack tops below 0x20010000, the 64 KB of the
+    nRF52832 QFAA (512 KB flash, 64 KB RAM: nRF52832 PS v1.9, ordering information); bryton-S510-mods
+    ghidra/nordic-app.md.
   - *No supply switch is known.* Stock's switch-off sends `sd_power_system_off` (`00 32`, no response) and nothing
     else to the chip: no pin is driven for it, PA6 and PI4 stay high until its standby, where they float with USART2's pins
     (it parks RTS high only in its own stop mode; section 9). Of the output pins on the unit, only PA2 and PB15 are
     not explained by section 4 (`tools/dev.py peek` of every port, 2026-11-02); stock never drives either at the switch-off.
   - *What the chip draws* (nRF52832 Product Specification v1.4,
     https://infocenter.nordicsemi.com/pdf/nRF52832_PS_v1.4.pdf, and its POWER chapter,
-    https://docs.nordicsemi.com/bundle/ps_nrf52832/page/power.html): System OFF 0.3 uA (no RAM kept), woken by a pin
+    https://docs.nordicsemi.com/bundle/ps_nrf52832/page/power.html; v1.9, 18 POWER, gives the same System OFF
+    figures): System OFF 0.3 uA (no RAM kept), woken by a pin
     reset among others; held in reset, about 0.2 mA through the reset pin's 13 kOhm pull-up plus the regulators,
     which stay on (Nordic's answer on DevZone,
     https://devzone.nordicsemi.com/f/nordic-q-a/47176/power-consumption-in-reset-state-for-a-solar-powered-device:
@@ -788,6 +830,8 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
 
 ## 12. Battery and charging
 
+- **The cell:** 3.7 V, 1200 mAh, 4.4 Wh (its label in the FCC filing's internal photos, FCC ID YDM-CA2404).
+
 From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt_ChargeTempCheck` 0xd018b63c) and
 **seen on the unit (2026-10-23)**.
 
@@ -840,6 +884,23 @@ From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt
   window from the barometer: charge only if 0 < T < 50 C (5 < T after "too cold", T < 45 after "too hot"). This
   firmware does not drive PG14 yet: no temperature check, so charging below 0 C is possible. PF6: charger status
   input (reads high; meaning not traced).
+- **The charger IC:** ETA Solutions **ETA6003** (the owner's reading of the board), a 3 MHz switching Li-ion charger
+  with a power path, QFN3x3-16. From its datasheet (v2.5.1, electrical characteristics and pin description):
+  - *ENB* (pin 6), active low: low charges, high stops the charge but keeps the battery feeding the system. PG14
+    drives it (inferred: stock's polarity matches).
+  - *STAT* (pin 9), open drain, the charge status: PF6, which reads high, is it (inferred). The datasheet does not
+    say which state means what; an open-drain status pin is usually pulled low while charging (inferred), so PF6
+    high would be no charge or the charge done. To check: read PF6 on USB with the battery low, then full.
+  - *The charge:* below 2.9 V a 100 mA pre-charge (at most 120 min), then the fast charge (at most 960 min) to
+    4.2 V (4.16 to 4.24), ending at 10 % of the fast-charge current; it starts again 200 mV below. The fast-charge
+    current is 1000 V / R on ISET1 (USB_DET low) or ISET2 (USB_DET high); the board's resistors and USB_DET are not
+    known.
+  - *Input:* 4.4 to 5.5 V, under-voltage lockout at 4.35 V; 5 mA while switching.
+  - *NTC* (pin 7): it suspends the charge itself when the thermistor's voltage is above 76.5 % of VIN (cold) or
+    below 35 % (hot); under 100 mV the check is off. Whether the board has a thermistor is not known: stock's own
+    temperature window (above) suggests none (inferred).
+  - *ENPPB* (pin 8): tied to BATT it cuts the battery from the system (a shipping mode). Whether a pin of the MCU
+    reaches it is not known.
 
 ## 13. GNSS receiver
 
@@ -1186,9 +1247,18 @@ The S510 has a touch panel over the display (retail spec: 2.8 in colour touchscr
 (https://www.crystalfontz.com/products/document/4590/Sitronix_Touch_IC_Protocol_A_V2.7.pdf), whose register map
 stock's reads match. Read on the unit on 2026-10-23 (below).
 
-- **Controller:** Sitronix ST1xxx class at I2C address **0x55** (stock passes 0xaa, 8-bit). Stock reads two point
-  slots (0x12, 0x16), so an ST1232-class part (2 points; Linux `st1232.c`); the exact part is inferred. Registers
-  0x0c..0x0f (firmware revision) and 0x3f (max contacts) would tell.
+- **Controller:** Sitronix **ST1624-N32C** (the owner's reading of the board) at I2C address **0x55** (stock passes
+  0xaa, 8-bit): mutual capacitive, up to 5 fingers, 100 Hz reports, QFN32 (ST1624 datasheet v1.1, features). Its
+  5 contacts match register 0x3f on the unit (below); stock reads only two point slots (0x12, 0x16). The datasheet
+  has no register map: the registers are Protocol A's.
+- **From the datasheet** (v1.1, 2, 3 and 5):
+  - supplies VDD 2.7 to 3.6 V, IOVDD (the I2C side) 1.6 to 3.6 V; it resets itself below 2.3 V;
+  - RESET (pin 26) active low, 1 us low takes effect; INT (pin 27) says coordinate data is ready;
+  - I2C slave up to 400 kHz (Fast mode), SDA and SCL pulled up to IOVDD outside it;
+  - **current:** 16 mA typical (24 max) scanning, 5.9 mA (8.9 max) idle scanning at 20 Hz, 20 uA at most powered
+    down, all clocks stopped, left by a reset or by I2C. Idle, the chip alone draws about twice the MCU's
+    2.85 mA in Stop at SVOS3 (docs/power.md). How to power it down over I2C is Protocol A's (Device Control,
+    0x02: not read for this note).
 - **Bus and pins:**
 
 | what | value |
@@ -1220,7 +1290,7 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
 | 0x02, 0x03 | 00 02 | Device Control at its default; Timeout to Idle 2 (seconds per the protocol doc; the doc's default is 8) |
 | 0x04..0x06 resolution | 01 f0 40 | **240 x 320**, the panel's size: raw points map 1:1 (orientation not checked yet) |
 | 0x0c..0x0f firmware revision | 05 31 03 30 | |
-| 0x3f max contacts | 05 | **5 points**: an ST1633-class part (Linux `st1232.c`: ST1232 2, ST1633 5; the part number is inferred), although stock reads only 2 slots |
+| 0x3f max contacts | 05 | **5 points**, as the ST1624's datasheet says, although stock reads only 2 slots |
 | 0x12.. point slots | 00 ... | no valid bit: no finger |
 
   INT (PC6) read high with no finger, and polling it costs nothing measurable: awake 6 to 7 per mille before and

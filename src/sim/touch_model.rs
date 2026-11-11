@@ -1,8 +1,9 @@
-//! The simulated touch controller (Sitronix ST1633 class, I2C1 0x55, BOARD.md 17), strict about what the part's
+//! The simulated touch controller (Sitronix ST1624, I2C1 0x55, BOARD.md 17), strict about what the part's
 //! documents say. Checked 2026-11-02 against the documents; "inferred" marks what no text settles (searched: both
 //! documents below, no text on a short pulse's consequence, on Idle's status value or on a lost first report):
-//! - T1 RESET: ST1633 datasheet v1.6 (https://www.orientdisplay.com/pdf/ST1633.pdf), 3.2: low for 1 us takes effect
-//!   (in operation); 3.3: 5 ms low at power-on after the supplies are stable. The model keeps the stricter 5 ms (the
+//! - T1 RESET: ST1624 datasheet v1.1 (docs/datasheets.md), 3.2: low for 1 us takes effect (in operation). It has no
+//!   power-on sequence; its sibling's, ST1633 datasheet v1.6 (https://www.orientdisplay.com/pdf/ST1633.pdf) 3.3, holds
+//!   it 5 ms low after the supplies are stable. The model keeps the stricter 5 ms (the
 //!   firmware's, harmless; its clock is in ms). Init then lasts 50 ms for the ST1x33i / ST1x33 (Protocol A v2.7, 3.1,
 //!   status 0x01 low nibble 1 = Init, 0 = Normal). That a short pulse leaves the chip dead is **inferred**.
 //! - T2 Timeout to Idle (register 0x03: seconds, 0xFF off, 0 at once, chip default 8 s; the unit's 2 s is stock's): Sitronix
