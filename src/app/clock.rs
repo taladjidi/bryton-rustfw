@@ -1,11 +1,12 @@
 //! The RTC's registers decoded, and dates: BCD fields, civil dates from day numbers and back, seconds since 1970;
 //! the shown clock (TIME ZONE, SUMMER TIME). Pure functions, so the doc tests run them on the host.
 //!
-//! **What the RTC holds, and who sets it.** Local time, never UTC (stock runs it that way, and its ride names are
-//! local). This firmware sets it from one source only: the phone link's Current Time Service (app/phone.rs
-//! `phone_time`: the phone's local time, between rides only). The GNSS receiver never sets it: at a fix with a valid
-//! time, `learn_aid` (app/gps.rs) learns the RTC's offset from UTC (RTC minus UTC, to the nearest 15 minutes) into the
-//! backup registers, between rides only (a ride's FIT times are the RTC less it), and the phone's Local Time
+//! **What the RTC holds, and who sets it.** Local time (stock runs it that way, and its ride names are local). This
+//! firmware sets it from the phone link's Current Time Service (app/phone.rs `phone_time`: the phone's local time,
+//! between rides only). The GNSS receiver sets it only once it was lost with the backup domain (it reads earlier than
+//! the build year): to UTC, the offset 0, between rides only (`learn_aid`), so rides are not dated 2000 until the phone
+//! comes, which sets the zone. Otherwise, at a fix with a valid time, `learn_aid` (app/gps.rs) learns the RTC's offset
+//! from UTC (RTC minus UTC, to the nearest 15 minutes) into the backup registers, between rides only (a ride's FIT times are the RTC less it), and the phone's Local Time
 //! Information replaces it. Stock firmware sets the RTC too: from the GPS with its own time zone and DST
 //! (`Clk_ApplyGpsTimeZone`) and from the Bryton app's UTC plus its configured offset (`Clk_SetRtcFromHostTime`) (the
 //! bryton repo's ghidra/notes/agent_b1.md; inferred from the decompiled names and strings). Its INI files hold no time

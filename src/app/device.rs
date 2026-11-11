@@ -164,6 +164,23 @@ impl App {
             let raw = b.adc_read(1)?;
             battery::millivolts(raw, vref, b.vrefint_cal())
         });
+        if reading.is_none() {
+            // no switch-off without a reading: the ADC brought up again at each of the first misses, then once a minute
+            // (its calibration's time-out spins up to 200 ms: main.rs `adc_init`); said once, when the third reading
+            // still has none (one the first retry mends needs no alarm; Renode, which has no ADC, shows it from 20 s)
+            let n = self.saver.adc_misses.saturating_add(1);
+            self.saver.adc_misses = n;
+            if n == 3 {
+                self.alarm_notice("BATTERY UNKNOWN");
+            }
+            if n <= 3 || n >= 9 {
+                let _ = b.adc_init();
+                // after the third, one each 6 readings, for ever (the count never saturates)
+                self.saver.adc_misses = n.min(3);
+            }
+        } else {
+            self.saver.adc_misses = 0;
+        }
         if let Some(mv) = reading
             && self.battery.update(mv, charging)
         {

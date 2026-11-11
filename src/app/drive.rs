@@ -78,6 +78,16 @@ impl App {
         self.take_card_back();
     }
 
+    /// The cable pulled and USB powered down during a ride or its save (app/main_loop.rs `Cable::Stop`): the dot off,
+    /// and a card lent to the computer that went taken back, which no eject can now do.
+    pub(crate) fn usb_gone(&mut self, b: &mut impl Board) {
+        if self.emmc.lent() {
+            self.drive.remove();
+            self.take_card_back();
+        }
+        self.set_usb(b, UsbDot::Off);
+    }
+
     fn take_card_back(&mut self) {
         self.emmc.lend(false);
         if self.drive.wrote() {

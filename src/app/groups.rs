@@ -173,6 +173,8 @@ pub(crate) struct Gps {
     pub(crate) answers: [u16; 4],
     /// The one retry of a refused configuration is spent (until the receiver is switched on again).
     pub(crate) retried: bool,
+    /// A clock lost with the backup domain was set from a fix this boot, or tried ([`App::learn_aid`]: one try).
+    pub(crate) clock_tried: bool,
     /// Whether the screen shown holds a map, with the screen and MORE page it was worked out for (a page's boxes
     /// are built to find out: once per screen, not each pass).
     pub(crate) map_on: Option<(MapKey, bool)>,
@@ -206,6 +208,7 @@ impl Gps {
             slept: false,
             answers: [0; 4],
             retried: false,
+            clock_tried: false,
             map_on: None,
         }
     }
@@ -538,6 +541,9 @@ pub(crate) struct Saver {
     pub(crate) usb_snapped: bool,
     /// BATTERY SAVER AUTO's state as the rider was last told.
     pub(crate) saver_said: bool,
+    /// Battery polls in a row with no reading (BATTERY UNKNOWN said at the third; the ADC brought up again), back to 3
+    /// at each retry after the third ([`App::poll_battery`]).
+    pub(crate) adc_misses: u8,
 }
 
 impl Saver {
@@ -549,6 +555,7 @@ impl Saver {
             saver_auto: false,
             usb_snapped: false,
             saver_said: false,
+            adc_misses: 0,
         }
     }
 }

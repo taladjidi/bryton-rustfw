@@ -27,6 +27,9 @@ SPI = re.compile(r'spi1: .*Write(Byte|UInt32) to 0x20 .*value 0x([0-9A-Fa-f]+)')
 BSRR_G = re.compile(r'gpioPortG: .*Write\w* to 0x18 .*value 0x([0-9A-Fa-f]+)')
 OTG = re.compile(r'usb1: ')
 DC = 1 << 9                                             # PG9: 0 command, 1 parameter / pixel data
+# the battery's reading period, s (src/app/device.rs `BATTERY_MS`), read from the source so the check below follows it
+BATTERY_S = int(re.search(r'pub const BATTERY_MS: u32 = ([\d_]+);',
+                          (ROOT / 'src/app/device.rs').read_text())[1].replace('_', '')) / 1000
 
 
 def symbols(path):
@@ -107,6 +110,10 @@ def main():
     ap.add_argument('--off', action='store_true')
     ap.add_argument('--renode', default=RENODE)
     a = ap.parse_args()
+    # Renode has no ADC (s510.resc): the third battery reading with none (10 s apart from the first step, app/device.rs
+    # `poll_battery`) says BATTERY UNKNOWN in the notices this compares with the simulator's empty ones
+    if a.seconds >= 2 * BATTERY_S:
+        sys.exit(f'--seconds {a.seconds}: the notices are compared before BATTERY UNKNOWN ({2 * BATTERY_S} s)')
 
     OUT.mkdir(parents=True, exist_ok=True)
     log = OUT / ('off.log' if a.off else 'boot.log')

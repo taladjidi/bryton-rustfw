@@ -282,6 +282,8 @@ impl App {
                     m.0[32..64].copy_from_slice(&sys);
                     return Some((m.0, 2));
                 }
+                // a clock lost with the backup domain (2000, [`App::learn_aid`]) would aid the receiver wrong
+                2 if rtc_year(b) < BUILD_YEAR => continue,
                 2 => {
                     // the RTC holds local time: with the offset learnt at a fix, UTC within a couple of seconds;
                     // without it, the RTC as is, within 14 h (any time zone): the date still helps
@@ -370,7 +372,26 @@ impl App {
     /// `phone_time` refuses the phone's).
     pub(crate) fn learn_aid(&mut self, b: &mut impl Board, pvt: gnss::Pvt) {
         let mut aid = self.gps.aid;
-        if pvt.time_ok && self.ride_settled() {
+        let settled = pvt.time_ok && self.ride_settled();
+        // a clock lost with the backup domain (it restarts in 2000): set to UTC, the offset then learnt as 0, so rides
+        // are not named and dated 2000 until a phone comes (the review of 2026-11-11, R3); a clock at the build year
+        // or later is never moved, nor to a year past the build's by more than 2 (a receiver's bad week number). One try
+        // a boot: a set that does not take (no LSE, INITF late) costs its 10 ms wait, not every second's
+        let lost = settled
+            && !self.gps.clock_tried
+            && rtc_year(b) < BUILD_YEAR
+            && (BUILD_YEAR..=BUILD_YEAR + 2).contains(&pvt.utc.0);
+        let mut set = false;
+        if lost {
+            self.gps.clock_tried = true;
+            let (tr, dr) = rtc_words(pvt.utc);
+            b.rtc_set(tr, dr);
+            set = rtc_year(b) >= BUILD_YEAR; // read back: it took
+            if set {
+                self.rec.counted_s = rtc_epoch_s(b); // a set, not seconds gone (app/pass.rs)
+            }
+        }
+        if settled {
             let diff = rtc_epoch_s(b) - epoch_s(pvt.utc);
             let steps = (diff + diff.signum() * 450) / 900; // nearest 15 minutes
             if steps.abs() <= 14 * 4 {
@@ -385,5 +406,29 @@ impl App {
             self.gps.aid = aid;
             self.write_aid(b);
         }
+        if set {
+            self.show_clock(pvt.utc); // with the offset just learnt (a TIME ZONE needs it)
+            self.seconds = pvt.utc.5;
+        }
+    }
+}
+
+/// The RTC's year.
+fn rtc_year(b: &mut impl Board) -> u16 {
+    rtc_date_from_dr(b.rtc().1).0
+}
+
+/// The year the build was made (build.rs `GIT_DATE`; 2026 outside a git checkout, and under test so the simulator's
+/// 2026 clock is never "lost"): an RTC earlier than it was reset with the backup domain ([`App::learn_aid`]).
+const BUILD_YEAR: u16 = if cfg!(test) { 2026 } else { year_of(env!("GIT_DATE")) };
+const _: () = assert!(year_of("2027-03-04") == 2027 && year_of("unknown") == 2026);
+
+/// The year of a `YYYY-MM-DD` date, 2026 when it is not one.
+const fn year_of(date: &str) -> u16 {
+    match date.as_bytes() {
+        [a @ b'0'..=b'9', b @ b'0'..=b'9', c @ b'0'..=b'9', d @ b'0'..=b'9', b'-', ..] => {
+            (*a - b'0') as u16 * 1000 + (*b - b'0') as u16 * 100 + (*c - b'0') as u16 * 10 + (*d - b'0') as u16
+        }
+        _ => 2026,
     }
 }

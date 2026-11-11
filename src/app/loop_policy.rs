@@ -16,7 +16,15 @@ pub enum Cable {
     /// The cable went, the link was started and no ride would be lost: reset. The simplest way to power the PHY and
     /// the USB core down again; never during a ride or on its card (a loose cable or a power bank unplugged must not
     /// lose it): after it.
+    /// Also after a [`Cable::Stop`], once the ride and its card are done, the cable in or not: the reset brings USB
+    /// up with a cable that came back.
     Reset,
+    /// The cable went during a ride or on its card: USB powered down without a reset (the review of 2026-11-11, B4:
+    /// a power bank unplugged kept VOS1, the PHY and the USB core on, and the ride's Stop off, to the ride's end).
+    Stop,
+    /// The cable came back after a [`Cable::Stop`], the ride or its card still busy: no USB until the reset after it
+    /// (its buffers are once-cells), so the rider is told.
+    Later,
     /// Nothing to do.
     Keep,
 }
@@ -198,6 +206,10 @@ pub struct LoopPolicy {
     timer_max_ms: u32,
     /// The USB link was started (the cable came in once since boot).
     usb_tried: bool,
+    /// USB was powered down by a [`Cable::Stop`] (only a reset brings it back).
+    usb_stopped: bool,
+    /// The cable's line at the last [`LoopPolicy::cable`], for a plug-in's edge.
+    vbus_was: bool,
     /// Slept so far in this pass, ms, by SysTick: the cycle counter stops in WFI.
     slept: u32,
     /// The sub-ms rest of the early-ended slices, us, kept for the next one.
@@ -223,6 +235,8 @@ impl LoopPolicy {
             cpu_hz,
             timer_max_ms,
             usb_tried: false,
+            usb_stopped: false,
+            vbus_was: false,
             slept: 0,
             rest_us: 0,
             slept_rest_us: 0,
@@ -256,15 +270,24 @@ impl LoopPolicy {
     /// use bryton_rustfw::{Cable, LoopPolicy};
     /// let mut p = LoopPolicy::new(200_000_000, 80);
     /// assert_eq!(p.cable(true, false), Cable::Start);
-    /// assert_eq!(p.cable(false, true), Cable::Keep); // a ride: after it
-    /// assert_eq!(p.cable(false, false), Cable::Reset);
+    /// assert_eq!(p.cable(false, true), Cable::Stop); // a ride: USB off now (once), the reset after it
+    /// assert_eq!(p.cable(false, true), Cable::Keep);
+    /// assert_eq!(p.cable(true, true), Cable::Later); // back in: USB after the ride
+    /// assert_eq!(p.cable(true, false), Cable::Reset); // the ride done: the reset brings USB up
     /// ```
     pub fn cable(&mut self, vbus: bool, busy: bool) -> Cable {
+        let plugged = vbus && !self.vbus_was;
+        self.vbus_was = vbus;
         if vbus && !self.usb_tried {
             self.usb_tried = true;
             Cable::Start
-        } else if !vbus && self.usb_tried && !busy {
+        } else if self.usb_tried && (!vbus || self.usb_stopped) && !busy {
             Cable::Reset
+        } else if !vbus && self.usb_tried && !self.usb_stopped {
+            self.usb_stopped = true;
+            Cable::Stop
+        } else if plugged && self.usb_stopped {
+            Cable::Later
         } else {
             Cable::Keep
         }
@@ -503,7 +526,10 @@ mod tests {
         assert_eq!(p.cable(false, false), Cable::Keep); // never plugged: nothing to power down
         assert_eq!(p.cable(true, false), Cable::Start);
         assert_eq!(p.cable(true, false), Cable::Keep); // once per boot, even if the start failed
-        assert_eq!(p.cable(false, true), Cable::Keep); // a ride or its card: after it
+        assert_eq!(p.cable(false, true), Cable::Stop); // a ride or its card: USB off, the reset after it
+        assert_eq!(p.cable(false, true), Cable::Keep); // once
+        assert_eq!(p.cable(true, true), Cable::Later); // back in during the ride: said once
+        assert_eq!(p.cable(true, true), Cable::Keep);
         assert_eq!(p.cable(false, false), Cable::Reset);
         let mut busy = LoopPolicy::new(HZ, MAX);
         assert_eq!(busy.cable(true, true), Cable::Start); // plugged in during a ride: USB starts all the same

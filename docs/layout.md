@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::new_with`, `App::step`). The app's cell is <!-- n:app -->47 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->22 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::new_with`, `App::step`). The app's cell is <!-- n:app -->47 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->21 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -267,7 +267,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   its module doc), and a listed one deleted.
 - `src/storage/course_file.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
-  memory (about <!-- n:courses -->76 KB<!-- /n -->, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course/mod.rs`: the course model,
+  memory (about <!-- n:courses -->77 KB<!-- /n -->, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course/mod.rs`: the course model,
   pure logic: points thinned to 4096, where the rider is (a moving window, a bounded search when lost),
   off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns. `src/nav/course/cues.rs`:
   turn-by-turn cues (FIT course points, GPX turn words, else the turns of the course's shape), the next one said.
