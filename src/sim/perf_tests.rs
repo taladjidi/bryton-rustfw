@@ -244,8 +244,8 @@ fn perf_budgets() {
         ("map", [map, values, graph], 0, None, false, (6_800, 50)),
         // 584, 3: on the course, the profile's rider column (a whole profile at each eighth), two values, and the
         // hill's left turn said twice (2026-10-25: 456 before the cues; a banner and the page under it again, about
-        // 19 000 px each)
-        ("course profile", [profile, values, map], 0, None, false, (800, 10)),
+        // 19 000 px each); 801 on 2026-11-11 with the turn countdown in the strip and the 47 px banner (3 rows more)
+        ("course profile", [profile, values, map], 0, None, false, (850, 10)),
         // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
         // NEXT TURN's last digit (1548 before it), the turn's two banners; 3412, 15 with the CLIMB page opening at the climb's start (one whole page)
         ("course page", [values, graph, map], crate::COURSE, None, false, (3_700, 20)), // the pacer's countdown at 2x
