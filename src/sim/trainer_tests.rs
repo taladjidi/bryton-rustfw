@@ -136,7 +136,9 @@ fn pairs_reads_and_waits_to_be_taken_over() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert!(sim.nordic.got.contains(&vec![6, 0xd3, 7, 0, 0, 0x11, 0]), "any trainer, device type 17");
     assert!(sim.nordic.got.contains(&vec![6, 0xd1, 7, 0, 0x20]), "8192 / 32768 s");
-    run(&mut sim, &mut app, 4000);
+    run(&mut sim, &mut app, 1000);
+    app.confirm_found(&mut sim, Kind::Trainer);
+    run(&mut sim, &mut app, 20_000); // its manufacturer page comes every 16 s
     assert_eq!(sensors_file(&sim), Some(Some(ID)), "paired and kept in the sensors file");
     assert_eq!(sim.backup[14], 0, "and not in the register the shifting systems use");
     let (label, value, _) = app
@@ -161,6 +163,8 @@ fn pairs_reads_and_waits_to_be_taken_over() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
     app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
     run(&mut sim, &mut app, 4000);
+    app.confirm_found(&mut sim, Kind::Power);
+    run(&mut sim, &mut app, 3000);
     assert_eq!(live(&app, Metric::Power), Some(210), "the power meter wins");
     assert_eq!(live(&app, Metric::Speed), Some(272), "the trainer's speed, no speed sensor");
 }
@@ -274,6 +278,8 @@ fn the_full_copy_records_the_trainer_for_erg() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
     app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
     run(&mut sim, &mut app, 4000);
+    app.confirm_found(&mut sim, Kind::Power);
+    run(&mut sim, &mut app, 3000);
     app.press(&mut sim, Press::Long(Key::Page));
     super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -329,6 +335,8 @@ fn no_trainer_no_trainer_fields() {
     let mut app = App::start(&mut sim, Some(KEY));
     app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
     run(&mut sim, &mut app, 4000);
+    app.confirm_found(&mut sim, Kind::Power);
+    run(&mut sim, &mut app, 3000);
     let name = crate::recorder::ride_name(app.rec_time().0);
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 15_000);
@@ -1582,6 +1590,8 @@ fn erg_with_a_low_meter(on: bool, seconds: u32) -> (Sim, App, u16) {
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: meter_page, network: 0, ack: &[] });
     app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
     run(&mut sim, &mut app, 4000);
+    app.confirm_found(&mut sim, Kind::Power);
+    run(&mut sim, &mut app, 3000);
     app.open(Screen::Trainer);
     for _ in 0..20 {
         app.press(&mut sim, Press::Short(Key::Page)); // +5 W: 100 to 200

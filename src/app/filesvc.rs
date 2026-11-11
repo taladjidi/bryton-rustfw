@@ -824,7 +824,7 @@ impl App {
         (s.zones_lthr, s.female) = (p.zones_lthr, p.female);
         if p.max_hr != now.max_hr {
             s.max_hr = b8(p.max_hr);
-            self.setting_edited(menu::Setting::MaxHr);
+            self.setting_edited(menu::Setting::MaxHr, now.max_hr.into());
         }
         self.save_misc(b);
         self.notice("PROFILE FROM PHONE");

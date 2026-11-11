@@ -2269,3 +2269,17 @@ fn back_returns_level_by_level_from_the_deepest_path() {
         assert_eq!(app.screen(), want);
     }
 }
+
+/// Audit A2: opening MAX HR and leaving it unchanged keeps "from age", so a corrected BORN still moves it.
+#[test]
+fn max_hr_left_unchanged_stays_from_age() {
+    let (mut sim, mut app) = started();
+    app.settings.birth_year = 1986;
+    app.settings.max_hr = 180;
+    app.settings.max_hr_age = true;
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.settings.max_hr_age, "entered and left without a step");
+}

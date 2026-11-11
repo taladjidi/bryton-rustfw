@@ -383,3 +383,18 @@ fn fuzz_the_sensor_bus() {
     }
     assert!(recovers > 4 && violations > 0 && reads > 100 && nacks > 20, "{recovers} {violations} {reads} {nacks}");
 }
+
+/// Audit D9: a chip not ready at boot is initialised again with a backoff, and the next tap works.
+#[test]
+fn d9_a_touch_chip_not_ready_at_boot_comes_back() {
+    let mut sim = Sim::new(9, 0, 0).finger(|t| ((20_000..20_300).contains(&t)).then_some((120, 160)));
+    sim.touch.idle_ms = None;
+    sim.touch.init_extra_ms = 300; // Init outlasts the 150 ms the driver waits
+    let mut app = App::start(&mut sim, None);
+    assert!(!app.touch.ok, "not ready at boot");
+    sim.touch.init_extra_ms = 0;
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.touch.ok, "initialised again");
+    let g = gestures(&mut sim, &mut app, 15_000);
+    assert!(g.iter().any(|i| matches!(i, Input::Touch(Gesture::Tap(..)))), "{g:?}");
+}

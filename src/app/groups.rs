@@ -247,6 +247,8 @@ pub(crate) struct Radio {
     pub(crate) misses: [u8; Kind::ALL.len()],
     /// Channels that sent data while searching: ask the chip which sensor it found.
     pub(crate) ask: u8,
+    /// The device a search heard, until the rider confirms it on the sensor's row (nothing of it is used before).
+    pub(crate) found: [Option<nrf::SensorId>; Kind::ALL.len()],
     /// The sensors heard in the NEARBY search.
     pub(crate) nearby: nrf::Nearby,
     /// The NEARBY search is running.
@@ -292,6 +294,7 @@ impl Radio {
             lost: 0,
             heard: 0,
             broadcasts: [0; Kind::ALL.len()],
+            found: [None; Kind::ALL.len()],
         }
     }
 
@@ -575,6 +578,8 @@ impl Quick {
 pub(crate) struct MenuInput {
     /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
     pub(crate) editing: bool,
+    /// MAX HR when its editing began: leaving it unchanged keeps "from age" ([`App::setting_edited`]).
+    pub(crate) max_hr_start: u16,
     /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
     /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
     pub(crate) chosen: bool,
@@ -600,6 +605,7 @@ impl MenuInput {
     pub(crate) fn new() -> Self {
         MenuInput {
             editing: false,
+            max_hr_start: 0,
             chosen: false,
             confirm: None,
             give_up_step: 0,

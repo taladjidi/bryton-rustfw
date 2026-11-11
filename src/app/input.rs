@@ -774,7 +774,7 @@ impl App {
                                 _ => self.alt_typed(),
                             }
                         }
-                        self.setting_edited(s);
+                        self.setting_edited(s, self.menu.max_hr_start);
                         self.save_misc(b);
                     }
                     _ => {}
@@ -833,6 +833,10 @@ impl App {
                 return self.select_row(b, menu, row, armed.filter(|&a| a == (menu, row)));
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
+            // Back on a sensor row that asks "OK?" refuses the device (the search stops); else it leaves
+            (Screen::Menu(menu, sel), Input::Back) if self.cancel_found(b, menu, sel) => {
+                return self.update_menu_rows(b, menu, sel);
+            }
             (Screen::Menu(..), Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
             _ => return,
         }
@@ -924,7 +928,16 @@ impl App {
             Some(false) => t.fails = t.fails.saturating_add(1),
             None => {}
         }
-        if t.fails >= TOUCH_RECOVER_AFTER && t.wait_ms == 0 && t.ok {
+        if !t.ok {
+            // not ready at boot: tried again with a backoff, the recovery below needs a chip that answered once
+            if t.wait_ms == 0 {
+                t.backoff_ms = (t.backoff_ms * 2).clamp(TOUCH_BACKOFF_MS, I2C_BACKOFF_MAX_MS);
+                t.wait_ms = t.backoff_ms;
+                t.ok = touch::init(b);
+            }
+            return;
+        }
+        if t.fails >= TOUCH_RECOVER_AFTER && t.wait_ms == 0 {
             t.fails = 0;
             t.backoff_ms = (t.backoff_ms * 2).clamp(TOUCH_BACKOFF_MS, I2C_BACKOFF_MAX_MS);
             t.wait_ms = t.backoff_ms;
@@ -968,7 +981,7 @@ pub(crate) fn sample_touch(
     let mut buf = [0; 7]; // the first two point slots: a pinch needs both
     let answered = b.touch_read(touch::REG_POINT, &mut buf);
     let [p, q] = if answered { touch::points(buf) } else { [None, None] };
-    (r.feed2(p, q, dt_ms), p.is_some(), Some(answered))
+    (r.feed2(p, q, dt_ms), p.is_some() && !r.stuck(), Some(answered))
 }
 
 /// (`x`, `y`) is in box (left, top, width, height).
