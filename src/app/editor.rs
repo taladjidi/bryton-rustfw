@@ -365,6 +365,14 @@ impl App {
         fat.read_at(&mut d, &f, 0, file)
     }
 
+    /// `\Rustfw\<name>`'s size: NotFound when it is not there.
+    pub(crate) fn copies_size(&mut self, b: &mut impl Board, name: &str) -> Result<u32, fat::Error> {
+        let mut d = emmc::Volume(&mut self.emmc, b);
+        let mut fat = fat::Fat::mount(&mut d)?;
+        let dir = fat.open(&mut d, recorder::DIR)?;
+        Ok(fat.locate(&mut d, dir, name)?.size)
+    }
+
     /// Copy `slot` (0 or 1) of `\Rustfw\<name>` written with `sector`, the other untouched; the file created (or
     /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]), only if `make`: else nothing
     /// written and `NotFound` unless it is whole (bikes.bin, places.bin: made at a ride's start, recorder/mod.rs

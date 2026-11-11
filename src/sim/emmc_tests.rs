@@ -413,6 +413,29 @@ fn a_stall_longer_than_the_drivers_second_is_a_busy_error_today() {
     assert_eq!(emmc.write(&mut sim, 3, &[2; SECTOR]), Err(Error::Busy));
 }
 
+/// A write that fails (an error in its answer) still waits for the card to finish programming what it took before it
+/// returns, so the identification the next use starts (CMD0) does not meet a card still programming (what the card
+/// does then is not documented).
+#[test]
+fn a_failed_write_waits_for_the_programming_before_the_next_identification() {
+    for sectors in [1, 4] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = vec![0; 64 * SECTOR];
+        let mut emmc = Emmc::new();
+        emmc.write(&mut sim, 2, &[1; SECTOR]).unwrap();
+        (sim.cost.stall_every, sim.cost.stall_ms) = (1, 600);
+        sim.emmc.write_answer = 1 << 20; // CC_ERROR
+        assert!(matches!(emmc.write(&mut sim, 3, &vec![2; sectors * SECTOR]), Err(Error::Status(..))));
+        assert!(sim.emmc.busy_until > 0, "the card stalled");
+        assert!(sim.emmc.busy_until <= sim.ms, "{sectors} sectors: returned while the card was programming");
+        sim.cost.stall_every = 0;
+        emmc.retry_now();
+        let from = sim.emmc.cmds.len();
+        assert_eq!(emmc.write(&mut sim, 5, &[4; SECTOR]), Ok(()), "identified again");
+        assert!(sim.emmc.cmds[from..].iter().any(|c| c.0 == 0), "from CMD0");
+    }
+}
+
 /// A voltage drop (inferred for this card, see emmc_model.rs) aborts the write and sets ERROR + CC_ERROR, in the first CMD13
 /// after the busy, not in CMD12's answer. The driver must fail the write (the host retries), not take it as done.
 #[test]

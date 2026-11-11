@@ -8,7 +8,8 @@
 //! that reaches B or beyond (the factory image, the calibration, the fonts, the OS) is refused here, before any
 //! command, whatever the caller. CMD24 (WRITE_BLOCK) for one sector, CMD25 (WRITE_MULTIPLE_BLOCK) then CMD12
 //! (STOP_TRANSMISSION) for more, then CMD13 until the card has programmed the data (back in the transfer state,
-//! READY_FOR_DATA), at most [`TRIES`] ms, and its status checked (WP_VIOLATION, ADDRESS_OUT_OF_RANGE...): the
+//! READY_FOR_DATA), at most [`TRIES`] ms (after an error too, so the next command, a new identification's CMD0
+//! included, does not meet a card still programming), and its status checked (WP_VIOLATION, ADDRESS_OUT_OF_RANGE...): the
 //! write's answer, CMD12's and every CMD13 poll's, since the card clears an error bit once it has reported it. Opcodes,
 //! R1 bits and the open-ended CMD25 + CMD12 sequence as the Linux kernel's MMC core uses them
 //! (include/linux/mmc/mmc.h, drivers/mmc/core/block.c, checked 2026-10-24; JEDEC JESD84-B51 itself is not public);
@@ -372,10 +373,14 @@ impl Card {
             // the CMD13 below, which stops again
             stop = cmd(b, 12, 0, Resp::R1).map_or(0, |r| r[0] & DATA_ERRORS & !OUT_OF_RANGE);
         }
-        status(index, got?)?;
-        status(12, stop)?;
-        // programming: the card leaves STATE_PRG for tran when the data is in; errors found meanwhile show here
-        status(13, wait_ready(b)?).map(drop)
+        let sent = got.and_then(|s| status(index, s)).and_then(|_| status(12, stop));
+        // programming: the card leaves STATE_PRG for tran when the data is in; errors found meanwhile show here.
+        // Waited for after an error too: the caller's next step may be a new identification (CMD0). Not past
+        // TRIES: a longer wait holds the main loop, and a ride loses the seconds it holds it (a write given up costs
+        // a cluster at most, fat/write.rs)
+        let ready = wait_ready(b);
+        sent?;
+        status(13, ready?).map(drop)
     }
 }
 
