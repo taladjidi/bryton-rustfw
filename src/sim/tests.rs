@@ -2284,8 +2284,9 @@ fn max_hr_left_unchanged_stays_from_age() {
     assert!(app.settings.max_hr_age, "entered and left without a step");
 }
 
-/// The summary says where the save is, from the recorders: SAVING... until both copies are done, then SAVED; Page
-/// shows the totals and back, Lap the laps once the history has the ride, and Back returns to the card.
+/// The summary says where the save is, from the recorder's outcomes: SAVING... until the clean copy is saved and read
+/// back, then SAVED (COPY... while the full copy is written); Page shows the totals and back; Lap is refused until the
+/// card is free, then opens the laps once the history has the ride, and Back returns to the card.
 #[test]
 fn summary_shows_the_save_and_pages() {
     use crate::ui::card::Save;
@@ -2299,10 +2300,28 @@ fn summary_shows_the_save_and_pages() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Summary);
     assert_eq!(app.save_now(), Save::Saving, "the recorders still hold the ride");
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert!(!app.laps_wanted && app.screen() == Screen::Summary, "Lap is refused while the card is busy");
     sim.save("summary_saving_dark");
-    run(&mut sim, &mut app, 3000);
+    let mut copying = false;
+    for _ in 0..60 {
+        run(&mut sim, &mut app, 100);
+        copying |= app.save_now() == Save::Copying;
+        if app.ride_settled() {
+            break;
+        }
+    }
+    assert!(app.ride_settled());
     assert_eq!(app.save_now(), Save::Saved);
-    assert_eq!(app.save_drawn, Save::Saved, "the title line was drawn again when the state changed");
+    run(&mut sim, &mut app, 6000); // the refusal's banner covers the title line: drawn when it goes
+    assert_eq!(
+        app.save_drawn,
+        Save::Saved,
+        "drawn again on the change: {:?} {:?}",
+        app.notes.ms,
+        app.notes.text.as_str()
+    );
+    let _ = copying; // the full copy may finish in the same pass as the clean one
     sim.save("summary_saved_dark");
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.summary_page, 1);
@@ -2312,22 +2331,130 @@ fn summary_shows_the_save_and_pages() {
     sim.save("summary_totals_light");
     app.press(&mut sim, Press::Short(Key::Page));
     sim.save("summary_saved_light");
-    app.theme = ui::theme::Theme::DARK;
-    app.repaint(&mut sim);
-    app.press(&mut sim, Press::Short(Key::Page));
-    app.press(&mut sim, Press::Short(Key::Page));
-    assert_eq!(app.summary_page, 0);
-    app.press(&mut sim, Press::Short(Key::Lap));
-    run(&mut sim, &mut app, 3000);
-    if app.screen() != Screen::Laps(0) {
-        // the history had not read the ride: Lap started that, and asks again
-        app.press(&mut sim, Press::Short(Key::Lap));
-        run(&mut sim, &mut app, 3000);
+    for (name, state) in [
+        ("copying", Save::Copying),
+        ("saving", Save::Saving),
+        ("failed", Save::Failed("NOT SAVED: CARD")),
+        ("part", Save::Part),
+        ("nocopy", Save::NoFullCopy),
+    ] {
+        app.save = state;
+        app.repaint(&mut sim);
+        sim.save(&std::format!("summary_{name}_light"));
+        app.theme = ui::theme::Theme::DARK;
+        app.repaint(&mut sim);
+        sim.save(&std::format!("summary_{name}_dark"));
+        app.theme = ui::theme::Theme::LIGHT;
     }
-    assert_eq!(app.screen(), Screen::Laps(0));
+    app.theme = ui::theme::Theme::DARK;
+    app.save = Save::Saved;
+    app.repaint(&mut sim);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    for _ in 0..60 {
+        if app.screen() == Screen::Laps(0) {
+            break;
+        }
+        run(&mut sim, &mut app, 100);
+    }
+    assert_eq!(app.screen(), Screen::Laps(0), "the laps open by themselves once the history has the ride");
     sim.save("summary_laps_dark");
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Summary);
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Main);
+}
+
+/// The summary never says SAVED for a ride that is not on the card as a ride: each run polls the state every 100 ms.
+fn never_saved(sim: &mut Sim, app: &mut App, ms: u32) {
+    use crate::ui::card::Save;
+    for _ in 0..ms / 100 {
+        run(sim, app, 100);
+        if app.screen() == Screen::Summary {
+            assert!(!matches!(app.save_now(), Save::Saved | Save::Copying), "SAVED for a ride not saved");
+        }
+    }
+}
+
+/// A card that refuses every write from the start: no checkpoint ever lands.
+#[test]
+fn summary_is_not_saved_on_a_card_refusing_writes() {
+    use crate::ui::card::Save;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    sim.emmc.bad = std::vec![0..u32::MAX];
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Summary);
+    never_saved(&mut sim, &mut app, 300_000);
+    assert!(matches!(app.save_now(), Save::Failed(_)), "{:?}", app.save_now());
+}
+
+/// A save stuck after its step 4 (both folders failing): never SAVED.
+#[test]
+fn summary_is_not_saved_when_the_save_is_stuck() {
+    use crate::ui::card::Save;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let dirs = ["Activities", "Rustfw/Rides"].map(|p| super::drive_tests::dir_sectors(&sim.emmc.image, p));
+    sim.emmc.bad = std::vec![dirs[0].clone()];
+    save_ride(&mut sim, &mut app);
+    never_saved(&mut sim, &mut app, 1000);
+    sim.emmc.bad = dirs.to_vec();
+    never_saved(&mut sim, &mut app, 300_000);
+    assert!(matches!(app.save_now(), Save::Failed(_)), "{:?}", app.save_now());
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert!(!app.laps_wanted, "no laps of a ride that is not on the card");
+}
+
+/// A build that cannot write the card, and a ride ended behind the last one's save: not saved, not recorded.
+#[test]
+fn summary_is_not_saved_without_a_writable_card_or_behind_a_save() {
+    use crate::ui::card::Save;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.writable = false;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    never_saved(&mut sim, &mut app, 5000);
+    assert!(matches!(app.save_now(), Save::Failed(_)));
+
+    // a save stuck on the card, and a ride started and ended behind it
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let dirs = ["Activities", "Rustfw/Rides"].map(|p| super::drive_tests::dir_sectors(&sim.emmc.image, p));
+    sim.emmc.bad = std::vec![dirs[0].clone()];
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 1000);
+    sim.emmc.bad = dirs.to_vec();
+    run(&mut sim, &mut app, 300_000);
+    assert!(app.rec.clean.stuck());
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Start)); // a ride behind it (the first Start is answered, the second starts)
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 5000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Summary);
+    assert_eq!(app.save_now(), Save::Failed("NOT RECORDED"));
+    never_saved(&mut sim, &mut app, 20_000);
+    assert_eq!(app.save_now(), Save::Failed("NOT RECORDED"));
 }

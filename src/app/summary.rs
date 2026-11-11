@@ -5,32 +5,38 @@
 use crate::*;
 use ui::card::Save;
 
-/// `summary_page` values: the card, the totals, and the laps list opened from it.
+/// `summary_page` values: the card and the totals.
 pub(crate) const PAGE_CARD: u8 = 0;
 pub(crate) const PAGE_TOTALS: u8 = 1;
-pub(crate) const PAGE_LAPS: u8 = 2;
 
 impl App {
-    /// The ride just ended is not saved (a recorder kept it unsaved, or a build that cannot write the card), is being
-    /// saved (a recorder still holds it: written, read back, the full copy), or is saved.
+    /// What the title line says: the recorders' outcomes wrote `save` ([`App::save_settle`], `step_recorder`); the full
+    /// copy still being written shows as COPY... after SAVED.
     pub(crate) fn save_now(&self) -> Save {
-        if self.save_failed || !self.card_writable {
-            Save::Failed("NOT SAVED: CARD")
-        } else if self.rec.clean.phase() != recorder::Phase::Done || self.rec.full.phase() != recorder::Phase::Done {
-            Save::Saving
-        } else {
-            Save::Saved
+        match self.save {
+            Save::Saved if self.rec.full.phase() != recorder::Phase::Done => Save::Copying,
+            s => s,
         }
     }
 
-    /// The summary is up and the save state changed since it was drawn: that line alone is drawn again.
+    /// A save that ends with nothing said is not a save: its recorder is done or stuck and no `Saved` came.
+    pub(crate) fn save_settle(&mut self) {
+        let done = self.rec.clean.phase() == recorder::Phase::Done;
+        if self.save == Save::Saving && (done || self.rec.clean.stuck() || self.rec.clean.failing()) {
+            self.save = Save::Failed("NOT SAVED: CARD");
+        }
+    }
+
+    /// The summary is up and the save state changed since it was drawn: the title line alone is drawn again (not
+    /// under a banner, which covers it: the screen's next full draw has the state).
     pub(crate) fn save_redraw(&mut self, b: &mut impl Board) {
         let now = self.save_now();
-        if self.screen != Screen::Summary || now == self.save_drawn {
+        if self.screen != Screen::Summary || now == self.save_drawn || self.notes.ms.is_some() {
             return;
         }
         self.save_drawn = now;
-        ui::card::draw_save(&mut panel::Panel(b, self.area(), self.look()), now);
+        let date = self.ride_card().title;
+        ui::card::draw_title_line(&mut panel::Panel(b, self.area(), self.look()), date.as_str(), Some(now));
     }
 
     /// The second card: what the ride has that the first leaves out, from numbers it already keeps.
@@ -38,7 +44,7 @@ impl App {
         let (r, imp) = (&self.ride, self.settings.imperial);
         let num = |v: Option<u32>| {
             let mut l = Line::<10>::new();
-            match v.filter(|&v| v > 0) {
+            match v {
                 Some(v) => l.push_u32(v),
                 None => l.push_str("--"),
             }
@@ -71,37 +77,38 @@ impl App {
         }
     }
 
-    /// Back from the laps: to the summary when it opened them, else the screen below.
-    pub(crate) fn leave_laps(&mut self) {
-        if self.summary_page == PAGE_LAPS {
-            (self.summary_page, self.screen) = (PAGE_CARD, Screen::Summary);
-        } else {
-            self.close();
-        }
-    }
-
     /// Page on the summary: the card and the totals in turn.
     pub(crate) fn summary_flip(&mut self, b: &mut impl Board) {
         self.summary_page = if self.summary_page == PAGE_TOTALS { PAGE_CARD } else { PAGE_TOTALS };
         self.show(b);
     }
 
-    /// Lap on the summary: the laps of the ride, read from its saved file as a past ride's (the history's entry for its
-    /// start); asked before the save is done or the history has read it, it says so.
+    /// Lap on the summary: the laps of the ride, read from its saved file as a past ride's. Only once it is saved and
+    /// the card is free; they open from [`App::laps_step`] when the history has the ride (one scan, not one a press).
     pub(crate) fn summary_laps(&mut self) {
-        if self.save_now() != Save::Saved {
-            return self.say("SAVING: WAIT");
+        if self.save_now() != Save::Saved || !self.ride_settled() {
+            return self.say(if matches!(self.save, Save::Failed(_)) { "NOT ON THE CARD" } else { "SAVING: WAIT" });
+        }
+        self.laps_wanted = true;
+        self.laps_step();
+    }
+
+    /// The laps asked for: read once the history's index has the ride; if it has not, its scan is started (once).
+    pub(crate) fn laps_step(&mut self) {
+        if !self.laps_wanted {
+            return;
+        }
+        if self.screen != Screen::Summary {
+            self.laps_wanted = false;
+            return;
         }
         let ((y, mo, d), (h, mi)) = (self.ride_started.date, self.ride_started.time);
-        match (0..).map_while(|i| self.stock.index.get(i)).find(|r| r.start == (y, mo, d, h, mi)) {
-            Some(&r) => {
-                self.past.start(&r, self.settings.ftp, self.settings.imperial); // App::step_past opens the list
-                self.say("READING RIDE");
-            }
-            None => {
-                self.rescan();
-                self.say("HISTORY READING: TRY AGAIN");
-            }
+        if let Some(&r) = (0..).map_while(|i| self.stock.index.get(i)).find(|r| r.start == (y, mo, d, h, mi)) {
+            self.laps_wanted = false;
+            self.past.start(&r, self.settings.ftp, self.settings.imperial); // App::step_past opens the list
+            self.say("READING RIDE");
+        } else if self.stock.status() == stock::Status::Idle {
+            self.rescan();
         }
     }
 }

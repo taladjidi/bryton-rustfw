@@ -137,6 +137,7 @@ impl App {
     /// on a new day, and written once the scan has changed it, only between rides, in the same time a pass.
     #[inline(never)]
     pub(crate) fn step_stock(&mut self, b: &mut impl Board) {
+        self.laps_step();
         self.stock.load(&mut emmc::Volume(&mut self.emmc, b), self.date);
         self.stock.new_day(self.date);
         // read once by itself, a while after start-up and not during a ride, for the totals on the overview
@@ -222,7 +223,7 @@ impl App {
             Some(Ok(())) => {
                 if self.screen == Screen::Summary {
                     // the ride just ended asked for its laps: the list, and Back returns to the card
-                    (self.summary_page, self.screen) = (crate::app::summary::PAGE_LAPS, Screen::Laps(0));
+                    self.open(Screen::Laps(0));
                 } else {
                     self.open(Screen::Past);
                 }

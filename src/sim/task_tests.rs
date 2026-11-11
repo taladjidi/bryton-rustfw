@@ -283,19 +283,15 @@ fn tasks() -> Vec<Task> {
             r.key(Press::Short(Key::Page));
             done(&r, r.app.screen() == Screen::Summary && r.app.summary_page == 1, "totals")
         }),
-        t("ride summary: laps, keys", RIDING, 5, || {
+        t("ride summary: laps, keys", RIDING, 4, || {
             let mut r = Run::new(true);
             run(&mut r.sim, &mut r.app, 5000); // a ride a few seconds old: Start pauses it
             r.key(Press::Short(Key::Start)); // pause
             r.key(Press::Long(Key::Start));
             r.key(Press::Short(Key::Start)); // SAVE
             run(&mut r.sim, &mut r.app, 5000); // the save is read back and the history has the ride
-            r.key(Press::Short(Key::Lap)); // the first starts the history's read when it lacks the ride
+            r.key(Press::Short(Key::Lap)); // the laps open by themselves once the history has the ride
             run(&mut r.sim, &mut r.app, 5000);
-            if !matches!(r.app.screen(), Screen::Laps(_)) {
-                r.key(Press::Short(Key::Lap));
-                run(&mut r.sim, &mut r.app, 3000);
-            }
             done(&r, matches!(r.app.screen(), Screen::Laps(_)), "laps")
         }),
         t("main menu from a ride, keys", RIDING, 10, || {

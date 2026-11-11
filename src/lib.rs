@@ -354,8 +354,12 @@ pub struct App {
     /// The summary's page ([`app::summary`]): the card, the totals, the laps opened from it; the save state last drawn
     /// on it; a recorder said the ride was kept unsaved.
     summary_page: u8,
+    save: ui::card::Save,
     save_drawn: ui::card::Save,
-    save_failed: bool,
+    /// The recording stopped on a full card: the save that follows is partial.
+    save_part: bool,
+    /// Lap was pressed on the summary: its laps open once the history has the ride.
+    laps_wanted: bool,
     /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the one tone player
     /// (alerts, courses, workouts).
     alerts: alerts::Alerts,
@@ -579,8 +583,10 @@ impl App {
             tones: Tones::default(),
             summary: None,
             summary_page: 0,
+            save: ui::card::Save::Saving,
             save_drawn: ui::card::Save::Saving,
-            save_failed: false,
+            save_part: false,
+            laps_wanted: false,
             new_ride: false,
             drawn: Default::default(),
             ride: ride::Ride::new(),

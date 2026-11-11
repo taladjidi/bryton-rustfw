@@ -38,29 +38,46 @@ pub struct Card {
     pub save: Option<Save>,
 }
 
-/// Where the ride just ended is: read from the recorder's phase and outcome, never from a timer.
+/// Where the ride just ended is, written by the recorder's outcomes (app/summary.rs), never by a timer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Save {
-    /// Being written and read back (both copies).
+    /// Being written and read back.
     Saving,
-    /// Both copies done.
+    /// The ride is in the activities folder, read back; the full copy is done.
     Saved,
-    /// Not saved, and why.
+    /// Saved; the full copy is still being written.
+    Copying,
+    /// Saved; the full copy could not be.
+    NoFullCopy,
+    /// Saved up to where the card filled.
+    Part,
+    /// Not on the card as a ride, and why.
     Failed(&'static str),
 }
 
-/// The save state's box on the title line: the right end, the date moves left beside it.
-const SAVE_BOX: (u32, u32, u32) = (148, PAGE_Y + 8, W - 150);
-
-/// Draws the save state alone (the text clears its box): the only redraw when the state changes.
-pub fn draw_save(c: &mut impl Canvas, save: Save) {
-    let (text, fg) = match save {
-        Save::Saving => ("SAVING...", super::ACCENT),
-        Save::Saved => ("SAVED", super::GREEN),
-        Save::Failed(why) => (why, super::RED),
+/// Draws the title line whole, the only redraw when the save state changes: the date alone (a past ride, centred);
+/// else the state at 2x, colour and word: SAVING... and the failures centred in place of the date, SAVED right of it.
+pub fn draw_title_line(c: &mut impl Canvas, date: &str, save: Option<Save>) {
+    let mut at = |fg, x, w, align, text: &str| {
+        text::draw_in(c, &Style { fg, ..LABEL }, x, PAGE_Y + 2, w, align, text);
     };
-    let style = Style { fg, scale: 1, ..LABEL };
-    text::draw_in(c, &style, SAVE_BOX.0, SAVE_BOX.1, SAVE_BOX.2, Align::Right, text);
+    let (grey, amber, green, red) = (super::GREY, super::ACCENT, super::GREEN, super::RED);
+    match save {
+        None => at(grey, 0, W, Align::Centre, date),
+        Some(Save::Saved) => {
+            at(grey, 4, 144, Align::Left, date);
+            at(green, 148, W - 150, Align::Right, "SAVED");
+        }
+        // the date gives way: 2x words do not fit beside it
+        Some(Save::Copying) => {
+            at(green, 4, 70, Align::Left, "SAVED");
+            at(amber, 76, W - 78, Align::Right, "COPY...");
+        }
+        Some(Save::Saving) => at(amber, 0, W, Align::Centre, "SAVING..."),
+        Some(Save::NoFullCopy) => at(amber, 0, W, Align::Centre, "SAVED, NO FULL COPY"),
+        Some(Save::Part) => at(amber, 0, W, Align::Centre, "SAVED: PART"),
+        Some(Save::Failed(why)) => at(red, 0, W, Align::Centre, why),
+    }
 }
 
 /// The second card of the ride just ended: the totals the first leaves out, label and value per row.
@@ -78,10 +95,7 @@ const TOTAL_H: u32 = 26;
 pub fn draw_totals(c: &mut impl Canvas, t: &Totals, title: &Card) {
     let grey = Style { fg: super::GREY, ..LABEL };
     let small = Style { scale: 1, ..grey };
-    text::draw_in(c, &grey, 4, PAGE_Y + 2, 144, Align::Left, title.title.as_str());
-    if let Some(save) = title.save {
-        draw_save(c, save);
-    }
+    draw_title_line(c, title.title.as_str(), title.save);
     for (i, (label, value)) in t.rows.iter().enumerate() {
         let y = MAP.1 + 4 + i as u32 * TOTAL_H;
         text::draw_in(c, &small, 8, y + (LABEL.height() - small.height()) / 2, 110, Align::Left, label);
@@ -346,12 +360,7 @@ pub fn draw(
 ) {
     map::draw(c, map::area(MAP), track, view, base, None, false);
     let grey = Style { fg: super::GREY, ..LABEL };
-    if let Some(save) = card.save {
-        text::draw_in(c, &grey, 4, PAGE_Y + 2, 144, Align::Left, card.title.as_str());
-        draw_save(c, save);
-    } else {
-        text::draw_in(c, &grey, 0, PAGE_Y + 2, W, Align::Centre, card.title.as_str());
-    }
+    draw_title_line(c, card.title.as_str(), card.save);
     let (x, y, w, h) = ELEV;
     super::draw_graph(c, (x, y, w, h), elev);
     c.fill(x, y + h, w, 1, super::DARK);
