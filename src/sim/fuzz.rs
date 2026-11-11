@@ -2418,14 +2418,14 @@ const MENU_TREE_OWNED: [(&str, u32); 33] = [
     ("CourseNow", 0),
     ("auto scrolled", 0),
     ("Bike", 0),
-    ("Gps", 3),
+    ("Gps", 0),
     ("Phone", 1),
     ("Steps", 1),
     ("WorkoutNow", 2),
     ("Main", 3),
     ("Me", 3),
     ("Sensors", 3),
-    ("Remote", 3),
+    ("Remote", 0),
     ("Pages", 3),
     ("PageList", 3),
     ("Page", 3),
@@ -4966,7 +4966,7 @@ fn settings_file_bytes() {
     let choice = |p: usize, v: u8| -> Option<bool> {
         let below = |n: usize| Some(usize::from(v) < n);
         match p {
-            123 | 145 | 149..=153 | 158 | 167 => below(2),
+            123 | 145 | 149..=153 | 158 | 167 | 173 => below(2),
             154 => Some(DateFormat::from_byte(v).is_some()),
             155 => below(crate::SUNSET_LEAD_MIN.len()),
             156 => below(crate::CHAINRINGS.len()),
@@ -5012,6 +5012,7 @@ fn settings_file_bytes() {
         gnss_systems: 3,
         steep_descent: 2,
         saver: SaverMode::Auto,
+        map_turn: false,
         ..d
     };
     assert_eq!(read(sector(set), SETTINGS_LEN), set, "the set copy reads whole");
@@ -5022,7 +5023,7 @@ fn settings_file_bytes() {
     let mut saver = [0u32; 3]; // each BATTERY SAVER mode read as itself
     for (k, base) in [d, set].into_iter().enumerate() {
         let full = sector(base);
-        for _ in 0..40_000 {
+        for _ in 0..50_000 {
             let cut_at = FROM - 3 + (next() as usize) % (SETTINGS_LEN - FROM + 3);
             let len = if next().is_multiple_of(2) { SETTINGS_LEN } else { cut_at }; // whole, or cut anywhere
             let p = FROM + (next() as usize) % (SETTINGS_LEN - FROM);

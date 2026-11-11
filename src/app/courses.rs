@@ -81,7 +81,20 @@ impl App {
         if c.open(&mut emmc::Volume(&mut self.emmc, b)).is_err() || c.list.is_empty() {
             self.say("NO COURSE\nSEND ONE FROM APP");
         }
+        self.sort_courses();
         self.open(Screen::Menu(Menu::Courses, 0));
+    }
+
+    /// With a fix, the list nearest start first and the "AWAY" distances from the fix; without, as it was. Only when
+    /// COURSES opens and once its lengths are in (the starts come with them), so rows do not move under a finger.
+    fn sort_courses(&mut self) {
+        let from = self.gps.pvt.filter(|p| p.good()).map(|p| (p.lat, p.lon));
+        let Some(c) = self.courses.as_deref_mut().filter(|c| !c.loading()) else { return };
+        c.from = from;
+        // a length being measured is held by its place in the list: not moved under it (the last length sorts)
+        if let (Some(f), false) = (from, c.measuring()) {
+            c.list.sort_by_start(f);
+        }
     }
 
     /// The course list again once the phone wrote or deleted a course ([`storage::course_file::Courses::stale`]),
@@ -107,6 +120,7 @@ impl App {
         // another map (the course in or out of the fit): fitted until "+", not a zoom from before that waited for
         // the fit to grow (review)
         (self.map_view.zoom, self.map_view.centre, self.map_view.whole) = (None, None, false);
+        self.near = NearTurn::new();
         if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) && !c.ride_it {
             return self.stop_course();
         }
@@ -243,6 +257,18 @@ impl App {
         if let (true, Screen::Menu(Menu::Courses, sel)) = (measuring, self.screen) {
             self.update_menu_rows(b, Menu::Courses, sel);
             self.redraw_ms = 0;
+        }
+        // the last length in: sorted by the starts just read, unless the rider has moved off the first row already
+        if let (true, Screen::Menu(Menu::Courses, 0)) = (measuring, self.screen)
+            && self.courses.as_deref().is_some_and(|c| !c.measuring())
+        {
+            // the cursor stays on the course it was on
+            let was = self.courses.as_deref().and_then(|c| c.list.get(0)).map(|e| e.file);
+            self.sort_courses();
+            let at =
+                self.courses.as_deref().and_then(|c| (0..c.list.len()).find(|&i| c.list.get(i).map(|e| e.file) == was));
+            self.screen = Screen::Menu(Menu::Courses, at.unwrap_or(0));
+            self.show(b);
         }
         match step {
             storage::course_file::Progress::Loaded(true) => {
@@ -442,6 +468,28 @@ impl App {
             false => c.climbs().get(k).map(|k| k.grade_x10() as i32),
         });
         grade.map_or(ui::BLACK, ui::grade_color)
+    }
+
+    /// A course row's second line: its length, and with a fix at the sort how far its start is ("12.4 KM 3.1 KM
+    /// AWAY", the km unit of the distance dropped to leave room for the tick).
+    pub(crate) fn course_sub(&self, k: usize, length: &str) -> Line<24> {
+        let mut l = Line::new();
+        l.push_str(length);
+        let Some(c) = self.courses.as_deref() else { return l };
+        let (Some(from), Some(e)) = (c.from, c.list.get(k)) else { return l };
+        let (Some(start), true) = (e.start(), e.measured) else { return l };
+        let mut d = Line::<8>::new();
+        // kilometres with a decimal at every range, no unit: "12.4 KM 3.1 KM AWAY" is 19 characters, the line holds 18
+        crate::push_trip(&mut d, places::dist_bearing(from, start).0.saturating_add(50), false);
+        l.push_str(" ");
+        l.push_str(d.as_str());
+        l.push_str(" AWAY");
+        // a same-name course's " GPX" or " #2" after its length leaves no room: the length alone, as before
+        if l.as_str().len() > 16 {
+            l = Line::new();
+            l.push_str(length);
+        }
+        l
     }
 
     /// A course's menu row: its name, its length; green when followed.
