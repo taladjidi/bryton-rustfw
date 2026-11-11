@@ -1541,3 +1541,58 @@ fn two_steep_pitches_both_alert() {
     }
     assert_eq!(said, 2, "{:?}", app.on_course().map(|(c, _)| c.descents().collect::<Vec<_>>()));
 }
+
+/// COURSES from the ride menu, in a ride: the course picked is read while the ride records (no second lost, the
+/// receiver read on time), followed and placed by the next fix; another one picked later replaces it.
+#[test]
+fn a_course_picked_in_a_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(course_route);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 20_000);
+    assert!(app.courses.as_deref().unwrap().on.is_none());
+    sim.gnss.longest_gap_ms = 0;
+    let (t0, ms0) = (app.ride.timer_s(), sim.ms);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Courses, 0));
+    run(&mut sim, &mut app, 1000);
+    let pick = |sim: &mut Sim, app: &mut App, k: usize| {
+        let Screen::Menu(_, sel) = app.screen() else { panic!() };
+        for _ in 0..sel {
+            app.press(sim, Press::Short(Key::Lap));
+        }
+        for _ in 0..k {
+            app.press(sim, Press::Short(Key::Page));
+        }
+        app.press(sim, Press::Short(Key::Start));
+    };
+    let k = hill(&app);
+    pick(&mut sim, &mut app, k);
+    run(&mut sim, &mut app, 10_000);
+    let c = app.courses.as_deref().unwrap();
+    assert!(c.on.is_some() && c.at.off_m.is_some(), "followed and placed: {:?}", c.at);
+    assert_eq!(app.screen(), Screen::Ride(COURSE));
+    let wall = (sim.ms - ms0) / 1000;
+    assert!(u64::from(app.ride.timer_s() - t0) + 1 >= wall, "no second of the ride lost while the course loaded");
+    assert!(sim.gnss.longest_gap_ms <= 1200, "{} ms", sim.gnss.longest_gap_ms);
+    // another course while one is followed: it replaces it
+    let first = app.courses.as_deref().unwrap().on;
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    let other = (0..app.courses.as_deref().unwrap().list.len())
+        .find(|&i| i != k && app.courses.as_deref().unwrap().list.get(i).is_some_and(|e| e.dist_m.is_some()))
+        .unwrap();
+    pick(&mut sim, &mut app, other);
+    run(&mut sim, &mut app, 10_000);
+    let c = app.courses.as_deref().unwrap();
+    assert!(c.on.is_some() && c.on != first, "switched");
+}

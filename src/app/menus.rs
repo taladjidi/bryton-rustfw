@@ -185,6 +185,8 @@ impl App {
                     (Row::Ride(RideRow::End), true),
                     (Row::Open(Menu::WorkoutNow), self.workout_running()),
                     (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
+                    // pick or switch a course in a ride (a virtual ride picks through RIDE A COURSE)
+                    (Row::Open(Menu::Courses), self.courses.is_some() && !self.indoors()),
                     (Row::Open(Menu::Climbs), self.climbs_done.len() > 0), // once one is done
                     (Row::Ride(RideRow::BackToStart), self.track.points().len() >= 2),
                     (Row::Ride(RideRow::Trainer), self.trainer_on()),

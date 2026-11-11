@@ -2398,7 +2398,7 @@ const MENU_TREE_OWNED: [(&str, u32); 32] = [
     ("CourseNow", 0),
     ("auto scrolled", 0),
     ("Bike", 1),
-    ("Gps", 3),
+    ("Gps", 1),
     ("Phone", 1),
     ("Steps", 1),
     ("WorkoutNow", 2),
@@ -2416,7 +2416,7 @@ const MENU_TREE_OWNED: [(&str, u32); 32] = [
     ("shown", 3),
     ("moved", 3),
     ("renamed", 3),
-    ("ride a course picked", 3),
+    ("ride a course picked", 0),
 ];
 /// A part reaches an owned key at least this many times.
 const MENU_TREE_MIN: u32 = 1;

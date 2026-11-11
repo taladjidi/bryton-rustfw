@@ -214,18 +214,28 @@ impl App {
     }
 
     /// Bytes of course files read per pass: as much as the scan of stock's rides while no ride runs (about 40 ms
-    /// on the unit), ride or not, since someone waits for it.
-    const COURSE_BYTES: u32 = Self::SCAN_IDLE;
+    /// on the unit), and as little as it reads in a ride ([`App::SCAN_RIDING`]: 16 KB, a few ms), so a course picked
+    /// in a ride never holds the recorder's pass up.
+    fn course_bytes(&self) -> u32 {
+        if self.ride.state() == ride::State::Idle { Self::SCAN_IDLE } else { Self::SCAN_RIDING }
+    }
 
     /// The course files go on being read, a bounded amount per pass: the course to follow (then COURSE ON and the
     /// first ride page, or NOT A COURSE), and the lengths of the list while it shows.
     #[inline(never)]
     pub(crate) fn step_courses(&mut self, b: &mut impl Board) {
+        let budget = self.course_bytes();
+        // in a ride, never in a pass where the recorder has card work (a checkpoint, a start, a save): the course waits
+        // a pass, the records do not
+        let (rec, riding) = (&self.rec, self.ride.state() != ride::State::Idle);
+        if riding && [&rec.full, &rec.clean].iter().any(|r| r.due() || r.pending()) {
+            return;
+        }
         let Some(c) = self.courses.as_deref_mut() else { return };
         if c.measuring() && !matches!(self.screen, Screen::Menu(Menu::Courses, _)) {
             return; // the lengths only while the list shows
         }
-        match c.step(&mut emmc::Volume(&mut self.emmc, b), Self::COURSE_BYTES) {
+        match c.step(&mut emmc::Volume(&mut self.emmc, b), budget) {
             storage::course_file::Progress::Loaded(true) => {
                 self.say("COURSE ON");
                 if self.courses.as_deref_mut().is_some_and(|c| core::mem::take(&mut c.ride_it)) {

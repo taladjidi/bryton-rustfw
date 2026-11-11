@@ -867,7 +867,14 @@ impl Course {
         let off = project((track.0, track.1, cos_q16(track.0)), lat, lon);
         let boxes = self.boxes.get(..self.n_boxes).unwrap_or(&[]);
         let gaps = &self.gaps;
-        Some(Route { pts: self.points(), boxes, gaps, off, id: self.id })
+        Some(Route {
+            pts: self.points(),
+            boxes,
+            gaps,
+            dist: self.dist.get(..self.len).unwrap_or(&[]),
+            off,
+            id: self.id,
+        })
     }
 
     /// The altitude at `d` m from the start, dm, between the two points around it; None without altitudes.
