@@ -525,14 +525,17 @@ MENU
    +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
    +- WORKOUT >        while a step runs: NEXT STEP (makes a lap, through `step_lap`, as the Lap key does), STOP WORKOUT (the ride goes on)
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on), REVERSE COURSE
+   +- COURSES >        pick or switch a course (not on a virtual ride, which picks through WORKOUTS > RIDE A COURSE)
+   +- WORKOUTS >       the planned workouts, RAMP TEST, RIDE A COURSE
+   +- SENSORS >        the same menu as off the ride
+   +- BRIGHTNESS       changed in place
    +- BACK TO START    once the ride has a track: the ride's own breadcrumb followed back as a course (replaces the one followed)
    +- TRAINER CONTROL  with a trainer paired: its screen (mode, target)
+   +- POWER CURVE      with a power meter paired
    +- INDOOR ON / OFF  the ride's profile by hand, for this ride
-   +- BRIGHTNESS       changed in place
-   +- SENSORS >        the same menu as off the ride
    +- EDIT THIS PAGE > paused only: the page editor on the page (the overview: its fields; the course page has none)
    +- SAVE PLACE       stopped only: here, as a favourite place (written once the ride is saved)
-   +- ALL SETTINGS >   the full menu above
+   +- MAIN MENU >      the home menu above
   ```
   An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when
   that page is gone, as the course page once the course stops). A row that goes while its menu shows (WORKOUT when

@@ -40,7 +40,7 @@ pub enum Menu {
     Storage,
     /// The ride menu, Page held while a ride records or is paused, over ride page `n` ([`OVERVIEW`] from the
     /// overview): RESUME or PAUSE, END RIDE, WORKOUT and COURSE while one runs, BRIGHTNESS, SENSORS, EDIT THIS PAGE,
-    /// ALL SETTINGS (the main menu). Rows that do not apply are not shown.
+    /// MAIN MENU (the home menu). Rows that do not apply are not shown.
     Ride(usize),
     /// The workout running ([`menu::WORKOUT_NOW`]).
     WorkoutNow,
@@ -187,15 +187,16 @@ impl App {
                     (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
                     // pick or switch a course in a ride (a virtual ride picks through RIDE A COURSE)
                     (Row::Open(Menu::Courses), self.courses.is_some() && !self.indoors()),
+                    (Row::Open(Menu::Workouts), true),
+                    (Row::Open(Menu::Sensors), true),
+                    (Row::Set(menu::Setting::Light), true),
                     (Row::Open(Menu::Climbs), self.climbs_done.len() > 0), // once one is done
                     (Row::Ride(RideRow::BackToStart), self.track.points().len() >= 2),
                     (Row::Ride(RideRow::Trainer), self.trainer_on()),
+                    (Row::Ride(RideRow::Curve), self.power_paired()),
                     (Row::Ride(RideRow::Indoor), true),
-                    (Row::Set(menu::Setting::Light), true),
-                    (Row::Open(Menu::Sensors), true),
                     // the course page has no settings; no page edited while recording (UI review 2, 5.2 point 8)
                     (Row::Open(Menu::Page(n)), n <= OVERVIEW && self.ride.state() != ride::State::Running),
-                    (Row::Ride(RideRow::Curve), self.power_paired()),
                     // stopped only: a tap acts at once then (a row more scrolls the menu under a second tap)
                     (Row::SavePlace, !self.ride.moving()),
                     (Row::Open(Menu::Main), true),

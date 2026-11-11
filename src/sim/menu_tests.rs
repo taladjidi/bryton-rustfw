@@ -370,7 +370,7 @@ pub(super) fn built_in_row(app: &App, i: usize) -> std::string::String {
 }
 
 /// The way from menu `from` to `row`, by the rows the app shows (the first found, at most 5 menus down; the main
-/// menu walked into only from the ride menu, as ALL SETTINGS): each menu on the way and the row chosen in it.
+/// menu walked into only from the ride menu, as MAIN MENU): each menu on the way and the row chosen in it.
 pub(crate) fn path_to(app: &App, from: Menu, row: menu::Row) -> Option<Vec<(Menu, usize)>> {
     fn walk(app: &App, from: Menu, row: menu::Row, depth: usize) -> Option<Vec<(Menu, usize)>> {
         for i in 0..app.rows(from) {
@@ -585,7 +585,7 @@ fn labels(app: &App) -> Vec<std::string::String> {
 /// on the course page. Each row acts: PAUSE stays (RESUME then, and END RIDE under it), RESUME goes back to the page,
 /// BRIGHTNESS changes in place, NEXT STEP, STOP WORKOUT and STOP FOLLOWING act and go back to riding, END RIDE
 /// pauses and opens the end-ride screen (RESUME back to the page, SAVE the ride's card). SENSORS, EDIT THIS PAGE and
-/// ALL SETTINGS open their menus; Back goes up one level at a time; no wrap. Screenshots: ride_menu,
+/// MAIN MENU open their menus; Back goes up one level at a time; no wrap. Screenshots: ride_menu,
 /// ride_menu_paused, ride_menu_workout.
 #[test]
 fn ride_menu() {
@@ -603,7 +603,7 @@ fn ride_menu() {
     assert_eq!(app.screen(), Screen::Ride(0));
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Ride(0), 0));
-    let base = ["PAUSE", "END RIDE", "COURSES", "INDOOR", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"];
+    let base = ["PAUSE", "END RIDE", "COURSES", "WORKOUTS", "SENSORS", "BRIGHTNESS", "INDOOR", "MAIN MENU"];
     assert_eq!(
         labels(&app),
         base,
@@ -617,9 +617,9 @@ fn ride_menu() {
     // BRIGHTNESS: in place
     to_row(&mut sim, &mut app, Row::Set(Setting::Light));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((sim.light_level, app.screen()), (100, Screen::Menu(Menu::Ride(0), 4)), "AUTO by default, then 100 %");
-    // SENSORS, ALL SETTINGS: their menus, Back to the ride menu's row, then to the page
-    for (row, m, at) in [(Row::Open(Menu::Sensors), Menu::Sensors, 5), (Row::Open(Menu::Main), Menu::Main, 6)] {
+    assert_eq!((sim.light_level, app.screen()), (100, Screen::Menu(Menu::Ride(0), 5)), "AUTO by default, then 100 %");
+    // SENSORS, MAIN MENU: their menus, Back to the ride menu's row, then to the page
+    for (row, m, at) in [(Row::Open(Menu::Sensors), Menu::Sensors, 4), (Row::Open(Menu::Main), Menu::Main, 7)] {
         back(&mut sim, &mut app, 1);
         hold_page(&mut sim, &mut app);
         to_row(&mut sim, &mut app, row);
@@ -643,7 +643,7 @@ fn ride_menu() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Running, Screen::Ride(0)));
 
-    // a workout from ALL SETTINGS > WORKOUTS: WORKOUT > NEXT STEP, STOP WORKOUT
+    // a workout from MAIN MENU > WORKOUTS: WORKOUT > NEXT STEP, STOP WORKOUT
     hold_page(&mut sim, &mut app);
     to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -674,7 +674,7 @@ fn ride_menu() {
     );
     assert_eq!(app.ride.state(), ride::State::Running, "the ride goes on");
 
-    // a course from ALL SETTINGS > COURSES: on its page, COURSE > STOP FOLLOWING, and no EDIT THIS PAGE
+    // a course from MAIN MENU > COURSES: on its page, COURSE > STOP FOLLOWING, and no EDIT THIS PAGE
     hold_page(&mut sim, &mut app);
     to_row(&mut sim, &mut app, Row::Open(Menu::Courses));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -689,7 +689,7 @@ fn ride_menu() {
     assert_eq!(app.screen(), Screen::Menu(Menu::Ride(COURSE), 0));
     assert_eq!(
         labels(&app),
-        ["PAUSE", "END RIDE", "COURSE", "COURSES", "INDOOR", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"]
+        ["PAUSE", "END RIDE", "COURSE", "COURSES", "WORKOUTS", "SENSORS", "BRIGHTNESS", "INDOOR", "MAIN MENU"]
     );
     to_row(&mut sim, &mut app, Row::Ride(RideRow::StopCourse));
     app.press(&mut sim, Press::Short(Key::Start));

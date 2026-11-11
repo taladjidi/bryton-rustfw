@@ -613,7 +613,7 @@ impl Row {
     pub fn label(self) -> Option<&'static str> {
         use RideRow as R;
         Some(match self {
-            Row::Open(Menu::Main) => "ALL SETTINGS",
+            Row::Open(Menu::Main) => "MAIN MENU",
             Row::Open(Menu::Page(crate::OVERVIEW)) => "OVERVIEW",
             Row::Open(Menu::Page(crate::QUICK)) => "QUICK FIELDS",
             Row::Open(Menu::Page(_)) => return None,

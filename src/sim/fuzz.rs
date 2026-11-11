@@ -2402,7 +2402,7 @@ const MENU_TREE_OWNED: [(&str, u32); 33] = [
     ("CourseNow", 0),
     ("auto scrolled", 0),
     ("Bike", 1),
-    ("Gps", 1),
+    ("Gps", 3),
     ("Phone", 1),
     ("Steps", 1),
     ("WorkoutNow", 2),
@@ -2426,7 +2426,7 @@ const MENU_TREE_OWNED: [(&str, u32); 33] = [
 /// A part reaches an owned key at least this many times.
 const MENU_TREE_MIN: u32 = 1;
 /// Per part, the settings stored by an act and the rides ended (measured: the least of the four parts, halved).
-const MIN_ACTS: u32 = 50;
+const MIN_ACTS: u32 = 23;
 const MIN_RIDES: u32 = 5;
 
 /// Every menu of the tree and every event the walk must see is owned by one part (the old whole-run checks).

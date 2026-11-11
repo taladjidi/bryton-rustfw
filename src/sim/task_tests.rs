@@ -214,13 +214,13 @@ fn tasks() -> Vec<Task> {
             r.path(true, &[Row::Open(Menu::Courses), Row::Open(Menu::Main), Row::Open(Menu::Courses), Row::Course(0)]);
             done(&r, r.app.page_on(COURSE), "course")
         }),
-        t("workout in a ride, keys", RIDING, 12, || {
+        t("workout in a ride, keys", RIDING, 7, || {
             let mut r = Run::new(true);
             let w = [Row::Open(Menu::Workouts), Row::Open(Menu::Main), Row::Open(Menu::Workouts)];
             r.path(false, &[w[0], w[1], w[2], Row::Workout(0), Row::WorkoutStart]);
             done(&r, r.app.workout_running(), "workout")
         }),
-        t("workout in a ride, touch", RIDING, 12, || {
+        t("workout in a ride, touch", RIDING, 9, || {
             let mut r = Run::new(true);
             let w = [Row::Open(Menu::Workouts), Row::Open(Menu::Main), Row::Open(Menu::Workouts)];
             r.path(true, &[w[0], w[1], w[2], Row::Workout(0), Row::WorkoutStart]);
@@ -235,13 +235,13 @@ fn tasks() -> Vec<Task> {
             );
             done(&r, !r.app.page_on(COURSE), "stop")
         }),
-        t("brightness in a ride, keys", RIDING, 6, || {
+        t("brightness in a ride, keys", RIDING, 7, || {
             let mut r = Run::new(true);
             let before = r.app.settings.light_level;
             r.path(false, &[Row::Set(menu::Setting::Light)]);
             done(&r, r.app.settings.light_level != before, "light")
         }),
-        t("sensors in a ride, keys", RIDING, 7, || {
+        t("sensors in a ride, keys", RIDING, 6, || {
             let mut r = Run::new(true);
             r.path(false, &[Row::Open(Menu::Sensors)]);
             done(&r, on(&r, Menu::Sensors), "sensors")
@@ -251,7 +251,7 @@ fn tasks() -> Vec<Task> {
             r.open_menu(true);
             done(&r, matches!(r.app.screen(), Screen::Menu(Menu::Ride(_), _)), "menu")
         }),
-        t("main menu from a ride, keys", RIDING, 9, || {
+        t("main menu from a ride, keys", RIDING, 10, || {
             let mut r = Run::new(true);
             r.path(false, &[Row::Open(Menu::Main)]);
             done(&r, on(&r, Menu::Main), "main")
