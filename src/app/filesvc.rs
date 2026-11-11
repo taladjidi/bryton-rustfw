@@ -85,8 +85,8 @@ const _: () = assert!(FAST_POLL_MS < POLL_MS);
 /// The connection parameters of a READ on the fast link: 15 to 30 ms (iOS accepts an interval minimum of 15 ms with a
 /// maximum 15 ms above it), no slave latency, supervision 4 s.
 pub const FAST_PARAMS: ble::ConnParams = (12, 24, 0, 400);
-/// Passes a failed restore of the link parameters is tried again (a BUSY or a time-out), then dropped.
-const RESTORE_TRIES: u8 = 20;
+/// How long (ms of passes) a failed restore of the link parameters is tried again (a BUSY or a time-out), then dropped.
+const RESTORE_MS: u32 = 30_000;
 /// The data length asked for during a READ, octets (the largest, 251).
 const FAST_DLE: u16 = 251;
 /// A transfer whose frame the stack takes for this long is dropped.
@@ -99,7 +99,7 @@ const WINDOW_FAST: u32 = 32 * 1024;
 const WINDOW_SLOW: u32 = 4 * 1024;
 /// The smallest WRITE that asks for the boost: routes are tens of KB, a workout a few hundred bytes, the profile a few
 /// bytes. A short write ends before the phone applies the request, so its give-back would be refused (BUSY) for
-/// [`RESTORE_TRIES`] passes and the link would keep 15 to 30 ms and 2M PHY until the disconnect.
+/// [`RESTORE_MS`] and the link would keep 15 to 30 ms and 2M PHY until the disconnect.
 const WRITE_BOOST: u32 = 8 * 1024;
 /// How long the boost outlives a window's END: the phone's next READ follows at once (one round trip), and giving the
 /// parameters back between windows would cost two radio procedures per window and a slow start for each.
@@ -272,8 +272,8 @@ pub(crate) struct FileSvc {
     pub(crate) link: Option<ble::ConnParams>,
     /// Time left to keep the boost after a window's END (the next READ is expected).
     hold_ms: u32,
-    /// Passes the restore has been tried ([`RESTORE_TRIES`]).
-    restore_tries: u8,
+    /// Time the restore has been tried for ([`RESTORE_MS`]); 0: not yet.
+    restore_ms: u32,
     /// The longest value Data holds (the characteristic's max): the frame never passes it.
     pub(crate) max_frame: usize,
     /// What the link really has (`dev.py info`).
@@ -295,7 +295,7 @@ impl FileSvc {
             mtu: ble::ATT_MTU,
             boosted: false,
             link: None,
-            restore_tries: 0,
+            restore_ms: 0,
             hold_ms: 0,
             max_frame: fs::FRAME_MAX,
             info: LinkInfo {
@@ -324,7 +324,7 @@ impl FileSvc {
     pub(crate) fn link_down(&mut self) {
         self.reset();
         self.info.link_down();
-        (self.mtu, self.boosted, self.link, self.restore_tries) = (ble::ATT_MTU, false, None, 0);
+        (self.mtu, self.boosted, self.link, self.restore_ms) = (ble::ATT_MTU, false, None, 0);
     }
 
     /// A READ runs on a link with a larger MTU: the loop passes quickly.
@@ -864,6 +864,8 @@ impl App {
         let svc = &mut self.phone.files;
         let course = matches!(c, fs::Command::Delete { folder: fs::Folder::Courses, .. })
             || matches!((c, &svc.job), (fs::Command::WriteEnd { .. }, Job::Write { to: Target::Course(_), .. }));
+        let workout = matches!(c, fs::Command::Delete { folder: fs::Folder::Workout, .. })
+            || matches!((c, &svc.job), (fs::Command::WriteEnd { .. }, Job::Write { to: Target::Day(_), .. }));
         match (r, c) {
             (Ok(()), fs::Command::WriteBegin { .. } | fs::Command::WriteCourse { .. }) => svc.reply(seq, Status::Ok, 0),
             (Ok(()), fs::Command::WriteData { .. }) => {}
@@ -886,6 +888,9 @@ impl App {
                 cs.stale = true;
             }
             self.relist_courses(b);
+        }
+        if workout && r.is_ok() {
+            self.plan.day = None; // the cached calendar holds clusters and sizes: read again
         }
     }
 
@@ -993,18 +998,21 @@ impl App {
         self.phone.files.boosted = true;
     }
 
-    /// Gives back what the phone had: its last connection parameters (none known: no update is sent, the link keeps
-    /// what the phone set) and the 1M PHY; the data length stays (it costs nothing idle). A restore that fails (BUSY,
-    /// a time-out) is tried again next pass, [`RESTORE_TRIES`] times.
-    fn unboost(&mut self, b: &mut impl Board, conn: u16) {
+    /// Gives back what the phone had: its last connection parameters (none known: the preferred ones, `PPCP`) and the
+    /// 1M PHY; the data length stays (it costs nothing idle). A restore that fails (BUSY, a time-out) is tried again
+    /// on the passes, for [`RESTORE_MS`] (a count of tries was spent in a second, TX_COMPLETE also calls this).
+    fn unboost(&mut self, b: &mut impl Board, conn: u16, pass: bool) {
+        if !pass && self.phone.files.restore_ms > 0 {
+            return;
+        }
         let rx = &mut self.rx;
-        let link = self.phone.files.link;
-        let param = link.map_or(Ok(()), |p| ble::conn_param_update(b, rx, conn, p));
+        let link = self.phone.files.link.unwrap_or(super::phone::PPCP);
+        let param = ble::conn_param_update(b, rx, conn, link);
         let phy = ble::phy_set(b, rx, conn, 1);
-        let svc = &mut self.phone.files;
-        svc.restore_tries = svc.restore_tries.saturating_add(1);
-        if (param.is_ok() && phy.is_ok()) || svc.restore_tries >= RESTORE_TRIES {
-            (svc.boosted, svc.restore_tries) = (false, 0);
+        let (svc, dt) = (&mut self.phone.files, self.dt_ms);
+        svc.restore_ms = svc.restore_ms.saturating_add(if pass { dt.max(1) } else { 1 });
+        if (param.is_ok() && phy.is_ok()) || svc.restore_ms >= RESTORE_MS {
+            (svc.boosted, svc.restore_ms) = (false, 0);
         }
     }
 
@@ -1016,7 +1024,7 @@ impl App {
         if svc.boosted && !svc.active() && svc.hold_ms > 0 && fast_ok {
             svc.hold_ms = svc.hold_ms.saturating_sub(if pass { dt } else { 0 }); // only a pass's time counts: between two windows
         } else if svc.boosted && (!svc.active() || !fast_ok) {
-            self.unboost(b, conn); // the answer ended (or the row went off): the normal parameters, whatever the way
+            self.unboost(b, conn, pass); // the answer ended (or the row went off): the normal parameters, whatever the way
         }
         if !self.phone.owners_link() || !self.phone.files.active() {
             return;

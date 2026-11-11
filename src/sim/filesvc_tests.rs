@@ -890,27 +890,40 @@ fn a_restore_the_chip_refuses_is_tried_again_and_the_phones_own_parameters_come_
 }
 
 #[test]
-fn a_restore_that_never_works_is_dropped_after_a_bounded_number_of_passes() {
+fn a_restore_that_never_works_is_dropped_after_a_bounded_time() {
     let (mut sim, mut app, control, _, _) = fast_unit(247, 400_000, |_| {});
     start_read(&mut sim, control, 1, BIG);
     pass(&mut sim, &mut app, 400);
     sim.nordic.refuse = Some(0x8f); // the PHY update is always refused
     sim.nordic.phone_write(control, &[3, 9]);
     run(&mut sim, &mut app, 3000);
-    assert!(!app.phone.files.boosted, "20 tries, then given up");
+    assert!(app.phone.files.boosted, "still trying: it is time that counts");
+    run(&mut sim, &mut app, 30_000);
+    assert!(!app.phone.files.boosted, "30 s, then given up");
 }
 
 #[test]
-fn with_no_known_parameters_no_update_is_sent_back() {
+fn with_no_known_parameters_the_preferred_ones_are_sent_back() {
     let (mut sim, mut app, control, _, _) = fast_unit(247, 400_000, |_| {});
     app.phone.files.link = None; // the connect event was lost
     start_read(&mut sim, control, 1, BIG);
     pass(&mut sim, &mut app, 400);
-    let before = sim.nordic.param_updates.len();
     sim.nordic.phone_write(control, &[3, 9]);
     run(&mut sim, &mut app, 400);
     assert!(!app.phone.files.boosted && !sim.nordic.server.radio.phy2);
-    assert_eq!(sim.nordic.param_updates.len(), before, "the link keeps whatever the phone set");
+    let r = &sim.nordic.server.radio;
+    assert!(r.interval_ms == super::ble_sim::HVN_MS && r.latency == 6, "PPCP back, not the fast ones (audit P3)");
+}
+
+/// The chip answers BUSY to the parameter and PHY calls for 1.5 s after a short READ's boost: the give-back is tried
+/// again by time, and the link is normal within seconds (audit P3: 20 tries in a second were spent, the link stayed fast).
+#[test]
+fn a_restore_refused_busy_is_tried_again_by_time() {
+    let (mut sim, mut app, control, _, _) = fast_unit(247, 2000, |_| {});
+    sim.nordic.params_busy_until = sim.ms + 1500;
+    start_read(&mut sim, control, 1, BIG);
+    run(&mut sim, &mut app, 5000);
+    assert!(radio_normal(&sim) && !app.phone.files.boosted, "still fast");
 }
 
 #[test]
@@ -1206,6 +1219,23 @@ fn a_workout_sent_at_either_mtu_is_listed_read_back_whole_and_deleted() {
     assert!(day_files(&sim).is_empty());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(lost0), "its clusters freed");
     assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::NotFound, 0)), "gone");
+}
+
+/// The unit's cached calendar holds each workout's clusters: a workout sent or deleted by the phone drops it (audit P4).
+#[test]
+fn a_workout_sent_or_deleted_by_the_phone_makes_the_calendar_read_again() {
+    let (mut sim, mut app, control, data) = paired();
+    let file = long_workout();
+    app.plan.day = Some(app.date);
+    send_workout(&mut sim, &mut app, (control, data), &file, crc(&file), 14);
+    assert_eq!(app.plan.day, None, "sent");
+    let (listed, _) = list_workouts(&mut sim, &mut app, control, data, 40);
+    let key = listed.iter().find(|e| e.0.bytes().starts_with(b"20261108")).unwrap().0;
+    app.plan.day = Some(app.date);
+    let mut f = [0; 20];
+    let n = Command::Delete { seq: 42, folder: Folder::Workout, key }.encode(&mut f);
+    assert_eq!(answer(&mut sim, &mut app, control, data, &f[..n]), Some((Status::Ok, 1)));
+    assert_eq!(app.plan.day, None, "deleted");
 }
 
 #[test]

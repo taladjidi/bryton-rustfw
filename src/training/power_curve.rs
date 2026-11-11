@@ -243,10 +243,11 @@ pub struct Curve {
 }
 
 impl Curve {
-    /// Keeps a ride's bests where they beat the curve.
+    /// Keeps a ride's bests where they beat the curve; on a tie the earlier day keeps it, whatever the order the rides
+    /// are merged in (the cache is counted newest first).
     pub fn merge(&mut self, best: &[u16; N], day: u16) {
         for ((w, d), &b) in self.watts.iter_mut().zip(&mut self.day).zip(best) {
-            if b > *w {
+            if b > *w || (b > 0 && b == *w && day < *d) {
                 (*w, *d) = (b, day);
             }
         }

@@ -836,7 +836,8 @@ impl Scan {
         self.out = Summary { bytes, ..Summary::default() };
         self.index.clear();
         let n = self.cache.as_ref().map_or(0, |c| c.len);
-        for i in 0..n {
+        for i in (0..n).rev() {
+            // newest first: each insert into the newest-first index appends, shifting nothing
             if let Some(e) = self.cache.as_ref().and_then(|c| c.get(i)) {
                 self.count(&e);
             }

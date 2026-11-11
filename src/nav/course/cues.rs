@@ -546,7 +546,7 @@ impl Course {
     /// [`super::SEARCH_CHUNKS`] chunks nearest along, as the rider's wide search does: a lap course's other laps
     /// cost nothing.
     fn place_near(&self, p: (i32, i32), along: u32) -> Option<(usize, u32)> {
-        let h = self.search(p, along, &mut 0).filter(|h| h.off_m <= CUE_NEAR_M)?;
+        let h = self.search(p, along, &mut 0, None).filter(|h| h.off_m <= CUE_NEAR_M)?;
         Some((h.seg, h.along_m))
     }
 

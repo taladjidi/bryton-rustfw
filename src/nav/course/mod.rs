@@ -91,6 +91,8 @@ pub const SEARCH_S: u32 = 5;
 pub const SEARCH_CHUNKS: usize = 4;
 /// Two passes within this of each other, m, are as near: the first one not behind wins.
 const TIE_M: u32 = 20;
+/// A step between two fixes of at least 5 m (squared) tells the rider's direction; less is jitter.
+const MOVING_M2: i64 = 25;
 
 /// Decimetres to FIT's altitude ((m + 500) x 5), as kept.
 fn enc(dm: i32) -> u16 {
@@ -942,10 +944,23 @@ impl Course {
 
     /// Segment `i`'s nearest point to `p`: squared distance and distance along the course.
     fn on_segment(&self, i: usize, p: (i32, i32)) -> Option<(i64, u32)> {
+        self.on_segment_toward(i, p, None)
+    }
+
+    /// [`Course::on_segment`], but None for a segment that runs against `dir` (the rider's movement, plane metres):
+    /// more than 90 degrees from it.
+    fn on_segment_toward(&self, i: usize, p: (i32, i32), dir: Option<(i32, i32)>) -> Option<(i64, u32)> {
         if self.gap_at(i + 1) {
             return None; // not ridden
         }
         let (&a, &b) = (self.xy.get(i)?, self.xy.get(i + 1)?);
+        if let Some(d) = dir {
+            let dot =
+                (i64::from(b.0) - i64::from(a.0)) * i64::from(d.0) + (i64::from(b.1) - i64::from(a.1)) * i64::from(d.1);
+            if dot < 0 {
+                return None;
+            }
+        }
         let (&da, &db) = (self.dist.get(i)?, self.dist.get(i + 1)?);
         Some(seg_hit(a, b, (da, db), p))
     }
@@ -955,10 +970,22 @@ impl Course {
         nearest_by(|i| self.on_segment(i, p), ranges, along, n)
     }
 
+    /// [`Course::nearest`] among the segments that go the way `dir` does (None: all).
+    fn nearest_toward(
+        &self,
+        p: (i32, i32),
+        ranges: &[core::ops::Range<usize>],
+        along: u32,
+        n: &mut u32,
+        dir: Option<(i32, i32)>,
+    ) -> Option<Hit> {
+        nearest_by(|i| self.on_segment_toward(i, p, dir), ranges, along, n)
+    }
+
     /// The nearest segment among [`SEARCH_CHUNKS`] chunks: of the chunks whose boxes are about as near to `p` as the
     /// nearest box (within [`LOST_M`]), the ones nearest along the course to `along`, where the rider was. On a lap
     /// course every lap's box holds `p`: the nearest box alone would always pick the first laps (review 2).
-    fn search(&self, p: (i32, i32), along: u32, n: &mut u32) -> Option<Hit> {
+    fn search(&self, p: (i32, i32), along: u32, n: &mut u32, dir: Option<(i32, i32)>) -> Option<Hit> {
         let boxes = self.boxes.get(..self.n_boxes).unwrap_or(&[]);
         let box_m = |b: &(i32, i32, i32, i32)| box_m(b, p);
         let near = boxes.iter().map(box_m).min().unwrap_or(u64::MAX).saturating_add(u64::from(LOST_M));
@@ -978,7 +1005,7 @@ impl Course {
             }
         }
         let ranges = pick.map(|(gap, c)| if gap == u32::MAX { 0..0 } else { span(c) });
-        self.nearest(p, &ranges, along, n)
+        self.nearest_toward(p, &ranges, along, n, dir)
     }
 
     /// The rider's fix (degrees x 1e-7), once a second: where `t` is now, and what to say (one thing at a time).
@@ -986,18 +1013,27 @@ impl Course {
         let was = t.off_m.map(|_| t.along_m);
         let o = self.origin.filter(|_| self.len >= 2)?;
         let p = project(o, lat, lon);
+        // the rider's movement since the last fix, when it is clear: a pass that runs against it is the other way of an
+        // out-and-back (joined on the way back, the first fix cannot tell the passes apart)
+        let dir = t
+            .off_m
+            .and(Some((p.0 - t.here.0, p.1 - t.here.1)))
+            .filter(|d| i64::from(d.0) * i64::from(d.0) + i64::from(d.1) * i64::from(d.1) >= MOVING_M2);
         t.here = p;
         let segs = self.len - 1;
         let window = t.seg.saturating_sub(BEHIND)..(t.seg + AHEAD).min(segs);
-        let mut hit = self.nearest(p, &[window], t.along_m, &mut t.examined);
+        let mut hit = self.nearest_toward(p, core::slice::from_ref(&window), t.along_m, &mut t.examined, dir);
         let lost = t.off_m.is_none() || hit.is_none_or(|h| h.off_m > LOST_M);
         if lost && t.lost_s.is_multiple_of(SEARCH_S) {
-            let wide = self.search(p, t.along_m, &mut t.examined);
+            let wide = self.search(p, t.along_m, &mut t.examined, dir);
             if let Some(w) = wide.filter(|w| hit.is_none_or(|h| w.off_m.saturating_add(TIE_M) < h.off_m)) {
                 hit = Some(w);
             }
         }
         t.lost_s = if lost { t.lost_s.saturating_add(1) } else { 0 };
+        if hit.is_none() && dir.is_some() {
+            hit = self.nearest(p, &[window], t.along_m, &mut t.examined); // riding the course backwards: any pass
+        }
         let h = hit?;
         (t.seg, t.along_m, t.off_m) = (h.seg, h.along_m, Some(h.off_m));
         t.joined |= h.off_m <= BACK_M;
@@ -1472,11 +1508,19 @@ pub(crate) mod tests {
             c.follow(&mut t, lat, lon);
             assert!(x > 2985.0 || t.along_m.abs_diff(6005 - x as u32) <= 3, "back at {x}: {t:?}");
         }
-        // joining in the middle: the first pass
+        // joining in the middle: the first fix cannot tell the passes apart (the way out), the next ones can
         let mut t = Tracker::default();
         let (lat, lon) = fix(1500.0, 2.0);
         c.follow(&mut t, lat, lon);
         assert!(t.along_m.abs_diff(1500) <= 3, "{t:?}");
+        // joined on the way back at 1500 m (audit T2): after a few fixes the follower is on the return leg
+        let mut t = Tracker::default();
+        for k in 0..6 {
+            let x = 1500.0 - 8.0 * f64::from(k);
+            let (lat, lon) = fix(x, 3.0);
+            c.follow(&mut t, lat, lon);
+        }
+        assert!(t.along_m.abs_diff(6005 - 1460) <= 4, "on the way back: {t:?}");
     }
 
     /// A loop that starts and ends at the same place: at the start, the start; near the end, the end.

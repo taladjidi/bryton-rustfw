@@ -1096,6 +1096,24 @@ fn a_workout_records_a_lap_per_step() {
     assert_eq!(lap_count(&file), 8);
 }
 
+/// A passing card error is not "no workout today": the calendar is read again a few seconds later (audit S3).
+#[test]
+fn a_calendar_read_error_is_retried() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.plan.day = None;
+    sim.emmc.unreadable = core::iter::once(0..u32::MAX).collect();
+    app.load_calendar(&mut sim);
+    assert_eq!(app.plan.day, None, "not read: not 'rest day'");
+    sim.emmc.unreadable.clear();
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(app.plan.day, Some(app.date), "read again");
+    assert!(app.today().is_some());
+}
+
 /// AUTO OFF never switches off while the recorder holds a ride: a save that keeps failing holds it (the recorder
 /// itself does not retry after a failed end: the rider's GIVE UP SAVE closes it).
 #[test]

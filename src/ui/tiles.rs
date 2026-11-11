@@ -160,6 +160,8 @@ struct Slot {
     key: (u8, u32, u32),
     feats: usize,
     used: u32,
+    /// An IGN tile whose pack entry is damaged: not drawn, and not decoded again until the slot is reused.
+    bad: bool,
 }
 
 /// The basemap: its memory, the volume, the tiles held, and what the pixel buffer holds.
@@ -250,7 +252,7 @@ impl Basemap {
             failed: false,
             io_errors: 0,
             dirs: None,
-            slots: [Slot { key: (0, 0, 0), feats: 0, used: 0 }; SLOTS],
+            slots: [Slot { key: (0, 0, 0), feats: 0, used: 0, bad: false }; SLOTS],
             tick: 0,
             drawn: None,
             map: false,
@@ -258,7 +260,7 @@ impl Basemap {
                 dir: None,
                 packs: [Pack { key: (0, 0, 0), file: None, seek: Seek::new() }; 4],
                 next: 0,
-                tiles: [Slot { key: (0, 0, 0), feats: 0, used: 0 }; RASTERS],
+                tiles: [Slot { key: (0, 0, 0), feats: 0, used: 0, bad: false }; RASTERS],
                 tick: 0,
             },
             osm: Osm { dir: None, packs: [Pack { key: (0, 0, 0), file: None, seek: Seek::new() }; 4], next: 0 },
@@ -432,7 +434,7 @@ impl Basemap {
             let Some((feats, pts)) = words.split_at_mut_checked(FEATS * 4) else { continue };
             let (feats, _) = feats.as_chunks_mut::<4>();
             if let Some(slot) = self.slots.get_mut(s) {
-                *slot = Slot { key: (0, 0, 0), feats: 0, used: self.tick };
+                *slot = Slot { key: (0, 0, 0), feats: 0, used: self.tick, bad: false };
             }
             let name = tile_name(x, y);
             let got = match (dirs, self.osm.find(fat, d, (z, x, y))) {
@@ -452,7 +454,7 @@ impl Basemap {
                 Err(_) => 0, // missing or damaged: drawn empty
             };
             if let Some(slot) = self.slots.get_mut(s) {
-                *slot = Slot { key: (z, x, y), feats, used: self.tick };
+                *slot = Slot { key: (z, x, y), feats, used: self.tick, bad: false };
             }
             self.stats.tiles_read += 1;
             if let Some(a) = at.get_mut(i) {
@@ -672,13 +674,17 @@ impl Ign {
         // the tiles held, then the others into the slots used longest ago (not one of this view's)
         self.tick = self.tick.wrapping_add(1);
         for t in v.tiles.iter_mut().take(v.n) {
-            t.3 = self.tiles.iter().position(|s| s.key == (z, t.0, t.1));
+            t.3 = self.tiles.iter().position(|s| s.key == (z, t.0, t.1) && !s.bad);
             if let Some(s) = t.3.and_then(|s| self.tiles.get_mut(s)) {
                 s.used = self.tick;
             }
         }
         for k in 0..v.n {
             let Some(&(x, y, _, None)) = v.tiles.get(k) else { continue };
+            if self.tiles.iter().any(|s| s.key == (z, x, y) && s.bad) {
+                v.missing = true; // known damaged
+                continue;
+            }
             let Some((i, at)) = self.find(fat, d, (z, x, y))? else {
                 v.missing = true;
                 continue;
@@ -701,11 +707,14 @@ impl Ign {
                 return Err(fat::Error::Io);
             }
             if !whole {
-                v.missing = true; // damaged: stock's map shows there
+                v.missing = true; // damaged: stock's map shows there; remembered, not decoded at every refit
+                if let Some(slot) = self.tiles.get_mut(s) {
+                    *slot = Slot { key: (z, x, y), feats: 0, used: self.tick, bad: true };
+                }
                 continue;
             }
             if let (Some(slot), Some(t)) = (self.tiles.get_mut(s), v.tiles.get_mut(k)) {
-                *slot = Slot { key: (z, x, y), feats: 0, used: self.tick };
+                *slot = Slot { key: (z, x, y), feats: 0, used: self.tick, bad: false };
                 t.3 = Some(s);
             }
             stats.ign_tiles += 1;
@@ -1959,6 +1968,34 @@ pub(crate) mod tests {
             b.render(&mut Ram(img, 0), AREA, v, ORIGIN);
             assert!(matches!(b.layer(AREA, v, ORIGIN), Layer::Map(_)), "damage at {off}");
         }
+    }
+
+    /// A tile whose blob is damaged is decoded once, not again at every refit (audit A8).
+    #[test]
+    fn a_damaged_ign_tile_is_not_decoded_again() {
+        let clean = image_with_packs();
+        let mut d = Ram(clean.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, "Rustfw/Maps/IGN16_1024_1023.PAK").unwrap();
+        let v = View { cx: 100, cy: 50, mpp16: 32, rot: 0 };
+        let mut img = clean.clone();
+        let mut x = 7u32;
+        for off in (8192..8192 + 8192).step_by(512) {
+            let mut s = [0u8; 512];
+            fat.read_at(&mut d, &f, off, &mut s).unwrap();
+            let k = (0..d.0.len() / 512).find(|&k| d.0[k * 512..k * 512 + 512] == s).unwrap();
+            for byte in &mut img[k * 512..k * 512 + 512] {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                *byte = x as u8;
+            }
+        }
+        let mut b = basemap();
+        b.render(&mut Ram(img.clone(), 0), AREA, v, ORIGIN);
+        let first = b.stats.bytes_read;
+        b.render(&mut Ram(img, 0), AREA, View { cx: 90, ..v }, ORIGIN);
+        assert!(first > 0 && b.stats.bytes_read == 0, "{first} then {:?}", b.stats);
     }
 
     /// A tile's files in memory.
