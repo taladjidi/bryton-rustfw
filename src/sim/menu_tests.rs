@@ -814,3 +814,34 @@ fn date_rows_fit_in_each_format() {
         assert!(ui::LABEL.width(label.as_str()) <= ui::W - 8 - 4 - 20 - 2, "{f:?}");
     }
 }
+
+/// A ride paused while its power meter is out of range: the meter's channel rests after its searches time out (60,
+/// 120, 240 s), and when the ride resumes the channel must search again at once, as a ride's Start does. Measured on
+/// the unit 2026-11-11: power came back about 190 s after the restart, inside a 240 s rest.
+#[test]
+fn a_resumed_ride_searches_the_power_meter_at_once() {
+    fn power(_t: u64) -> [u8; 8] {
+        [0x10, 1, 0xff, 85, 0, 0, 210, 0]
+    }
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Power.backup()] = Kind::Power.to_word(SensorId { device: 7, trans: 5 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(app.live.get(Metric::Power), Some(210), "heard");
+    app.start_pause(); // the ride starts
+    run(&mut sim, &mut app, 2000);
+    app.start_pause(); // paused
+    run(&mut sim, &mut app, 1000);
+    let meter = sim.nordic.sensors.pop().expect("the meter");
+    run(&mut sim, &mut app, 400_000); // silent: three timed-out searches, the last rest (240 s) under way
+    assert_eq!(app.live.get(Metric::Power), None, "lost");
+    sim.nordic.sensors.push(meter);
+    app.start_pause(); // resumed
+    let t0 = sim.ms;
+    while app.live.get(Metric::Power).is_none() && sim.ms < t0 + 200_000 {
+        run(&mut sim, &mut app, 250);
+    }
+    let back = sim.ms - t0;
+    assert!(back <= 10_000, "power back {back} ms after the resume");
+}

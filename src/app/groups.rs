@@ -318,8 +318,8 @@ impl Radio {
         (lost, back)
     }
 
-    /// A ride starts: the channels resting search again at the next pass, from the first rest (a strap put on just
-    /// before Start is found at once, not after a long rest).
+    /// A ride starts or resumes: the channels resting search again at the next pass, from the first rest (a strap put
+    /// on just before Start is found at once, not after a long rest; a power meter out of range during a pause, too).
     pub(crate) fn wake_rested(&mut self) {
         for (r, m) in self.resting_ms.iter_mut().zip(&mut self.misses) {
             if *r != u32::MAX {

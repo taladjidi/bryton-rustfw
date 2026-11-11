@@ -27,7 +27,7 @@ pub const SEARCH_REST_MS: u32 = 60_000;
 /// Each search in a row that finds nothing doubles the rest after it, up to this: a sensor left at home (a power
 /// meter on the other bike) then searches about 40 s in 280 instead of 40 in 100 (the chip's high-priority search,
 /// 10 s by default, before the 30 s low-priority one), about 1 mA less per absent sensor (docs/power.md, estimated).
-/// A sensor heard, the rider's own action in SENSORS, or a ride's Start (the channels resting search again at once)
+/// A sensor heard, the rider's own action in SENSORS, or a ride's Start or Resume (the channels resting search again at once)
 /// start from [`SEARCH_REST_MS`] again.
 pub const SEARCH_REST_MAX_MS: u32 = 4 * SEARCH_REST_MS;
 
