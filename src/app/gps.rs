@@ -65,6 +65,7 @@ impl App {
             // off: the start's clock still runs (the files read a few seconds after the start wait on it); the
             // receiver's sequence starts over from 0 when it is switched on
             self.gps.ms = self.gps.ms.saturating_add(self.real_ms);
+            self.gps.ok_speed = None; // no spike check against a speed from before the receiver was off
             return;
         }
         // real time: the receiver's power-up is not hurried by a repaid debt (lib.rs `real_ms`)
@@ -73,6 +74,9 @@ impl App {
         }
         self.gps.ms = self.gps.ms.saturating_add(self.real_ms);
         self.gps.pvt_ms = self.gps.pvt_ms.saturating_add(self.dt_ms);
+        if let Some((_, age)) = self.gps.ok_speed.as_mut() {
+            *age = age.saturating_add(self.dt_ms);
+        }
         let mut send = if self.gps.ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
         self.gps.wait = self.gps.wait.saturating_sub(self.dt_ms);
         if send.is_some() || self.gps.wait == 0 {
@@ -123,6 +127,10 @@ impl App {
                     self.note_ack(a);
                 }
                 if let Some(pvt) = pvt {
+                    let speed = pvt.speed_x10(self.gps.ok_speed);
+                    if speed.is_some() {
+                        self.gps.ok_speed = Some((pvt.speed_mm_s, 0));
+                    }
                     self.gps.pvt = Some(pvt);
                     self.gps.pvt_ms = 0;
                     pvt_read = true;
@@ -137,9 +145,8 @@ impl App {
                         self.track.orient(self.settings.map_up, pvt.heading, pvt.speed_mm_s);
                         self.gps.fixed = true;
                     }
-                    if pvt.good() && !sensor {
-                        // mm/s to km/h x 10
-                        self.live.set(Metric::Speed, (pvt.speed_mm_s * 36 / 1000).min(u32::from(u16::MAX)) as u16);
+                    if let (Some(v), false) = (speed, sensor) {
+                        self.live.set(Metric::Speed, v);
                     }
                 }
             }

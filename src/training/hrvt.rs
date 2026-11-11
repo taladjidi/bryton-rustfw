@@ -48,7 +48,7 @@
 //! recent), trusted from [`MIN_RIDES`] rides.
 
 use crate::math::sqrt;
-use crate::power_curve::FILL_S;
+use crate::power_curve::{FILL_S, hold};
 
 /// The window of alpha1 and of the power paired with it, s.
 pub const WINDOW_S: usize = 120;
@@ -133,6 +133,7 @@ pub struct RideFit {
     sum: u32,
     first: Option<u32>,
     last: Option<u32>,
+    held: Option<(u16, u32)>,
     bins: [Bin; BINS],
     /// Points in all, and those with alpha1 under [`FIT_MAX`].
     all: u32,
@@ -156,10 +157,24 @@ impl RideFit {
             sum: 0,
             first: None,
             last: None,
+            held: None,
             bins: [B; BINS],
             all: 0,
             low: 0,
         }
+    }
+
+    /// One second of power `w` into the window.
+    fn push(&mut self, w: u16) {
+        if self.len == WINDOW_S {
+            self.sum -= u32::from(self.ring.get(self.head).copied().unwrap_or(0));
+        }
+        if let Some(s) = self.ring.get_mut(self.head) {
+            *s = w;
+        }
+        self.sum += u32::from(w);
+        self.head = (self.head + 1) % WINDOW_S;
+        self.len = (self.len + 1).min(WINDOW_S);
     }
 
     /// The record at FIT time `t`, its power and alpha1 x 1000 (records out of order are skipped; a gap over
@@ -174,7 +189,11 @@ impl RideFit {
         self.last = Some(t);
         let first = *self.first.get_or_insert(t);
         let Some(w) = power else {
-            (self.len, self.sum) = (0, 0);
+            // a short dropout holds the last power, as the power curve does
+            match hold(&mut self.held, gap) {
+                Some((w, n)) => (0..n).for_each(|_| self.push(w)),
+                None => (self.len, self.sum) = (0, 0),
+            }
             return;
         };
         let fill = if gap > FILL_S {
@@ -183,17 +202,8 @@ impl RideFit {
         } else {
             gap
         };
-        for _ in 0..fill {
-            if self.len == WINDOW_S {
-                self.sum -= u32::from(self.ring.get(self.head).copied().unwrap_or(0));
-            }
-            if let Some(s) = self.ring.get_mut(self.head) {
-                *s = w;
-            }
-            self.sum += u32::from(w);
-            self.head = (self.head + 1) % WINDOW_S;
-            self.len = (self.len + 1).min(WINDOW_S);
-        }
+        (0..fill).for_each(|_| self.push(w));
+        self.held = Some((w, 0));
         let a1 = alpha1_milli.map(|m| f32::from(m) / 1000.0).filter(|a| *a > 0.0 && *a < 3.0);
         if let Some(x) = a1
             && self.len == WINDOW_S
@@ -458,9 +468,14 @@ pub(crate) mod tests {
     fn dropouts() {
         let mut r = RideFit::new();
         for t in 0..1000u32 {
+            r.sample(t, (t % 100 > 4).then_some(200), Some(700));
+        }
+        assert_eq!(r.all, 0, "never 120 s of power in a row, a dropout of 5 s");
+        let mut r = RideFit::new();
+        for t in 0..1000u32 {
             r.sample(t, (t % 100 != 0).then_some(200), Some(700));
         }
-        assert_eq!(r.all, 0, "never 120 s of power in a row");
+        assert!(r.all > 0, "one second without power is held");
         r.sample(10, Some(200), Some(700));
         assert_eq!(r.last, Some(999));
     }

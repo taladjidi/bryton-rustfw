@@ -123,10 +123,9 @@ fn lap_ends_the_ramp_and_apply_sets_the_ftp() {
     let (x, y) = (60, 290);
     app.input(&mut sim, Input::Touch(Gesture::Tap(x, y)));
     assert_eq!(app.screen(), Screen::Ride(crate::WORKOUT));
-    assert_eq!(app.settings.ftp, (o.ftp + 2) / 5 * 5, "to the setting's 5 W step");
-    assert_eq!(app.notes.text.as_str(), "FTP SET");
-    // kept through a restart (the settings are saved at once)
-    assert_eq!(crate::Settings::from_word(sim.backup[crate::WHEEL_BKP]).ftp, app.settings.ftp);
+    // the ride is open: its TSS and zone times keep one FTP, so the result is held to the setting's 5 W step
+    assert_eq!((app.settings.ftp, app.ramp.held), (ftp, Some((o.ftp + 2) / 5 * 5)));
+    assert_eq!(app.notes.text.as_str(), "FTP SET AFTER THE RIDE");
 }
 
 /// Cadence under 60 rpm for 5 s, and a stop before a whole minute gives no result.

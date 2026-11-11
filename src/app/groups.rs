@@ -132,6 +132,9 @@ pub(crate) struct Gps {
     pub(crate) pvt: Option<gnss::Pvt>,
     /// Since the last fix, ms.
     pub(crate) pvt_ms: u32,
+    /// The last speed taken (mm/s) and its age (ms): what the next fix's speed is checked against
+    /// ([`gnss::Pvt::speed_x10`]).
+    pub(crate) ok_speed: Option<(u32, u32)>,
     /// Since the app's first step: the receiver is powered at [`GNSS_ON_MS`], its configuration and aiding sent
     /// once from [`GNSS_CONFIG_MS`].
     pub(crate) ms: u32,
@@ -183,6 +186,7 @@ impl Gps {
             parser: gnss::Parser::new(),
             pvt: None,
             pvt_ms: 0,
+            ok_speed: None,
             ms: 0,
             sent: 0,
             reconfig: false,
@@ -450,6 +454,8 @@ pub(crate) struct RampState {
     pub(crate) result: Option<ramp::Outcome>,
     /// The result screen is due (shown at the next pass).
     pub(crate) show: bool,
+    /// An APPLY made during the ride: the FTP to set once the ride is over (the ride's TSS and zone times keep one FTP).
+    pub(crate) held: Option<u16>,
 }
 
 /// The ride recorders and what goes with the ride being recorded (app/riding.rs, storage/recorder/mod.rs).

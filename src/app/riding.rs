@@ -753,9 +753,9 @@ impl App {
         if let Some(hold) = self.zones.get_mut(4) {
             hold.update(self.live.shown(Metric::Hr), hm, |v| zt.hr_zone(v));
         }
-        // the time in each zone: the moving seconds, in the zone the bars show (a Start or a resume clears it)
+        // the time in each zone: the moving seconds, in the zone ridden, not the held one the bars show (a Start or a resume clears it)
         if self.ride.state() == ride::State::Running && self.ride.moving() {
-            self.zone_s.second(self.zone_now(4), self.zone_now(0));
+            self.zone_s.second(self.live.shown(Metric::Hr).map(|v| zt.hr_zone(v)), watts[0].map(|w| zt.power_zone(w)));
             self.hrtss.second(self.live.shown(Metric::Hr), max_hr, self.settings.female);
         }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);

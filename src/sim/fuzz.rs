@@ -1686,7 +1686,7 @@ fn ubx_frames() {
     // random bytes, then UBX frames built on purpose (sync, class, id, length, payload, Fletcher checksum): NAV-PVT
     // with random content, other messages, bad checksums, garbage between; random bytes alone never pass the
     // checksum, so the decoder was never reached (code review)
-    let mut pvts = 0;
+    let (mut pvts, mut resyncs) = (0, 0);
     for seed in 1..=4u32 {
         for b in bytes(seed, 1 << 18) {
             if let Some((c, i, p)) = parser.push(b) {
@@ -1703,6 +1703,30 @@ fn ubx_frames() {
             };
             let mut f = std::vec![0xb5, 0x62, class, id, len as u8, (len >> 8) as u8];
             f.extend((0..len).map(|_| r()));
+            if r() % 50 == 0 {
+                // a corrupt header (length 0xffff), noise (no sync byte), then a valid NAV-PVT, all through the shared
+                // parser: the PVT must still come out
+                f.splice(4..6, [0xff, 0xff]);
+                f.truncate(6);
+                f.extend((0..2000).map(|_| r() % 0xb0));
+                let mut g = std::vec![0xb5, 0x62, 0x01, 0x07, 92, 0];
+                g.extend((0..92).map(|_| r()));
+                let (mut a, mut b) = (0u8, 0u8);
+                for &x in &g[2..] {
+                    a = a.wrapping_add(x);
+                    b = b.wrapping_add(a);
+                }
+                g.extend([a, b]);
+                let mut got = None;
+                for x in f.into_iter().chain(g) {
+                    if let Some((c, i, p)) = parser.push(x) {
+                        got = crate::gnss::pvt(c, i, p);
+                    }
+                }
+                assert!(got.is_some(), "the PVT after a corrupt length decodes");
+                resyncs += 1;
+                continue;
+            }
             let (mut a, mut b) = (0u8, 0u8);
             for &x in &f[2..] {
                 a = a.wrapping_add(x);
@@ -1719,7 +1743,7 @@ fn ubx_frames() {
             }
         }
     }
-    assert!(pvts > 1000, "NAV-PVT decoded: {pvts}");
+    assert!(pvts > 1000 && resyncs > 20, "NAV-PVT decoded: {pvts}, corrupt lengths: {resyncs}");
 }
 
 /// GPS POWER AUTO fed rides in stretches of 100 s, each either steady (fast, straight, a good fix) or anything (speed,
