@@ -564,9 +564,14 @@ impl App {
             let mut p = Panel(b, (0, ui::H), self.look());
             match want {
                 Some(a) => {
-                    let old = self.plan.top.filter(|o| o.next == a.next && o.metres == a.metres).map(|o| o.count());
-                    ui::draw_next_strip(
+                    let old = self
+                        .plan
+                        .top
+                        .filter(|o| o.kind == a.kind && o.next == a.next && o.metres == a.metres)
+                        .map(|o| o.count());
+                    ui::draw_strip_msg(
                         &mut p,
+                        a.color(),
                         self.ahead_head(&a).as_str(),
                         a.count().as_str(),
                         old.as_ref().map(|o| o.as_str()),

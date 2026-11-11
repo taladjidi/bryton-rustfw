@@ -185,7 +185,7 @@ fn map_shows_the_last_known_position_until_a_fix() {
     assert_consistent(&sim, &app);
     sim.gnss.fix = Some(5000);
     run(&mut sim, &mut app, 3000);
-    assert!(!app.track.stale() && count(&sim, crate::ui::WHITE) > 20, "the fix: the arrow");
+    assert!(!app.track.stale() && count(&sim, crate::ui::CYAN) > 20, "the fix: the arrow");
     assert_consistent(&sim, &app);
 }
 
@@ -245,7 +245,7 @@ fn map_page_follows_a_ride() {
     assert!(small_px / s < 2000, "{} px/s between full redraws", small_px / s);
     let v = app.map_view(0).unwrap();
     let (x, y) = v.px(area, app.track.pos().unwrap());
-    assert_eq!(sim.screen[(y as u32 * W + x as u32) as usize], crate::ui::WHITE, "the arrow at the position");
+    assert_eq!(sim.screen[(y as u32 * W + x as u32) as usize], crate::ui::CYAN, "the arrow at the position");
     let track = sim.screen.iter().filter(|&&p| p == crate::ui::ACCENT).count();
     assert!(track > 500, "the track drawn: {track} px");
     // the map as one field of three, over speed and heart rate
@@ -676,7 +676,7 @@ fn map_heading_up_turns_the_map() {
     assert!(red > 20, "the north arrow: {red} px");
     let area = crate::map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
     let (x, y) = app.map_view(0).unwrap().px(area, app.track.pos().unwrap());
-    assert_eq!(sim.screen[(y as u32 * W + x as u32) as usize], ui::WHITE, "the arrow at the position");
+    assert_eq!(sim.screen[(y as u32 * W + x as u32) as usize], ui::CYAN, "the arrow at the position");
     // stopped: the course is noise, the orientation stays
     let rot = app.track.rot();
     sim.gnss.fix = Some(300);
