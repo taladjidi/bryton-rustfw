@@ -362,6 +362,28 @@ fn a_folder_with_a_ride_name_is_not_a_ride() {
     assert_eq!(a.end.map(|e| e.0), Some(Status::NotFound));
 }
 
+/// The owner is bonded and opens PAIR; a stranger connects first and pairs Just Works without bonding: its link is
+/// encrypted (level 2) and the owner's bond exists, yet it gets no file (review 2026-11-11: it could read every ride).
+#[test]
+fn a_stranger_pairing_without_bonding_in_the_pair_window_gets_no_file() {
+    let (mut sim, mut app, _, data) = paired();
+    let owners = app.phone.stored.bond.map(|d| d.key);
+    drop_link(&mut sim, u64::MAX);
+    run(&mut sim, &mut app, 500);
+    let mut stranger = PhoneSim::new(false);
+    (stranger.no_bond, stranger.connect_at) = (true, sim.ms + 500);
+    sim.nordic.phone = Some(stranger);
+    app.activate(&mut sim, Menu::Phone, 1); // PAIR
+    run(&mut sim, &mut app, 3000);
+    assert!(sim.nordic.got.iter().any(|p| p[..2] == [0, 0x7f]), "the stranger paired");
+    assert_eq!(app.phone.stored.bond.map(|d| d.key), owners, "the owner's bond is kept");
+    assert_eq!(app.phone.conn, None, "the link its pairing encrypted is dropped");
+    // a write that reached the app before the drop: the link was secure, but not with the bond's key
+    (app.phone.conn, app.phone.secure) = (Some(0), true);
+    app.files_command(&mut sim, &[1, 1]);
+    assert!(drain(&mut sim, data).is_empty() && !app.phone.files.active(), "nothing served");
+}
+
 #[test]
 fn an_encrypted_link_without_the_bond_is_refused() {
     let (mut sim, mut app, control, data) = paired();

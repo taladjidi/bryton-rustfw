@@ -270,6 +270,8 @@ pub struct Nordic {
     pub dead: bool,
     /// A BLE command the chip refuses (NRF_ERROR_NO_MEM), as one whose configuration it lacks would.
     pub refuse: Option<u8>,
+    /// A BLE command the chip takes and never answers (the caller times out). Kept over a reset.
+    pub mute: Option<u8>,
     /// The configurations of the fast link (ids 0x22, 0x23) are refused (NRF_ERROR_NO_MEM): a chip whose RAM, fixed by
     /// Bryton's app, cannot hold them. Kept over a reset.
     pub refuse_fast_cfg: bool,
@@ -1229,7 +1231,8 @@ impl Sim {
             t.hang_up();
         }
         let no_mem = self.nordic.no_mem;
-        let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
+        let (dead, refuse, ant_refuse, mute) =
+            (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse, self.nordic.mute);
         let (die_at_ant, stays_on) = (self.nordic.die_at_ant, self.nordic.stays_on);
         let trainer = std::mem::take(&mut self.nordic.trainer);
         let meter = std::mem::take(&mut self.nordic.meter);
@@ -1245,6 +1248,7 @@ impl Sim {
             stays_on,
             dead,
             refuse,
+            mute,
             ant_refuse,
             sensors,
             trainer,

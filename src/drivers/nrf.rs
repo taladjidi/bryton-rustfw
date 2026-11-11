@@ -71,7 +71,8 @@ pub struct Rx {
     /// The oldest event kept is `kept[head]`: a ring, so a pop moves nothing.
     head: usize,
     kept_n: usize,
-    /// The op of a call that timed out, whose answer may still come: the next call swallows one answer of that op.
+    /// The op of a call that timed out, whose answer may still come: the next call waits for it (and drops it) before
+    /// it sends.
     pub(crate) late: Option<u8>,
     /// ANT queue overflows the SoftDevice reported (EVENT_QUE_OVERFLOW): ANT events lost between the chip and us.
     /// Survives a reset (a count for `dev.py info`, next to the radio resets).
@@ -451,44 +452,41 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
     if rx.broken || rx.stalled {
         return Err(Error::Timeout); // no frame goes to a mis-framed chip; the watchdog resets it (not a time-out)
     }
-    // a failed send leaves `rx.late` as the drain left it (an answer swallowed there stays swallowed)
     let paused = rx.paused_ms;
-    let sent = send(b, rx, payload);
     let op = payload.get(1).copied();
-    // a call that timed out may still be answered: that late answer is not this call's (the next channel's open has
-    // the same op), so one answer of its op is swallowed. If it never came, this call fails once (it swallowed the
-    // real answer) and does not arm another: the next call is clean.
-    let armed = if sent.is_ok() { rx.late.take() } else { None };
-    let mut late = armed;
-    let response = |p: &[u8]| match *p {
-        [RESP, o, ..] if late == Some(o) => {
-            late = None;
-            None
+    // a call that timed out may still be answered, and the chip answers in order: that answer comes before this
+    // one's and must not be taken for it (the next channel's open has the same op). So nothing is sent while it may
+    // still come: it is waited for first (the call's one budget) and dropped. Swallowing it during this call's wait
+    // instead lost the count after two time-outs in a row (the second's answer then went to the third call: frames
+    // lost and doubled, review 2026-11-11). If it never comes, this call fails unsent and the next one is clean.
+    let r = match rx.late.take() {
+        Some(l) if wait(b, rx, TIMEOUT_MS, |p| matches!(*p, [RESP, o, ..] if o == l).then_some(())).is_none() => {
+            Err(Error::Timeout)
         }
-        [RESP, o, r0, r1, r2, r3, ref outputs @ ..] if Some(o) == op => {
-            Some(match u32::from_le_bytes([r0, r1, r2, r3]) {
-                0 => {
-                    let len = outputs.len().min(out.len());
-                    out.iter_mut().zip(outputs).for_each(|(o, &s)| *o = s);
-                    Ok(len)
+        _ => send(b, rx, payload).and_then(|()| {
+            let response = |p: &[u8]| match *p {
+                [RESP, o, r0, r1, r2, r3, ref outputs @ ..] if Some(o) == op => {
+                    Some(match u32::from_le_bytes([r0, r1, r2, r3]) {
+                        0 => {
+                            let len = outputs.len().min(out.len());
+                            out.iter_mut().zip(outputs).for_each(|(o, &s)| *o = s);
+                            Ok(len)
+                        }
+                        code => Err(Error::Code(code)),
+                    })
                 }
-                code => Err(Error::Code(code)),
+                _ => None,
+            };
+            let left = TIMEOUT_MS.saturating_sub(rx.paused_ms - paused);
+            wait(b, rx, left, response).unwrap_or_else(|| {
+                rx.late = op; // sent and not answered: its answer may still come
+                Err(Error::Timeout)
             })
-        }
-        _ => None,
-    };
-    let r = match sent {
-        Ok(()) => {
-            wait(b, rx, TIMEOUT_MS.saturating_sub(rx.paused_ms - paused), response).unwrap_or(Err(Error::Timeout))
-        }
-        Err(e) => Err(e), // the chip took no whole command: nothing to wait for
+        }),
     };
     if r == Err(Error::Timeout) {
         rx.stalled = true;
         rx.timeouts = rx.timeouts.saturating_add(1);
-        if sent.is_ok() {
-            rx.late = op.filter(|_| armed.is_none() || late.is_some()); // not after a swallow
-        }
     }
     if let (Err(e), Some(op)) = (r, op) {
         rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
@@ -1236,9 +1234,31 @@ mod tests {
         assert!(rx.stalled, "the time-out stalls the rest of the pass");
         assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: refused at once");
         rx.span_end(); // the next span
-        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: its answer swallowed");
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: A's answer never came");
         rx.span_end();
         assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "C: clean");
+    }
+
+    /// Two calls in a row answered after their time-out (600 ms): each later call still gets its own answer, never
+    /// the one before's (review 2026-11-11: B's answer went to C, and so on, until the burst ended).
+    #[test]
+    fn two_late_answers_in_a_row_are_never_the_next_calls() {
+        let mut sim = crate::sim::Sim::new(9, 0, 0);
+        let _app = crate::App::start(&mut sim, None);
+        let (mut rx, mut out) = (Rx::new(), [0; 16]);
+        let ask = [CMD, SD_BLE_VERSION_GET, 1];
+        sim.nordic.slow_ms = 600;
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "A: late");
+        rx.span_end();
+        sim.nordic.refuse = Some(SD_BLE_VERSION_GET); // B's answer, when it comes, is a refusal
+        assert_eq!(call(&mut sim, &mut rx, &ask, &mut out), Err(Error::Timeout), "B: late too");
+        rx.span_end();
+        (sim.nordic.slow_ms, sim.nordic.refuse) = (0, None);
+        for c in ["C", "D"] {
+            assert!(call(&mut sim, &mut rx, &ask, &mut out).is_ok(), "{c} gets its own answer, not B's refusal");
+            rx.span_end();
+        }
+        assert_eq!(rx.late, None);
     }
 
     #[test]

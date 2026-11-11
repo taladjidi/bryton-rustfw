@@ -323,6 +323,16 @@ impl Fat {
         Ok(self.fsinfo_read(d)?.map(|(free, _, _)| free).filter(|&n| n <= self.clusters))
     }
 
+    /// [`Fat::free_clusters`]; when FSInfo's count is unknown (0xffffffff, as a formatter may leave it) the FAT is
+    /// counted once ([`Fat::sync_fats`], which writes it). None only without an FSInfo: no room can be promised.
+    pub fn free_clusters_counted(&mut self, d: &mut impl DiskWrite) -> Result<Option<u32>, Error> {
+        if let Some(n) = self.free_clusters(d)? {
+            return Ok(Some(n));
+        }
+        self.sync_fats(d)?;
+        self.free_clusters(d)
+    }
+
     /// The hint where to look for a free cluster: FSInfo's, else the start.
     fn hint(&self, d: &mut impl Disk) -> Result<u32, Error> {
         Ok(self.fsinfo_read(d)?.map_or(2, |(_, next, _)| next))

@@ -72,6 +72,34 @@ fn a_hung_chip_is_reset() {
     sim.gnss.assert_reads(890, 0);
 }
 
+/// The phone's part of the radio set-up times out at every start (a command the chip never answers): during a ride
+/// that is no reason for another reset, each of which would close the sensors' channels; once the ride is saved the
+/// phone is set up again.
+#[test]
+fn a_phone_setup_that_times_out_resets_nothing_during_a_ride() {
+    let (mut sim, mut app) = riding();
+    let t0 = sim.ms - 5000;
+    sim.nordic.mute = Some(0x7c); // sd_ble_gap_device_name_set: the phone set-up's first command
+    sim.nordic.hung = true; // one reset; its restart's phone stage then times out
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(app.watch.resets, 1);
+    assert_eq!(app.phone.link(), Link::NoBle, "the phone's set-up timed out");
+    let mut gaps = 0;
+    for _ in 0..30 * 60 {
+        run(&mut sim, &mut app, 1000);
+        gaps += usize::from(app.live.get(Metric::Hr).is_none());
+    }
+    assert_eq!((app.watch.resets, gaps), (1, 0), "30 minutes: no reset for the phone, the strap heard throughout");
+    ride_ok(&app, t0, &sim);
+    sim.nordic.mute = None;
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 60_000);
+    assert!(app.ride_settled());
+    assert_eq!(app.watch.resets, 2, "after the ride: the reset that sets the phone up again");
+    assert_ne!(app.phone.link(), Link::NoBle);
+}
+
 /// The bonded phone is connected when the chip hangs; after the reset the server is set up again and the unit
 /// advertises for it again; the PHONE menu says so.
 #[test]

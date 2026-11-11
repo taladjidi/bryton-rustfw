@@ -56,6 +56,8 @@ pub struct PhoneSim {
     pub client_mtu: u16,
     /// The LTK it kept from a bond with the unit.
     pub key: Option<[u8; 16]>,
+    /// It pairs Just Works with bonding off: the link is encrypted, no key is kept (a stranger in the PAIR window).
+    pub no_bond: bool,
     pub script: Vec<(u64, Act)>,
     pub db: Vec<Attr>,
     /// What it received: the unit's HID reports and AMS remote commands, the ANCS actions.
@@ -129,6 +131,7 @@ impl PhoneSim {
             connect_at: 0,
             client_mtu: 0,
             key: None,
+            no_bond: false,
             script: Vec::new(),
             db,
             reports: Vec::new(),
@@ -454,6 +457,9 @@ impl Nordic {
             self.queue(&[1, *op, 4, 0, 0, 0]);
             return true;
         }
+        if self.mute == Some(*op) {
+            return true;
+        }
         let ok = |n: &mut Nordic, out: &[u8]| n.queue(&[&[1, *op, 0, 0, 0, 0][..], out].concat());
         let u16_at = |i: usize| u16::from_le_bytes([args[i], args[i + 1]]);
         match *op {
@@ -584,7 +590,10 @@ impl Nordic {
             0x7f => {
                 ok(self, &[]);
                 let Some(mut ph) = self.phone.take() else { return true };
-                if args[2] == 0 {
+                if args[2] == 0 && ph.no_bond {
+                    self.secured(&mut ph);
+                    self.evt(0x19, &[0, 0, 0, 0, 0x11, 0, 0, 0]); // success, not bonded, no keys
+                } else if args[2] == 0 {
                     ph.key = Some(LTK);
                     let mut a = vec![0, 0, 0, 4, 0x03, 0x03, 0x01, 0x03]; // success, bonded
                     a.push(1);

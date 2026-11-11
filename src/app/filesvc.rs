@@ -668,8 +668,8 @@ impl Phone {
 impl App {
     /// The phone wrote Control: a command to answer. Only on the encrypted link (the stack enforces it too).
     pub(crate) fn files_command(&mut self, b: &mut impl Board, written: &[u8]) {
-        // rides are GPS tracks: the bond, not just an encrypted link (Just Works pairing during the PAIR window)
-        if !self.phone.secure || self.phone.stored.bond.is_none() {
+        // rides are GPS tracks: the bond's own link, not just an encrypted one (Just Works pairing in the PAIR window)
+        if !self.phone.owners_link() {
             return;
         }
         let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
@@ -1016,7 +1016,7 @@ impl App {
         } else if svc.boosted && (!svc.active() || !fast_ok) {
             self.unboost(b, conn); // the answer ended (or the row went off): the normal parameters, whatever the way
         }
-        if !self.phone.secure || self.phone.stored.bond.is_none() || !self.phone.files.active() {
+        if !self.phone.owners_link() || !self.phone.files.active() {
             return;
         }
         if !matches!(self.phone.files.job, Job::Idle) && (!self.ride_settled() || self.emmc.lent()) {

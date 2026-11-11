@@ -202,13 +202,13 @@ fn card(e: Error) -> Status {
 }
 
 /// The temporary file made (or the one left kept) and sized for `size` bytes of a file for `to`, the card's room
-/// checked first (the file and the recorder's [`FULL_RESERVE`], FSInfo's count; unknown counts as none): its handle
+/// checked first (the file and the recorder's [`FULL_RESERVE`], FSInfo's count, counted when unknown): its handle
 /// for [`put`].
 pub fn begin(fat: &mut Fat, d: &mut impl DiskWrite, to: &Target, size: u32, t: (u16, u16)) -> Result<Handle, Status> {
     if size == 0 || size > to.max() {
         return Err(Status::BadRequest);
     }
-    let free = fat.free_clusters(d).map_err(card)?.map_or(0, u64::from) * u64::from(fat.cluster_bytes());
+    let free = fat.free_clusters_counted(d).map_err(card)?.map_or(0, u64::from) * u64::from(fat.cluster_bytes());
     if free < u64::from(size) + FULL_RESERVE {
         return Err(Status::Full);
     }
@@ -531,6 +531,12 @@ pub(crate) mod tests {
         assert!(begin(&mut fat, &mut d, &W, workout_file::FILE_MAX as u32, T).is_ok());
         d.0[SECTOR + 488..SECTOR + 492].copy_from_slice(&0u32.to_le_bytes());
         assert_eq!(begin(&mut fat, &mut d, &W, 100, T).err(), Some(Status::Full));
+        // a count left unknown (0xffffffff, as a formatter may leave it) is not "no room": counted, then exact
+        d.0[SECTOR + 488..SECTOR + 492].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(begin(&mut fat, &mut d, &W, 100, T).is_ok(), "an unknown count is counted, not FULL");
+        let (free, info) = crate::fat::write::tests::free_counts(&d.0);
+        assert_eq!(free, info, "FSInfo's count is the FAT's after");
+        assert_eq!(fsck(&d.0), Ok(0));
     }
 
     /// No `\Workout\calendar` on the card: BEGIN is NOT FOUND and writes nothing.
