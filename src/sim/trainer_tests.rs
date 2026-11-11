@@ -987,9 +987,7 @@ fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
     run(&mut sim, &mut app, 1000);
     super::tests::assert_consistent(&sim, &app);
     sim.save("main_menu_trainer");
-    for _ in 0..5 {
-        app.press(&mut sim, Press::Short(Key::Page)); // SENSORS
-    }
+    super::menu_tests::to_row(&mut sim, &mut app, crate::menu::Row::Open(Menu::Sensors));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, 0));
     app.press(&mut sim, Press::Short(Key::Start)); // TRAINER CONTROL, its first row

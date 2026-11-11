@@ -528,7 +528,7 @@ MENU
    +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
    +- WORKOUT >        while a step runs: NEXT STEP (makes a lap, through `step_lap`, as the Lap key does), STOP WORKOUT (the ride goes on)
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on), REVERSE COURSE
-   +- COURSES >        pick or switch a course (not on a virtual ride, which picks through WORKOUTS > RIDE A COURSE)
+   +- COURSES >        pick or switch a course (not on a virtual ride, which picks through WORKOUTS > TRAINER COURSE)
    +- WORKOUTS >       the planned workouts, RAMP TEST, RIDE A COURSE
    +- SENSORS >        the same menu as off the ride
    +- BRIGHTNESS       changed in place

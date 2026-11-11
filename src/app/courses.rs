@@ -236,7 +236,15 @@ impl App {
         if c.measuring() && !matches!(self.screen, Screen::Menu(Menu::Courses, _)) {
             return; // the lengths only while the list shows
         }
-        match c.step(&mut emmc::Volume(&mut self.emmc, b), budget) {
+        let measuring = c.measuring();
+        let step = c.step(&mut emmc::Volume(&mut self.emmc, b), budget);
+        // a length that came in is drawn in this pass, not at the next throttled list redraw: a screenshot taken
+        // between the two disagreed with the panel
+        if let (true, Screen::Menu(Menu::Courses, sel)) = (measuring, self.screen) {
+            self.update_menu_rows(b, Menu::Courses, sel);
+            self.redraw_ms = 0;
+        }
+        match step {
             storage::course_file::Progress::Loaded(true) => {
                 self.say("COURSE ON");
                 if self.courses.as_deref_mut().is_some_and(|c| core::mem::take(&mut c.ride_it)) {
@@ -450,6 +458,17 @@ impl App {
                 value.push_str(" KM");
             }
             None => value.push_str("--"),
+        }
+        // a name that repeats says what tells it apart: the file's kind, else its place among the same names
+        let same = |o: &&storage::course_file::Entry| o.name() == e.name();
+        let all = (0..c.list.len()).filter_map(|i| c.list.get(i));
+        if all.clone().filter(same).count() > 1 {
+            if all.clone().filter(same).any(|o| o.gpx != e.gpx) {
+                value.push_str(if e.gpx { " GPX" } else { " FIT" });
+            } else {
+                value.push_str(" #");
+                value.push_u32(1 + all.take(k).filter(same).count() as u32);
+            }
         }
         Some(if c.on == Some(e.file) { ui::GREEN } else { ui::WHITE })
     }

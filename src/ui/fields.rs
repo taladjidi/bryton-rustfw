@@ -931,6 +931,7 @@ pub fn draw_zone_bar(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), co
 }
 
 /// A field's frame with its zone bar (`bar`; BLACK: none), for the plain power and heart rate fields.
+#[cfg(test)]
 pub fn draw_field_frame_bar(
     c: &mut impl Canvas,
     bx: (u32, u32, u32, u32),
@@ -945,7 +946,13 @@ pub fn draw_field_frame_bar(
 }
 
 /// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label (none on a map).
-pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, units: (bool, bool)) {
+#[cfg(test)]
+pub fn draw_field_frame(c: &mut impl Canvas, bx: (u32, u32, u32, u32), field: Field, units: (bool, bool)) {
+    draw_field_frame_as(c, bx, field, field.label_in(units.0, units.1));
+}
+
+/// [`draw_field_frame_as`] with `label` for the field's own (NEXT TURN says TO START while the way to the start shows).
+pub fn draw_field_frame_as(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, label: &str) {
     if x + w < W {
         c.fill(x + w - 1, y, 1, h, GREY);
     }
@@ -954,14 +961,21 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     }
     if !field.is_picture() {
         let bar = c.theme().zone_bar;
-        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + bar + 1, Align::Left, field.label_in(units.0, units.1));
+        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + bar + 1, Align::Left, label);
     }
+}
+
+/// A field's label changed alone (NEXT TURN to TO START): its own box cleared, the new one drawn.
+pub fn redraw_field_label(c: &mut impl Canvas, (x, y, _, _): (u32, u32, u32, u32), was: &str, label: &str) {
+    let bar = c.theme().zone_bar;
+    c.fill(x + 6, y + bar + 1, LABEL.width(was).max(LABEL.width(label)), LABEL.height(), BLACK);
+    text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + bar + 1, Align::Left, label);
 }
 
 /// Width of the page editor's frame round the selected cell (UI review 2, 5.2 point 5).
 pub const FRAME: u32 = theme::FRAME.1;
 
-/// The inside of a field box: without its rules (right and bottom edges, [`draw_field_frame`]).
+/// The inside of a field box: without its rules (right and bottom edges, [`draw_field_frame_as`]).
 pub fn box_inside((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
     (x, y, w - u32::from(x + w < W), h - u32::from(y + h < H - 2))
 }

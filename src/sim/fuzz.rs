@@ -2418,7 +2418,7 @@ const MENU_TREE_OWNED: [(&str, u32); 33] = [
     ("Courses", 3),
     ("switch rows", 3),
     ("shown", 0),
-    ("moved", 2),
+    ("moved", 3),
     ("renamed", 0),
     ("ride a course picked", 0),
     ("course picked in a ride", 0),

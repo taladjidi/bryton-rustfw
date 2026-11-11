@@ -478,7 +478,7 @@ fn menu_tree_reaches_everything() {
         let page_row = matches!(row, Row::Layout(_) | Row::EditPage(_) | Row::Field(..));
         assert!(d <= 3 + usize::from(page_row), "{row:?}: {d} levels down");
     }
-    assert_eq!(level(Row::Phone(PhoneRow::Forget)), Some(3), "SENSORS > PHONE");
+    assert_eq!(level(Row::Phone(PhoneRow::Forget)), Some(2), "MENU > PHONE (it is on MAIN)");
     // the readings (diagnostics, nothing to set): under SYSTEM
     for r in menu::BUILT_IN.iter().chain(&menu::GPS) {
         assert_eq!(level(Row::Read(*r)), Some(4), "{r:?}: MENU > SETTINGS > SYSTEM > ...");
