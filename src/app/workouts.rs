@@ -576,9 +576,9 @@ impl App {
 
     /// A gauge's title, and its tag (the pacer's target in a box too short for the target line). The pacer's: "TOP"
     /// and the time left to the top.
-    fn gauge_title(g: &GaugeShown, h: u32) -> (Line<12>, Line<4>) {
+    fn gauge_title(g: &GaugeShown, h: u32) -> (Line<12>, Line<6>) {
         use storage::workout_file::Kind;
-        let (mut title, mut tag) = (Line::<12>::new(), Line::<4>::new());
+        let (mut title, mut tag) = (Line::<12>::new(), Line::<6>::new());
         match g.kind {
             _ if g.pace.is_some() => {
                 title.push_str("TOP");
@@ -591,6 +591,7 @@ impl App {
                 }
                 if let Some((lo, hi)) = g.band.filter(|_| h < 100) {
                     tag.push_u32((u32::from(lo) + u32::from(hi)) / 2);
+                    tag.push_str("W");
                 }
             }
             Kind::Hr => title.push_str("HR"),

@@ -481,6 +481,8 @@ pub(crate) struct Recording {
     pub(crate) model: Option<(u16, u16, bool)>,
     /// Both copies' card errors as [`App::step_recorder`] last saw them.
     pub(crate) errors_seen: u32,
+    /// Whether AUTO PAUSED was said and RESUMED not yet, and the seconds in a row the ride has differed from that.
+    pub(crate) auto_said: (bool, u8),
 }
 
 impl Recording {
@@ -491,6 +493,7 @@ impl Recording {
             resume_pending: false,
             full: recorder::Recorder::of(recorder::Kind::Full),
             full_pending: false,
+            auto_said: (false, 0),
             lag_s: 0,
             counted_s: rtc_s,
             model: None,

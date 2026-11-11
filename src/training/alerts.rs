@@ -170,9 +170,10 @@ impl Alert {
         Alert::Sunset,
     ];
 
-    /// Whether this one is an alarm (a limit passed, red) and not a reminder.
+    /// Whether this one is an alarm (red): the heart rate over its limit. The other limits are orange, red being for
+    /// alarms only.
     pub fn alarm(self) -> bool {
-        !matches!(self, Alert::Eat | Alert::Drink | Alert::Dist | Alert::Kcal | Alert::Kj | Alert::Sunset)
+        self == Alert::HrHigh
     }
 
     /// Whether `text` is one of the banners of an alert.
@@ -415,6 +416,14 @@ impl Alerts {
 mod tests {
     extern crate std;
     use super::*;
+
+    /// Red is for alarms: of the alerts, only the heart rate over its limit.
+    #[test]
+    fn only_hr_high_is_an_alarm() {
+        for a in Alert::ALL {
+            assert_eq!(a.alarm(), a == Alert::HrHigh, "{a:?}");
+        }
+    }
 
     #[test]
     fn heart_rate_alert_does_not_nag() {

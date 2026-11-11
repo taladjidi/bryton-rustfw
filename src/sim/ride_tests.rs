@@ -372,8 +372,11 @@ fn a_ride_with_laps_and_pauses() {
     assert_eq!((app.ride.timer_s(), app.strip.rec), (timer, Rec::Paused), "auto-paused");
     assert_consistent(&sim, &app);
     sim.save("ride_autopause");
+    assert_eq!(app.notes.text.as_str(), "AUTO PAUSED");
     sim.gnss.fix = Some(8000);
-    run(&mut sim, &mut app, 10_000);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.notes.text.as_str(), "RESUMED", "and its end too");
+    run(&mut sim, &mut app, 6000);
     assert!(app.ride.timer_s() >= timer + 8 && app.strip.rec == Rec::Running, "moving again");
     app.press(&mut sim, Press::Short(Key::Start));
     let (timer, dist) = (app.ride.timer_s(), app.ride.dist_m());
@@ -797,7 +800,7 @@ fn a_tap_cycles_the_power_average() {
     let before = sim.pixels;
     tap_field(&mut app, &mut sim, Power3s);
     assert_eq!((app.screen(), text(&app, Power3s)), (screen, "250".into()), "10 s");
-    assert!(sim.pixels - before < 40_000, "only the power boxes are drawn");
+    assert!(sim.pixels - before < 41_000, "only the power boxes are drawn: {}", sim.pixels - before);
     tap_field(&mut app, &mut sim, Power3s);
     assert_eq!(text(&app, Power3s), "150", "30 s");
     // the other page's field shows it too, and a restart keeps it

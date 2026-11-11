@@ -440,7 +440,7 @@ fn power_high_alert_shows_the_banner() {
         assert_ne!(app.notes.text.as_str(), "POWER HIGH", "second {s}: not before the hold");
     }
     run(&mut sim, &mut app, 4000);
-    assert_eq!(app.notes.text.as_str(), "POWER HIGH");
+    assert_eq!((app.notes.text.as_str(), app.notes.kind), ("POWER HIGH", crate::Banner::Ride), "orange, not red");
     assert!(sim.tones.len() > t0, "the beeps");
     sim.save("alert_power_high");
 }

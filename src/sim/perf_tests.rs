@@ -248,7 +248,7 @@ fn perf_budgets() {
         ("course profile", [profile, values, map], 0, None, false, (800, 10)),
         // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
         // NEXT TURN's last digit (1548 before it), the turn's two banners; 3412, 15 with the CLIMB page opening at the climb's start (one whole page)
-        ("course page", [values, graph, map], crate::COURSE, None, false, (3_600, 20)),
+        ("course page", [values, graph, map], crate::COURSE, None, false, (3_700, 20)), // the pacer's countdown at 2x
         // 14476, 58 (3532, 42 before the arrow's spot, 2026-11-11; 4563, 44 before the wider margin): zoomed in at 1.5 m a pixel (map.rs MIN_LEVEL),
         // following the rider: a whole map at each re-centre (about every 5 s at 8 m/s)
         ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), false, (15_900, 70)),

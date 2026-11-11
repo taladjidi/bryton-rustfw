@@ -83,7 +83,7 @@ fn the_ready_card_lists_gps_sensors_and_battery_and_never_delays_the_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.ride.state(), ride::State::Running, "recording from the press");
     assert_eq!(app.notes.kind, Banner::Ready);
-    assert_eq!(app.notes.text.as_str(), "GPS NO  BAT 12%\nLOW BATT NO POWER");
+    assert_eq!(app.notes.text.as_str(), "NO GPS  BATT 12 %\nLOW BATT NO POWER");
     run(&mut sim, &mut app, 500);
     sim.save("ready_card");
     app.press(&mut sim, Press::Short(Key::Start));
@@ -99,7 +99,7 @@ fn the_ready_card_lists_gps_sensors_and_battery_and_never_delays_the_ride() {
     app.radio.heard_ms[Kind::Hr as usize] = 100;
     app.strip.battery = Some(80);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.notes.text.as_str(), "GPS YES  BAT 80%\nHR OK");
+    assert_eq!(app.notes.text.as_str(), "GPS OK  BATT 80 %\nHR OK");
     run(&mut sim, &mut app, READY_BANNER_MS as u64 + 500);
     assert_eq!(app.notes.ms, None);
     // off: the usual banner
