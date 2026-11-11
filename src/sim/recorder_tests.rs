@@ -2039,3 +2039,31 @@ fn the_utc_offset_is_not_learnt_mid_ride() {
     }
     assert_eq!(app.gps.aid.offset_15min, Some(8), "learnt at a fix once the ride is saved");
 }
+
+/// The review of 5f589691: a resume with the clock a few minutes behind the ride's last record (stock moved the RTC
+/// back). The full copy has every second the clean one has: it recorded the clamped seconds, then dropped 120 s once
+/// the clock came within two checkpoints of its last record.
+#[test]
+fn a_resume_with_the_clock_behind_keeps_every_second_in_the_full_copy() {
+    let (mut sim, mut app, name, _) = ride_70s();
+    run(&mut sim, &mut app, 55_000); // past the second checkpoint: the last record about 09:02:06
+    let mut sim2 = Sim::new(8, 58, 0); // about 4 min behind
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    (sim2.emmc.rel_param, sim2.emmc.rel_sectors) = (sim.emmc.rel_param, sim.emmc.rel_sectors);
+    sim2.backup = sim.backup;
+    let mut sim = sim2;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 480_000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    let clean = record_times(&sim.emmc.image, &std::format!("Activities/{name}.fit"));
+    let full = record_times(&sim.emmc.image, &std::format!("Rustfw/Activities/{name}.fit"));
+    assert!(clean.len() >= 120 + 470, "{} clean records", clean.len());
+    assert!(full.windows(2).all(|p| p[1] > p[0]), "full copy in order");
+    assert!(full.len() + 2 >= clean.len(), "{} full records of {}", full.len(), clean.len());
+}

@@ -1062,3 +1062,47 @@ fn gauge_fields() {
     run(&mut sim, &mut app, 5000);
     assert!(sim.pixels - px < 3000, "a lost strap costs nothing more: {} px", sim.pixels - px);
 }
+
+/// The review of 5f589691 (T4): the time in zones and the hrTSS go on from the recovery record after a reset. A ride
+/// with a strap, the unit reset after a checkpoint, then 40 s more: each zone's time and the hrTSS at least
+/// what they were at that checkpoint (they restarted from zero before).
+#[test]
+fn zone_times_and_hrtss_go_on_after_a_reset() {
+    let strap = |sim: &mut Sim| {
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp, network: 0, ack: &[] });
+        sim.gnss.fix = Some(8000);
+    };
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    strap(&mut sim);
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    // the totals as the last card write before the reset (the checkpoint, which the full copy's beats may bring
+    // earlier than a minute) left them: what the record holds
+    let mut before = (app.zone_s, app.hrtss.sum);
+    for _ in 0..1300 {
+        let written = sim.sectors_written;
+        run(&mut sim, &mut app, 100);
+        if sim.sectors_written != written {
+            before = (app.zone_s, app.hrtss.sum);
+        }
+    }
+    assert!((1..=5).filter(|&z| before.0.hr_s(z) > Some(0)).count() >= 3 && before.1 > 0, "{before:?}");
+    let mut sim2 = Sim::new(9, 2, 15);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    (sim2.emmc.rel_param, sim2.emmc.rel_sectors) = (sim.emmc.rel_param, sim.emmc.rel_sectors);
+    sim2.backup = sim.backup;
+    strap(&mut sim2);
+    let mut sim = sim2;
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+    run(&mut sim, &mut app, 40_000);
+    assert_eq!(app.ride.state(), ride::State::Running, "not paused by hand: on again by itself once riding");
+    for z in 1..=5 {
+        assert!(app.zone_s.hr_s(z) >= before.0.hr_s(z), "zone {z}: {:?} of {:?}", app.zone_s, before.0);
+    }
+    assert!(app.hrtss.sum >= before.1, "hrTSS {} of {}", app.hrtss.sum, before.1);
+}

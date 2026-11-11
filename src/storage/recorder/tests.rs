@@ -4265,3 +4265,16 @@ fn a_ride_kept_under_its_alias_says_that_name() {
     assert_eq!(check_clean(&d.img, "kept under its alias"), 0);
     assert_eq!(Recorder::new().recover(&mut d, local(SECS + 6)), Outcome::Nothing);
 }
+
+/// A full copy resumed (`skip_to` its last record), then a new ride started a little before that time (a clock set
+/// back by under two checkpoints): `start` forgets the resumed ride's skip, every second of the new one recorded.
+#[test]
+fn a_new_ride_forgets_the_resumed_full_copys_skip() {
+    let mut r = Recorder::of(Kind::Full);
+    r.skip_to = T0 + 1000;
+    r.start(T0 + 970, *b"261023100000", false);
+    for t in 970..=1000 {
+        r.second(&sample(t), [0; RIDE_WORDS]);
+    }
+    assert_eq!(r.since, 31, "every second recorded");
+}

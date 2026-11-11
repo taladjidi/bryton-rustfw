@@ -458,7 +458,7 @@ Details: timer stop_all and start events with timer_trigger auto at each stop an
 Seen: simulator only, with the RTC back at 2000-01-01 and stopped until the boot starts it (lib.rs `begin`, main.rs `rtc_start`, BOARD.md 8).
 
 On the unit, with the owner:
-1. Before and after a full drain, a `tools/dev.py peek` of RCC_BDCR (0x58024470: LSEON, LSERDY, RTCSEL, RTCEN) and RTC_PRER (0x58004010): whether the drain resets the backup domain at all (no coin cell seen), and the values stock leaves (its LSE drive, LSEDRV bits 3..4).
+1. Before and after a full drain, a `tools/dev.py peek` of RCC_BDCR (0x58024470: LSEON, LSERDY, RTCSEL, RTCEN) and RTC_PRER (0x58004010): whether the drain resets the backup domain at all (no coin cell seen), and the values stock leaves. Silent, any time: a peek of RCC_BDCR on a normal boot after stock, to read stock's LSE drive (LSEDRV, bits 3..4). This firmware starts the LSE at the lowest drive (the reset value): if the crystal needs more, a boot after a backup domain loss shows CLOCK NOT RUNNING, and `rtc_start` must set stock's drive.
 2. A ride recorded a few minutes, the battery run flat (or VBAT cut), the boot: no CLOCK NOT RUNNING, the clock counting from 2000-01-01, RIDE RESUMED, paused at the last checkpoint, then the save; both copies (`\Activities`, `\Rustfw\Activities`) with records after the resume, and the next ride's full copy with records too.
 3. A first start of this firmware on a unit that never ran it: nothing resumed, stock's settings imported.
 

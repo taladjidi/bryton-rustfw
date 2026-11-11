@@ -935,6 +935,9 @@ impl Recorder {
         if self.kind == Kind::Full && s.time <= self.skip_to && self.skip_to - s.time <= 2 * CHECKPOINT_S {
             return;
         }
+        // past the overlap once (the app's times only go on): a clock set back a few minutes must not reach the
+        // window later and drop its seconds
+        self.skip_to = 0;
         let time = if s.time > self.last_rec { s.time } else { self.last_rec + 1 };
         if core::mem::take(&mut self.gap) && self.writer.paused() {
             self.put(16, |w, sink| w.resume(sink, time)); // the ride recorded from here (a start put off)
