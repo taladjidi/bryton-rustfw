@@ -1681,7 +1681,7 @@ fn ubx_frames() {
     // random bytes, then UBX frames built on purpose (sync, class, id, length, payload, Fletcher checksum): NAV-PVT
     // with random content, other messages, bad checksums, garbage between; random bytes alone never pass the
     // checksum, so the decoder was never reached (code review)
-    let mut pvts = 0;
+    let (mut pvts, mut resyncs) = (0, 0);
     for seed in 1..=4u32 {
         for b in bytes(seed, 1 << 18) {
             if let Some((c, i, p)) = parser.push(b) {
@@ -1698,6 +1698,15 @@ fn ubx_frames() {
             };
             let mut f = std::vec![0xb5, 0x62, class, id, len as u8, (len >> 8) as u8];
             f.extend((0..len).map(|_| r()));
+            if r() % 50 == 0 {
+                // a corrupt header (length 0xffff) and noise: the next valid frame must still come out
+                f.splice(4..6, [0xff, 0xff]);
+                let mut p = crate::gnss::Parser::new();
+                f.iter().take(6).for_each(|&x| _ = p.push(x));
+                assert!(p.idle(), "an over-long length resyncs");
+                resyncs += 1;
+                continue;
+            }
             let (mut a, mut b) = (0u8, 0u8);
             for &x in &f[2..] {
                 a = a.wrapping_add(x);
@@ -1714,7 +1723,7 @@ fn ubx_frames() {
             }
         }
     }
-    assert!(pvts > 1000, "NAV-PVT decoded: {pvts}");
+    assert!(pvts > 1000 && resyncs > 20, "NAV-PVT decoded: {pvts}, corrupt lengths: {resyncs}");
 }
 
 /// GPS POWER AUTO fed rides in stretches of 100 s, each either steady (fast, straight, a good fix) or anything (speed,

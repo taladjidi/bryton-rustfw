@@ -126,6 +126,16 @@ impl<const L: usize> Ring<L> {
     }
 }
 
+/// A record without power after `gap` seconds: the power to repeat for those seconds, or None when the dropout, with
+/// those before it since the last power, passes [`FILL_S`] (the efforts end). `held` is the last power and the seconds
+/// already held.
+pub(crate) fn hold(held: &mut Option<(u16, u32)>, gap: u32) -> Option<(u16, u32)> {
+    let (w, n) = (*held)?;
+    let n = n.saturating_add(gap);
+    *held = (n <= FILL_S).then_some((w, n));
+    held.map(|_| (w, gap))
+}
+
 /// One ride's best powers, computed as the samples come.
 pub struct Rolling {
     fine: Ring<FINE>,
@@ -135,6 +145,8 @@ pub struct Rolling {
     acc: u32,
     in_block: u32,
     last: Option<u32>,
+    /// The last power and the seconds of dropout filled with it since ([`hold`]).
+    held: Option<(u16, u32)>,
     /// The ride's best average power per duration ([`DURATIONS`]), W; 0: not held that long.
     pub best: [u16; N],
 }
@@ -148,7 +160,16 @@ impl Default for Rolling {
 impl Rolling {
     /// No ride yet.
     pub const fn new() -> Self {
-        Rolling { fine: Ring::new(), coarse: Ring::new(), sums: [0; N], acc: 0, in_block: 0, last: None, best: [0; N] }
+        Rolling {
+            fine: Ring::new(),
+            coarse: Ring::new(),
+            sums: [0; N],
+            acc: 0,
+            in_block: 0,
+            last: None,
+            held: None,
+            best: [0; N],
+        }
     }
 
     /// A new ride: its bests and its windows cleared.
@@ -160,6 +181,7 @@ impl Rolling {
     /// The efforts start again (a gap, a dropout).
     fn restart(&mut self) {
         (self.fine.len, self.coarse.len, self.sums, self.acc, self.in_block) = (0, 0, [0; N], 0, 0);
+        self.held = None;
     }
 
     /// The record at FIT time `t`, with its power if it has one (records out of order are skipped).
@@ -180,7 +202,11 @@ impl Rolling {
         };
         self.last = Some(t);
         let Some(w) = power else {
-            return self.restart(); // a dropout ends the efforts
+            // a short dropout holds the last power (NP counts it too); a long one ends the efforts
+            return match hold(&mut self.held, gap) {
+                Some((w, n)) => (0..n).for_each(|_| self.push(w)),
+                None => self.restart(),
+            };
         };
         let fill = if gap > FILL_S {
             self.restart();
@@ -191,6 +217,7 @@ impl Rolling {
         for _ in 0..fill {
             self.push(w);
         }
+        self.held = Some((w, 0));
     }
 
     fn push(&mut self, w: u16) {
@@ -378,6 +405,16 @@ mod tests {
         }
     }
 
+    /// One record without power in an hour at 200 W does not restart the bests.
+    #[test]
+    fn one_dropout_keeps_the_hour() {
+        let mut r = Rolling::new();
+        for t in 0..3600 {
+            r.sample(t, (t != 1000).then_some(200));
+        }
+        assert!(r.best[N - 1] >= 199, "the longest window is {} W", r.best[N - 1]);
+    }
+
     /// A pause ends the efforts; a dropout too; a short gap is filled; samples out of order are skipped.
     #[test]
     fn gaps() {
@@ -391,9 +428,14 @@ mod tests {
         assert_eq!((r.best[2], r.best[3]), (300, 0), "15 s held, 30 s not across the stop");
         r.reset();
         for t in 0..40 {
+            r.sample(t, (!(20..25).contains(&t)).then_some(300));
+        }
+        assert_eq!((r.best[2], r.best[3]), (300, 0), "a dropout of 5 s");
+        r.reset();
+        for t in 0..40 {
             r.sample(t, (t != 20).then_some(300));
         }
-        assert_eq!((r.best[2], r.best[3]), (300, 0), "a dropout");
+        assert_eq!(r.best[3], 300, "one second without power is held");
         r.reset();
         for t in (0..60).step_by(2) {
             r.sample(t, Some(300));

@@ -2030,3 +2030,20 @@ fn a_ride_cuts_the_backoff_short() {
     assert_ne!(app.rec.clean.phase(), crate::recorder::Phase::Starting);
     assert_ne!(app.rec.full.phase(), crate::recorder::Phase::Starting);
 }
+
+/// A power meter that sends no cadence leaves the trainer's cadence on the page; one that sends it keeps its own.
+#[test]
+fn trainer_cadence_shows_beside_a_meter_without_cadence() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.trainer.reading.cadence = Some(85);
+    *app.radio.heard_ms.at_mut(Kind::Power) = 0;
+    app.fold_trainer();
+    assert_eq!(app.live.get(Metric::Cadence), Some(85), "no meter cadence: the trainer's");
+    app.live.set(Metric::Cadence, 70); // the meter sends one
+    app.fold_trainer();
+    assert_eq!(app.live.get(Metric::Cadence), Some(70), "the meter's, under a second old, stands");
+    app.live.tick(1500);
+    app.fold_trainer();
+    assert_eq!(app.live.get(Metric::Cadence), Some(85), "the meter went quiet on cadence");
+}

@@ -1087,9 +1087,19 @@ impl App {
         }
     }
 
+    /// FTP, max HR and LTHR score the whole ride (TSS, zone times): not edited while one is open, as the bike is not.
+    pub(crate) fn frozen_in_ride(&self, s: menu::Setting) -> bool {
+        matches!(s, menu::Setting::Ftp | menu::Setting::MaxHr | menu::Setting::Lthr)
+            && self.ride.state() != ride::State::Idle
+    }
+
     /// Select on a setting: a number starts or ends its editing, a choice cycles.
     fn activate_setting(&mut self, b: &mut impl Board, s: menu::Setting) {
         if !self.menu.editing && s != menu::Setting::Altitude && !self.settings_ready(b) {
+            return;
+        }
+        if !self.menu.editing && self.frozen_in_ride(s) {
+            self.say("NOT DURING A RIDE");
             return;
         }
         if s.number().is_some() {

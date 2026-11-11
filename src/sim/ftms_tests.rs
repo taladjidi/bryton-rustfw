@@ -79,7 +79,7 @@ fn the_trainer_and_the_phone_at_once() {
     let live = |app: &App, m| app.live.get(m);
     assert_eq!(
         [Metric::Power, Metric::Cadence, Metric::Speed].map(|m| live(&app, m)),
-        [Some(150), Some(90), Some(226)]
+        [Some(150), Some(90), Some(227)]
     );
     assert_eq!(app.trainer.reading.modes, Some(7), "its Feature: resistance, power, simulation");
     let row =
@@ -194,7 +194,7 @@ fn a_forgotten_subscription_and_split_records() {
     assert!(t.control && t.on(FT_CP, 2), "subscribed again and in control");
     assert_eq!(t.got, [vec![0x00], vec![0x04, 0]], "the refused write is not a procedure; then the release");
     assert_eq!(app.live.get(Metric::Cadence), Some(90), "from the first half");
-    assert_eq!((app.live.get(Metric::Power), app.live.get(Metric::Speed)), (Some(150), Some(226)), "the second");
+    assert_eq!((app.live.get(Metric::Power), app.live.get(Metric::Speed)), (Some(150), Some(227)), "the second");
 }
 
 /// A trainer that refuses the control is read without it, and nothing is written to its Control Point after.

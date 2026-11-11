@@ -118,7 +118,7 @@ pub fn bike_data(d: &[u8], r: &mut Reading) {
         let Some(&v0) = v.first() else { return };
         let u = u16::from_le_bytes([v0, *v.get(1).unwrap_or(&0)]);
         match bit {
-            0 => r.speed_x10 = Some(u / 10),
+            0 => r.speed_x10 = Some(u.saturating_add(5) / 10),
             2 => r.cadence = Some((u / 2).min(254) as u8),
             6 => r.power = Some((u as i16).max(0) as u16),
             9 => r.hr = Some(v0).filter(|&h| h != 0),

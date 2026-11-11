@@ -398,6 +398,39 @@ fn power_lr(_: u64) -> [u8; 8] {
     [0x10, 1, 0x80 | 48, 85, 0, 0, 0x2c, 0x01]
 }
 
+/// A power meter: 170 W, then from 15 s of simulated time 184 W (FTP 200: zone 3 ends at 181 W, 4 starts at 182).
+fn power_step(ms: u64) -> [u8; 8] {
+    [0x10, 1, 0xff, 0xff, 0, 0, if ms < 15_000 { 170 } else { 184 }, 0]
+}
+
+/// FTP, max HR and LTHR are not edited while a ride is open: its TSS and zone times would change for the past.
+#[test]
+fn ride_scoring_settings_are_frozen_in_a_ride() {
+    use crate::menu::Setting;
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    assert!(![Setting::Ftp, Setting::MaxHr, Setting::Lthr].iter().any(|&s| app.frozen_in_ride(s)));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    assert!([Setting::Ftp, Setting::MaxHr, Setting::Lthr].iter().all(|&s| app.frozen_in_ride(s)));
+    assert!(!app.frozen_in_ride(Setting::Font));
+}
+
+/// The time in zone counts the zone ridden, not the held one: 184 W within the hold margin of zone 3 is zone 4.
+#[test]
+fn time_in_zone_follows_the_power_ridden() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(ride_route);
+    sim.gnss.fix = Some(8000);
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_step, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 80_000);
+    assert_eq!(app.zones[0].shown(), 3, "the bar holds zone 3");
+    assert!(app.zone_s.power_s(4) > Some(40), "zone 4 counted: {:?}", app.zone_s.power_s(4));
+}
+
 /// The derived fields (power.rs, ride.rs): a ride at 300 W on the GPS route (8 m/s, climbing 0.2 m/s) with a
 /// strap and a dual-sided power meter, at the default FTP (200 W), weight (75 kg) and W' (20 kJ). After two
 /// minutes the fields show the values worked out by hand, W' balance in its draining colour, and the screen

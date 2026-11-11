@@ -53,7 +53,13 @@ impl Parser {
                     2 => self.class_id.0 = b,
                     3 => self.class_id.1 = b,
                     4 => self.len = usize::from(b),
-                    _ => self.len |= usize::from(b) << 8,
+                    _ => {
+                        self.len |= usize::from(b) << 8;
+                        // a length no frame has is a corrupt header: resync now, not after swallowing that many bytes
+                        if self.len > MAX {
+                            self.pos = 0;
+                        }
+                    }
                 }
             }
             _ if at < 6 + self.len => {
@@ -397,6 +403,14 @@ impl Pvt {
     pub fn good(&self) -> bool {
         self.fix_ok && (self.fix == 2 || self.fix == 3)
     }
+
+    /// The ground speed in km/h x 10, rounded; None without a good fix, or when it is 15 m/s off the previous good
+    /// fix's (a bad fix, not a rider: it would add metres and set the max speed).
+    pub fn speed_x10(&self, prev: Option<&Pvt>) -> Option<u16> {
+        let spike = prev.is_some_and(|q| q.good() && q.speed_mm_s.abs_diff(self.speed_mm_s) > 15_000);
+        let v = self.speed_mm_s.saturating_mul(36).saturating_add(500) / 1000;
+        (self.good() && !spike).then_some(v.min(u32::from(u16::MAX)) as u16)
+    }
 }
 
 /// Signal bars (1 to 4) for a fix from `sats` satellites used: under 6, 9, 12, then 12 and more.
@@ -480,6 +494,36 @@ mod tests {
         f[20] ^= 1; // corrupt a payload byte: the checksum drops the frame
         let mut parser = Parser::new();
         assert!(f.iter().all(|&x| parser.push(x).is_none()));
+    }
+
+    /// Rounded to 0.1 km/h; a 90 km/h spike in a 5 m/s ride is dropped.
+    #[test]
+    fn speed_is_rounded_and_spikes_dropped() {
+        let at = |mm_s| Pvt { fix: 3, fix_ok: true, speed_mm_s: mm_s, ..pvt(0x01, 0x07, &sample(3, 0)).unwrap() };
+        assert_eq!(at(6944).speed_x10(None), Some(250), "24.998 km/h");
+        assert_eq!(at(6972).speed_x10(None), Some(251), "25.099 km/h rounds up, not down");
+        assert_eq!(at(25_000).speed_x10(Some(&at(5000))), None, "a spike");
+        assert_eq!(at(5100).speed_x10(Some(&at(5000))), Some(184));
+        assert_eq!(Pvt { fix: 0, ..at(5000) }.speed_x10(None), None);
+    }
+
+    /// A corrupt header with a length of 0xffff does not make the parser swallow the next frames.
+    #[test]
+    fn corrupt_length_resyncs_at_once() {
+        let mut f = std::vec![0xb5, 0x62, 0x01, 0x07, 0xff, 0xff];
+        f.extend((0..2000).map(|i| if i % 2 == 0 { 0xff } else { i as u8 | 1 }));
+        let body: std::vec::Vec<u8> = [0x01, 0x07, 92, 0].iter().chain(&sample(3, 7000)).copied().collect();
+        let (mut a, mut b) = (0u8, 0u8);
+        for &x in &body {
+            a = a.wrapping_add(x);
+            b = b.wrapping_add(a);
+        }
+        f.extend([0xb5, 0x62]);
+        f.extend(&body);
+        f.extend([a, b]);
+        let mut parser = Parser::new();
+        let n = f.iter().filter_map(|&x| parser.push(x).map(|(c, i, p)| pvt(c, i, p).is_some())).count();
+        assert_eq!(n, 1, "the PVT after the noise decodes");
     }
 
     #[test]

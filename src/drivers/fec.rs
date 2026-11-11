@@ -96,7 +96,7 @@ pub fn decode(d: [u8; 8], r: &mut Reading) {
         // general FE data: speed in mm/s (0xffff: none), the heart rate with its source in byte 7
         16 => {
             r.seen |= seen::P16;
-            r.speed_x10 = Some(u16_at(4)).filter(|&v| v != 0xffff).map(|v| (u32::from(v) * 36 / 1000) as u16);
+            r.speed_x10 = Some(u16_at(4)).filter(|&v| v != 0xffff).map(|v| ((u32::from(v) * 36 + 500) / 1000) as u16);
             r.hr = Some(d[6]).filter(|&h| h != 0 && h != 0xff && d[7] & 3 != 0);
         }
         // trainer data: cadence, power (12 bits), status, target flags and state
@@ -120,7 +120,8 @@ pub fn decode(d: [u8; 8], r: &mut Reading) {
             r.seen |= seen::P2;
             r.cal_pending = d[1] & 0xc0;
             r.cal_cond = d[2];
-            r.cal_target_x10 = Some(u16_at(4)).filter(|&v| v != 0xffff).map(|v| (u32::from(v) * 36 / 1000) as u16);
+            r.cal_target_x10 =
+                Some(u16_at(4)).filter(|&v| v != 0xffff).map(|v| ((u32::from(v) * 36 + 500) / 1000) as u16);
             r.cal_target_ms = Some(u16_at(6)).filter(|&v| v != 0xffff);
             r.cal_pages = r.cal_pages.wrapping_add(1);
         }

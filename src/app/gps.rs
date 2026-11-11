@@ -123,6 +123,7 @@ impl App {
                     self.note_ack(a);
                 }
                 if let Some(pvt) = pvt {
+                    let speed = pvt.speed_x10(self.gps.pvt.as_ref());
                     self.gps.pvt = Some(pvt);
                     self.gps.pvt_ms = 0;
                     pvt_read = true;
@@ -137,9 +138,8 @@ impl App {
                         self.track.orient(self.settings.map_up, pvt.heading, pvt.speed_mm_s);
                         self.gps.fixed = true;
                     }
-                    if pvt.good() && !sensor {
-                        // mm/s to km/h x 10
-                        self.live.set(Metric::Speed, (pvt.speed_mm_s * 36 / 1000).min(u32::from(u16::MAX)) as u16);
+                    if let (Some(v), false) = (speed, sensor) {
+                        self.live.set(Metric::Speed, v);
                     }
                 }
             }
