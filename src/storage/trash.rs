@@ -802,8 +802,7 @@ pub(crate) mod tests {
     /// sector in order): a remove's long name pieces may go and its 8.3 entry stay, under its alias alone, which the
     /// name does not find (`unlink_old`): the delete was undone then, the ride left in `\Activities` under its alias,
     /// stock's name lost. The next start moves both copies whole, one name each, the volume clean (no orphan piece).
-    #[test]
-    fn a_torn_remove_still_moves_the_ride() {
+    fn torn_remove(part: usize) {
         use crate::fat::write::tests::Torn;
         const FULL: &str = "Rustfw/Activities/261020080000.fit";
         let img = volume();
@@ -834,11 +833,13 @@ pub(crate) mod tests {
         for budget in 0..u32::MAX - whole.1 {
             let mut probe = Torn { ram: Ram(img.clone(), 0), budget, keep: 1, cut_at: 0 };
             let _ = delete(&mut probe, &ride, T);
-            let remove = removes.iter().find(|h| h.entry_lba == probe.cut_at);
+            let which = removes.iter().position(|h| h.entry_lba == probe.cut_at);
+            let remove = which.map(|i| &removes[i]);
             // a write into those folders after the first remove: a link (before: the folders being made)
             removed |= remove.is_some();
             let link = removed && remove.is_none() && deleted.iter().any(|&l| (l..l + spc).contains(&probe.cut_at));
-            if remove.is_none() && !link {
+            // three parallel tests: the clean copy's remove (0), the full copy's (1), the links (2)
+            if !(which == Some(part) || part == 2 && link) {
                 continue;
             }
             links += usize::from(link);
@@ -867,8 +868,24 @@ pub(crate) mod tests {
                 swept += 1;
             }
         }
-        assert!(swept >= 2 * (SECTOR - 1) && links >= 2, "{swept} tears, {links} links swept");
-        assert!(alone >= 64, "{alone} tears left the 8.3 entry alone");
+        assert!(part == 2 || swept == SECTOR - 1, "{swept} tears swept");
+        assert!(part != 2 || links >= 4 && swept == links * (SECTOR - 1), "{swept} tears, {links} links swept");
+        assert!(part == 2 || alone >= 64, "{alone} tears left the 8.3 entry alone");
+    }
+
+    #[test]
+    fn a_torn_remove_of_the_clean_copy_still_moves_the_ride() {
+        torn_remove(0);
+    }
+
+    #[test]
+    fn a_torn_remove_of_the_full_copy_still_moves_the_ride() {
+        torn_remove(1);
+    }
+
+    #[test]
+    fn a_torn_link_still_moves_the_ride() {
+        torn_remove(2);
     }
 
     /// A chain the cut left named by no entry that a computer's fsck reconnected (FILE0000.CHK) and something then
