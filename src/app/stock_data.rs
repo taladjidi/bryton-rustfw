@@ -190,6 +190,12 @@ impl App {
         if self.card_writable { b"yes" } else { b"no" }
     }
 
+    /// Samples and RR intervals the recorders dropped (a slow card), for the dev link's `info`; read only.
+    pub(crate) fn rec_dropped(&self) -> (u32, u32) {
+        let (c, f) = (&self.rec.clean, &self.rec.full);
+        (c.dropped.saturating_add(f.dropped), c.beats_dropped.saturating_add(f.beats_dropped))
+    }
+
     /// The ride's state for the dev link's `info`: a finished ride still being saved is "ending".
     pub(crate) fn ride_word(&self) -> &'static [u8] {
         match self.ride.state() {

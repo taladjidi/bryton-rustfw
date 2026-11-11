@@ -1,7 +1,7 @@
 //! A tiny INI reader for stock's settings files (`\System\*.ini`, ghidra/STORAGE_AND_MAPS.md 2.1): `[Section]`
 //! lines and `Key=Value` lines, LF or CRLF. Stock leaves a NUL byte at the end of some files, sometimes with text
 //! after it: a NUL ends a line like LF. Lookups scan the text from the start (the files are a few KB); a line
-//! longer than [`LINE`] bytes is skipped. Names compare without regard to ASCII case.
+//! longer than [`LINE`] bytes is skipped. A leading UTF-8 BOM is skipped, and a value ends at a `;` after a space (a comment). Names compare without regard to ASCII case.
 
 /// The longest line read.
 pub const LINE: usize = 512;
@@ -20,6 +20,12 @@ fn trim(mut b: &[u8]) -> &[u8] {
     b
 }
 
+/// A value without a trailing comment: it starts at a `;` after a space or tab (so a `;` inside a word is kept).
+fn comment(v: &[u8]) -> &[u8] {
+    let end = v.windows(2).position(|w| matches!(w, [b' ' | b'\t', b';']));
+    v.get(..end.map_or(v.len(), |i| i + 1)).unwrap_or(v)
+}
+
 /// The value of `key` in section `section` of `text`, spaces around it removed; the first if there are several.
 ///
 /// ```
@@ -28,9 +34,12 @@ fn trim(mut b: &[u8]) -> &[u8] {
 /// assert_eq!(get(t, "b", "X"), Some(&b"2"[..]));
 /// assert_eq!(get(t, "C", "y"), Some(&b"3"[..]));
 /// assert_eq!(get(t, "A", "y"), None);
+/// assert_eq!(get(b"\xEF\xBB\xBF[A]\nx=1 ;note\ny=a;b\n", "A", "x"), Some(&b"1"[..]));
+/// assert_eq!(get(b"[A]\ny=a;b\n", "A", "y"), Some(&b"a;b"[..]));
 /// ```
 pub fn get<'a>(text: &'a [u8], section: &str, key: &str) -> Option<&'a [u8]> {
     let mut inside = false;
+    let text = text.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(text); // a UTF-8 BOM from a Windows editor
     for line in text.split(|&b| b == b'\n' || b == 0).map(trim).filter(|l| l.len() <= LINE) {
         if let Some(name) = line.strip_prefix(b"[").and_then(|l| l.strip_suffix(b"]")) {
             inside = trim(name).eq_ignore_ascii_case(section.as_bytes());
@@ -38,7 +47,7 @@ pub fn get<'a>(text: &'a [u8], section: &str, key: &str) -> Option<&'a [u8]> {
             && let Some(i) = line.iter().position(|&b| b == b'=')
             && trim(line.get(..i)?).eq_ignore_ascii_case(key.as_bytes())
         {
-            return line.get(i + 1..).map(trim);
+            return line.get(i + 1..).map(comment).map(trim);
         }
     }
     None

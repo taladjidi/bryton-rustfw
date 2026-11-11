@@ -386,8 +386,8 @@ fn snap(g: &mut bryton_rustfw::stopbench::Regs) {
 /// SDRAM in normal mode. Flags, cycles and the registers just before and after the WFI go into `r` (lib
 /// link/stopbench.rs). If the self-refresh is not confirmed, no WFI: the normal-mode command is sent and it returns.
 /// Whatever failed on the wake, the SDRAM is put back in normal mode before returning: on a PLL that did not lock
-/// again, the FMC's kernel clock is moved to hclk3 first (the HSI's 64 MHz then, which the SDRAM allows: its refresh
-/// only comes more often). Nothing is done (no flag set) unless `r` is in the DTCM.
+/// again, the FMC's kernel clock is moved to hclk3 first (the HSI's 64 MHz then: a slower clock, so the refresh
+/// counter, set for the faster one, makes refresh come less often, not more; a degraded fallback to get a clock back). Nothing is done (no flag set) unless `r` is in the DTCM.
 /// The caller (main.rs `low_power`) arms the wake-up first: the RTC wake-up timer's EXTI line and IRQ, every other
 /// NVIC line off, SysTick off, no DMA running, USB off the bus for a Stop.
 pub fn stop(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport) {
@@ -458,7 +458,8 @@ fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport
         if wait_for(RCC_CR, pll << 1, pll << 1) {
             flags |= sb::PLL;
         } else if matches!(rd(RCC_D1CCIPR) & 0b11, 1 | 2) {
-            // the FMC's kernel clock is a PLL output that did not come back: hclk3 instead, so it has a clock
+            // the FMC's kernel clock is a PLL output that did not come back: hclk3 instead, so it has a clock (slower, so
+            // refresh comes less often than set, not more)
             wr(RCC_D1CCIPR, rd(RCC_D1CCIPR) & !0b11);
         }
         let t3 = rd(DWT_CYCCNT);

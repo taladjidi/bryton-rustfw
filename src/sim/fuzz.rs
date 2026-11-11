@@ -1395,20 +1395,27 @@ fn ini_files() {
         "rightlongpress",
     ];
     let mut reached = [0usize; 6];
+    let (mut bom, mut commented) = (0, 0);
     for seed in 1..=2000u32 {
         // many short files (a lookup takes a section's first copy), of sections and key = value lines (an INI's structure), each value one of: a small number, a list of field
         // ids, a huge number, raw bytes
         let mut t = Vec::new();
         let mut v = bytes(seed, 600);
+        // a UTF-8 BOM before the first section, as a Windows editor saves it
+        if seed % 7 == 0 {
+            t.extend_from_slice(b"\xEF\xBB\xBF");
+            bom += 1;
+        }
         if seed % 2 == 0 {
             // first, as stock writes them (a lookup takes a section's first copy): sensor blocks (an ANT+ type,
             // active, an id some past 20 bits, a wheel, the buttons), W' and the pressure at sea level
             let mut r = xorshift(seed);
             for k in 0..1 + r() % 4 {
                 let id = if r().is_multiple_of(4) { r() >> 12 << 4 } else { r() % 100_000 };
+                commented += 1; // the wheel line below ends in a comment
                 t.extend_from_slice(
                     std::format!(
-                        "[{}]\r\nHWType={}\r\nactive=1\r\nID={id}\r\nWheel={}\r\nleftpress={}\r\nrightpress={}\r\n",
+                        "[{}]\r\nHWType={}\r\nactive=1\r\nID={id}\r\nWheel={} ;mm\r\nleftpress={}\r\nrightpress={}\r\n",
                         SECTIONS[11 + (r() as usize + k as usize) % 8],
                         u32::from(r() % 7 == 6),
                         900 + r() % 2500,
@@ -1489,6 +1496,7 @@ fn ini_files() {
     }
     std::println!("ini fuzz reached {reached:?} (pages, reminders, sensors, remotes, wheels, W' and Alt_P0)");
     assert!(reached.iter().all(|&n| n > 100), "every path reached: {reached:?}");
+    assert!(bom > 100 && commented > 100, "BOM {bom} and trailing comments {commented} reached");
     assert!(reached[0] > 0 && reached[1] > 0, "the fuzz reaches the pages and the reminders");
 }
 
