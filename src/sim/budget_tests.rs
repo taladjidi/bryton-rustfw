@@ -638,6 +638,11 @@ fn a_card_stall_inside_a_checkpoint_keeps_the_radio_drained_and_the_ride() {
     }
 }
 
+/// The simulated hour of the clock tests; 10 minutes under FUZZ_SCALE < 1 (the --quick tier).
+fn hour_ms() -> u64 {
+    if super::fuzz::fuzz_scale() < 1.0 { 600_000 } else { 3_600_000 }
+}
+
 /// The app's clock (`up_ms`: the time-outs and the cadences counted in ms) keeps real time even when the
 /// pass waits for the panel's DMA (the cycle counter stops in WFI): an hour of full-screen redraws, 2026-11-01.
 #[test]
@@ -646,7 +651,7 @@ fn the_app_clock_counts_the_waits_of_the_work() {
     r.press(Press::Short(Key::Start));
     r.run(5000);
     let (up0, real0) = (u64::from(r.app.up_ms), r.sim.ms);
-    while r.sim.ms < real0 + 3_600_000 {
+    while r.sim.ms < real0 + hour_ms() {
         r.app.show(&mut r.sim); // a full redraw: its pixels go by DMA, the CPU sleeps
         r.pass();
     }
@@ -668,7 +673,7 @@ fn the_loop_keeps_real_time_through_all_its_waits() {
         main.pass(&mut app, &mut sim);
     }
     let (up0, real0) = (u64::from(app.up_ms), sim.ms);
-    while sim.ms < real0 + 3_600_000 {
+    while sim.ms < real0 + hour_ms() {
         app.show(&mut sim); // a full redraw each pass
         main.pass(&mut app, &mut sim);
     }

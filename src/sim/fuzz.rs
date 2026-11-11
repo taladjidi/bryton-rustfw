@@ -7,8 +7,13 @@ use super::chip_table::{self, CMDS, Hang, L};
 use crate::Board;
 use std::vec::Vec;
 
+/// Every n-th point of an exhaustive sweep: 1 at the gate, 4 at FUZZ_SCALE 0.25 (the --quick tier samples).
+pub(super) fn sample_step() -> usize {
+    (1.0 / fuzz_scale()).round() as usize
+}
+
 /// The fuzz scale: `FUZZ_SCALE` in the environment (default 1: every seed; `./check.sh --quick` sets 0.25).
-fn fuzz_scale() -> f32 {
+pub(super) fn fuzz_scale() -> f32 {
     std::env::var("FUZZ_SCALE").ok().and_then(|v| v.parse().ok()).filter(|s| *s > 0.0 && *s <= 1.0).unwrap_or(1.0)
 }
 
