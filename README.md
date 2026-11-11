@@ -74,10 +74,10 @@ Measured on the unit (2026-10-29 evening, build 13fec4c, `tools/profile.py` from
 | Panel traffic, a ride page | about 740 pixels a second (only what changed, in the smallest box) |
 | Climb pacer, one plan | about 75 us (estimated from operation counts) |
 | A map tile for climbs ahead | at most about 3 ms a slice (estimated; one tile took 238 ms in one go before) |
-| Image | <!-- n:image -->834 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
-| Code | about <!-- n:rust_lines -->152,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
+| Image | <!-- n:image -->835 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
+| Code | about <!-- n:rust_lines -->153,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
 | Interactions | <!-- n:taps -->172<!-- /n --> weighted actions over the rider's tasks (`src/sim/task_tests.rs`: keys, taps and swipes to reach a course, a workout, the phone pairing...; a task mid-ride counts double); a task that gets longer fails |
-| Tests | <!-- n:tests -->2,000<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->29<!-- /n --> need files outside the repo), <!-- n:doctests -->234<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
+| Tests | <!-- n:tests -->2,004<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->29<!-- /n --> need files outside the repo), <!-- n:doctests -->234<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
 
 
 | Read | For |
