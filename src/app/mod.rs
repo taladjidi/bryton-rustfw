@@ -38,6 +38,7 @@ mod powercal;
 mod profile;
 mod start_cues;
 mod status;
+pub(crate) mod summary;
 mod survey;
 pub use profile::ClimbNow;
 mod quick;

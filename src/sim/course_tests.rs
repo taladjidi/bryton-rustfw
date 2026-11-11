@@ -92,12 +92,12 @@ fn course_ride() {
     rows.sort();
     assert_eq!(
         rows,
-        ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
+        ["", "BROKEN --", "HILL 5.0 KM FIT", "HILL 5.0 KM GPX", "HILL GARMIN 5.0 KM", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
     );
     // the distance keeps its unit on every row (a long name is cut by the drawing, never the value)
     for i in 0..7 {
         let Some((_, value, _)) = app.menu_row(Menu::Courses, i) else { continue }; // a row past the files
-        assert!(value.as_str().ends_with(" KM") || matches!(value.as_str(), "..." | "--"), "{}", value.as_str());
+        assert!(value.as_str().contains(" KM") || matches!(value.as_str(), "..." | "--"), "{}", value.as_str());
         let Some((name, _, _)) = app.menu_row(Menu::Courses, i) else { continue };
         assert!(
             ui::LABEL.width(value.as_str()) + ui::menu_label_w(name.as_str(), value.as_str()) <= ui::NEARBY.2,
@@ -1356,6 +1356,30 @@ fn navigate_to_the_start() {
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.field_text(Field::NextTurn).as_str(), "N390M");
     sim.save("course_to_start");
+    // the label says what the value is, and goes back to NEXT TURN once the course is joined (its own box redrawn)
+    app.pages[0] = PageCfg {
+        layout: 6,
+        fields: [Field::NextTurn, Field::Map, Field::Speed, Field::Time, Field::Time, Field::Time],
+    }
+    .into();
+    app.screen = Screen::Ride(0);
+    app.show(&mut sim);
+    assert!(app.to_start_now());
+    run(&mut sim, &mut app, 5000); // the banners go
+    assert_consistent(&sim, &app);
+    sim.save("course_to_start_label");
+    let label_px = |sim: &Sim| {
+        (0..ui::H).map(|y| sim.screen[(y * ui::W) as usize..((y + 1) * ui::W) as usize].to_vec()).collect::<Vec<_>>()
+    };
+    let before = label_px(&sim);
+    sim.gnss.route = Some(course_route);
+    run(&mut sim, &mut app, 8000);
+    assert!(!app.to_start_now(), "joined");
+    assert_consistent(&sim, &app);
+    // the label's own rows (under the strip and its line), in the first box: NEXT TURN is not TO START
+    let label = |v: &[Vec<u16>]| v[26..38].iter().map(|r| r[..100].to_vec()).collect::<Vec<_>>();
+    assert_ne!(label(&before), label(&label_px(&sim)), "the label changed at the join, a map in the page or not");
+    sim.save("course_joined_label");
 }
 
 /// BACK TO START in the ride menu after a ride out: a course that ends at the start, with its cues.
@@ -1752,4 +1776,32 @@ fn off_course_count_in_km() {
     let c =
         |left| std::string::String::from(Ahead { kind: AheadKind::Off, next: 0, left, metres: true }.count().as_str());
     assert_eq!([c(120), c(990), c(1500), c(12_000), c(250_000)], ["120M", "990M", " 1KM", "12KM", "99KM"]);
+}
+
+/// The cursor moved onto a COURSES row while the lengths are still being measured: once the list has settled, the
+/// panel shows what the screenshot does.
+#[test]
+fn courses_cursor_while_measuring_matches_the_panel() {
+    for presses in 0..7 {
+        for wait in [0, 20, 60, 150, 400] {
+            let mut sim = Sim::new(9, 0, 0);
+            sim.emmc.image = crate::fat::tests::image();
+            let mut app = App::start(&mut sim, None);
+            app.set_map_memory(crate::tiles::tests::memory());
+            app.set_course_memory(crate::storage::course_file::tests::memory());
+            app.press(&mut sim, Press::Long(Key::Page));
+            to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+            app.press(&mut sim, Press::Short(Key::Start));
+            for _ in 0..presses {
+                run(&mut sim, &mut app, wait);
+                app.press(&mut sim, Press::Short(Key::Page));
+            }
+            // every pass while the lengths come in, not only once the list has settled
+            for _ in 0..200 {
+                app.step(&mut sim);
+                sim.sleep_ms(10);
+                assert_consistent(&sim, &app);
+            }
+        }
+    }
 }

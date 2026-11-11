@@ -595,7 +595,7 @@ impl App {
                 push_hm(&mut value, self.plan.workout.total_s());
                 color = ui::GREEN;
             }
-            Row::RideCourse => value.push_str("SIM"),
+            Row::RideCourse => {}
             Row::RampTest => {
                 value.push_str("FTP ");
                 value.push_u32(u32::from(self.settings.ftp));

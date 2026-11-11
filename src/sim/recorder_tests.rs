@@ -2122,3 +2122,59 @@ fn a_resume_with_the_clock_behind_keeps_every_second_in_the_full_copy() {
     assert!(full.windows(2).all(|p| p[1] > p[0]), "full copy in order");
     assert!(full.len() + 2 >= clean.len(), "{} full records of {}", full.len(), clean.len());
 }
+
+/// The usual no-full-copy case: the full copy is lost during the ride, so the summary says SAVED, NO FULL COPY.
+#[test]
+fn summary_says_no_full_copy_when_it_was_lost_during_the_ride() {
+    use crate::ui::card::Save;
+    let mut sim = Sim::new(9, 0, 0);
+    let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let dir = fat.ensure_dir(&mut d, fat.root(), "Rustfw", (0, 0)).unwrap();
+    fat.create(&mut d, dir, "Full", (0, 0)).unwrap();
+    sim.emmc.image = d.0;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(app.save_now(), Save::NoFullCopy);
+}
+
+/// A card that fills under the ride: past the first checkpoint what reached it is saved (PART); before it, nothing is.
+#[test]
+fn summary_says_part_or_not_recorded_on_a_card_that_fills() {
+    use crate::ui::card::Save;
+    for (ms, want) in [(70_000, Save::Part), (0, Save::Failed("NOT RECORDED"))] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 1000);
+        if ms == 0 {
+            crate::fat::write::tests::fill(&mut sim.emmc.image, 0, true); // full before the ride has a file
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, ms);
+        if ms > 0 {
+            crate::fat::write::tests::fill(&mut sim.emmc.image, 0, true);
+        }
+        for _ in 0..40 {
+            run(&mut sim, &mut app, 300_000); // the file's last cluster fills first
+            if app.notes.list.iter().any(|n| n.as_str().ends_with("CARD FULL")) {
+                break;
+            }
+        }
+        assert!(
+            app.notes.list.iter().any(|n| n.as_str().ends_with("CARD FULL")),
+            "{ms} {:?} {:?}",
+            app.notes.list.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+            app.rec.clean.phase()
+        );
+        app.press(&mut sim, Press::Short(Key::Start)); // pause
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 5000);
+        assert_eq!(app.save_now(), want, "{ms} ms before the card filled");
+    }
+}

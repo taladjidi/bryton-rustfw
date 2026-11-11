@@ -137,6 +137,7 @@ impl App {
     /// on a new day, and written once the scan has changed it, only between rides, in the same time a pass.
     #[inline(never)]
     pub(crate) fn step_stock(&mut self, b: &mut impl Board) {
+        self.laps_step();
         self.stock.load(&mut emmc::Volume(&mut self.emmc, b), self.date);
         self.stock.new_day(self.date);
         // read once by itself, a while after start-up and not during a ride, for the totals on the overview
@@ -215,12 +216,17 @@ impl App {
         if !self.past.reading() {
             return;
         }
-        if !matches!(self.screen, Screen::Menu(Menu::History | Menu::Storage, _)) {
+        if !matches!(self.screen, Screen::Menu(Menu::History | Menu::Storage, _) | Screen::Summary) {
             return self.past.stop();
         }
         match self.past.step(&mut emmc::Volume(&mut self.emmc, b), Self::SCAN_IDLE) {
             Some(Ok(())) => {
-                self.open(Screen::Past);
+                if self.screen == Screen::Summary {
+                    // the ride just ended asked for its laps: the list, and Back returns to the card
+                    self.open(Screen::Laps(0));
+                } else {
+                    self.open(Screen::Past);
+                }
                 self.show(b);
                 // the read is done: its banner would stay over the ride's date
                 if self.notes.ms.is_some() && self.notes.text.as_str() == "READING RIDE" {
