@@ -361,6 +361,8 @@ pub enum Event {
     Climb(Climb),
     /// A cue ahead, and how far, m (0: at the turn) ([`cues`]).
     Cue(Cue, u32),
+    /// Still off course a minute later ([`OFF_REPEAT_S`]): the caller says it again unless the rider is stopped.
+    OffAgain,
     /// The course's end reached (said once; again after the rider was back more than 100 m before it).
     End,
 }
@@ -1013,7 +1015,7 @@ impl Course {
         }
         // still off: the alarm again every OFF_REPEAT_S (off_s counts the seconds beyond the limit)
         if t.warned && t.off_s > OFF_S && (t.off_s - OFF_S).is_multiple_of(OFF_REPEAT_S) {
-            return Some(Event::Off);
+            return Some(Event::OffAgain);
         }
         // the end: within BACK_M of it, on the course, once; a lap course rearms it when the rider is far from the end
         let left = self.len_m().saturating_sub(h.along_m);
@@ -1541,25 +1543,53 @@ pub(crate) mod tests {
     #[test]
     fn fuzz_walks_end_and_off() {
         let c = course(&lines(&[(0.0, 0.0, 100.0), (1000.0, 0.0, 100.0)], 10.0));
-        let (mut reached, mut offs) = (0, 0);
+        let (mut reached, mut offs, mut rearmed, mut total_approaches) = (0, 0, 0, 0);
         for seed in 1..200u64 {
             let (mut r, mut t, mut x, mut ends) =
                 (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), Tracker::default(), 0.0, 0);
+            // an approach: from more than END_REARM_M before the end to within BACK_M of it
+            let (mut far, mut approaches) = (true, 0);
             for _ in 0..400 {
                 r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 x += ((r >> 40) % 40) as f64 - 6.0;
+                if (r >> 10) % 60 == 0 {
+                    x -= 200.0; // back along the course: the end rearms
+                }
                 let y = if (r >> 20) % 50 == 0 { 300.0 } else { ((r >> 33) % 40) as f64 - 20.0 };
                 let (lat, lon) = fix(x.clamp(-50.0, 1100.0), y);
                 match c.follow(&mut t, lat, lon) {
                     Some(Event::End) => ends += 1,
-                    Some(Event::Off) => offs += 1,
+                    Some(Event::Off | Event::OffAgain) => offs += 1,
                     _ => {}
+                }
+                let left = c.len_m().saturating_sub(t.along_m);
+                if left > END_REARM_M {
+                    far = true;
+                } else if far && left <= BACK_M {
+                    (far, approaches) = (false, approaches + 1);
                 }
             }
             reached += u32::from(ends > 0);
-            assert!(ends <= 8, "{seed}: {ends}");
+            rearmed += u32::from(ends > 1);
+            total_approaches += approaches;
+            assert!(ends <= approaches, "{seed}: {ends} ends in {approaches} approaches");
         }
-        assert!(reached > 20 && offs > 0, "{reached} {offs}");
+        assert!(
+            reached > 20 && offs > 0 && total_approaches > 0 && rearmed > 0,
+            "{reached} {offs} {total_approaches} {rearmed}"
+        );
+    }
+
+    /// To the end, back 150 m, to the end again: two Ends (a lap course), not one per fix near it.
+    #[test]
+    fn end_again_after_going_back() {
+        let c = course(&lines(&[(0.0, 0.0, 100.0), (1000.0, 0.0, 100.0)], 10.0));
+        let (mut t, mut ends) = (Tracker::default(), 0);
+        for x in [0.0, 400.0, 800.0, 990.0, 1000.0, 995.0, 850.0, 840.0, 900.0, 990.0, 1000.0, 1000.0] {
+            let (lat, lon) = fix(x, 0.0);
+            ends += u32::from(c.follow(&mut t, lat, lon) == Some(Event::End));
+        }
+        assert_eq!(ends, 2);
     }
 
     /// Still off course: the alarm again every OFF_REPEAT_S; the end of a course said once.
@@ -1571,7 +1601,7 @@ pub(crate) mod tests {
         c.follow(&mut t, lat, lon);
         let (lat, lon) = fix(100.0, 200.0);
         for _ in 0..(OFF_S + 2 * OFF_REPEAT_S + 3) {
-            offs += u32::from(c.follow(&mut t, lat, lon) == Some(Event::Off));
+            offs += u32::from(matches!(c.follow(&mut t, lat, lon), Some(Event::Off | Event::OffAgain)));
         }
         assert_eq!(offs, 3, "at 5 s, then every 60 s");
         let mut ends = 0;

@@ -104,6 +104,18 @@ const REC_DOT: [u16; 10] = [0x1e00, 0x7f80, 0x7f80, 0xffc0, 0xffc0, 0xffc0, 0xff
 const NOT_SAVING_X: [u16; 10] = [0xc0c0, 0x6180, 0x3300, 0x1e00, 0x0c00, 0x0c00, 0x1e00, 0x3300, 0x6180, 0xc0c0];
 const PAUSE_BARS: [u16; 10] = [0xe1c0; 10];
 
+/// The ride's state cell at `x`: level with the capitals, 10 rows in their 14.
+fn draw_rec(c: &mut impl Canvas, rec: Rec, x: u32) {
+    let top = STRIP_H - LABEL.height();
+    c.fill(x, top, STRIP_REC.1, 14, BLACK);
+    match rec {
+        Rec::Idle => {}
+        Rec::Running => draw_bitmap(c, &REC_DOT, x, top + 2, 1, RED),
+        Rec::Paused => draw_bitmap(c, &PAUSE_BARS, x, top + 2, 1, ACCENT),
+        Rec::NotSaving => draw_bitmap(c, &NOT_SAVING_X, x, top + 2, 1, RED),
+    }
+}
+
 /// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" blinking grey while
 /// the receiver searches, signal bars once it has a fix (nothing if it is silent), the time in the middle; on the right the USB
 /// symbol in the USB state's colour (nothing when unplugged) and the battery (green while charging, red at 15 % and
@@ -133,14 +145,7 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
         None => at(c, STRIP_TIME, WHITE, Align::Left, hm(s).as_str()),
     }
     if changed(|s| s.rec as u32) {
-        // level with the capitals: 10 rows in their 14
-        c.fill(STRIP_REC.0, top, STRIP_REC.1, 14, BLACK);
-        match s.rec {
-            Rec::Idle => {}
-            Rec::Running => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, RED),
-            Rec::Paused => draw_bitmap(c, &PAUSE_BARS, STRIP_REC.0, top + 2, 1, ACCENT),
-            Rec::NotSaving => draw_bitmap(c, &NOT_SAVING_X, STRIP_REC.0, top + 2, 1, RED),
-        }
+        draw_rec(c, s.rec, STRIP_REC.0);
     }
     if changed(|s| s.locked as u32) {
         c.fill(STRIP_LOCK.0, top + 2, STRIP_LOCK.1, 10, BLACK);
@@ -222,6 +227,17 @@ pub fn draw_strip_whole(c: &mut impl Canvas, s: &Strip) {
     draw_strip(c, s);
 }
 
+/// Where the ride's state cell goes in the message strip: left of the countdown, so a recording that stops being
+/// saved is still seen (the golden rule) while a turn or the off course alarm holds the strip.
+pub(crate) fn next_rec_x() -> u32 {
+    W - NEXT_COUNT * CELL * 2 - STRIP_REC.1 - 4
+}
+
+/// Draws only the ride's state cell of the message strip, left of its countdown.
+pub fn draw_strip_msg_rec(c: &mut impl Canvas, rec: Rec) {
+    draw_rec(c, rec, next_rec_x());
+}
+
 /// The characters the next-step strip's countdown takes, right-aligned at the strip's end.
 const NEXT_COUNT: u32 = 4;
 
@@ -230,14 +246,15 @@ const NEXT_COUNT: u32 = 4;
 /// was `old`, only the cells that changed are drawn (the digit of a second); without, the whole strip.
 ///
 /// `fg` is the head's colour: orange, red for the course's off-course alarm.
-pub fn draw_strip_msg(c: &mut impl Canvas, fg: u16, head: &str, count: &str, old: Option<&str>) {
+pub fn draw_strip_msg(c: &mut impl Canvas, fg: u16, head: &str, count: &str, old: Option<&str>, rec: Rec) {
     let top = STRIP_H - LABEL.height();
     let x = W - NEXT_COUNT * CELL * 2;
     match old {
         Some(o) => draw_changed_chars(c, &LABEL, x, top, o, count),
         None => {
             c.fill(0, 0, W, STRIP_H, BLACK);
-            text::draw_in(c, &Style { fg, ..LABEL }, 0, top, x, Align::Left, head);
+            text::draw_in(c, &Style { fg, ..LABEL }, 0, top, next_rec_x(), Align::Left, head);
+            draw_rec(c, rec, next_rec_x());
             text::draw(c, &LABEL, x, top, Align::Left, count);
             c.fill(0, STRIP_H, W, 2, fg);
         }

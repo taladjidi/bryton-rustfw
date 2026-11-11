@@ -151,8 +151,26 @@ fn course_ride() {
     let a = app.plan.top.expect("the off course strip");
     assert!(a.kind == crate::app::AheadKind::Off && a.left.abs_diff(150) <= 10, "{a:?}");
     sim.save("course_off_strip");
+    // the recording indicator stays true under the strip: not saving shows its red cross there
+    let cell = |sim: &Sim| {
+        let x0 = ui::next_rec_x();
+        (0..14)
+            .flat_map(|dy| (0..10).map(move |dx| (dx, dy)))
+            .filter(|&(dx, dy)| sim.screen[((ui::STRIP_H - ui::LABEL.height() + dy) * W + x0 + dx) as usize] == ui::RED)
+            .count()
+    };
+    let before = cell(&sim);
+    app.strip.rec = ui::Rec::NotSaving;
+    app.update_strip(&mut sim); // as the second's pass does, before the ride state sets it again
+    assert!(app.plan.top.is_some() && app.strip_shown.rec == ui::Rec::NotSaving && cell(&sim) > 0);
+    assert_ne!(cell(&sim), before, "the cross replaced the dot");
+    app.strip.rec = ui::Rec::Running;
+    app.update_strip(&mut sim);
+    assert_eq!(cell(&sim), before);
     app.theme = ui::theme::Theme::LIGHT;
     app.repaint(&mut sim);
+    run(&mut sim, &mut app, 200);
+    assert!(app.plan.top.is_some(), "the strip is up in LIGHT");
     sim.save("course_off_strip_light");
     app.theme = ui::theme::Theme::DARK;
     app.repaint(&mut sim);
@@ -491,6 +509,8 @@ fn course_cues_ride() {
                 sim.save("course_turn_strip");
                 app.theme = ui::theme::Theme::LIGHT;
                 app.repaint(&mut sim);
+                run(&mut sim, &mut app, 200);
+                assert!(app.plan.top.is_some(), "the strip is up in LIGHT");
                 sim.save("course_turn_strip_light");
                 app.theme = ui::theme::Theme::DARK;
                 app.repaint(&mut sim);
@@ -1331,6 +1351,10 @@ fn navigate_to_the_start() {
     }
     let t = std::string::String::from(app.field_text(Field::NextTurn).as_str());
     assert_eq!(t, "\x08390M", "the start is due north, the rider heads north: straight on");
+    // stopped, the heading is noise: the compass point
+    sim.gnss.fix = Some(0);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.field_text(Field::NextTurn).as_str(), "N390M");
     sim.save("course_to_start");
 }
 
@@ -1693,4 +1717,39 @@ fn start_arrow_follows_the_heading() {
             let _ = App::turn_toward(d, h);
         }
     }
+}
+
+/// What the strip shows: off course first, a turn within 100 m, the workout's step, a farther turn.
+#[test]
+fn strip_priority() {
+    use crate::app::{Ahead, AheadKind::*, pick_ahead};
+    let a = |kind, left| Some(Ahead { kind, next: 0, left, metres: true });
+    let (off, near, far, step) =
+        (a(Off, 90), a(Turn(crate::course::Turn::Left), 80), a(Turn(crate::course::Turn::Right), 250), a(Step, 5));
+    assert_eq!(pick_ahead(off, near, step), off);
+    assert_eq!(pick_ahead(None, near, step), near, "a near turn beats the step");
+    assert_eq!(pick_ahead(None, far, step), step, "the step beats a far turn");
+    assert_eq!(pick_ahead(None, far, None), far);
+    assert_eq!(pick_ahead(None, None, None), None);
+}
+
+/// A step boundary inside the turn window still shows its banner (the strip that announced a step is not this one).
+#[test]
+fn step_banner_under_a_turn_strip() {
+    use crate::app::{Ahead, AheadKind};
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let l = |app: &App| std::string::String::from(app.notes.text.as_str());
+    app.plan.top = Some(Ahead { kind: AheadKind::Turn(crate::course::Turn::Left), next: 500, left: 120, metres: true });
+    app.workout_event(crate::workout::Event::Step(1));
+    assert!(l(&app).starts_with("2/"), "{:?}", l(&app));
+}
+
+/// The countdown right-aligned in 4 cells, kilometres from 1000 m.
+#[test]
+fn off_course_count_in_km() {
+    use crate::app::{Ahead, AheadKind};
+    let c =
+        |left| std::string::String::from(Ahead { kind: AheadKind::Off, next: 0, left, metres: true }.count().as_str());
+    assert_eq!([c(120), c(990), c(1500), c(12_000), c(250_000)], ["120M", "990M", " 1KM", "12KM", "99KM"]);
 }

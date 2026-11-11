@@ -94,4 +94,4 @@ pub use stock_data::*;
 pub(crate) use trainer::SensorStore;
 pub(crate) use workouts::GaugeShown;
 #[cfg(test)]
-pub(crate) use workouts::{Ahead, AheadKind};
+pub(crate) use workouts::{Ahead, AheadKind, pick_ahead};

@@ -575,7 +575,9 @@ impl App {
                         self.ahead_head(&a).as_str(),
                         a.count().as_str(),
                         old.as_ref().map(|o| o.as_str()),
+                        self.strip.rec,
                     );
+                    self.strip_shown.rec = self.strip.rec;
                 }
                 None => {
                     ui::draw_strip_whole(&mut p, &self.strip);
@@ -583,6 +585,12 @@ impl App {
                 }
             }
             self.plan.top = want;
+        }
+        // under the message strip only the ride's state cell is kept up to date (a recording that stops being saved)
+        if self.plan.top.is_some() && !self.hint_shown && self.area().0 == 0 && self.strip.rec != self.strip_shown.rec {
+            ui::draw_strip_msg_rec(&mut Panel(b, (0, ui::H), self.look()), self.strip.rec);
+            self.strip_shown.rec = self.strip.rec;
+            drew = true;
         }
         if self.strip != self.strip_shown && !self.hint_shown && self.plan.top.is_none() {
             // under a banner or a call: not drawn, nor under the next-step strip, and drawn whole when it goes

@@ -300,10 +300,14 @@ impl App {
     /// Shows and sounds what following the course said: off course (banner and the alert's beeps), back on it, a
     /// climb starting ("CLIMB 3.4 KM 7%", a beep).
     pub(crate) fn course_event(&mut self, ev: course::Event) {
+        // the repeat of off course goes to a rider who is riding, not to one stopped or paused (no beep, no light)
+        if ev == course::Event::OffAgain && !(self.ride.state() == ride::State::Running && self.ride.moving()) {
+            return;
+        }
         // seen whatever the screen: the light comes on as for a key, even after its time-out
         self.light.idle_ms = 0;
         match ev {
-            course::Event::Off => {
+            course::Event::Off | course::Event::OffAgain => {
                 self.alarm("OFF COURSE");
                 self.tones.play(&BEEP_ALERT);
             }
@@ -371,7 +375,7 @@ impl App {
             // not on the course yet: the way to its start, a compass point and the distance
             (Field::NextTurn, _) if c.to_start(at).is_some() => {
                 let (deg, m) = c.to_start(at).unwrap_or((0, 0));
-                match self.gps.pvt.filter(|p| p.good()) {
+                match self.gps.pvt.filter(|p| p.good() && p.speed_mm_s >= crate::app::fields::HEADING_MIN_MM_S) {
                     // an arrow relative to the way the rider faces (heading in degrees x 1e-5)
                     Some(p) => l.push_str(Self::turn_toward(deg, p.heading).glyph()),
                     None => l.push_str(

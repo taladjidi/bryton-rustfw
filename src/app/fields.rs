@@ -173,7 +173,7 @@ pub(crate) fn fahrenheit_x10(c_x10: i32) -> i32 {
 }
 
 /// Speed from which the course over ground is shown as a heading (mm/s): 5 km/h, below it the heading is noise.
-const HEADING_MIN_MM_S: u32 = 1_389;
+pub(crate) const HEADING_MIN_MM_S: u32 = 1_389;
 
 /// The compass points, N first (a heading's point is [`point_of`]).
 pub(crate) const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];

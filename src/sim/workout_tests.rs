@@ -434,10 +434,24 @@ fn next_step_strip() {
         b.count()
     });
     let px0 = sim.pixels;
-    ui::draw_strip_msg(&mut Panel(&mut sim, (0, ui::H), look), ui::ACCENT, head.as_str(), n.as_str(), Some(o.as_str()));
+    ui::draw_strip_msg(
+        &mut Panel(&mut sim, (0, ui::H), look),
+        ui::ACCENT,
+        head.as_str(),
+        n.as_str(),
+        Some(o.as_str()),
+        ui::Rec::Running,
+    );
     let second = sim.pixels - px0;
     let px0 = sim.pixels;
-    ui::draw_strip_msg(&mut Panel(&mut sim, (0, ui::H), look), ui::ACCENT, head.as_str(), n.as_str(), None);
+    ui::draw_strip_msg(
+        &mut Panel(&mut sim, (0, ui::H), look),
+        ui::ACCENT,
+        head.as_str(),
+        n.as_str(),
+        None,
+        ui::Rec::Running,
+    );
     std::println!("next-step strip: {second} px for a second, {} px whole", sim.pixels - px0);
     assert!(second <= 2 * 24 * 14, "{second} px: one cell of the countdown");
 }
