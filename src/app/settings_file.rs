@@ -40,8 +40,8 @@
 //! No file (the first start of a build with it, or one left empty or all zeros: a cut while it was made, the recorder's
 //! `make_kept`): the registers' settings are written as its first copy, once (the migration). A file there with no
 //! copy this build reads (both damaged, another size, another build's version) is never written over: "SETTINGS
-//! DAMAGED" is said, it is renamed `settings.bad` when the settings may next be written (an older one replaced), then
-//! the migration. A build that may not write the card reads the file but never writes it.
+//! DAMAGED" is said, it is renamed `settings.bad` (or `.bad.2`, `.bad.3`: never one replaced) when the settings may
+//! next be written, then the migration; with all three there, it stays and nothing is written. A build that may not write the card reads the file but never writes it.
 
 use crate::copies::{self, CRC_AT};
 use crate::text::Face;
@@ -50,8 +50,9 @@ use menu::Setting;
 
 /// The file's name, in this firmware's folder ([`crate::recorder::DIR`]).
 pub const SETTINGS_FILE: &str = "settings.bin";
-/// Where a settings file this build cannot read is set aside (module doc).
-pub const SETTINGS_BAD: &str = "settings.bad";
+/// Where a settings file this build cannot read is set aside (module doc), the first name free; with all three
+/// taken it is left where it is and nothing is written (the phone app's `.fit.bad` rule).
+pub const SETTINGS_BAD: [&str; 3] = ["settings.bad", "settings.bad.2", "settings.bad.3"];
 
 const MAGIC: &[u8; 4] = b"RSET";
 const VERSION: u16 = 1;
@@ -598,7 +599,17 @@ impl App {
             let damaged = if whole {
                 file.iter().any(|&x| x != 0)
             } else {
-                !matches!(self.copies_size(b, SETTINGS_FILE), Ok(0) | Err(fat::Error::NotFound))
+                match self.copies_size(b, SETTINGS_FILE) {
+                    Ok(n) => n > 0,
+                    Err(fat::Error::NotFound) => false,
+                    Err(e) => {
+                        // not known: read again later, as a failed read ([`copies::Copies::read`])
+                        let st = &mut self.settings_store.file;
+                        (st.loaded, st.dirty) = (false, false);
+                        let _ = st.read(Err(e), false, false);
+                        return;
+                    }
+                }
             };
             if damaged {
                 self.notice("SETTINGS DAMAGED");
@@ -659,11 +670,17 @@ impl App {
         let mut d = emmc::Volume(&mut self.emmc, b);
         let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
             let dir = fat.open(&mut d, recorder::DIR)?;
-            fat.set_aside(&mut d, dir, SETTINGS_FILE, SETTINGS_BAD, t)
+            fat.set_aside(&mut d, dir, SETTINGS_FILE, &SETTINGS_BAD, t)
         });
-        if r.is_ok() {
+        if r == Ok(true) {
             self.settings_store.damaged = false;
             return true;
+        }
+        if r == Ok(false) {
+            // every name taken: the file stays, nothing written until a person clears one
+            self.settings_store.file.dirty = false;
+            self.notice("SETTINGS DAMAGED");
+            return false;
         }
         self.fats_unsure();
         self.notice("SETTINGS NOT SAVED");

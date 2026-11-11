@@ -323,6 +323,36 @@ fn an_unusable_settings_file_is_set_aside_not_overwritten() {
     }
 }
 
+/// The three set-aside names taken already: the unusable file stays as it is and nothing is written over it (never an
+/// older one replaced), "SETTINGS DAMAGED" said; the registers' settings in use.
+#[test]
+fn with_every_set_aside_name_taken_the_file_stays() {
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    for (k, name) in crate::SETTINGS_BAD.iter().enumerate() {
+        crate::fat::tests::put_file(&mut d, crate::recorder::DIR, name, &[k as u8 + 1; 1024]);
+    }
+    let bytes = [0x5au8; 1024];
+    crate::fat::tests::put_file(&mut d, crate::recorder::DIR, crate::SETTINGS_FILE, &bytes);
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = d.0;
+    set_registers(&mut sim, some());
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+    for _ in 0..20 {
+        run(&mut sim, &mut app, 200);
+    }
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("SETTINGS DAMAGED")));
+    assert_eq!(app.settings.ftp, some().ftp);
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    assert_eq!(read_all(&mut fat, &mut d, "Rustfw/settings.bin"), Ok(bytes.to_vec()), "left as it was");
+    for (k, name) in crate::SETTINGS_BAD.iter().enumerate() {
+        let v = read_all(&mut fat, &mut d, &std::format!("Rustfw/{name}")).unwrap();
+        assert!(v == [k as u8 + 1; 1024], "{name} kept");
+    }
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
 /// A power cut after every sector of a write of the settings: the first (the file created, the migration) and later
 /// ones (a copy over the older). The next start, with the registers as the change left them, has the new settings;
 /// with them lost, the file's old or new, never the defaults once a copy was whole; the volume stays clean for fsck.
