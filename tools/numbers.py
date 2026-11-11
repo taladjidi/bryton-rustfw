@@ -120,17 +120,30 @@ def values():
     v['doctests'] = len(cargo_list('--doc', '--', '--list'))
     v['rust_lines'] = sum(sum(1 for _ in open(f, encoding='utf-8')) for f in
                           glob.glob(os.path.join(ROOT, 'src', '**', '*.rs'), recursive=True))
-    v['taps'] = taps_total()
+    taps = taps_total()
+    if taps is None:
+        print('numbers.py: no target/sim/taps.txt, taps skipped', file=sys.stderr)
+    else:
+        v['taps'] = taps
     return v
 
 
 def taps_total():
-    '''Sum of actions x weight over target/sim/taps.txt ("task | actions | budget | weight" lines).'''
+    '''Sum of actions x weight over target/sim/taps.txt ("task | actions | budget | weight" lines); None when the
+    file is not there (cargo test-host not run yet), like the other optional values.'''
     path = os.path.join(ROOT, 'target', 'sim', 'taps.txt')
     if not os.path.exists(path):
-        sys.exit('numbers.py: no target/sim/taps.txt: run cargo test-host first')
-    rows = [ln.split(' | ') for ln in open(path, encoding='utf-8') if ln.strip() and not ln.startswith('#')]
-    return sum(int(r[1]) * int(r[3]) for r in rows)
+        return None
+    total = 0
+    for n, ln in enumerate(open(path, encoding='utf-8'), 1):
+        if not ln.strip() or ln.startswith('#'):
+            continue
+        try:
+            r = ln.split(' | ')
+            total += int(r[1]) * int(r[3])
+        except (IndexError, ValueError):
+            sys.exit(f'numbers.py: {path} line {n} is not "task | actions | budget | weight": {ln.strip()!r}')
+    return total
 
 
 def texts(vals):

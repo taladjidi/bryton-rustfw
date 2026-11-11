@@ -102,7 +102,15 @@ impl App {
             }
             self.notes.ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < self.notes.kind.ms());
             if self.notes.ms.is_none() {
+                // a row's "SURE?" goes with its banner: a stray Start later must not act with no prompt shown
+                let armed = self.menu.confirm.is_some_and(|c| c != PAST_DELETE);
+                if armed {
+                    self.menu.confirm = None;
+                }
                 self.unbanner(b);
+                if armed && let Screen::Menu(m, sel) = self.screen {
+                    self.update_menu_rows(b, m, sel); // its "SURE?" goes
+                }
             }
         }
     }

@@ -404,6 +404,13 @@ impl App {
         {
             return;
         }
+        // the clock's tap that only woke the screen or cleared a banner does not also open the menu
+        if (cleared || woke)
+            && let (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) = (self.screen, i)
+            && inside(ui::MENU_TAP, x, y)
+        {
+            return;
+        }
         let call = call_choice(i);
         match (self.screen, i) {
             // during a ride (or on its card), a first hold only warns: switching off ends the riding (the recorder
@@ -532,8 +539,8 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.wkt_avg_at(x, y) => {
                 return self.cycle_wkt_avg(b);
             }
-            // a tap on the clock of the strip opens the menu, even while recording: a 44 px target, and the touch lock above
-            // stops a stray touch. The only touch way in from a ride page (the hold is ignored while recording)
+            // a tap on the clock of the strip opens the menu, even while recording: the strip's own 24 px, no field taken, and the touch lock
+            // above stops a stray touch (a tap that woke the screen or cleared a banner is dropped before this). The only touch way in from a ride page (the hold is ignored while recording)
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if inside(ui::MENU_TAP, x, y) => {
                 self.open(Screen::Menu(self.menu_root(), 0))
             }

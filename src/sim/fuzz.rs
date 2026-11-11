@@ -2393,7 +2393,7 @@ const MENU_TREE_OWNED: [(&str, u32); 33] = [
     ("Alerts", 0),
     ("Display", 0),
     ("System", 0),
-    ("BuiltIn", 0),
+    ("BuiltIn", 2),
     ("Group", 0),
     ("History", 0),
     ("Stock", 0),
@@ -2417,16 +2417,16 @@ const MENU_TREE_OWNED: [(&str, u32); 33] = [
     ("Workouts", 3),
     ("Courses", 3),
     ("switch rows", 3),
-    ("shown", 3),
-    ("moved", 3),
-    ("renamed", 3),
+    ("shown", 0),
+    ("moved", 2),
+    ("renamed", 0),
     ("ride a course picked", 0),
     ("course picked in a ride", 0),
 ];
 /// A part reaches an owned key at least this many times.
 const MENU_TREE_MIN: u32 = 1;
 /// Per part, the settings stored by an act and the rides ended (measured: the least of the four parts, halved).
-const MIN_ACTS: u32 = 23;
+const MIN_ACTS: u32 = 50;
 const MIN_RIDES: u32 = 5;
 
 /// Every menu of the tree and every event the walk must see is owned by one part (the old whole-run checks).
@@ -2534,6 +2534,39 @@ fn menu_tree_by_chance(part: u32) {
                 if let Some(&r) = ops.get(b as usize / 3 % ops.len().max(1)) {
                     app.screen = Screen::Menu(Menu::Page(n), r);
                     app.update_menu_rows(&mut sim, Menu::Page(n), r);
+                }
+            }
+            if let Screen::Menu(m, _) = app.screen()
+                && matches!(
+                    m,
+                    Menu::Main | Menu::Settings | Menu::Me | Menu::Alerts | Menu::Display | Menu::Bike | Menu::System
+                )
+                && b % 5 == 0
+            {
+                // the way to the settings: now and then the cursor on SETTINGS or a setting, so the walk still stores
+                // them as the menus grow rows above them
+                use crate::menu::Row;
+                let rows: Vec<usize> = (0..app.rows(m))
+                    .filter(|&r| {
+                        matches!(
+                            app.row(m, r),
+                            Some(
+                                Row::Set(_)
+                                    | Row::Open(
+                                        Menu::Settings
+                                            | Menu::Me
+                                            | Menu::Alerts
+                                            | Menu::Display
+                                            | Menu::Bike
+                                            | Menu::System
+                                    )
+                            )
+                        )
+                    })
+                    .collect();
+                if let Some(&r) = rows.get(b as usize / 5 % rows.len().max(1)) {
+                    app.screen = Screen::Menu(m, r);
+                    app.update_menu_rows(&mut sim, m, r);
                 }
             }
             let (in_menu, avg) = (matches!(app.screen(), Screen::Menu(..)), app.settings.wkt_avg);

@@ -784,7 +784,7 @@ impl App {
                 if with_value || cut || workout {
                     eat(value.as_str().as_bytes());
                 }
-                if with_value || sensor || value.as_str().is_empty() {
+                if with_value || workout || value.as_str().is_empty() {
                     eat(&color.to_le_bytes());
                 }
                 eat(&[u8::from(i == sel)]);

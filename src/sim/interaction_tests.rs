@@ -21,7 +21,7 @@ impl Count {
             Screen::Menu(m, sel) => menu::first_shown(sel, ui::MENU_ROWS, app.rows(m)),
             _ => 0,
         };
-        let y = ui::LIST_Y + (row - first) as u32 * ui::MENU_ROW + ui::MENU_ROW / 2;
+        let y = ui::LIST_Y + row.saturating_sub(first) as u32 * ui::MENU_ROW + ui::MENU_ROW / 2;
         app.input(sim, Input::Touch(Gesture::Tap(120, y as u16)));
     }
 }

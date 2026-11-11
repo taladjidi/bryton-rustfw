@@ -111,22 +111,34 @@ impl Run {
         // a ride is open: the clock of the strip; else the overview's gear
         if self.app.ride.state() != ride::State::Idle {
             let t = ui::MENU_TAP;
-            return self.touch(Gesture::Tap((t.0 + t.2 / 2) as u16, (t.1 + t.3 / 2) as u16));
+            let tap = Gesture::Tap((t.0 + t.2 / 2) as u16, (t.1 + t.3 / 2) as u16);
+            self.touch(tap);
+            if !matches!(self.app.screen(), Screen::Menu(..)) {
+                self.touch(tap); // a banner was up: that tap only cleared it
+            }
+            return;
         }
         let t = ui::GEAR_TAP;
         self.touch(Gesture::Tap((t.0 + t.2 / 2) as u16, (t.1 + t.3 / 2) as u16));
     }
 
-    /// Each row of the path, skipping one the menu shown does not have (a shorter way).
+    /// Each row of the path, in turn; a row the menu shown does not have fails the task.
     fn rows(&mut self, touch: bool, rows: &[Row]) {
         for &r in rows {
             // the course list is read once the menu is open: the hill is found then
             let r =
                 if matches!(r, Row::Course(_)) && self.has(Row::Course(0)) { Row::Course(hill(&self.app)) } else { r };
-            if self.has(r) {
-                if touch { self.tap_to(r) } else { self.keys_to(r) }
-            }
+            assert!(self.has(r), "{r:?} is not in the menu shown: {:?}", self.app.screen());
+            if touch { self.tap_to(r) } else { self.keys_to(r) }
         }
+    }
+
+    /// `target`, straight from the menu shown or, when it is not there, through `via` (the main menu, SENSORS).
+    fn go(&mut self, touch: bool, target: Row, via: Row) {
+        if !self.has(target) {
+            self.rows(touch, &[via]);
+        }
+        self.rows(touch, &[target]);
     }
 
     /// Opens the menu, then each row of the path.
@@ -137,7 +149,9 @@ impl Run {
 
     /// Follows the hill course (not counted), for the tasks that start with one followed.
     fn follow(&mut self) {
-        self.path(false, &[Row::Open(Menu::Main), Row::Open(Menu::Courses), Row::Course(0)]);
+        self.open_menu(false);
+        self.go(false, Row::Open(Menu::Courses), Row::Open(Menu::Main));
+        self.rows(false, &[Row::Course(0)]);
         self.n = 0;
         assert!(self.app.page_on(COURSE));
     }
@@ -183,46 +197,56 @@ fn tasks() -> Vec<Task> {
             r.path(true, &[Row::Open(Menu::Courses), Row::Course(0)]);
             done(&r, r.app.page_on(COURSE), "course")
         }),
-        t("history list, keys", IDLE, 5, || {
+        t("history menu, keys", IDLE, 5, || {
             let mut r = Run::new(false);
             r.path(false, &[Row::Open(Menu::History)]);
             done(&r, on(&r, Menu::History), "history")
         }),
-        t("phone pairing, keys", IDLE, 8, || {
+        t("phone menu, keys", IDLE, 8, || {
             let mut r = Run::new(false);
-            r.path(false, &[Row::Open(Menu::Phone), Row::Open(Menu::Sensors), Row::Open(Menu::Phone)]);
+            r.open_menu(false);
+            r.go(false, Row::Open(Menu::Phone), Row::Open(Menu::Sensors));
             done(&r, on(&r, Menu::Phone), "phone")
         }),
-        t("phone pairing, touch", IDLE, 3, || {
+        t("phone menu, touch", IDLE, 3, || {
             let mut r = Run::new(false);
-            r.path(true, &[Row::Open(Menu::Phone), Row::Open(Menu::Sensors), Row::Open(Menu::Phone)]);
+            r.open_menu(true);
+            r.go(true, Row::Open(Menu::Phone), Row::Open(Menu::Sensors));
             done(&r, on(&r, Menu::Phone), "phone")
         }),
-        t("GPS status, keys", IDLE, 17, || {
+        t("GPS menu, keys", IDLE, 17, || {
             let mut r = Run::new(false);
             r.path(false, &[Row::Open(Menu::Settings), Row::Open(Menu::System), Row::Open(Menu::Gps)]);
             done(&r, on(&r, Menu::Gps), "gps")
         }),
         t("course in a ride, keys", RIDING, 6, || {
             let mut r = Run::new(true);
-            r.path(false, &[Row::Open(Menu::Courses), Row::Open(Menu::Main), Row::Open(Menu::Courses), Row::Course(0)]);
+            r.open_menu(false);
+            r.go(false, Row::Open(Menu::Courses), Row::Open(Menu::Main));
+            r.rows(false, &[Row::Course(0)]);
             done(&r, r.app.page_on(COURSE), "course")
         }),
-        t("course in a ride, touch", RIDING, 5, || {
+        t("course in a ride, touch", RIDING, 6, || {
             let mut r = Run::new(true);
-            r.path(true, &[Row::Open(Menu::Courses), Row::Open(Menu::Main), Row::Open(Menu::Courses), Row::Course(0)]);
+            r.open_menu(true);
+            r.go(true, Row::Open(Menu::Courses), Row::Open(Menu::Main));
+            r.rows(true, &[Row::Course(0)]);
             done(&r, r.app.page_on(COURSE), "course")
         }),
         t("workout in a ride, keys", RIDING, 7, || {
             let mut r = Run::new(true);
-            let w = [Row::Open(Menu::Workouts), Row::Open(Menu::Main), Row::Open(Menu::Workouts)];
-            r.path(false, &[w[0], w[1], w[2], Row::Workout(0), Row::WorkoutStart]);
+            let w = Row::Open(Menu::Workouts);
+            r.open_menu(false);
+            r.go(false, w, Row::Open(Menu::Main));
+            r.rows(false, &[Row::Workout(0), Row::WorkoutStart]);
             done(&r, r.app.workout_running(), "workout")
         }),
-        t("workout in a ride, touch", RIDING, 7, || {
+        t("workout in a ride, touch", RIDING, 8, || {
             let mut r = Run::new(true);
-            let w = [Row::Open(Menu::Workouts), Row::Open(Menu::Main), Row::Open(Menu::Workouts)];
-            r.path(true, &[w[0], w[1], w[2], Row::Workout(0), Row::WorkoutStart]);
+            let w = Row::Open(Menu::Workouts);
+            r.open_menu(true);
+            r.go(true, w, Row::Open(Menu::Main));
+            r.rows(true, &[Row::Workout(0), Row::WorkoutStart]);
             done(&r, r.app.workout_running(), "workout")
         }),
         t("stop following, keys", RIDING, 6, || {
@@ -240,12 +264,12 @@ fn tasks() -> Vec<Task> {
             r.path(false, &[Row::Set(menu::Setting::Light)]);
             done(&r, r.app.settings.light_level != before, "light")
         }),
-        t("sensors in a ride, keys", RIDING, 6, || {
+        t("sensors menu in a ride, keys", RIDING, 6, || {
             let mut r = Run::new(true);
             r.path(false, &[Row::Open(Menu::Sensors)]);
             done(&r, on(&r, Menu::Sensors), "sensors")
         }),
-        t("menu from a ride page, touch", RIDING, 1, || {
+        t("ride menu from a page, touch", RIDING, 2, || {
             let mut r = Run::new(true);
             r.open_menu(true);
             done(&r, matches!(r.app.screen(), Screen::Menu(Menu::Ride(_), _)), "menu")
@@ -261,6 +285,8 @@ fn tasks() -> Vec<Task> {
 /// Every task reaches its target within its budget; writes target/sim/taps.txt.
 #[test]
 fn tasks_stay_within_their_tap_budget() {
+    let path = out_dir().join("taps.txt");
+    let _ = std::fs::remove_file(&path); // a stale one must not outlive a failing run
     let mut out = std::string::String::from("# task | actions | budget | weight\n");
     let mut failed = Vec::new();
     for t in tasks() {
@@ -270,10 +296,9 @@ fn tasks_stay_within_their_tap_budget() {
             failed.push(format!("{}: {n} > {}", t.name, t.budget));
         }
     }
-    let dir = out_dir();
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("taps.txt"), out).unwrap();
     assert!(failed.is_empty(), "longer than the budget: {failed:?}");
+    std::fs::create_dir_all(out_dir()).unwrap();
+    std::fs::write(path, out).unwrap(); // only when every task reached its target within its budget
 }
 
 /// The refusals say what to do, in two lines the banner holds (shots: target/sim/refusal_N.bmp).
@@ -340,4 +365,46 @@ fn the_clock_opens_the_menu_while_recording_and_a_stray_touch_does_not() {
     let mut r = Run::new(true);
     r.touch(Gesture::Hold(120, 200));
     assert!(r.app.notes.text.as_str().starts_with("MENU: HOLD PAGE"), "{:?}", r.app.notes.text.as_str());
+}
+
+/// The clock's tap is dropped when it only clears a banner or wakes the screen, and the box leaves the fields alone.
+#[test]
+fn the_clock_tap_only_acts_when_it_is_the_whole_input() {
+    let t = ui::MENU_TAP;
+    let mid = Gesture::Tap((t.0 + t.2 / 2) as u16, (t.1 + t.3 / 2) as u16);
+    assert!(t.3 <= ui::PAGE_Y, "the box is the strip's: no field row under it");
+    let is_menu = |r: &Run| matches!(r.app.screen(), Screen::Menu(..));
+    // a banner up: the first tap clears it, the second opens the menu
+    let mut r = Run::new(true);
+    run(&mut r.sim, &mut r.app, 10_000);
+    r.app.say("A BANNER");
+    r.app.input(&mut r.sim, Input::Touch(mid));
+    assert!(!is_menu(&r), "the tap that cleared the banner only cleared it");
+    r.app.input(&mut r.sim, Input::Touch(mid));
+    assert!(is_menu(&r), "the next one opens the menu");
+    // a dimmed screen: the tap that wakes it only wakes it
+    let mut r = Run::new(true);
+    run(&mut r.sim, &mut r.app, 10_000);
+    r.app.light.shown = 0;
+    r.app.input(&mut r.sim, Input::Touch(mid));
+    assert!(!is_menu(&r), "the waking tap did not open the menu");
+    // the first field row keeps its taps: just under the box, nothing opens the menu
+    let mut r = Run::new(true);
+    run(&mut r.sim, &mut r.app, 10_000);
+    r.app.input(&mut r.sim, Input::Touch(Gesture::Tap(t.0 as u16 + 10, ui::PAGE_Y as u16 + 2)));
+    assert!(!is_menu(&r), "a tap on the first field row is the field's");
+}
+
+/// A "SURE?" does not outlive its banner: a Start after it has gone asks again instead of stopping the course.
+#[test]
+fn an_armed_confirm_goes_with_its_banner() {
+    let mut r = Run::new(true);
+    r.follow();
+    r.open_menu(false);
+    r.rows(false, &[Row::Open(Menu::CourseNow), Row::Ride(RideRow::StopCourse)]);
+    assert!(r.app.notes.text.as_str().starts_with("STOP FOLLOWING?"));
+    run(&mut r.sim, &mut r.app, 10_000); // the banner goes
+    r.app.press(&mut r.sim, Press::Short(Key::Start));
+    assert!(r.app.page_on(COURSE), "the course is still followed");
+    assert!(r.app.notes.text.as_str().starts_with("STOP FOLLOWING?"), "it asked again");
 }
