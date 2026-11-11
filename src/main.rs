@@ -683,8 +683,8 @@ fn rtc_set(tr: u32, dr: u32) {
     wr(RTC_WPR, 0xff);
 }
 
-/// RCC_BDCR (stm32h747xx.h `RCC_TypeDef`: offset 0x70): LSEON 0, LSERDY 1, RTCSEL 8..9 (01: LSE), RTCEN 15. A backup
-/// domain reset (a cell run flat) clears it all (BOARD.md 8, "After a backup domain loss").
+/// RCC_BDCR (stm32h747xx.h `RCC_TypeDef`: offset 0x70): LSEON 0, LSERDY 1, LSEDRV 3..4, RTCSEL 8..9 (01: LSE),
+/// RTCEN 15. A backup domain reset (a cell run flat) clears it all (BOARD.md 8, "After a backup domain loss").
 const RCC_BDCR: u32 = RCC + 0x070;
 
 /// The RTC counts: enabled (RTCEN), on a clock (RTCSEL not 0), and that clock ready if it is the LSE.
@@ -698,10 +698,18 @@ fn rtc_running() -> bool {
 /// stm32h7xx_hal_rcc.c `HAL_RCC_OscConfig`, `LSE_STARTUP_TIMEOUT` 5000 ms), then, on a domain that selects no clock
 /// (RTCSEL is write-once until a domain reset), RTCSEL = LSE and RTCEN, and the prescalers stock sets (31 / 1023, in
 /// INIT, PREDIV_S first: stm32h7xx_hal_rtc.c `HAL_RTC_Init`). The calendar stays at its reset values (2000-01-01).
-/// The LSE drive (LSEDRV 3..4) is left at its reset value, lowest (stock's: inferred, not read). Not yet seen on the
-/// unit.
+/// An LSE turned on from off gets stock's drive first, the highest (LSEDRV 3..4 = 0b11, read after stock on the unit,
+/// BOARD.md 8): it cannot be changed while LSEON is set (stm32h7xx_hal_rcc.h `__HAL_RCC_LSEDRIVE_CONFIG`: "On STM32H7
+/// Rev.B and above devices this can't be updated while LSE is ON"; 0b11 is the highest on every revision). Not yet
+/// seen on the unit.
 fn rtc_start() {
     modify(PWR_CR1, 0, 1 << 8); // DBP
+    // read back set before the first BDCR write, at most 100 ms (HAL_RCC_OscConfig, `RCC_DBP_TIMEOUT_VALUE`)
+    let t0 = cycles();
+    while rd(PWR_CR1) & (1 << 8) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 10 {}
+    if rd(RCC_BDCR) & 1 == 0 {
+        modify(RCC_BDCR, 0, 3 << 3); // LSEDRV highest, as stock
+    }
     modify(RCC_BDCR, 0, 1); // LSEON
     let t0 = cycles();
     while rd(RCC_BDCR) & (1 << 1) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 1000 * 5000 {}

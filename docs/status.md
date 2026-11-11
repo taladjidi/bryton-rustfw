@@ -453,12 +453,18 @@ On the unit: a ride with stops, its saved timer against the screen's, and Interv
 
 Details: timer stop_all and start events with timer_trigger auto at each stop and when moving again; each lap's and the session's total_timer_time leave the stops out, so they are the screen's timer (the unit had saved 241 s for a 4.5 min ride at 0 km/h showing TIMER 0:00); a reset during a stop comes back paused with the stop's timer.
 
+**Faults in a row with a ride open (2026-11-11, lib.rs `begin`)**
+
+Seen: simulator (`faults_in_a_row_keep_the_ride_on_the_card_unresumed`): from 2 faults in a row the ride is not resumed (NOT RESUMED: NEXT START SAVES IT), kept on the card, and the next Start saves it as it is into `\Activities` (never resumes it, however recent: storage/recorder/mod.rs `decline`) and records the new ride under its own name; a boot that finds more than 3 in a row (a restart out of the park) clears the count. Not done: saving it by itself once the unit has run a minute (stock and the phone see it only after the next Start). That save runs the same code as the resume up to its checkpoint, and the decline is in RAM only, so a fault there would come back at every Start; a decline kept across resets (in the ride's backup register) comes first.
+
+On the unit, silent: after a four-button restart, a `tools/dev.py peek` of backup register 29 (RTC_BKP29R, 0x580040c4: 0xfa in the top byte after a fault): whether the restart keeps the backup registers (inferred: the backup domain survives a reset). The RCC_RSR read after one such restart (2026-10-25, bryton-S510-mods FLASHLOG #77: 0x01560000) has SFTRSTF (bit 24) set beside PINRSTF, so the reset flags cannot tell it from a fault's reset: the count past 3 is what does.
+
 **A power cut with the backup domain lost, then the boot (2026-11-02, app/riding.rs `left_by_a_power_loss`)**
 
 Seen: simulator only, with the RTC back at 2000-01-01 and stopped until the boot starts it (lib.rs `begin`, main.rs `rtc_start`, BOARD.md 8).
 
 On the unit, with the owner:
-1. Before and after a full drain, a `tools/dev.py peek` of RCC_BDCR (0x58024470: LSEON, LSERDY, RTCSEL, RTCEN) and RTC_PRER (0x58004010): whether the drain resets the backup domain at all (no coin cell seen), and the values stock leaves. Silent, any time: a peek of RCC_BDCR on a normal boot after stock, to read stock's LSE drive (LSEDRV, bits 3..4). This firmware starts the LSE at the lowest drive (the reset value): if the crystal needs more, a boot after a backup domain loss shows CLOCK NOT RUNNING, and `rtc_start` must set stock's drive.
+1. Before and after a full drain, a `tools/dev.py peek` of RCC_BDCR (0x58024470: LSEON, LSERDY, RTCSEL, RTCEN) and RTC_PRER (0x58004010): whether the drain resets the backup domain at all (no coin cell seen). The values stock leaves were read on 2026-11-11 (BOARD.md 8: LSEDRV 0b11, the highest drive, which `rtc_start` now sets before it turns the LSE on); after the drain the boot must show no CLOCK NOT RUNNING and RCC_BDCR 0x0000811b again.
 2. A ride recorded a few minutes, the battery run flat (or VBAT cut), the boot: no CLOCK NOT RUNNING, the clock counting from 2000-01-01, RIDE RESUMED, paused at the last checkpoint, then the save; both copies (`\Activities`, `\Rustfw\Activities`) with records after the resume, and the next ride's full copy with records too.
 3. A first start of this firmware on a unit that never ran it: nothing resumed, stock's settings imported.
 

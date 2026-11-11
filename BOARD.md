@@ -406,8 +406,12 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   2000-01-01 00:00:00 and the bootloader starts none of it. The firmware sets LSEON, waits for LSERDY at most 5 s
   (STM32CubeH7 `LSE_STARTUP_TIMEOUT`), selects the LSE if nothing is, sets RTCEN, then in INIT writes RTC_PRER
   (0x58004010: PREDIV_S bits 0..14 first, then PREDIV_A bits 16..22, as stm32h7xx_hal_rtc.c `HAL_RTC_Init`) to
-  1023 / 31 as stock. LSEDRV (bits 3..4) stays at its reset value, the lowest drive (stock's: inferred, not read). No
-  LSE: the app says CLOCK NOT RUNNING.
+  1023 / 31 as stock. Before LSEON, an LSE that was off gets LSEDRV (bits 3..4) = 0b11, the highest drive, as stock
+  (it cannot change while LSEON is set on rev. B and later: stm32h7xx_hal_rcc.h `__HAL_RCC_LSEDRIVE_CONFIG`). No LSE:
+  the app says CLOCK NOT RUNNING.
+- **Read on the unit** (2026-11-11, `tools/dev.py peek`, running this firmware, the domain as stock left it): RCC_BDCR
+  = 0x0000811b (LSEON 1, LSERDY 1, LSEDRV 0b11 the highest drive, RTCSEL 01 = LSE, RTCEN 1), RTC_PRER = 0x001f03ff
+  (PREDIV_A 31, PREDIV_S 1023), RCC_CR = 0x0303f1a5 (HSECSSON, bit 19, clear: the HSE clock security system is off).
 
 - **Wake-up timer** (the Stop benches, main.rs `wakeup_timer`; **seen on the unit 2026-11-03**: WUTF set after 99
   and 1000 ms sleeps of 100 and 1000 asked): RTC_WUTR (0x58004014)

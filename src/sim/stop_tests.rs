@@ -119,6 +119,17 @@ fn a_wake_that_does_not_restore_the_clocks_resets() {
     let w = sim.backup[crate::stopbench::BKP[0]];
     assert_eq!(w >> 24, crate::stopbench::TAG_A, "the report kept as `bench stop` keeps it");
     assert_eq!(w >> 12 & crate::stopbench::PLL, 0, "PLL not locked again, in register 0");
+    // the unit after that reset (the backup registers kept) never stops idle again while the report is there: a wake
+    // broken every time would otherwise reset it every minute, all day, and AUTO OFF's count with it
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.backup = sim.backup;
+    sim2.main.stop_broken = true;
+    let mut app2 = App::start(&mut sim2, None);
+    app2.settings.auto_off = 0;
+    let mut main2 = MainLoop::<SimLink>::new(<Sim as Board>::CPU_HZ, 80);
+    until(&mut sim2, &mut app2, &mut main2, 200_000);
+    assert_eq!((sim2.main.resets, sim2.main.stops.len()), (0, 0), "an idle Stop after a wake that broke");
+    assert!(!app2.stop_ok(&mut sim2));
 }
 
 #[test]

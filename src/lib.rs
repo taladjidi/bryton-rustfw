@@ -633,12 +633,29 @@ impl App {
                 self.notice("CLOCK NOT RUNNING");
             }
         }
-        // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
+        // faults in a row (hw.rs `mark`: a reset up to 3, the park after). Past 3 this boot was not hw.rs's reset but a
+        // restart from outside the park (the four-button restart): three fresh tries, the marker kept for the log
+        let fault = b.backup_read(FAULT_BKP);
+        let faults = if fault >> 24 == 0xfa { fault & 0xff } else { 0 };
+        if faults > 3 {
+            b.backup_write(FAULT_BKP, fault & !0xff);
+        }
+        // a ride left open on the card: reopened at the first step (not here: its card work in its own frame); after
+        // 2 faults in a row the resume may be what faults, so it is not tried, at the boot nor at the next Start: the
+        // ride stays on the card, saved as it is at the next ride's start (storage/recorder/mod.rs `decline`), and
+        // the unit is not parked
         self.card_writable = b.emmc_writable();
         self.awake_at = self.prof.clock.us(b);
         let marker = b.backup_read(RIDE_BKP) == RIDE_OPEN;
         let probe = if self.card_writable && !marker { self.left_by_a_power_loss(b) } else { Some(false) };
-        self.rec.resume_if(self.card_writable && (marker || probe != Some(false)));
+        let open = self.card_writable && (marker || probe != Some(false));
+        self.rec.resume_if(open && faults < 2);
+        if open && faults >= 2 {
+            self.rec.clean.decline();
+            if marker || probe == Some(true) {
+                self.notice("NOT RESUMED: NEXT START SAVES IT"); // known open, not an unread record
+            }
+        }
         // for stock's import: a ride known open (the marker, or its record read so), none, or unknown (the record
         // not read: the import waits, `first_import`)
         let ride = if !self.card_writable {
@@ -656,7 +673,6 @@ impl App {
         if let Some((lat, lon)) = self.gps.aid.pos {
             self.track.seed(lat, lon); // the map shows where the unit last was until the first fix
         }
-        let fault = b.backup_read(FAULT_BKP);
         if fault >> 24 == 0xfa {
             // the last run ended in a fault or a panic, and hw.rs restarted the unit
             let mut l = Line::<20>::new();

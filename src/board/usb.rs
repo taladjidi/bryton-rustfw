@@ -558,8 +558,8 @@ impl Host for Link {
     }
 
     // The computer's addresses reach rd / wr only here, checked again whatever the caller (dev.rs checks them too):
-    // aligned, poke in the peripheral blocks only (dev.rs `IO`: the holes between them bus-fault), so the poke itself
-    // never writes RAM; peek there or in the DTCM or the SDRAM ([`dev::MEMORY`]), always mapped. A poke can still
+    // aligned, poke in the peripheral blocks only (dev.rs `IO`: the holes between them bus-fault) and never where one
+    // wrong word could brick the unit (dev.rs `NO_POKE`), so the poke itself never writes RAM; peek there or in the DTCM or the SDRAM ([`dev::MEMORY`]), always mapped. A poke can still
     // make the hardware write RAM (a DMA, MDMA or FMC register, the RCC or the MPU's peers): the dev link is a
     // debugging tool, and that is its operator's to avoid, not something this check can promise.
     fn peek(&mut self, addr: u32) -> u32 {
@@ -568,7 +568,7 @@ impl Host for Link {
     }
 
     fn poke(&mut self, addr: u32, value: u32) {
-        if addr.is_multiple_of(4) && dev::io(addr) {
+        if dev::poke_ok(addr) {
             wr(addr, value);
         }
     }
