@@ -434,10 +434,24 @@ fn next_step_strip() {
         b.count()
     });
     let px0 = sim.pixels;
-    ui::draw_next_strip(&mut Panel(&mut sim, (0, ui::H), look), head.as_str(), n.as_str(), Some(o.as_str()));
+    ui::draw_strip_msg(
+        &mut Panel(&mut sim, (0, ui::H), look),
+        ui::ACCENT,
+        head.as_str(),
+        n.as_str(),
+        Some(o.as_str()),
+        ui::Rec::Running,
+    );
     let second = sim.pixels - px0;
     let px0 = sim.pixels;
-    ui::draw_next_strip(&mut Panel(&mut sim, (0, ui::H), look), head.as_str(), n.as_str(), None);
+    ui::draw_strip_msg(
+        &mut Panel(&mut sim, (0, ui::H), look),
+        ui::ACCENT,
+        head.as_str(),
+        n.as_str(),
+        None,
+        ui::Rec::Running,
+    );
     std::println!("next-step strip: {second} px for a second, {} px whole", sim.pixels - px0);
     assert!(second <= 2 * 24 * 14, "{second} px: one cell of the countdown");
 }
@@ -504,7 +518,7 @@ fn next_step_strip_text_and_return() {
         ],
     );
     let head = |app: &App, next| {
-        let a = crate::app::Ahead { next, left: 5, metres: false };
+        let a = crate::app::Ahead { kind: crate::app::AheadKind::Step, next, left: 5, metres: false };
         std::string::String::from(app.ahead_head(&a).as_str())
     };
     assert_eq!(head(&app, 0), "150BPM 10:00", "NEXT dropped, no number cut");

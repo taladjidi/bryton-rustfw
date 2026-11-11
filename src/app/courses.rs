@@ -300,14 +300,26 @@ impl App {
     /// Shows and sounds what following the course said: off course (banner and the alert's beeps), back on it, a
     /// climb starting ("CLIMB 3.4 KM 7%", a beep).
     pub(crate) fn course_event(&mut self, ev: course::Event) {
+        // the repeat of off course goes to a rider who is riding, not to one stopped or paused (no beep, no light)
+        if ev == course::Event::OffAgain && !(self.ride.state() == ride::State::Running && self.ride.moving()) {
+            return;
+        }
         // seen whatever the screen: the light comes on as for a key, even after its time-out
         self.light.idle_ms = 0;
         match ev {
-            course::Event::Off => {
+            course::Event::Off | course::Event::OffAgain => {
                 self.alarm("OFF COURSE");
                 self.tones.play(&BEEP_ALERT);
             }
             course::Event::Back => self.say("BACK ON COURSE"),
+            course::Event::End => {
+                let mut l = Line::<20>::new();
+                l.push_str("COURSE DONE ");
+                crate::push_trip(&mut l, self.courses.as_deref().map_or(0, |c| c.course.len_m()), false);
+                l.push_str(" KM");
+                self.say_as(l.as_str(), Banner::Ride);
+                self.tones.play(&Self::STEP_TONE);
+            }
             course::Event::Climb(k) => {
                 let mut l = Line::<20>::new();
                 l.push_str("CLIMB ");
@@ -363,9 +375,13 @@ impl App {
             // not on the course yet: the way to its start, a compass point and the distance
             (Field::NextTurn, _) if c.to_start(at).is_some() => {
                 let (deg, m) = c.to_start(at).unwrap_or((0, 0));
-                l.push_str(
-                    ["N", "NE", "E", "SE", "S", "SW", "W", "NW"].get((deg as usize + 22) / 45 % 8).unwrap_or(&"N"),
-                );
+                match self.gps.pvt.filter(|p| p.good() && p.speed_mm_s >= crate::app::fields::HEADING_MIN_MM_S) {
+                    // an arrow relative to the way the rider faces (heading in degrees x 1e-5)
+                    Some(p) => l.push_str(Self::turn_toward(deg, p.heading).glyph()),
+                    None => l.push_str(
+                        ["N", "NE", "E", "SE", "S", "SW", "W", "NW"].get((deg as usize + 22) / 45 % 8).unwrap_or(&"N"),
+                    ),
+                }
                 push_dist(&mut l, m);
             }
             (Field::NextTurn, _) => match c.next_cue(at) {
@@ -386,6 +402,22 @@ impl App {
             _ => l.push_str("--"),
         }
         l
+    }
+
+    /// The turn that faces bearing `deg` for a rider heading `heading_e5` (degrees x 1e-5).
+    pub(crate) fn turn_toward(deg: u32, heading_e5: i32) -> course::Turn {
+        use course::Turn::*;
+        let rel = (i64::from(deg) * 100_000 - i64::from(heading_e5)).rem_euclid(36_000_000) as u32;
+        match (rel + 1_125_000) / 4_500_000 % 8 {
+            1 => SlightRight,
+            2 => Right,
+            3 => SharpRight,
+            4 => UTurn,
+            5 => SharpLeft,
+            6 => Left,
+            7 => SlightLeft,
+            _ => Straight,
+        }
     }
 
     /// A course field's colour: OFF COURSE red once off course was said (an alarm); None for the others.

@@ -60,6 +60,8 @@ impl GaugeShown {
 /// The next-step strip's state: the step it announces and the countdown to it ([`App::ahead`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Ahead {
+    /// What it announces: a workout step, a turn of the course, or being off it.
+    pub(crate) kind: AheadKind,
     /// The step coming (past the last: the end).
     pub(crate) next: usize,
     /// Seconds, or metres, left in the step running.
@@ -68,12 +70,33 @@ pub(crate) struct Ahead {
     pub(crate) metres: bool,
 }
 
+/// What the strip announces ([`Ahead::kind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AheadKind {
+    /// The workout's next step (`next` is its index).
+    Step,
+    /// The course's next turn (`next` is its place along the course, m).
+    Turn(crate::course::Turn),
+    /// Off the course (`left` is the distance from it).
+    Off,
+}
+
 impl Ahead {
+    /// The head's colour: red for the alarm, the orange of the next-step strip otherwise.
+    pub(crate) fn color(&self) -> u16 {
+        if self.kind == AheadKind::Off { ui::RED } else { ui::ACCENT }
+    }
+
     /// The countdown right-aligned in 4 characters ("  7S", " 45M"), so a second changes one cell.
     pub(crate) fn count(&self) -> Line<4> {
         let mut n = Line::<4>::new();
-        n.push_u32(self.left);
-        n.push_str(if self.metres { "M" } else { "S" });
+        if self.metres && self.left >= 1000 {
+            n.push_u32((self.left / 1000).min(99)); // off course by kilometres: "1KM" .. "99KM"
+            n.push_str("KM");
+        } else {
+            n.push_u32(self.left);
+            n.push_str(if self.metres { "M" } else { "S" });
+        }
         let mut l = Line::<4>::new();
         for _ in n.as_str().len()..4 {
             l.push_str(" ");
@@ -82,6 +105,15 @@ impl Ahead {
         l
     }
 }
+
+/// What the strip shows of the three that could take it: off course first, a turn within 100 m, then the workout's
+/// step, then a farther turn.
+pub(crate) fn pick_ahead(off: Option<Ahead>, turn: Option<Ahead>, step: Option<Ahead>) -> Option<Ahead> {
+    off.or(turn.filter(|a| a.left <= 100)).or(step).or(turn)
+}
+
+/// The next turn is shown in the strip from this far, m.
+pub(crate) const NAV_M: u32 = 300;
 
 impl App {
     // -----------------------------------------------------------------------------------------------------------
@@ -270,15 +302,41 @@ impl App {
     /// The strip to show now: the last [`workout::AHEAD_S`] seconds of a timed step, or [`workout::AHEAD_M`] metres of a
     /// distance step (stock's window); None otherwise, and for an open step (it ends on Lap).
     pub(crate) fn ahead(&self) -> Option<Ahead> {
+        // off course first, a turn within 100 m, then the workout's step, then a farther turn
+        pick_ahead(self.nav_off(), self.nav_turn(), self.workout_ahead())
+    }
+
+    /// The course's strip: "OFF COURSE 120M" in red while off it, else the next turn from [`NAV_M`] ahead until it is
+    /// passed ("<- LEFT 180M"). None without a course followed (one `Option` test).
+    fn nav_off(&self) -> Option<Ahead> {
+        let (_, at) = self.on_course()?;
+        at.off_course().then(|| Ahead {
+            kind: AheadKind::Off,
+            next: 0,
+            left: at.off_m.unwrap_or(0) / 10 * 10,
+            metres: true,
+        })
+    }
+
+    /// See [`App::nav_off`]: the next turn, within [`NAV_M`].
+    fn nav_turn(&self) -> Option<Ahead> {
+        let (c, at) = self.on_course()?;
+        let (cue, d) = c.next_cue(at).filter(|&(_, d)| d <= NAV_M)?;
+        // tens of metres beyond 100: the digits change less often
+        let left = if d > 100 { (d + 5) / 10 * 10 } else { d };
+        Some(Ahead { kind: AheadKind::Turn(cue.turn), next: cue.at_m as usize, left, metres: true })
+    }
+
+    fn workout_ahead(&self) -> Option<Ahead> {
         let steps = self.plan.steps();
         let p = self.plan.player?;
         let next = p.step(steps)? + 1;
         match p.left(steps, self.ride.dist_m()) {
             workout::Left::Time(t) if (1..=workout::AHEAD_S).contains(&t) => {
-                Some(Ahead { next, left: t, metres: false })
+                Some(Ahead { kind: AheadKind::Step, next, left: t, metres: false })
             }
             workout::Left::Distance(m) if (1..=workout::AHEAD_M).contains(&m) => {
-                Some(Ahead { next, left: m, metres: true })
+                Some(Ahead { kind: AheadKind::Step, next, left: m, metres: true })
             }
             _ => None,
         }
@@ -289,6 +347,18 @@ impl App {
     /// the numbers are never cut.
     pub(crate) fn ahead_head(&self, a: &Ahead) -> Line<24> {
         use storage::workout_file::{Kind, Length};
+        if a.kind != AheadKind::Step {
+            let mut l = Line::<24>::new();
+            match a.kind {
+                AheadKind::Turn(t) => {
+                    l.push_str(t.glyph());
+                    l.push_str(" ");
+                    l.push_str(t.word());
+                }
+                _ => l.push_str("OFF COURSE"),
+            }
+            return l;
+        }
         let Some(s) = self.plan.steps().get(a.next) else {
             let mut l = Line::<24>::new();
             l.push_str("LAST STEP");
@@ -350,7 +420,9 @@ impl App {
                 l.push_str("WORKOUT DONE")
             }
             // the strip announced it (a Lap skip or the start had none): no banner, the beep stays
-            workout::Event::Step(_) if self.plan.top.is_some() && !self.hint_shown => {
+            workout::Event::Step(_)
+                if matches!(self.plan.top, Some(a) if a.kind == AheadKind::Step) && !self.hint_shown =>
+            {
                 return self.tones.play(&Self::STEP_TONE);
             }
             workout::Event::Step(i) => {

@@ -74,6 +74,10 @@ pub const BEHIND: usize = 8;
 pub const AHEAD: usize = 40;
 /// Off course past this far, m, for [`OFF_S`] seconds; back within [`BACK_M`].
 pub const OFF_M: u32 = 50;
+/// A course shorter than this, m, has no end to say; the end rearms when the rider is farther than this from it.
+const END_REARM_M: u32 = 100;
+/// Still off course: the alarm again this often, s.
+pub const OFF_REPEAT_S: u32 = 60;
 /// See [`OFF_M`].
 pub const OFF_S: u32 = 5;
 /// See [`OFF_M`].
@@ -357,6 +361,10 @@ pub enum Event {
     Climb(Climb),
     /// A cue ahead, and how far, m (0: at the turn) ([`cues`]).
     Cue(Cue, u32),
+    /// Still off course a minute later ([`OFF_REPEAT_S`]): the caller says it again unless the rider is stopped.
+    OffAgain,
+    /// The course's end reached (said once; again after the rider was back more than 100 m before it).
+    End,
 }
 
 /// What a course file gives, in order: a point, or a cue at a position (degrees x 1e-7).
@@ -384,6 +392,8 @@ pub struct Tracker {
     /// The course was joined (within [`BACK_M`]) at least once: only then is going off it said.
     joined: bool,
     warned: bool,
+    /// The end was said.
+    ended: bool,
     /// Climbs said so far (the next one to say).
     said: usize,
     /// Segments and chunk boxes looked at so far: the cost (src/sim/ checks a budget).
@@ -410,6 +420,7 @@ impl Tracker {
             lost_s: 0,
             joined: false,
             warned: false,
+            ended: false,
             said: 0,
             examined: 0,
             cue: 0,
@@ -1002,6 +1013,17 @@ impl Course {
             t.warned = false;
             return Some(Event::Back);
         }
+        // still off: the alarm again every OFF_REPEAT_S (off_s counts the seconds beyond the limit)
+        if t.warned && t.off_s > OFF_S && (t.off_s - OFF_S).is_multiple_of(OFF_REPEAT_S) {
+            return Some(Event::OffAgain);
+        }
+        // the end: within BACK_M of it, on the course, once; a lap course rearms it when the rider is far from the end
+        let left = self.len_m().saturating_sub(h.along_m);
+        if t.joined && !t.ended && left <= BACK_M && h.off_m <= BACK_M && self.len_m() >= END_REARM_M {
+            t.ended = true;
+            return Some(Event::End);
+        }
+        t.ended &= left <= END_REARM_M;
         if let Some(e) = self.cue_step(t, was) {
             return Some(e);
         }
@@ -1516,6 +1538,80 @@ pub(crate) mod tests {
         assert!(t.along_m.abs_diff(33_000) <= 10, "still on lap 5: {t:?}");
     }
 
+    /// Fuzz: random walks over a course never panic; the end is said at most once per approach, an off alarm only
+    /// while warned; the walks reach the end and the off alarm (counts over the seeds).
+    #[test]
+    fn fuzz_walks_end_and_off() {
+        let c = course(&lines(&[(0.0, 0.0, 100.0), (1000.0, 0.0, 100.0)], 10.0));
+        let (mut reached, mut offs, mut rearmed, mut total_approaches) = (0, 0, 0, 0);
+        for seed in 1..200u64 {
+            let (mut r, mut t, mut x, mut ends) =
+                (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), Tracker::default(), 0.0, 0);
+            // an approach: from more than END_REARM_M before the end to within BACK_M of it
+            let (mut far, mut approaches) = (true, 0);
+            for _ in 0..400 {
+                r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                x += ((r >> 40) % 40) as f64 - 6.0;
+                if (r >> 10) % 60 == 0 {
+                    x -= 200.0; // back along the course: the end rearms
+                }
+                let y = if (r >> 20) % 50 == 0 { 300.0 } else { ((r >> 33) % 40) as f64 - 20.0 };
+                let (lat, lon) = fix(x.clamp(-50.0, 1100.0), y);
+                match c.follow(&mut t, lat, lon) {
+                    Some(Event::End) => ends += 1,
+                    Some(Event::Off | Event::OffAgain) => offs += 1,
+                    _ => {}
+                }
+                let left = c.len_m().saturating_sub(t.along_m);
+                if left > END_REARM_M {
+                    far = true;
+                } else if far && left <= BACK_M {
+                    (far, approaches) = (false, approaches + 1);
+                }
+            }
+            reached += u32::from(ends > 0);
+            rearmed += u32::from(ends > 1);
+            total_approaches += approaches;
+            assert!(ends <= approaches, "{seed}: {ends} ends in {approaches} approaches");
+        }
+        assert!(
+            reached > 20 && offs > 0 && total_approaches > 0 && rearmed > 0,
+            "{reached} {offs} {total_approaches} {rearmed}"
+        );
+    }
+
+    /// To the end, back 150 m, to the end again: two Ends (a lap course), not one per fix near it.
+    #[test]
+    fn end_again_after_going_back() {
+        let c = course(&lines(&[(0.0, 0.0, 100.0), (1000.0, 0.0, 100.0)], 10.0));
+        let (mut t, mut ends) = (Tracker::default(), 0);
+        for x in [0.0, 400.0, 800.0, 990.0, 1000.0, 995.0, 850.0, 840.0, 900.0, 990.0, 1000.0, 1000.0] {
+            let (lat, lon) = fix(x, 0.0);
+            ends += u32::from(c.follow(&mut t, lat, lon) == Some(Event::End));
+        }
+        assert_eq!(ends, 2);
+    }
+
+    /// Still off course: the alarm again every OFF_REPEAT_S; the end of a course said once.
+    #[test]
+    fn off_repeats_and_end_once() {
+        let c = course(&lines(&[(0.0, 0.0, 100.0), (1000.0, 0.0, 100.0)], 10.0));
+        let (mut t, mut offs) = (Tracker::default(), 0);
+        let (lat, lon) = fix(100.0, 0.0);
+        c.follow(&mut t, lat, lon);
+        let (lat, lon) = fix(100.0, 200.0);
+        for _ in 0..(OFF_S + 2 * OFF_REPEAT_S + 3) {
+            offs += u32::from(matches!(c.follow(&mut t, lat, lon), Some(Event::Off | Event::OffAgain)));
+        }
+        assert_eq!(offs, 3, "at 5 s, then every 60 s");
+        let mut ends = 0;
+        for x in [500.0, 960.0, 985.0, 995.0, 1000.0, 990.0] {
+            let (lat, lon) = fix(x, 0.0);
+            ends += u32::from(c.follow(&mut t, lat, lon) == Some(Event::End));
+        }
+        assert_eq!(ends, 1);
+    }
+
     /// Off course after OFF_S seconds beyond OFF_M, said once; back within BACK_M; a climb said at its start; the
     /// window keeps the cost to a few dozen segments a second.
     #[test]
@@ -1535,10 +1631,11 @@ pub(crate) mod tests {
             seconds += 1;
         }
         let kinds: Vec<_> = said.iter().map(|(_, e)| core::mem::discriminant(e)).collect();
-        assert_eq!(kinds.len(), 3, "{said:?}");
+        assert_eq!(kinds.len(), 4, "{said:?}");
         assert_eq!(said[0], (336, Event::Off), "the 5th second beyond 50 m");
         assert_eq!(said[1], (504, Event::Back));
         assert!(matches!(said[2], (1000..=1016, Event::Climb(Climb { gain_m: 55..=60, .. }))), "{said:?}");
+        assert!(matches!(said[3], (1900..=2000, Event::End)), "{said:?}");
         assert!(t.examined / seconds < 120, "{} a second", t.examined / seconds);
     }
 

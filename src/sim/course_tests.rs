@@ -146,6 +146,34 @@ fn course_ride() {
     run(&mut sim, &mut app, 1500);
     assert_eq!(app.notes.text.as_str(), "OFF COURSE");
     run(&mut sim, &mut app, 1000);
+    // the strip keeps it, in red, with the distance, while the banner is gone
+    run(&mut sim, &mut app, 5000);
+    let a = app.plan.top.expect("the off course strip");
+    assert!(a.kind == crate::app::AheadKind::Off && a.left.abs_diff(150) <= 10, "{a:?}");
+    sim.save("course_off_strip");
+    // the recording indicator stays true under the strip: not saving shows its red cross there
+    let cell = |sim: &Sim| {
+        let x0 = ui::next_rec_x();
+        (0..14)
+            .flat_map(|dy| (0..10).map(move |dx| (dx, dy)))
+            .filter(|&(dx, dy)| sim.screen[((ui::STRIP_H - ui::LABEL.height() + dy) * W + x0 + dx) as usize] == ui::RED)
+            .count()
+    };
+    let before = cell(&sim);
+    app.strip.rec = ui::Rec::NotSaving;
+    app.update_strip(&mut sim); // as the second's pass does, before the ride state sets it again
+    assert!(app.plan.top.is_some() && app.strip_shown.rec == ui::Rec::NotSaving && cell(&sim) > 0);
+    assert_ne!(cell(&sim), before, "the cross replaced the dot");
+    app.strip.rec = ui::Rec::Running;
+    app.update_strip(&mut sim);
+    assert_eq!(cell(&sim), before);
+    app.theme = ui::theme::Theme::LIGHT;
+    app.repaint(&mut sim);
+    run(&mut sim, &mut app, 200);
+    assert!(app.plan.top.is_some(), "the strip is up in LIGHT");
+    sim.save("course_off_strip_light");
+    app.theme = ui::theme::Theme::DARK;
+    app.repaint(&mut sim);
     assert_eq!(sim.tones[tones..tones + 3], [2500, 0, 2500], "the alert's beeps");
     assert!(text(&app, OffCourse).parse::<u32>().unwrap().abs_diff(150) <= 2 && app.field_color(OffCourse) == ui::RED);
     assert_consistent(&sim, &app);
@@ -154,6 +182,8 @@ fn course_ride() {
     }
     run(&mut sim, &mut app, 1500);
     assert_eq!(app.notes.text.as_str(), "BACK ON COURSE");
+    run(&mut sim, &mut app, 5000);
+    assert!(app.plan.top.is_none(), "the strip is the status strip again");
     assert!(text(&app, OffCourse).parse::<u32>().unwrap() <= 2 && app.field_color(OffCourse) == ui::WHITE);
 
     // the climb: a banner at its start, then what is left of it
@@ -453,7 +483,7 @@ fn course_cues_ride() {
 
     // the ride to the end: every banner as it shows, where the rider is then (m), the tones
     let (tones, mut said, mut last) = (sim.tones.len(), Vec::new(), std::string::String::new());
-    let mut banner_px = Vec::new();
+    let (mut banner_px, mut strip_seen, mut shot, mut strip_px) = (Vec::new(), 0, false, Vec::new());
     let end = (app.courses.as_deref().unwrap().course.len_m() as u64 + 40) * 125;
     while sim.ms < end {
         let px = sim.pixels;
@@ -468,7 +498,33 @@ fn course_cues_ride() {
             }
         }
         last = b;
+        // the strip counts the next turn down from 300 m, on whatever page; never when the turn is farther
+        if let Some(a) = app.plan.top {
+            strip_px.push(sim.pixels - px);
+            assert!(matches!(a.kind, crate::app::AheadKind::Turn(_)) && a.left <= 300, "{a:?}");
+            strip_seen += 1;
+            if !shot && a.left <= 150 && app.notes.ms.is_none() {
+                shot = true;
+                assert_consistent(&sim, &app);
+                sim.save("course_turn_strip");
+                app.theme = ui::theme::Theme::LIGHT;
+                app.repaint(&mut sim);
+                run(&mut sim, &mut app, 200);
+                assert!(app.plan.top.is_some(), "the strip is up in LIGHT");
+                sim.save("course_turn_strip_light");
+                app.theme = ui::theme::Theme::DARK;
+                app.repaint(&mut sim);
+            }
+        }
     }
+    strip_px.sort();
+    let (med, max) = (strip_px[strip_px.len() / 2], strip_px[strip_px.len() - 1]);
+    std::println!("a half second with the turn strip up: {med} px median, {max} max");
+    assert!(med < 1000 && max < 40_000, "{med} {max}"); // the big ones are banners and the profile's moves
+    assert!(strip_seen > 10 && shot, "the strip showed the turns: {strip_seen}");
+    // at the end: COURSE DONE, once, with the tone
+    let done = said.pop().unwrap();
+    assert!(done.1.starts_with("COURSE DONE ") && done.1.ends_with(" KM"), "{done:?}");
     // past the last turn, at the end: no turn left, said as such (not "--" as off course)
     assert_eq!(text(&app), "END");
     let mut want = Vec::new();
@@ -1294,7 +1350,11 @@ fn navigate_to_the_start() {
         run(&mut sim, &mut app, 1000);
     }
     let t = std::string::String::from(app.field_text(Field::NextTurn).as_str());
-    assert_eq!(t, "N390M", "the start is due north");
+    assert_eq!(t, "\x08390M", "the start is due north, the rider heads north: straight on");
+    // stopped, the heading is noise: the compass point
+    sim.gnss.fix = Some(0);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.field_text(Field::NextTurn).as_str(), "N390M");
     sim.save("course_to_start");
 }
 
@@ -1638,4 +1698,58 @@ fn a_course_load_leaves_the_recorder_and_the_save_alone() {
     assert!(app.ride_settled(), "the ride saved whole");
     assert!(app.courses.as_deref().unwrap().on.is_some(), "the course loaded after the save");
     assert!(busy > 0, "passes with card work were seen");
+}
+
+/// The way to the start is an arrow relative to the heading, not a compass point.
+#[test]
+fn start_arrow_follows_the_heading() {
+    use crate::course::Turn::*;
+    let t = |deg, head: i32| App::turn_toward(deg, head * 100_000);
+    assert_eq!(t(0, 0), Straight);
+    assert_eq!(t(90, 0), Right);
+    assert_eq!(t(270, 0), Left);
+    assert_eq!(t(0, 90), Left, "start north, riding east");
+    assert_eq!(t(180, 0), UTurn);
+    assert_eq!(t(45, 0), SlightRight);
+    assert_eq!(t(10, 350), Straight, "across north");
+    for d in 0..360 {
+        for h in [-1, 0, 35_999_999, 99_999_999] {
+            let _ = App::turn_toward(d, h);
+        }
+    }
+}
+
+/// What the strip shows: off course first, a turn within 100 m, the workout's step, a farther turn.
+#[test]
+fn strip_priority() {
+    use crate::app::{Ahead, AheadKind::*, pick_ahead};
+    let a = |kind, left| Some(Ahead { kind, next: 0, left, metres: true });
+    let (off, near, far, step) =
+        (a(Off, 90), a(Turn(crate::course::Turn::Left), 80), a(Turn(crate::course::Turn::Right), 250), a(Step, 5));
+    assert_eq!(pick_ahead(off, near, step), off);
+    assert_eq!(pick_ahead(None, near, step), near, "a near turn beats the step");
+    assert_eq!(pick_ahead(None, far, step), step, "the step beats a far turn");
+    assert_eq!(pick_ahead(None, far, None), far);
+    assert_eq!(pick_ahead(None, None, None), None);
+}
+
+/// A step boundary inside the turn window still shows its banner (the strip that announced a step is not this one).
+#[test]
+fn step_banner_under_a_turn_strip() {
+    use crate::app::{Ahead, AheadKind};
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let l = |app: &App| std::string::String::from(app.notes.text.as_str());
+    app.plan.top = Some(Ahead { kind: AheadKind::Turn(crate::course::Turn::Left), next: 500, left: 120, metres: true });
+    app.workout_event(crate::workout::Event::Step(1));
+    assert!(l(&app).starts_with("2/"), "{:?}", l(&app));
+}
+
+/// The countdown right-aligned in 4 cells, kilometres from 1000 m.
+#[test]
+fn off_course_count_in_km() {
+    use crate::app::{Ahead, AheadKind};
+    let c =
+        |left| std::string::String::from(Ahead { kind: AheadKind::Off, next: 0, left, metres: true }.count().as_str());
+    assert_eq!([c(120), c(990), c(1500), c(12_000), c(250_000)], ["120M", "990M", " 1KM", "12KM", "99KM"]);
 }

@@ -1087,7 +1087,7 @@ On the unit: how long READ RIDES takes over stock's rides (about 175 KB a ride o
 
 On the unit: WORKOUTS over the card's own `\Workout\calendar` (read on the host from one unit's backup: Bryton's files decode, names cut at 15 characters); a workout ridden through (the beeps' loudness and pitch, 2 kHz and 2.5 kHz, by ear; the banners); the time a list takes to read (16 workout files of 8 KB at most, about 50 ms, inferred from the scan's 2.5 MB/s).
 
-**Next-step strip and two targets per step (app/workouts.rs `ahead`, ui/strip.rs `draw_next_strip`, workout_file.rs fields 19 to 22)**
+**Next-step strip and two targets per step (app/workouts.rs `ahead`, ui/strip.rs `draw_strip_msg`, workout_file.rs fields 19 to 22)**
 
 Seen: simulator.
 
