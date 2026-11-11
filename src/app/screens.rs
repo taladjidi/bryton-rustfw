@@ -19,6 +19,8 @@ pub const READY_BANNER_MS: u32 = 3000;
 pub(crate) enum Banner {
     /// What a key just did, a notice.
     Info,
+    /// AUTO PAUSED / RESUMED: over what a key said, under a lap's summary (it waits behind it, not replaces it).
+    Auto,
     /// A lap's summary: stays [`LAP_BANNER_MS`], over what a key said, under a turn, a workout step or an alarm.
     Summary,
     /// The ready card at a ride's start: stays [`READY_BANNER_MS`], over what a key said, under everything the ride says.
@@ -27,6 +29,9 @@ pub(crate) enum Banner {
     Cue,
     /// What the ride says: a workout step, a reminder, a climb.
     Ride,
+    /// A limit passed (power, cadence, speed, DFA): orange like the ride's, but over it, so a workout step said in the
+    /// same second still shows after it.
+    Warn,
     /// A turn now.
     Now,
     /// An alarm (heart rate high, off course, the battery low, a ride not saving): white on red.

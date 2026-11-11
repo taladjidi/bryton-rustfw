@@ -997,8 +997,9 @@ pub fn draw(
             run(&mut c, k, a.x - 3, a.y - 3, 7, 7, ui::GREY);
         }
         Some(a) => {
-            triangle(&mut c, k, a.corners(ARROW + 3), ui::BLACK);
-            triangle(&mut c, k, a.corners(ARROW), ui::WHITE);
+            // cyan: no road of the basemap is (white ones blended with the old white arrow); 2 px black outline
+            triangle(&mut c, k, a.corners(ARROW + 2), ui::BLACK);
+            triangle(&mut c, k, a.corners(ARROW), ui::CYAN);
         }
         None => {}
     }

@@ -14,6 +14,9 @@ pub const REPEAT_S: u8 = 5;
 /// resumed either (`recorder::RESUME_S`, the same hour).
 pub const CLOCK_STEP_S: u32 = 3600;
 
+/// Seconds in a row an auto-pause or its end holds before it is said.
+const AUTO_SAY_S: u8 = 3;
+
 impl App {
     /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.
     pub(crate) fn start_pause(&mut self) {
@@ -649,6 +652,27 @@ impl App {
         }
     }
 
+    /// AUTO PAUSED / RESUMED, said when the ride has been auto-paused (or moving again) for [`AUTO_SAY_S`] seconds in
+    /// a row, so a stop-and-go flicker says nothing; a manual pause or no ride says nothing and resets it.
+    pub(crate) fn auto_pause_notice(&mut self) {
+        let (said, n) = self.rec.auto_said;
+        if self.ride.state() != ride::State::Running {
+            self.rec.auto_said = (false, 0);
+        } else if self.ride.moving() != said {
+            self.rec.auto_said = (said, 0);
+        } else if n + 1 < AUTO_SAY_S {
+            self.rec.auto_said = (said, n + 1);
+        } else {
+            self.rec.auto_said = (!said, 0);
+            let text = if said { "RESUMED" } else { "AUTO PAUSED" };
+            self.say_as(text, Banner::Auto);
+            // the tone only with its text: a banner waiting behind a summary or an alarm is silent
+            if self.notes.text.as_str() == text && self.notes.kind == Banner::Auto {
+                self.tones.play(if said { &BEEP_START } else { &BEEP_PAUSE });
+            }
+        }
+    }
+
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
         self.alt_second();
@@ -691,6 +715,7 @@ impl App {
             self.tones.play(&BEEP_START);
             self.say("RESUMED");
         }
+        self.auto_pause_notice();
         // only the seconds the timer ran, keyed by the wall clock: a stop longer than FILL_S ends the efforts
         let now = self.now_s();
         if let (true, Some(r)) = (self.ride.timer_s() != timer, self.ride_curve.as_deref_mut()) {
