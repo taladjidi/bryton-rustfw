@@ -351,6 +351,23 @@ pub struct App {
     new_ride: bool,
     /// The card's map and elevation profile as drawn (set when the card is shown).
     summary: Option<(map::Shown, GraphShown)>,
+    /// The summary's page ([`app::summary`]): the card, the totals, the laps opened from it; the save state last drawn
+    /// on it; a recorder said the ride was kept unsaved.
+    summary_page: u8,
+    save: ui::card::Save,
+    save_drawn: ui::card::Save,
+    /// The recording stopped on a full card: the save that follows is partial.
+    save_part: bool,
+    /// A partial save came during the ride (the card filled, what reached it was saved at once).
+    part_saved: bool,
+    /// The full copy was lost during this ride (its save says NO FULL COPY).
+    full_kept: bool,
+    /// The recording stopped and its mid-ride save was Kept (in the rides folder): the end says NOT SAVED.
+    kept_mid: bool,
+    /// Lap was pressed on the summary: its laps open once the history has the ride.
+    laps_wanted: bool,
+    /// The history was scanned for the laps asked for (a ride it lacks then is said, not waited for).
+    laps_scanned: bool,
     /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the one tone player
     /// (alerts, courses, workouts).
     alerts: alerts::Alerts,
@@ -573,6 +590,15 @@ impl App {
             alert: alerts::Queue::default(),
             tones: Tones::default(),
             summary: None,
+            summary_page: 0,
+            save: ui::card::Save::Saving,
+            save_drawn: ui::card::Save::Saving,
+            save_part: false,
+            part_saved: false,
+            full_kept: false,
+            kept_mid: false,
+            laps_wanted: false,
+            laps_scanned: false,
             new_ride: false,
             drawn: Default::default(),
             ride: ride::Ride::new(),

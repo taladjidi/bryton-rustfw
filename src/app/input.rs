@@ -671,11 +671,11 @@ impl App {
             Input::Next | Input::Touch(Gesture::Swipe(Dir::Up)) => top + 1,
             Input::Prev | Input::Touch(Gesture::Swipe(Dir::Down)) => top.saturating_sub(1),
             Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => {
-                self.close();
+                self.close_laps();
                 return self.show(b);
             }
             Input::Touch(Gesture::Tap(x, y)) if inside(ui::BACK_TAP, x, y) => {
-                self.close();
+                self.close_laps();
                 return self.show(b);
             }
             _ => return,
@@ -864,6 +864,10 @@ impl App {
         match (self.screen, i) {
             // the ride's card stays until Back or Start: a key, a swipe or a raindrop does not throw it away
             (Screen::Summary, Input::Back | Input::Select) => self.screen = Screen::Main,
+            (Screen::Summary, Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
+                return self.summary_flip(b);
+            }
+            (Screen::Summary, Input::Prev) => return self.summary_laps(),
             (Screen::Summary, _) => return,
             // a past ride's card: Start dismisses it, as the ride summary. DELETE asks (a tap on its label, or Start
             // held), and the answer is Start, a tap on it again or Start held again; Back says no (moved, kept:

@@ -166,7 +166,12 @@ impl App {
         let (_, _, cols, h) = ui::card::ELEV;
         let base = Some(&self.basemap);
         let cx = self.graph_ctx();
-        ui::card::draw(c, &self.ride_card(), (&self.track, m.view, base), &|i| self.graph_bar(&cx, g, cols, h, i));
+        let mut card = self.ride_card();
+        card.save = Some(self.save_now());
+        if self.summary_page == app::summary::PAGE_TOTALS {
+            return ui::card::draw_totals(c, &self.ride_totals(), &card);
+        }
+        ui::card::draw(c, &card, (&self.track, m.view, base), &|i| self.graph_bar(&cx, g, cols, h, i));
     }
 
     /// The card's map on screen (the ride just ended, a past ride): its view and its track's origin.
