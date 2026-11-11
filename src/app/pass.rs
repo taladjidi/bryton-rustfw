@@ -45,7 +45,7 @@ impl App {
         if !(self.notes.ms.is_some() && alerts::Alert::is_text(self.notes.text.as_str()))
             && let Some(a) = self.alert.pop()
         {
-            self.say_as(a.text(), if a.alarm() { Banner::Alarm } else { Banner::Ride });
+            self.say_as(a.text(), if a.alarm() { Banner::Alarm } else { Banner::Warn });
             self.tones.play(&BEEP_ALERT);
         }
     }

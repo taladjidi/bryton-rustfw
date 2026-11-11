@@ -101,7 +101,7 @@ pub fn draw_gauge_title(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32),
     let big = Style { fg: GREEN, ..LABEL };
     let tag_w = if tag.is_empty() { 0 } else { big.width(tag) };
     let room = w.saturating_sub(12 + if tag_w > 0 { tag_w + 6 } else { 0 });
-    let (style, dy) = gauge_title_style(tag);
+    let (style, dy) = gauge_title_style(w, title, tag);
     if tag_w > 0 {
         c.fill(x + 6, y + 4, room, LABEL.height(), BLACK); // the 1x title is shorter than what the 2x one left
     }
@@ -112,21 +112,26 @@ pub fn draw_gauge_title(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32),
     }
 }
 
-/// The title's style and its offset in the title row: the label style, or at 1x (centred in the row) beside a tag.
-fn gauge_title_style(tag: &str) -> (Style, u32) {
-    let small = Style { scale: 1, fg: GREY, ..LABEL };
+/// The title's style and its offset in the title row: the label style; beside a tag, white at 2x when title and tag
+/// fit the box `w` wide, else at 1x (centred in the row).
+fn gauge_title_style(w: u32, title: &str, tag: &str) -> (Style, u32) {
     if tag.is_empty() {
-        (Style { fg: GREY, ..LABEL }, 4)
-    } else {
-        (Style { ..small }, 4 + (LABEL.height() - small.height()) / 2)
+        return (Style { fg: GREY, ..LABEL }, 4);
     }
+    let room = w.saturating_sub(12 + LABEL.width(tag) + 6);
+    if LABEL.width(title) <= room {
+        return (Style { fg: WHITE, ..LABEL }, 4);
+    }
+    let small = Style { scale: 1, fg: WHITE, ..LABEL };
+    let dy = 4 + (LABEL.height() - small.height()) / 2;
+    (small, dy)
 }
 
 /// A gauge's title that was `old` now `new` (the tag as it was): only the characters that changed when the length is the
 /// same, else the whole row.
 pub fn update_gauge_title(c: &mut impl Canvas, bx: (u32, u32, u32, u32), (old, new): (&str, &str), tag: &str) {
     if old.len() == new.len() {
-        let (style, dy) = gauge_title_style(tag);
+        let (style, dy) = gauge_title_style(bx.2, new, tag);
         draw_changed_chars(c, &style, bx.0 + 6, bx.1 + dy, old, new);
     } else {
         draw_gauge_title(c, bx, new, tag);
@@ -174,5 +179,25 @@ pub fn draw_gauge_marker(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: Opt
     let bar = gauge_parts(bx).0;
     for (m, _) in [old, g.marker].into_iter().flatten() {
         draw_gauge_columns(c, bar, &g, m.saturating_sub(MARK_W / 2 + 1), m + MARK_W / 2 + 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pacer's title ("TOP 6:15") and target ("317W"): 2x white in a box that holds both, else 1x white centred in
+    /// the row; white is the theme's text colour, readable on the background in both themes.
+    #[test]
+    fn the_title_is_2x_when_it_fits_and_1x_centred_when_not() {
+        let (wide, dy) = gauge_title_style(240, "TOP 6:15", "317W");
+        assert_eq!((wide.scale, wide.fg, dy), (LABEL.scale, WHITE, 4));
+        let (narrow, dy) = gauge_title_style(120, "TOP 6:15", "317W");
+        assert_eq!((narrow.scale, narrow.fg), (1, WHITE));
+        assert_eq!(dy, 4 + (LABEL.height() - narrow.height()) / 2, "centred in the title row");
+        assert_eq!(gauge_title_style(120, "TOP", "").0.fg, GREY, "no tag: the plain title");
+        for t in [crate::ui::Theme::DARK, crate::ui::Theme::LIGHT] {
+            assert_ne!(t.ink(WHITE), t.ink(BLACK), "the title reads on the background");
+        }
     }
 }

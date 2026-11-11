@@ -481,6 +481,8 @@ pub(crate) struct Recording {
     pub(crate) model: Option<(u16, u16, bool)>,
     /// Both copies' card errors as [`App::step_recorder`] last saw them.
     pub(crate) errors_seen: u32,
+    /// Whether AUTO PAUSED was said and RESUMED not yet, and the seconds in a row the ride has differed from that.
+    pub(crate) auto_said: (bool, u8),
 }
 
 impl Recording {
@@ -491,6 +493,7 @@ impl Recording {
             resume_pending: false,
             full: recorder::Recorder::of(recorder::Kind::Full),
             full_pending: false,
+            auto_said: (false, 0),
             lag_s: 0,
             counted_s: rtc_s,
             model: None,
@@ -660,6 +663,32 @@ mod tests {
         n.ms = None;
         n.show_waiting();
         assert_eq!(n.ms, Some(0), "the one that waited comes up");
+    }
+
+    #[test]
+    fn a_limit_alert_and_a_workout_step_in_one_second_both_show() {
+        for first_step in [true, false] {
+            let mut n = Notices::new();
+            let (step, alert) = (("STEP 2", Banner::Ride), ("POWER HIGH", Banner::Warn));
+            for (t, k) in if first_step { [step, alert] } else { [alert, step] } {
+                n.say(t, k);
+            }
+            assert_eq!(n.text.as_str(), "POWER HIGH", "the alert is up");
+            n.ms = None;
+            n.show_waiting();
+            assert_eq!(n.text.as_str(), "STEP 2", "and the step after it");
+        }
+    }
+
+    #[test]
+    fn auto_paused_waits_behind_a_lap_summary() {
+        let mut n = Notices::new();
+        n.say("LAP 1", Banner::Summary);
+        n.say("AUTO PAUSED", Banner::Auto);
+        assert_eq!(n.text.as_str(), "LAP 1", "the summary stays");
+        n.ms = None;
+        n.show_waiting();
+        assert_eq!(n.text.as_str(), "AUTO PAUSED");
     }
 
     #[test]

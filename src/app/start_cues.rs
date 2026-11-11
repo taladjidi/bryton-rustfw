@@ -69,16 +69,16 @@ impl App {
             return false;
         }
         let mut l = Line::<40>::new();
-        l.push_str(if self.gps.pvt.is_some_and(|p| p.good()) { "GPS YES  " } else { "GPS NO  " });
+        l.push_str(if self.gps.pvt.is_some_and(|p| p.good()) { "GPS OK  " } else { "NO GPS  " });
         let low = match self.strip.battery {
             Some(p) => {
-                l.push_str("BAT ");
+                l.push_str("BATT ");
                 l.push_u32(u32::from(p));
-                l.push_str("%\n");
+                l.push_str(" %\n");
                 p <= LOW_PERCENT
             }
             None => {
-                l.push_str("BAT --\n");
+                l.push_str("BATT --\n");
                 false
             }
         };

@@ -407,8 +407,8 @@ impl Canvas for Row {
 }
 
 /// Height of a banner: a notice over the top of any screen other than the overview (the strip and the page's
-/// first 20 px), two lines of the 2x font.
-pub const BANNER_H: u32 = 44;
+/// first 20 px), two lines of the 2x font, and down to the end of the first field label row (a shorter banner left cut glyphs).
+pub const BANNER_H: u32 = PAGE_Y + FIELD_LABEL_H + 1; // the label glyphs reach one row past their 22
 
 /// `text` as at most two lines that fit `w` in `style`: cut at a newline, else at the last space that lets the first
 /// line fit (else at the last character that does); the second line is what is left (cut when drawn if too long).

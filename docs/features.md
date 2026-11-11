@@ -185,7 +185,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   aerobic threshold of patch P9; only with the strap's beats). A limit alerts once its value has stayed past it for
   5 s (not on one sample), re-arms once the value is back inside by 5 % of the limit (at least 1), and says at most
   once a minute; no reading from a sensor, no alert; only while the ride runs (not paused, not outside a ride).
-  Each is a red banner ("POWER HIGH", "POWER LOW", "CADENCE HIGH", "CADENCE UNDER", "SPEED HIGH", "SPEED LOW",
+  Each is an orange banner, ranked over what the ride says (only HEART RATE HIGH is a red alarm) ("POWER HIGH", "POWER LOW", "CADENCE HIGH", "CADENCE UNDER", "SPEED HIGH", "SPEED LOW",
   "HEART RATE LOW", "DFA A1 LOW") with the same three beeps and queue. Reminders by distance (every N km, 1 to 99), kcal and kJ
   (every N, steps of 10) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
   step (the first second of a ride, and a step set mid-ride, do not fire). Speed limits are in km/h whatever the units.
@@ -214,7 +214,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
-  switches off). No time in front: the strip shows it. Banners have a rank: an alarm, then a turn now, then what
+  switches off). No time in front: the strip shows it. Banners have a rank: an alarm, then a turn now, then the limit alerts, then what
   the ride says (a workout step, a reminder, a climb), then a turn ahead, then the rest. A lower one never covers
   a higher one; the other waits (one at most, the higher kept) and shows next, so an alarm and a workout step
   said in the same second both show. A newer one of the same rank replaces the one up, which does not come back,
@@ -894,12 +894,13 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
   LAP KM, AUTO PAUSE km/h), the trainer screen and the stats and storage figures of SETTINGS. Feet are 4 or 5 digits where metres were 3 or 4: the
   value takes a smaller size past the box's width, as every long value does.
   ![Imperial units](img/imperial-units.png)
+- **AUTO PAUSED / RESUMED:** when auto-pause stops the timer, or ends, and it holds for 3 s in a row, a banner says so with the pause or start tone (a stop-and-go flicker and a pause by hand say nothing; under a lap summary or an alarm it waits, silent).
 - **SOUND** (DISPLAY, ON): OFF drops every tone the app plays (alerts, course and workout tones, the start and pause beeps) and cuts
   the one sounding. The alerts' banners still show. It also silences the heart rate alarm, the off-course alarm and the low battery tone: only
   the banner shows. The power-on and power-off melodies stay (they play before the settings are read and after the screen is off). There is no key click: this unit's keys have no beep today, so a key click was not added.
 - **Start reminder and ready check** (SETTINGS > BIKE: REMINDER and READY CHECK, both ON; app/start_cues.rs). Neither starts, stops or touches the recording by itself.
   - REMINDER: with no ride (not running, not paused), on the overview or a ride page, the cable out, the bike moving for 10 s in a row (GPS speed over 8 km/h, a paired wheel sensor turning, or power above 0) says START THE RIDE? in a banner with one beep (SOUND OFF: the banner only), at most every 5 minutes. Start then starts the ride as it always does. A menu open, USB power in, or a ride running or paused: nothing, and the count starts again.
-  - READY CHECK: Start on a new ride (a resume or a pause shows nothing) shows a two-line card for 3 s: the GPS fix (YES / NO) and the unit's battery, then the warning: LOW BATT at 15 % or less, NO and the names of the paired sensors not heard in the last 5 s, else the sensors found and OK (NO SENSORS PAIRED with none). Names are written while they fit the banner, then "+N" for the rest. Shifting and Di2 count only when heard (they may stay silent at a standstill, which cannot be told from the sensor being gone without the unit). Any input skips it; Start on it only skips it, with a short tone (SOUND) and a RECORDING notice, so a rider who meant to pause knows it did not. **The recording starts at the press**, in the same call as without the card (the FIT start is the press, no data is lost); the card is a banner over the ride page, so it can neither delay nor prevent the start. The sensors are judged as heard at the press: the channels that were resting search again from it. Kept in settings.bin data 150 and 151 (ON in a file that predates them).
+  - READY CHECK: Start on a new ride (a resume or a pause shows nothing) shows a two-line card for 3 s: the GPS fix (GPS OK / NO GPS) and the unit's battery, then the warning: LOW BATT at 15 % or less, NO and the names of the paired sensors not heard in the last 5 s, else the sensors found and OK (NO SENSORS PAIRED with none). Names are written while they fit the banner, then "+N" for the rest. Shifting and Di2 count only when heard (they may stay silent at a standstill, which cannot be told from the sensor being gone without the unit). Any input skips it; Start on it only skips it, with a short tone (SOUND) and a RECORDING notice, so a rider who meant to pause knows it did not. **The recording starts at the press**, in the same call as without the card (the FIT start is the press, no data is lost); the card is a banner over the ride page, so it can neither delay nor prevent the start. The sensors are judged as heard at the press: the channels that were resting search again from it. Kept in settings.bin data 150 and 151 (ON in a file that predates them).
   ![Start reminder](img/start-reminder.png) ![Ready card](img/ready-card.png)
 - **BACKLIGHT ALWAYS ON** is LIGHT OFF NEVER (SETTINGS > DISPLAY), as before.
 - **AUTO PAUSE** (SETTINGS > BIKE): AUTO (the profile's own rule: road under 2 km/h at once, GRAVEL under 3 km/h, CX never, MTB under 2 km/h for 5 s, indoor
