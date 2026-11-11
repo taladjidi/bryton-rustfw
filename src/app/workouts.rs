@@ -8,6 +8,9 @@ use crate::*;
 /// It was 8 s until 2026-10-27: an empty TODAY card that long after the start.
 pub(crate) const CALENDAR_MS: u32 = 1_000;
 
+/// A calendar read that failed is tried again after this many ms.
+const RETRY_MS: u32 = 5_000;
+
 /// No step: what a workout field shows past the last one.
 pub(crate) const OPEN: storage::workout_file::Step = storage::workout_file::Step {
     len: storage::workout_file::Length::Open,
@@ -131,7 +134,17 @@ impl App {
     pub(crate) fn load_calendar(&mut self, b: &mut impl Board) {
         let vol = &mut emmc::Volume(&mut self.emmc, b);
         let zones = self.settings.zones();
-        self.plan.calendar = storage::workout_file::calendar(vol, self.date, zones).unwrap_or_default();
+        match storage::workout_file::calendar(vol, self.date, zones) {
+            Ok(c) => self.plan.calendar = c,
+            Err(fat::Error::NotFound) => self.plan.calendar = Default::default(), // no workout folder: none planned
+            Err(fat::Error::Io) => {
+                // a card error that may pass: keep the day unread so `refresh_calendar` tries again, later
+                self.plan.retry_ms = self.up_ms.saturating_add(RETRY_MS);
+                return;
+            }
+            Err(_) => self.plan.calendar = Default::default(),
+        }
+        self.plan.retry_ms = 0;
         (self.plan.day, self.plan.zones) = (Some(self.date), zones);
         self.plan.done_key = None;
     }
@@ -142,7 +155,7 @@ impl App {
     pub(crate) fn refresh_calendar(&mut self, b: &mut impl Board, asked: bool) {
         let zones = self.settings.zones();
         let stale = self.plan.day != Some(self.date) || self.plan.zones != zones;
-        if stale && !self.emmc.lent() && (asked || self.gps.ms >= CALENDAR_MS) {
+        if stale && !self.emmc.lent() && (asked || self.gps.ms >= CALENDAR_MS && self.up_ms >= self.plan.retry_ms) {
             self.load_calendar(b);
         }
     }

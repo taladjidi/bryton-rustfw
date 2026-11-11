@@ -44,6 +44,8 @@ impl Done {
 #[derive(Clone, Copy)]
 struct Cur {
     k: Climb,
+    /// Metres of the climb already behind when it was joined.
+    from_m: u32,
     t0: u32,
     last_t: u32,
     last_along: u32,
@@ -58,9 +60,12 @@ struct Cur {
 impl Cur {
     fn done(&self) -> Done {
         let sat = |v: u32| u16::try_from(v).unwrap_or(u16::MAX);
+        // joined late: the length and gain of the part ridden, so the time and the gain match (VAM)
+        let ridden = self.k.len_m.saturating_sub(self.from_m);
+        let gain = (u64::from(self.k.gain_m) * u64::from(ridden)).checked_div(u64::from(self.k.len_m)).unwrap_or(0);
         Done {
-            len_m: sat(self.k.len_m),
-            gain_m: sat(self.k.gain_m),
+            len_m: sat(ridden),
+            gain_m: sat(gain as u32),
             time_s: sat(self.last_t.saturating_sub(self.t0)),
             avg_w: sat(self.sum_w.checked_div(self.n_w).unwrap_or(0)),
             avg_hr: u8::try_from(self.sum_hr.checked_div(self.n_hr).unwrap_or(0)).unwrap_or(u8::MAX),
@@ -140,8 +145,18 @@ impl ClimbsDone {
             && along <= k.start_m + JOIN_M
             && along < k.end_m()
         {
-            self.cur =
-                Some(Cur { k, t0: t, last_t: t, last_along: along, fwd: false, sum_w: 0, n_w: 0, sum_hr: 0, n_hr: 0 });
+            self.cur = Some(Cur {
+                k,
+                from_m: along - k.start_m,
+                t0: t,
+                last_t: t,
+                last_along: along,
+                fwd: false,
+                sum_w: 0,
+                n_w: 0,
+                sum_hr: 0,
+                n_hr: 0,
+            });
         }
         if let Some(d) = out {
             self.push(d);
@@ -214,6 +229,17 @@ mod tests {
         assert_eq!((d.vam(), d.grade()), (960, 8));
         assert!(c.see(None, 500, None, None).is_none(), "done once");
         assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn a_climb_joined_100_m_up_counts_only_the_part_ridden() {
+        let mut c = ClimbsDone::new();
+        // K is 1000 m with 80 m of gain: joined at 100 m, 900 m in 270 s
+        for s in 0..=270u32 {
+            c.see(Some((K, 1100 + s * 900 / 270)), s, None, None);
+        }
+        let d = *c.get(0).unwrap();
+        assert_eq!((d.len_m, d.gain_m, d.time_s, d.vam()), (900, 72, 270, 960));
     }
 
     #[test]

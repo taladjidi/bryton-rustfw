@@ -284,6 +284,8 @@ pub struct Nordic {
     pub dead: bool,
     /// A BLE command the chip refuses (NRF_ERROR_NO_MEM), as one whose configuration it lacks would.
     pub refuse: Option<u8>,
+    /// Until this time (ms) the connection-parameter and PHY updates answer NRF_ERROR_BUSY (procedures pending).
+    pub params_busy_until: u64,
     /// A BLE command the chip takes and never answers (the caller times out). Kept over a reset.
     pub mute: Option<u8>,
     /// The configurations of the fast link (ids 0x22, 0x23) are refused (NRF_ERROR_NO_MEM): a chip whose RAM, fixed by

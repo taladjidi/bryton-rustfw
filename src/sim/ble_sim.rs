@@ -460,6 +460,10 @@ impl Nordic {
         if self.mute == Some(*op) {
             return true;
         }
+        if matches!(*op, 0x75 | 0x8f) && now < self.params_busy_until {
+            self.queue(&[1, *op, 17, 0, 0, 0]); // NRF_ERROR_BUSY
+            return true;
+        }
         let ok = |n: &mut Nordic, out: &[u8]| n.queue(&[&[1, *op, 0, 0, 0, 0][..], out].concat());
         let u16_at = |i: usize| u16::from_le_bytes([args[i], args[i + 1]]);
         match *op {

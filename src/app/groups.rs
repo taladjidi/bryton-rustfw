@@ -421,6 +421,8 @@ pub(crate) struct Plan {
     pub(crate) done_key: Option<u32>,
     /// The next-step strip as drawn in the status strip's place ([`App::update_strip`]); None: the status strip.
     pub(crate) top: Option<super::workouts::Ahead>,
+    /// A failed calendar read is tried again from this `gps.ms`.
+    pub(crate) retry_ms: u32,
 }
 
 impl Plan {
@@ -439,6 +441,7 @@ impl Plan {
             done: 0,
             done_key: None,
             top: None,
+            retry_ms: 0,
         }
     }
 
