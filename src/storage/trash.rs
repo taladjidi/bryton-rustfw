@@ -868,9 +868,9 @@ pub(crate) mod tests {
                 swept += 1;
             }
         }
-        assert!(part == 2 || swept >= SECTOR - 1, "{swept} tears swept");
-        assert!(part != 2 || links >= 2 && swept >= 1, "{swept} tears, {links} links swept");
-        assert!(part == 2 || alone >= 32, "{alone} tears left the 8.3 entry alone");
+        assert!(part == 2 || swept == SECTOR - 1, "{swept} tears swept");
+        assert!(part != 2 || links >= 4 && swept == links * (SECTOR - 1), "{swept} tears, {links} links swept");
+        assert!(part == 2 || alone >= 64, "{alone} tears left the 8.3 entry alone");
     }
 
     #[test]
