@@ -683,6 +683,51 @@ fn rtc_set(tr: u32, dr: u32) {
     wr(RTC_WPR, 0xff);
 }
 
+/// RCC_BDCR (stm32h747xx.h `RCC_TypeDef`: offset 0x70): LSEON 0, LSERDY 1, RTCSEL 8..9 (01: LSE), RTCEN 15. A backup
+/// domain reset (a cell run flat) clears it all (BOARD.md 8, "After a backup domain loss").
+const RCC_BDCR: u32 = RCC + 0x070;
+
+/// The RTC counts: enabled (RTCEN), on a clock (RTCSEL not 0), and that clock ready if it is the LSE.
+fn rtc_running() -> bool {
+    let bdcr = rd(RCC_BDCR);
+    let sel = (bdcr >> 8) & 3;
+    bdcr & (1 << 15) != 0 && sel != 0 && (sel != 1 || bdcr & (1 << 1) != 0)
+}
+
+/// The RTC started after a backup domain loss (BOARD.md 8): LSEON and LSERDY awaited at most 5 s (STM32CubeH7
+/// stm32h7xx_hal_rcc.c `HAL_RCC_OscConfig`, `LSE_STARTUP_TIMEOUT` 5000 ms), then, on a domain that selects no clock
+/// (RTCSEL is write-once until a domain reset), RTCSEL = LSE and RTCEN, and the prescalers stock sets (31 / 1023, in
+/// INIT, PREDIV_S first: stm32h7xx_hal_rtc.c `HAL_RTC_Init`). The calendar stays at its reset values (2000-01-01).
+/// The LSE drive (LSEDRV 3..4) is left at its reset value, lowest (stock's: inferred, not read). Not yet seen on the
+/// unit.
+fn rtc_start() {
+    modify(PWR_CR1, 0, 1 << 8); // DBP
+    modify(RCC_BDCR, 0, 1); // LSEON
+    let t0 = cycles();
+    while rd(RCC_BDCR) & (1 << 1) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 1000 * 5000 {}
+    if rd(RCC_BDCR) & (1 << 1) == 0 {
+        return; // no LSE: nothing to clock the RTC from (the app says CLOCK NOT RUNNING)
+    }
+    let fresh = rd(RCC_BDCR) & (3 << 8) == 0;
+    if fresh {
+        modify(RCC_BDCR, 3 << 8, 1 << 8);
+    }
+    modify(RCC_BDCR, 0, 1 << 15); // RTCEN
+    if fresh {
+        wr(RTC_WPR, 0xca);
+        wr(RTC_WPR, 0x53);
+        modify(RTC_ICSR, 0, 1 << 7);
+        let t0 = cycles();
+        while rd(RTC_ICSR) & (1 << 6) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {}
+        if rd(RTC_ICSR) & (1 << 6) != 0 {
+            wr(RTC_PRER, 1023);
+            wr(RTC_PRER, 1023 | 31 << 16);
+        }
+        modify(RTC_ICSR, (1 << 7) | (1 << 5), 0);
+        wr(RTC_WPR, 0xff);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Power off = system Standby, as stock's switch-off (Pwr_ShutdownToStandby 0xd018cd88, Pwr_EnterStandbyMode
 // 0xd018d9d0; BOARD.md 9): wake-up pin WKUP1 (PA0, the power button), rising edge, no pull. Waking resets the unit:
@@ -1881,6 +1926,12 @@ impl Board for S510 {
     }
     fn rtc_set(&mut self, tr: u32, dr: u32) {
         rtc_set(tr, dr);
+    }
+    fn rtc_running(&mut self) -> bool {
+        rtc_running()
+    }
+    fn rtc_start(&mut self) {
+        rtc_start();
     }
     fn delay_ms(&mut self, ms: u32) {
         delay_ms(ms);

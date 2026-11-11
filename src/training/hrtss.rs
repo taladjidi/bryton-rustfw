@@ -52,7 +52,7 @@ fn weight(hr: u16, max_hr: u16, female: bool) -> Option<u64> {
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Hrtss {
-    sum: u64,
+    pub(crate) sum: u64,
 }
 
 impl Hrtss {
@@ -63,15 +63,17 @@ impl Hrtss {
 
     /// `n` moving seconds at `hr` (a ride's average, for the scan's rides: [`crate::load`]).
     pub fn seconds(&mut self, hr: Option<u16>, n: u32, max_hr: u16, female: bool) {
-        self.sum += hr.and_then(|h| weight(h, max_hr, female)).unwrap_or(0) * u64::from(n);
+        // saturating: a sum resumed from a recovery record (ride.rs `hrtss_resumed`) is whatever it holds
+        self.sum = self.sum.saturating_add(hr.and_then(|h| weight(h, max_hr, female)).unwrap_or(0) * u64::from(n));
     }
 
     /// The score for an LTHR of `lthr`: None while LTHR is unset or `max_hr` is not over the resting rate, or nothing
     /// was counted.
     pub fn score(&self, lthr: u16, max_hr: u16, female: bool) -> Option<u32> {
         let at_lthr = weight(lthr, max_hr, female).filter(|_| lthr > 0)?;
-        (self.sum > 0)
-            .then(|| (self.sum * 100).checked_div(3600 * at_lthr.max(1)).unwrap_or(0).min(u64::from(u32::MAX)) as u32)
+        (self.sum > 0).then(|| {
+            self.sum.saturating_mul(100).checked_div(3600 * at_lthr.max(1)).unwrap_or(0).min(u64::from(u32::MAX)) as u32
+        })
     }
 }
 

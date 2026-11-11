@@ -5398,7 +5398,11 @@ fn recovery_records() {
                 p.second(i.power, &rd, next() as u16, next() as u16);
             }
             let _ = (p.np(), p.tss(next() as u16), p.kj(), p.kcal(), p.avg(), p.max(), p.if_x100(next() as u16));
-            let _ = (rd.descent_m(), rd.uphill_m(), rd.downhill_m(), rd.max_alt_m(), rd.more_words(&p));
+            let (z, h) = (crate::ride::ZoneTime::resumed(&r.more), crate::ride::hrtss_resumed(&r.more));
+            let _ = (rd.descent_m(), rd.uphill_m(), rd.downhill_m(), rd.max_alt_m(), rd.more_words(&p, &z, &h));
+            let _ = (rd.max_cadence(), rd.balance_right(), rd.laps(), rd.last_lap_s(), rd.last_lap_avg_power());
+            let _ = (rd.last_lap_hr(), rd.lap_avg_power(), rd.lap_np(), rd.lap_ascent_m(), rd.lap_descent_m());
+            let _ = (z.hr_s(5), z.power_s(7), h.score(next() as u16, next() as u16, false), rd.lap(), rd.last_lap_s());
             restored += usize::from(p.np().is_some() && p.wbal_j().is_some() && rd.max_alt_m().is_some());
 
             // one record per seed through a card (Recorder::recover_from): the totals it resumes from are the record's

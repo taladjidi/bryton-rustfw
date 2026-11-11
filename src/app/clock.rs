@@ -4,22 +4,23 @@
 //! **What the RTC holds, and who sets it.** Local time, never UTC (stock runs it that way, and its ride names are
 //! local). This firmware sets it from one source only: the phone link's Current Time Service (app/phone.rs
 //! `phone_time`: the phone's local time, between rides only). The GNSS receiver never sets it: at a fix with a valid
-//! time, `learn_aid` (app/gps.rs) learns the RTC's offset from UTC (RTC minus UTC, to the nearest 15 minutes) into
-//! the backup registers, and the phone's Local Time Information replaces it. Stock firmware sets the RTC too: from the
-//! GPS with its own time zone and DST (`Clk_ApplyGpsTimeZone`) and from the Bryton app's UTC plus its configured
-//! offset (`Clk_SetRtcFromHostTime`) (the bryton repo's ghidra/notes/agent_b1.md; inferred from the decompiled names
-//! and strings). Its INI files hold no time zone. So without the phone or stock, nothing moves the RTC at a DST
-//! change: under TIME ZONE CLOCK (the default) the shown time stays as the RTC holds it, as before.
+//! time, `learn_aid` (app/gps.rs) learns the RTC's offset from UTC (RTC minus UTC, to the nearest 15 minutes) into the
+//! backup registers, between rides only (a ride's FIT times are the RTC less it), and the phone's Local Time
+//! Information replaces it. Stock firmware sets the RTC too: from the GPS with its own time zone and DST
+//! (`Clk_ApplyGpsTimeZone`) and from the Bryton app's UTC plus its configured offset (`Clk_SetRtcFromHostTime`) (the
+//! bryton repo's ghidra/notes/agent_b1.md; inferred from the decompiled names and strings). Its INI files hold no time
+//! zone. So without the phone or stock, nothing moves the RTC at a DST change: under TIME ZONE CLOCK (the default) the
+//! shown time stays as the RTC holds it, as before.
 //!
 //! **TIME ZONE set: the RTC is kept as is, the shown clock is converted.** UTC is the RTC minus the learnt offset
-//! (which each fix keeps right), and the shown time is [`local_time`] of it ([`App::show_clock`]). Everything that
-//! reads a local time (the strip, the dates, the ride file's stock-style name, the FAT times, the sun's times) reads
-//! the shown one; the FIT times are the shown time minus the shown offset, which is the RTC minus the learnt offset
-//! whatever the zone: they stay monotonic across a DST change mid-ride and across a resume, and no RTC write can be
-//! cut apart from its offset's (setting the RTC at the change instead would need both, a backup register and the
-//! RTC, written together, and is refused during a ride anyway). A ride keeps the name it started with (its recovery
-//! record holds it), so a resume after the change reopens the same file. Until an offset is learnt (no fix, no phone
-//! yet) the RTC is shown as is; so it is until the settings file is read, 2 s after a start ([`PAGES_LOAD_MS`]).
+//! (which each fix between rides keeps right), and the shown time is [`local_time`] of it ([`App::show_clock`]).
+//! Everything that reads a local time (the strip, the dates, the ride file's stock-style name, the FAT times, the sun's
+//! times) reads the shown one; the FIT times are the shown time minus the shown offset, which is the RTC minus the
+//! learnt offset whatever the zone: they stay monotonic across a DST change mid-ride and across a resume, and no RTC
+//! write can be cut apart from its offset's (setting the RTC at the change instead would need both, a backup register
+//! and the RTC, written together, and is refused during a ride anyway). A ride keeps the name it started with (its
+//! recovery record holds it), so a resume after the change reopens the same file. Until an offset is learnt (no fix, no
+//! phone yet) the RTC is shown as is; so it is until the settings file is read, 2 s after a start ([`PAGES_LOAD_MS`]).
 //!
 //! The DST rules: the EU's, from the last Sunday of March to the last Sunday of October, 01:00 UTC both (Directive
 //! 2000/84/EC, articles 2 and 3, <https://eur-lex.europa.eu/eli/dir/2000/84/oj>); the US's, from the second Sunday of

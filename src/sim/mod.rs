@@ -195,6 +195,9 @@ pub struct Sim {
     sectors_written: u64,
     /// The RTC stands at this many seconds after its start, whatever the time: for a screen hashed against a reference.
     pub frozen_s: Option<u64>,
+    /// The RTC stopped, as a backup domain loss leaves it (no LSE, RTCEN off): it reads its calendar start for ever
+    /// and refuses a set (INITF never comes), until [`Board::rtc_start`].
+    pub rtc_stopped: bool,
     /// The RTC calendar's day 0, days since 1970 (2026-10-23; 2000-01-01, RTC_DR's reset value, after a power loss).
     pub rtc_base: i32,
     /// Time paid so far per [`PAID`] category, ns; and, for the longest gap between GNSS transfers, its length and what
@@ -1076,6 +1079,7 @@ impl Sim {
             last_keys_ms: 0,
             sectors_written: 0,
             frozen_s: None,
+            rtc_stopped: false,
             rtc_base: crate::days_from_civil(2026, 10, 23),
             paid_ns: [0; 6],
             paid_at_gnss: [0; 6],
@@ -1096,10 +1100,11 @@ impl Sim {
     /// The power lost with the backup domain (a battery run flat): a unit with this card as it is (torn or whole) and
     /// its reliable-write parameters; RAM and the backup registers all zero (`RIDE_BKP` too, AUTO OFF back to its
     /// default), and the RTC, in the same backup domain (RM0399, RTC and backup registers: a backup domain reset
-    /// clears both), back to its reset values: 2000-01-01 00:00:00 (RTC_TR 0, RTC_DR 0x2101), until the GNSS sets it.
+    /// clears both), back to its reset values, 2000-01-01 00:00:00 (RTC_TR 0, RTC_DR 0x2101), and stopped until the boot
+    /// starts it (`rtc_stopped`).
     pub fn power_loss(&mut self) -> Sim {
         let mut sim = Sim::new(0, 0, 0);
-        sim.rtc_base = crate::days_from_civil(2000, 1, 1);
+        (sim.rtc_base, sim.rtc_stopped) = (crate::days_from_civil(2000, 1, 1), true);
         sim.emmc.image = core::mem::take(&mut self.emmc.image);
         (sim.emmc.rel_param, sim.emmc.rel_sectors) = (self.emmc.rel_param, self.emmc.rel_sectors);
         sim.backup = [0; 32];
@@ -1333,7 +1338,7 @@ impl Board for Sim {
 
     fn rtc(&mut self) -> (u32, u32) {
         // the calendar from `rtc_base` (2026-10-23, or 2000-01-01 after a power loss) at the start; the day rolls over
-        let t = self.start_s + self.frozen_s.unwrap_or(self.ms / 1000);
+        let t = self.start_s + if self.rtc_stopped { 0 } else { self.frozen_s.unwrap_or(self.ms / 1000) };
         let (y, mo, d) = crate::civil_from_days(self.rtc_base + (t / 86400) as i32);
         let t = t % 86400;
         let tr = to_bcd(t / 3600) << 16 | to_bcd(t / 60 % 60) << 8 | to_bcd(t % 60);
@@ -1341,12 +1346,24 @@ impl Board for Sim {
     }
 
     fn rtc_set(&mut self, tr: u32, dr: u32) {
+        if self.rtc_stopped {
+            return;
+        }
         let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
         let days = i64::from(crate::days_from_civil(y, mo, d) - self.rtc_base);
         let t = days * 86400 + i64::from(h) * 3600 + i64::from(m) * 60 + i64::from(s);
         assert!(t >= (self.ms / 1000) as i64, "the simulated clock starts on its base day");
         self.start_s = t as u64 - self.ms / 1000;
         self.rtc_sets += 1;
+    }
+
+    fn rtc_running(&mut self) -> bool {
+        !self.rtc_stopped
+    }
+
+    /// Counts on from the calendar's start, the seconds since the power-up (the boot's) skipped.
+    fn rtc_start(&mut self) {
+        self.rtc_stopped = false;
     }
 
     /// A delay inside the work is a wait the app's clock must count ([`Board::waited_us`]), when

@@ -1372,6 +1372,7 @@ fn a_ride_survives_a_power_loss_that_clears_the_backup_registers() {
         let name = std::string::String::from(core::str::from_utf8(&app.rec.clean.name()).unwrap());
         let before = app.ride.timer_s();
         let mut app = App::start(&mut sim, None);
+        assert!(!sim.rtc_stopped, "{torn}: the boot started the clock the loss stopped");
         run(&mut sim, &mut app, 10_000);
         assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{torn}: {}", app.notes.list[0].as_str());
         // back paused at its last checkpoint: nothing lost before it
@@ -1392,6 +1393,23 @@ fn a_ride_survives_a_power_loss_that_clears_the_backup_registers() {
             "{torn}: {} records: up to the checkpoint and the new ones",
             times.len()
         );
+        // the full copy too: its new seconds, though "before" those it held, are recorded (the review of
+        // 2026-11-11, R1: it skipped every second earlier than its last record, to the end of the ride)
+        let full = record_times(&sim.emmc.image, &std::format!("Rustfw/Activities/{name}.fit"));
+        assert!(full.windows(2).all(|p| p[1] > p[0]), "{torn}: full copy in order");
+        assert!(full.len() >= times.len() - 2, "{torn}: {} full records of {}", full.len(), times.len());
+        // and the next ride of this boot, its clock still in 2000, has its full copy's records
+        app.press(&mut sim, Press::Short(Key::Start)); // the summary closed
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 70_000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.ride.state(), crate::ride::State::Paused, "{torn}");
+        let next = std::string::String::from(core::str::from_utf8(&app.rec.clean.name()).unwrap());
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 5000);
+        assert!(next != name, "{torn}: a new ride");
+        let full = record_times(&sim.emmc.image, &std::format!("Rustfw/Activities/{next}.fit"));
+        assert!(full.len() >= 60, "{torn}: the next ride's full copy, {} records", full.len());
         assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "{torn}");
     }
 }
@@ -1991,4 +2009,33 @@ fn a_cut_after_a_stall_resumes_at_the_last_checkpoint() {
         assert!(back <= timer && back + 60 >= lost_from, "cut {cut}: timer {back} of {timer} ({t} before the stall)");
         crate::fat::write::tests::fsck_torn(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
     }
+}
+
+/// The review of 2026-11-11, R2: a ride started before the first fix with a stale UTC offset in the backup registers
+/// (stock moved the RTC, or an earlier zone). The fix mid-ride must not learn the new offset: the FIT times are the
+/// RTC less it, and they would jump by an hour. Learnt once the ride is saved, as the phone's is (`phone_time`).
+#[test]
+fn the_utc_offset_is_not_learnt_mid_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    // 3 h, where the simulated receiver says 2 (the RTC runs on UTC + 2 h: sim/gnss_model.rs)
+    [sim.backup[17], sim.backup[18]] = crate::gnss::Aid { offset_15min: Some(12), pos: None }.to_words();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    sim.gnss.fix = Some(5000);
+    run(&mut sim, &mut app, 90_000);
+    assert_eq!(app.gps.aid.offset_15min, Some(12), "kept while the ride is open");
+    app.press(&mut sim, Press::Short(Key::Start));
+    let name = std::string::String::from(core::str::from_utf8(&app.rec.clean.name()).unwrap());
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 5000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    for path in [std::format!("Activities/{name}.fit"), std::format!("Rustfw/Activities/{name}.fit")] {
+        let times = record_times(&sim.emmc.image, &path);
+        assert!(times.len() >= 115, "{path}: {} records", times.len());
+        assert!(times.windows(2).all(|p| p[1] == p[0] + 1), "{path}: one a second, no jump");
+    }
+    assert_eq!(app.gps.aid.offset_15min, Some(8), "learnt at a fix once the ride is saved");
 }

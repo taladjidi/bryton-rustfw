@@ -358,10 +358,12 @@ impl App {
     }
 
     /// Keeps what the next power-up needs from a fix: the RTC's offset from UTC (once the receiver's time is
-    /// valid), the position (a good fix); written to the backup registers when it changes.
+    /// valid), the position (a good fix); written to the backup registers when it changes. The offset not while a
+    /// ride is open or being saved ([`App::ride_settled`]): the FIT times are the RTC less it, so they would jump (as
+    /// `phone_time` refuses the phone's).
     pub(crate) fn learn_aid(&mut self, b: &mut impl Board, pvt: gnss::Pvt) {
         let mut aid = self.gps.aid;
-        if pvt.time_ok {
+        if pvt.time_ok && self.ride_settled() {
             let diff = rtc_epoch_s(b) - epoch_s(pvt.utc);
             let steps = (diff + diff.signum() * 450) / 900; // nearest 15 minutes
             if steps.abs() <= 14 * 4 {

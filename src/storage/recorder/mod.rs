@@ -372,7 +372,8 @@ pub const BEATS_QUEUED: usize = 40;
 /// earlier build writes as zero (`to_sector` starts from a zeroed sector, the CRC covers the whole sector and
 /// earlier builds ignore those bytes), provided all zeros reads as "absent" and is harmless: `checked` (bytes 23,
 /// 28..30), paused by hand (byte 30, rec.rs `by_hand`), the lap sums (192..228, rec.rs `LAP_AT`), the ride's descent (its word 15, bytes 188..192), its other
-/// totals and its power's (228..280, rec.rs `MORE_AT`).
+/// totals and its power's (228..280, rec.rs `MORE_AT`), its screens' totals, laps, zones and hrTSS (284..416, rec.rs
+/// `TAIL_AT`).
 const TAG: [u8; 4] = *b"RFR2";
 const _: () = assert!(128 + 4 * RIDE_WORDS <= SECTOR - 2 && RIDE_WORDS < 256);
 
@@ -739,7 +740,7 @@ impl Recorder {
         self.len = 14 + w.data_len();
         (self.phase, self.file, self.name, self.since, self.want, self.ended, self.stopped) =
             (Phase::Starting, None, name, 0, true, false, false);
-        (self.resume_old, self.discard, self.beats_n, self.beats_ms) = (resume_old, false, 0, 0);
+        (self.resume_old, self.discard, self.beats_n, self.beats_ms, self.skip_to) = (resume_old, false, 0, 0, 0);
         (self.pending, self.save_as, self.checked, self.stuck, self.gap, self.begun) =
             (None, None, false, false, false, time);
     }
@@ -928,8 +929,10 @@ impl Recorder {
     /// One second of ride: its record, and the app's totals for the next recovery record.
     pub fn second(&mut self, s: &Sample, ride: [u32; RIDE_WORDS]) {
         self.ride = ride;
-        // one record a second, each later than the last (seconds caught up after a long pass share a clock)
-        if self.kind == Kind::Full && s.time <= self.skip_to {
+        // one record a second, each later than the last (seconds caught up after a long pass share a clock); the full
+        // copy skips only the overlap with the clean one's checkpoint: a clock set back further (the RTC restarted in
+        // 2000 after a backup domain loss) falls through to the clamp below, else no second would be recorded again
+        if self.kind == Kind::Full && s.time <= self.skip_to && self.skip_to - s.time <= 2 * CHECKPOINT_S {
             return;
         }
         let time = if s.time > self.last_rec { s.time } else { self.last_rec + 1 };

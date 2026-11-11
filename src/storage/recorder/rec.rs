@@ -4,16 +4,24 @@
 use super::{Local, Phase, TAG};
 use crate::fat::{Error, SECTOR};
 use crate::fit::{LAP_WORDS, RECORD_LEN};
-use crate::ride::{MORE_WORDS, RIDE_WORDS};
+use crate::ride::{MORE_TAIL, MORE_WORDS, RIDE_WORDS};
 
 /// Where [`Rec::lap`] starts: after the ride words, in bytes every build before left zero.
 const LAP_AT: usize = 192;
 /// Where [`Rec::more`] starts: after the lap sums, in bytes every build before left zero.
 const MORE_AT: usize = 228;
-/// Where [`Rec::timer`] is: after the ride's other totals, in bytes every build before left zero.
-const TIMER_AT: usize = MORE_AT + 4 * MORE_WORDS;
-const _: () =
-    assert!(128 + 4 * RIDE_WORDS <= LAP_AT && LAP_AT + 4 * LAP_WORDS <= MORE_AT && TIMER_AT + 4 <= SECTOR - 2);
+/// Where [`Rec::timer`] is: after the ride's other totals' first [`MORE_TAIL`] words, in bytes every build before
+/// left zero.
+const TIMER_AT: usize = MORE_AT + 4 * MORE_TAIL;
+/// Where the rest of [`Rec::more`] is (from its word [`MORE_TAIL`]): after the timer, in bytes every build before
+/// left zero.
+const TAIL_AT: usize = TIMER_AT + 4;
+const _: () = assert!(
+    128 + 4 * RIDE_WORDS <= LAP_AT
+        && LAP_AT + 4 * LAP_WORDS <= MORE_AT
+        && TIMER_AT == 280
+        && TAIL_AT + 4 * (MORE_WORDS - MORE_TAIL) <= SECTOR - 2
+);
 
 /// One recovery record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,8 +44,9 @@ pub(crate) struct Rec {
     /// records of the builds before them, which ignore these bytes (the lap then averages from the resume).
     pub(crate) lap: [u32; LAP_WORDS],
     /// The ride's totals beyond its words ([`crate::ride::Ride::more_words`]: uphill, downhill, max altitude and the
-    /// power's NP, work, max and W' balance), bytes 228..280: zeros in the records of the builds before them, which
-    /// ignore these bytes (the totals then count from the resume).
+    /// power's NP, work, max and W' balance), bytes 228..280; from its word [`MORE_TAIL`] (max cadence, balance, the
+    /// laps, the lap's power, the time in zones, the hrTSS), bytes 284..416: zeros in the records of the builds before
+    /// them, which ignore these bytes (the totals then count from the resume).
     pub(crate) more: [u32; MORE_WORDS],
     /// The FIT timer's state ([`crate::fit::Writer::timer_word`]), bytes 280..284: 0 in the records of the builds
     /// before it, which ignore these bytes.
@@ -68,8 +77,11 @@ impl Rec {
         for (c, w) in s[LAP_AT..LAP_AT + 4 * LAP_WORDS].chunks_exact_mut(4).zip(self.lap) {
             c.copy_from_slice(&w.to_le_bytes());
         }
-        for (c, w) in s[MORE_AT..MORE_AT + 4 * MORE_WORDS].chunks_exact_mut(4).zip(self.more) {
-            c.copy_from_slice(&w.to_le_bytes());
+        let at = (MORE_AT..TIMER_AT).step_by(4).chain((TAIL_AT..).step_by(4));
+        for (i, w) in at.zip(self.more) {
+            if let Some(c) = s.get_mut(i..i + 4) {
+                c.copy_from_slice(&w.to_le_bytes());
+            }
         }
         s[TIMER_AT..TIMER_AT + 4].copy_from_slice(&self.timer.to_le_bytes());
         crate::storage::seal16(&mut s);
@@ -98,7 +110,9 @@ impl Rec {
             discard: s[22] == 1,
             checked: (s[23] == 1).then(|| u16::from_le_bytes([s[28], s[29]])),
             lap: core::array::from_fn(|k| word(LAP_AT + 4 * k)),
-            more: core::array::from_fn(|k| word(MORE_AT + 4 * k)),
+            more: core::array::from_fn(|k| {
+                word(if k < MORE_TAIL { MORE_AT + 4 * k } else { TAIL_AT + 4 * (k - MORE_TAIL) })
+            }),
             timer: word(TIMER_AT),
             by_hand: s[30] == 1,
         };

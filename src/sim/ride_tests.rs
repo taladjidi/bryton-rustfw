@@ -899,6 +899,9 @@ fn sun_heading_arrival_and_battery_fields() {
     let mut sim = Sim::new(9, 0, 0);
     sim.gnss.route = Some(ride_route);
     sim.gnss.fix = Some(8000);
+    // the zone learnt at an earlier fix: one is not learnt during a ride (app/gps.rs `learn_aid`)
+    [sim.backup[crate::AID_BKP[0]], sim.backup[crate::AID_BKP[1]]] =
+        crate::gnss::Aid { offset_15min: Some(8), pos: None }.to_words();
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));

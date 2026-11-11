@@ -2025,12 +2025,16 @@ fn a_damaged_record_is_refused() {
     // builds before them, read as none (no new tag); nothing after them
     assert_eq!(s[228..280], [6u8, 0, 0, 0].repeat(13)[..]);
     // the FIT timer's word, bytes 280..284 (zero in the records of the builds before it: `Writer::with_timer_word`
-    // then keeps its guess); nothing after it
+    // then keeps its guess)
     assert_eq!(s[280..284], (5u32 | 1 << 31).to_le_bytes());
-    assert!(s[284..SECTOR - 2].iter().all(|&b| b == 0));
+    // the rest of the totals beyond the ride words (the screens', zones, hrTSS), bytes 284..416; nothing after them
+    let tail = crate::ride::MORE_WORDS - 13;
+    assert_eq!(s[284..284 + 4 * tail], [6u8, 0, 0, 0].repeat(tail)[..]);
+    assert!(s[284 + 4 * tail..SECTOR - 2].iter().all(|&b| b == 0) && 284 + 4 * tail == 416);
     let mut old = s;
     old[188..192].fill(0);
     old[228..280].fill(0);
+    old[284..416].fill(0);
     let crc = crate::fit::crc(0, &old[..SECTOR - 2]);
     old[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
     let back = Rec::from_sector(&old).unwrap();
@@ -4018,7 +4022,23 @@ fn totals_input(t: u32) -> crate::ride::Input {
     };
     let up = t % 1200;
     let alt = 100_000 + 333 * if up < 600 { up } else { 1200 - up } as i32;
-    crate::ride::Input { speed_x10: Some(300), power: Some(power), alt_mm: Some(alt), alt_ref: 1, ..Default::default() }
+    // and the totals the screens show (the review of 2026-11-11, T4): heart rate, cadence, balance
+    let (hr, cadence, balance) = (
+        Some(120 + (t % 50) as u16),
+        Some(if t == 500 { 130 } else { 70 + (t % 37) as u16 }),
+        Some(45 + (t % 11) as u16),
+    );
+    let speed_x10 = Some(300);
+    crate::ride::Input {
+        speed_x10,
+        power: Some(power),
+        hr,
+        cadence,
+        balance,
+        alt_mm: Some(alt),
+        alt_ref: 1,
+        ..Default::default()
+    }
 }
 
 /// The ride and its power from second `from + 1` to `to` (CP 250 W, W' 20 kJ), as the app's pass does.
@@ -4027,6 +4047,9 @@ fn totals_ride(r: &mut crate::ride::Ride, p: &mut crate::power::Power, from: u32
         let i = totals_input(t);
         r.second(&i);
         p.second(i.power, r, 250, 20_000);
+        if t % 1000 == 0 {
+            r.lap(); // laps that straddle the restarts
+        }
     }
 }
 
@@ -4043,7 +4066,7 @@ fn restarted(r: &crate::ride::Ride, p: &crate::power::Power) -> (crate::ride::Ri
         discard: false,
         checked: None,
         lap: [0; crate::fit::LAP_WORDS],
-        more: r.more_words(p),
+        more: r.more_words(p, &crate::ride::ZoneTime::default(), &crate::hrtss::Hrtss::default()),
         timer: 0,
         by_hand: true,
     };
@@ -4053,6 +4076,23 @@ fn restarted(r: &crate::ride::Ride, p: &crate::power::Power) -> (crate::ride::Ri
     p2.resume(&crate::ride::power_words(&back.more));
     r.start_pause();
     (r, p2)
+}
+
+/// The totals the screens show that a resume used to restart (the review of 2026-11-11, T4), as the ride never cut:
+/// max cadence, balance, the laps, the last lap's time, power, distance and heart rate, this lap's power, ascent and
+/// descent (lap ascent and descent within the hysteresis each restart costs, as the ride's).
+fn assert_screens_go_on(r: &crate::ride::Ride, whole: &crate::ride::Ride) {
+    assert!(whole.laps() >= 3 && whole.max_cadence().is_some() && whole.balance_right().is_some());
+    assert_eq!(
+        (r.max_cadence(), r.balance_right(), r.laps()),
+        (whole.max_cadence(), whole.balance_right(), whole.laps())
+    );
+    let last = |r: &crate::ride::Ride| (r.last_lap_s(), r.last_lap_avg_power(), r.last_lap_dist_m(), r.last_lap_hr());
+    assert_eq!(last(r), last(whole));
+    assert_eq!((r.lap_s(), r.lap_avg_power()), (whole.lap_s(), whole.lap_avg_power()));
+    for (got, want) in [(r.lap_ascent_m(), whole.lap_ascent_m()), (r.lap_descent_m(), whole.lap_descent_m())] {
+        assert!(got <= want && got + 4 * 4 >= want, "lap {got} m of {want}");
+    }
 }
 
 /// Finding 65 (review 2026-11-01): a 2 h ride restarted at every checkpoint (each minute, the cut right after a
@@ -4086,6 +4126,7 @@ fn totals_go_on_across_a_restart_at_every_checkpoint() {
     assert!(low_whole < 10_000, "W' drained: {low_whole} J");
     assert_eq!((p.kj(), p.max(), p.wbal_j(), low), (wp.kj(), wp.max(), wp.wbal_j(), low_whole));
     assert_eq!((r.timer_s(), r.max_alt_m(), whole.max_alt_m()), (N, Some(299), Some(299)));
+    assert_screens_go_on(&r, &whole);
     for (got, want) in [(r.descent_m(), whole.descent_m()), (r.ascent_m(), whole.ascent_m())] {
         assert!(want >= 1190 && got <= want && got + 119 * 4 >= want, "{got} m of {want}");
     }
@@ -4117,6 +4158,7 @@ fn totals_go_on_across_one_restart_and_an_older_record_starts_them_again() {
         totals_ride(&mut r, &mut p, c, N);
         assert_eq!((p.kj(), p.max(), p.wbal_j()), (wp.kj(), wp.max(), wp.wbal_j()), "restart at {c}");
         assert_eq!(r.max_alt_m(), whole.max_alt_m(), "restart at {c}");
+        assert_screens_go_on(&r, &whole);
         assert!(r.descent_m() <= whole.descent_m() && r.descent_m() + 4 >= whole.descent_m(), "restart at {c}");
         let (np, np_whole) = (u32::from(p.np().unwrap()), u32::from(wp.np().unwrap()));
         assert!(np.abs_diff(np_whole) * 50 <= np_whole, "restart at {c}: NP {np} of {np_whole}");

@@ -71,8 +71,15 @@ pub struct Input {
 
 /// Words of [`Ride::to_words`].
 pub const RIDE_WORDS: usize = 16;
-/// Words of [`Ride::more_words`]: the ride's 6, then its power's.
-pub const MORE_WORDS: usize = 6 + crate::power::POWER_WORDS;
+/// Words of [`Ride::more_words`]: the ride's 6, its power's, then (from [`MORE_TAIL`]) the ride's other totals the
+/// screens show (12: max cadence, balance, laps, the last lap's and this lap's values), the lap's power, the time
+/// in zones and the hrTSS.
+pub const MORE_WORDS: usize = HRTSS_AT + 2;
+/// Where the tail of [`Ride::more_words`] starts: words a build before them leaves zero (each zero is "none").
+pub const MORE_TAIL: usize = 6 + crate::power::POWER_WORDS;
+const LAP_POWER_AT: usize = MORE_TAIL + 12;
+const ZONES_AT: usize = LAP_POWER_AT + crate::power::POWER_WORDS;
+const HRTSS_AT: usize = ZONES_AT + 12;
 
 /// The power's words in [`Ride::more_words`], for [`crate::power::Power::resume`].
 pub fn power_words(more: &[u32; MORE_WORDS]) -> [u32; crate::power::POWER_WORDS] {
@@ -416,13 +423,33 @@ impl Ride {
 
     /// The totals [`Ride::to_words`] has no room for, with the ride's power's `p` ([`crate::power::Power::to_words`]),
     /// for the recovery record ([`Ride::resumed`] and [`power_words`] read them back): uphill and downhill (2 words
-    /// each), the max altitude's presence (bit 0) and altitude reference (bits 8..16), the max altitude (mm).
-    pub fn more_words(&self, p: &crate::power::Power) -> [u32; MORE_WORDS] {
+    /// each), the max altitude's presence (bit 0) and altitude reference (bits 8..16), the max altitude (mm); then
+    /// ([`MORE_TAIL`]) the max cadence, balance, laps, last lap and this lap's values, the lap's power, the time in
+    /// zones `z` and the hrTSS `h` ([`ZoneTime::resumed`], [`hrtss_resumed`]), so the screens go on after a reset.
+    pub fn more_words(&self, p: &crate::power::Power, z: &ZoneTime, h: &crate::hrtss::Hrtss) -> [u32; MORE_WORDS] {
         let (u, d, alt) = (self.up9, self.down9, self.max_alt_mm);
         let head = [u as u32, (u >> 32) as u32, d as u32, (d >> 32) as u32];
         let alt = [u32::from(alt.is_some()) | u32::from(self.alt_ref) << 8, alt.unwrap_or(0) as u32];
+        // an Option as its value plus one, 0 for None
+        let opt = |o: Option<u16>| o.map_or(0, |v| u32::from(v) + 1);
+        let tail = [
+            u32::from(self.max_cadence),
+            self.balance.sum,
+            self.balance.n,
+            self.laps,
+            self.last_lap_s.map_or(0, |v| v.saturating_add(1)),
+            opt(self.last_lap_w),
+            self.last_lap_m,
+            opt(self.last_lap_hr),
+            self.lap_hr.sum,
+            self.lap_hr.n,
+            self.lap_ascent_mm,
+            self.lap_descent_mm,
+        ];
+        let hrtss = [h.sum as u32, (h.sum >> 32) as u32];
+        let all = head.into_iter().chain(alt).chain(p.to_words()).chain(tail).chain(self.lap_power.to_words());
         let mut w = [0; MORE_WORDS];
-        for (o, v) in w.iter_mut().zip(head.into_iter().chain(alt).chain(p.to_words())) {
+        for (o, v) in w.iter_mut().zip(all.chain(z.hr).chain(z.power).chain(hrtss)) {
             *o = v;
         }
         w
@@ -433,16 +460,34 @@ impl Ride {
     /// at the first second of riding: a speed at or above the auto-pause's (its km/h set, else
     /// [`AUTO_PAUSE_X10`], AUTO PAUSE OFF too), or any cadence or power; no reading at all (the sensors not back yet,
     /// no fix) is not riding. The climbing window starts again. Zeros (a record of a build before them): no descent,
-    /// uphill, downhill or max altitude before the resume.
+    /// uphill, downhill, max altitude, max cadence, balance or lap values before the resume.
     pub fn resumed(w: &[u32; RIDE_WORDS], more: &[u32; MORE_WORDS], by_hand: bool) -> Ride {
         let at = |i: usize| w.get(i).copied().unwrap_or(0);
         let m = |i: usize| more.get(i).copied().unwrap_or(0);
         let avg = |i: usize| Avg { sum: at(i), n: at(i + 1) };
         let dist9 = u64::from(w[1]) | u64::from(w[2]) << 32;
         let lap_dist9 = (u64::from(w[12]) | u64::from(w[13]) << 32).min(dist9);
+        let t = |i: usize| m(MORE_TAIL + i);
+        let opt = |v: u32| v.checked_sub(1).map(|v| v as u16);
+        // the ride's power average has a count: power was heard
+        let mut lap_power = crate::power::Power::new_lap(w[7] > 0);
+        let lap_words: [u32; crate::power::POWER_WORDS] = core::array::from_fn(|i| m(LAP_POWER_AT + i));
+        if lap_words.iter().any(|&v| v != 0) {
+            lap_power.resume(&lap_words);
+        }
         Ride {
             state: State::Paused,
-            lap_power: crate::power::Power::new_lap(w[7] > 0), // the ride's power average has a count: power was heard
+            lap_power,
+            max_cadence: t(0) as u16,
+            balance: Avg { sum: t(1), n: t(2) },
+            laps: t(3),
+            last_lap_s: t(4).checked_sub(1),
+            last_lap_w: opt(t(5)),
+            last_lap_m: t(6),
+            last_lap_hr: opt(t(7)),
+            lap_hr: Avg { sum: t(8), n: t(9) },
+            lap_ascent_mm: t(10),
+            lap_descent_mm: t(11),
             timer_s: w[0],
             elapsed_s: w[0], // the trip time starts from the moving time: it is never less than the timer's
             dist9,
@@ -544,7 +589,7 @@ impl Ride {
         self.elapsed_s
     }
 
-    /// Laps taken (the Lap key, a workout's steps). Not kept over a resume.
+    /// Laps taken (the Lap key, a workout's steps).
     pub fn laps(&self) -> u32 {
         self.laps
     }
@@ -1075,6 +1120,18 @@ impl ZoneTime {
     pub fn power_s(&self, z: u8) -> Option<u32> {
         usize::from(z).checked_sub(1).and_then(|i| self.power.get(i)).copied()
     }
+
+    /// The zone times [`Ride::more_words`] kept (zeros, a record of a build before them: none).
+    pub fn resumed(more: &[u32; MORE_WORDS]) -> ZoneTime {
+        let m = |i: usize| more.get(ZONES_AT + i).copied().unwrap_or(0);
+        ZoneTime { hr: core::array::from_fn(m), power: core::array::from_fn(|i| m(5 + i)) }
+    }
+}
+
+/// The hrTSS [`Ride::more_words`] kept (zeros, a record of a build before it: none).
+pub fn hrtss_resumed(more: &[u32; MORE_WORDS]) -> crate::hrtss::Hrtss {
+    let m = |i: usize| u64::from(more.get(HRTSS_AT + i).copied().unwrap_or(0));
+    crate::hrtss::Hrtss { sum: m(0) | m(1) << 32 }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1775,6 +1832,22 @@ mod tests {
         }
         assert!(r.downhill_m() > 150, "down {}", r.downhill_m());
         assert!(r.uphill_m() >= up && r.uphill_m() < up + 100, "the 30 s window lags about 15 s");
+    }
+
+    /// The time in zones and the hrTSS go through the recovery record's words and back (the review of 2026-11-11,
+    /// T4: they restarted at a resume); zeros, a record of a build before them, are none.
+    #[test]
+    fn zone_times_and_hrtss_go_on_after_a_resume() {
+        let (mut z, mut h) = (ZoneTime::default(), crate::hrtss::Hrtss::default());
+        for s in 0..600u16 {
+            z.second(Some((s % 5 + 1) as u8), Some((s % 7 + 1) as u8));
+            h.second(Some(140 + s % 30), 190, false);
+        }
+        let more = Ride::new().more_words(&crate::power::Power::new(), &z, &h);
+        assert_eq!((ZoneTime::resumed(&more), hrtss_resumed(&more)), (z, h));
+        assert!(h.score(170, 190, false).is_some());
+        let zeros = [0; MORE_WORDS];
+        assert_eq!((ZoneTime::resumed(&zeros), hrtss_resumed(&zeros)), Default::default());
     }
 
     /// A resumed ride's trip time is never less than its timer, and the flat ground with GNSS noise of 4 m (under the

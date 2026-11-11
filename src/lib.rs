@@ -75,6 +75,10 @@ pub trait Board {
     fn rtc(&mut self) -> (u32, u32);
     /// Sets the RTC to RTC_TR / RTC_DR values ([`rtc_words`]): the clock keeps running from there.
     fn rtc_set(&mut self, tr: u32, dr: u32);
+    /// The RTC is enabled and its clock (the LSE) runs: false after a backup domain loss (BOARD.md 8).
+    fn rtc_running(&mut self) -> bool;
+    /// Starts the RTC on the LSE after a backup domain loss, its calendar at the reset values (BOARD.md 8).
+    fn rtc_start(&mut self);
     /// Sleeps `ms` milliseconds (SysTick and WFI on the unit; the simulator advances its clock).
     fn delay_ms(&mut self, ms: u32);
     /// The CPU clock the cycle counter runs at, Hz: [`prof::Clock`] turns cycles into microseconds with it. The
@@ -622,6 +626,13 @@ impl App {
     /// The second half of the start ([`App::new_with`] the first), on the app in place: what is left on the card and in the backup
     /// registers acted on, the first screen drawn, the backlight on.
     pub fn begin(&mut self, b: &mut impl Board) {
+        // a backup domain lost (a cell run flat) stops the RTC, the ride's clock: started again, at 2000-01-01
+        if !b.rtc_running() {
+            b.rtc_start();
+            if !b.rtc_running() {
+                self.notice("CLOCK NOT RUNNING");
+            }
+        }
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
         self.card_writable = b.emmc_writable();
         self.awake_at = self.prof.clock.us(b);

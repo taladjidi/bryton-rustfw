@@ -455,11 +455,12 @@ Details: timer stop_all and start events with timer_trigger auto at each stop an
 
 **A power cut with the backup domain lost, then the boot (2026-11-02, app/riding.rs `left_by_a_power_loss`)**
 
-Seen: simulator only, with the RTC back at 2000-01-01.
+Seen: simulator only, with the RTC back at 2000-01-01 and stopped until the boot starts it (lib.rs `begin`, main.rs `rtc_start`, BOARD.md 8).
 
 On the unit, with the owner:
-1. A ride recorded a few minutes, the battery run flat (or VBAT cut), the boot: RIDE RESUMED, paused at the last checkpoint, then the save.
-2. A first start of this firmware on a unit that never ran it: nothing resumed, stock's settings imported.
+1. Before and after a full drain, a `tools/dev.py peek` of RCC_BDCR (0x58024470: LSEON, LSERDY, RTCSEL, RTCEN) and RTC_PRER (0x58004010): whether the drain resets the backup domain at all (no coin cell seen), and the values stock leaves (its LSE drive, LSEDRV bits 3..4).
+2. A ride recorded a few minutes, the battery run flat (or VBAT cut), the boot: no CLOCK NOT RUNNING, the clock counting from 2000-01-01, RIDE RESUMED, paused at the last checkpoint, then the save; both copies (`\Activities`, `\Rustfw\Activities`) with records after the resume, and the next ride's full copy with records too.
+3. A first start of this firmware on a unit that never ran it: nothing resumed, stock's settings imported.
 
 Details: a boot with none of this firmware's backup registers set reads the ride's record once (read only) and resumes a ride left open as the marker's path does (a card that does not answer then: the resume pending, stock's settings imported once it answers with no ride).
 

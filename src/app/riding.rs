@@ -501,7 +501,7 @@ impl App {
         let local = self.rec_local();
         self.profile_to_recorders(); // before a checkpoint (a ride switched off or cut while paused)
         // the totals after this pass's second (power.rs runs after the recorder's second): a resume goes on from them
-        let more = self.ride.more_words(&self.power);
+        let more = self.ride.more_words(&self.power, &self.zone_s, &self.hrtss);
         self.rec.clean.set_more(more);
         self.rec.full.set_more(more);
         if self.rec.clean.phase() != recorder::Phase::Done {
@@ -560,9 +560,8 @@ impl App {
                 // no NP sample)
                 self.power.resume(&ride::power_words(&more));
                 self.reset_ride_curve();
-                // the zone times and the hrTSS restart after a resume, as the laps do
-                self.zone_s = ride::ZoneTime::default();
-                self.hrtss = hrtss::Hrtss::default();
+                // the zone times and the hrTSS go on too (zeros in a record of a build before them: from the resume)
+                (self.zone_s, self.hrtss) = (ride::ZoneTime::resumed(&more), ride::hrtss_resumed(&more));
                 self.rec.model = Some(self.model_now()); // what the ride has now: the scan may not have read yet
                 let now = self.now_s();
                 self.alt.ride_start(now);

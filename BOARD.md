@@ -399,6 +399,16 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
   system reset (seen), and should through standby (backup domain, RM0399; to see).
+- **After a backup domain loss** (a cell run flat; main.rs `rtc_start`, called by lib.rs `begin` when `rtc_running`
+  is false; not yet seen on the unit, nor whether a drain resets the domain at all): RCC_BDCR (0x58024470,
+  stm32h747xx.h `RCC_TypeDef` offset 0x70) back to 0, so LSE off (LSEON bit 0, LSERDY bit 1), no RTC clock (RTCSEL
+  bits 8..9, 01 = LSE, write-once until a domain reset: BDRST bit 16) and RTCEN (bit 15) clear; the calendar at
+  2000-01-01 00:00:00 and the bootloader starts none of it. The firmware sets LSEON, waits for LSERDY at most 5 s
+  (STM32CubeH7 `LSE_STARTUP_TIMEOUT`), selects the LSE if nothing is, sets RTCEN, then in INIT writes RTC_PRER
+  (0x58004010: PREDIV_S bits 0..14 first, then PREDIV_A bits 16..22, as stm32h7xx_hal_rtc.c `HAL_RTC_Init`) to
+  1023 / 31 as stock. LSEDRV (bits 3..4) stays at its reset value, the lowest drive (stock's: inferred, not read). No
+  LSE: the app says CLOCK NOT RUNNING.
+
 - **Wake-up timer** (the Stop benches, main.rs `wakeup_timer`; **seen on the unit 2026-11-03**: WUTF set after 99
   and 1000 ms sleeps of 100 and 1000 asked): RTC_WUTR (0x58004014)
   counts RTCCLK / 16 (RTC_CR WUCKSEL 000), 2048 Hz from the LSE, so up to 32 s; RTC_CR WUTE bit 10, WUTIE bit 14; RTC_ISR
