@@ -1596,3 +1596,46 @@ fn a_course_picked_in_a_ride() {
     let c = app.courses.as_deref().unwrap();
     assert!(c.on.is_some() && c.on != first, "switched");
 }
+
+/// A course picked in a ride is read only in passes where the recorder has no card work, and not at all while the
+/// save runs after END: no course point is added in a pass where a checkpoint, a start or the save is due (the
+/// guard, whatever the byte budget), the ride ends whole, and the course then loads.
+#[test]
+fn a_course_load_leaves_the_recorder_and_the_save_alone() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(course_route);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000); // past a checkpoint
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    app.follow_course(hill(&app));
+    // End at once, while the course is being read, then pass by pass
+    app.screen = Screen::Menu(Menu::Ride(0), 0);
+    to_row(&mut sim, &mut app, menu::Row::Ride(menu::RideRow::End));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (mut busy, mut ended_loading) = (0, false);
+    for _ in 0..4000 {
+        let c = app.courses.as_deref().unwrap();
+        let (points, loading) = (c.course.points().len(), c.loading());
+        let rec = &app.rec;
+        let due = [&rec.full, &rec.clean].iter().any(|r| r.due() || r.pending());
+        let unsettled = !app.ride_settled();
+        ended_loading |= unsettled && loading;
+        app.step(&mut sim);
+        sim.sleep_ms(POLL_MS);
+        let after = app.courses.as_deref().unwrap().course.points().len();
+        if unsettled && due {
+            busy += 1;
+            assert_eq!(after, points, "a course read in a pass with card work due");
+        }
+    }
+    assert!(ended_loading, "the course was still loading at End");
+    assert!(app.ride_settled(), "the ride saved whole");
+    assert!(app.courses.as_deref().unwrap().on.is_some(), "the course loaded after the save");
+    assert!(busy > 0, "passes with card work were seen");
+}

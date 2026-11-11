@@ -240,7 +240,7 @@ fn map_page_follows_a_ride() {
         small_px / s,
         (refit_px + small_px) / s
     );
-    assert!((2..=100).contains(&refits), "fitted again as the ride grows: {refits}");
+    assert!((2..=65).contains(&refits), "fitted again as the ride grows: {refits}");
     assert!(late_refits > 0, "the loop closed: the view still follows the rider round it");
     assert!(small_px / s < 2000, "{} px/s between full redraws", small_px / s);
     let v = app.map_view(0).unwrap();
@@ -893,4 +893,29 @@ fn course_chevron_shots() {
         tap(&mut sim, &mut app, centre);
         sim.save(&format!("map_chevrons_fit_{name}"));
     }
+}
+
+/// One segment 70 000 pixels long (280 km at 4 m a pixel, two points): no overflow, the chevrons on screen stand
+/// every 72 pixels all along the visible part (not the first few only).
+#[test]
+fn chevrons_on_a_very_long_segment() {
+    use crate::map::{self, Route, Track, View};
+    use crate::ui::tests::Frame;
+    let area = (0, 24, 240, 296);
+    let mut t = Track::new();
+    t.add(450_000_000, 60_000_000, 90);
+    let v = View { cx: 140_000, cy: 0, mpp16: map::mpp16(4), rot: 0 };
+    let (pts, dist, boxes) = ([(0, 0), (280_000, 0)], [0u32, 280_000], [(0, 0, 280_000, 0)]);
+    let r = Route { pts: &pts, boxes: &boxes, gaps: &[0, 0], dist: &dist, off: (0, 0), id: 1 };
+    let mut whole = Frame::new();
+    map::draw(&mut whole, area, &t, Some(v), None, Some(&r), false);
+    // along the course's row: runs of white are chevrons (8 px wide at most)
+    let y = v.px(area, (0, 0)).1 as u32;
+    let (mut runs, mut was) = (0, false);
+    for x in 0..area.2 as u32 {
+        let on = (y.saturating_sub(5)..=y + 5).any(|yy| whole.at(x, yy) == ui::WHITE);
+        runs += u32::from(on && !was);
+        was = on;
+    }
+    assert!((3..=4).contains(&runs), "{runs} chevrons across 240 px at 72 px apart");
 }

@@ -750,11 +750,20 @@ fn segment(c: &mut impl Canvas, k: Rect, a: (i32, i32), b: (i32, i32), color: u1
 
 /// The chevrons on segment `i` of the course (from point `i` to `i + 1`, drawn from `a` to `b`): one at each multiple
 /// of [`CHEVRON_GAP`] pixels' worth of metres along the course that falls in it, so they stand where the course is
-/// whatever box is redrawn, and point the way it is ridden. White with a black outline, over the violet line.
+/// whatever box is redrawn, and point the way it is ridden. White with a black outline, over the violet line. Only
+/// the ones near the box `k` are worked out, so a segment of any length costs what shows of it.
 fn chevrons(c: &mut impl Canvas, k: Rect, area: Rect, v: &View, r: &Route, i: usize, (a, b): ((i32, i32), (i32, i32))) {
+    let m = 2 * CHEVRON;
+    if a.0.max(b.0).saturating_add(m) < k.0
+        || a.0.min(b.0) >= k.0 + k.2 + m
+        || a.1.max(b.1).saturating_add(m) < k.1
+        || a.1.min(b.1) >= k.1 + k.3 + m
+    {
+        return; // the segment is away from the box: the common case
+    }
     let (Some(&d0), Some(&d1)) = (r.dist.get(i), r.dist.get(i + 1)) else { return };
-    let gap = (CHEVRON_GAP * v.mpp16 / 16).max(1);
-    let (n0, n1) = (i64::from(d0) / gap, i64::from(d1) / gap);
+    let gap = u32::try_from(CHEVRON_GAP * v.mpp16 / 16).unwrap_or(u32::MAX).max(1);
+    let (n0, n1) = (d0.checked_div(gap).unwrap_or(0), d1.checked_div(gap).unwrap_or(0)); // u32: a hardware divide
     if n1 <= n0 {
         return;
     }
@@ -762,25 +771,44 @@ fn chevrons(c: &mut impl Canvas, k: Rect, area: Rect, v: &View, r: &Route, i: us
     let (mut lo, mut hi) = (i, i + 1);
     let at = |j: usize| r.pts.get(j).map(|q| v.px(area, (q.0 + r.off.0, q.1 + r.off.1)));
     for step in 0..16 {
-        let (p, q) = (at(lo), at(hi));
-        let (Some(p), Some(q)) = (p, q) else { break };
-        if (q.0 - p.0).abs() + (q.1 - p.1).abs() >= 3 * CHEVRON {
+        let (Some(p), Some(q)) = (at(lo), at(hi)) else { break };
+        if (q.0 - p.0).abs().saturating_add((q.1 - p.1).abs()) >= 3 * CHEVRON {
             break;
         }
         if step % 2 == 0 && hi + 1 < r.pts.len() { hi += 1 } else { lo = lo.saturating_sub(1) }
     }
     let (Some(p), Some(q)) = (at(lo), at(hi)) else { return };
-    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
-    let len = crate::math::isqrt(dx * dx + dy * dy);
+    // clamped: a long sparse segment at a fine zoom is far off screen, its direction only needs the ratio
+    let (dx, dy) = (i64::from(q.0 - p.0).clamp(-30_000, 30_000), i64::from(q.1 - p.1).clamp(-30_000, 30_000));
+    let len = i64::from(crate::math::isqrt(((dx * dx + dy * dy) / 16).min(i64::from(i32::MAX)) as i32)) * 4;
     if len == 0 {
         return;
     }
-    let (ux, uy) = (dx * 256 / len, dy * 256 / len); // unit vector, x256
-    let den = i64::from(d1 - d0).max(1);
-    for n in (n0 + 1..=n1).take(8) {
-        let t = n * gap - i64::from(d0);
-        let m = (a.0 + ((b.0 - a.0) as i64 * t / den) as i32, a.1 + ((b.1 - a.1) as i64 * t / den) as i32);
+    let (ux, uy) = ((dx * 256).checked_div(len).unwrap_or(0), (dy * 256).checked_div(len).unwrap_or(0)); // unit vector, x256
+    let (span, den) = (i64::from(d1 - d0), 1.max(i64::from(d1 - d0)));
+    // the metres along the segment (from `d0`) at which it is inside the box and its margin, per axis
+    let (mut from, mut to) = (0i64, span);
+    for (a, b, lo, hi) in [(a.0, b.0, k.0 - m, k.0 + k.2 + m), (a.1, b.1, k.1 - m, k.1 + k.3 + m)] {
+        let w = i64::from(b) - i64::from(a);
+        if w == 0 {
+            if !(lo..=hi).contains(&a) {
+                return;
+            }
+            continue;
+        }
+        let at = |e: i32| ((i64::from(e) - i64::from(a)) * span).checked_div(w).unwrap_or(0);
+        let (t0, t1) = (at(lo), at(hi));
+        (from, to) = (from.max(t0.min(t1) - 1), to.min(t0.max(t1) + 1));
+    }
+    let g = i64::from(gap);
+    let first = ((i64::from(d0) + from).max(0) + g - 1).checked_div(g).unwrap_or(0);
+    let last = (i64::from(d0) + to).checked_div(g).unwrap_or(0);
+    for n in first.max(i64::from(n0) + 1)..=last.min(i64::from(n1)) {
+        let t = n * g - i64::from(d0);
+        let along = |from: i32, to: i32| from + (i64::from(to - from) * t).checked_div(den).unwrap_or(0) as i32;
+        let m = (along(a.0, b.0), along(a.1, b.1));
         let s = CHEVRON;
+        let (ux, uy) = (ux as i32, uy as i32);
         let tip = (m.0 + ux * s / 256, m.1 + uy * s / 256);
         let back = (m.0 - ux * s / 256, m.1 - uy * s / 256);
         let arms = [(back.0 - uy * s / 256, back.1 + ux * s / 256), (back.0 + uy * s / 256, back.1 - ux * s / 256)];
@@ -1193,7 +1221,7 @@ mod tests {
         let v = shown.view.unwrap();
         let height = v.mpp16 * 75 / 16;
         assert!((700..=1400).contains(&height), "{height} m high");
-        assert!((3..=40).contains(&refits), "{refits} refits");
+        assert!((3..=25).contains(&refits), "{refits} refits");
     }
 
     /// Indoors flips the view to the fit and back: one refit each way, none while it stays.

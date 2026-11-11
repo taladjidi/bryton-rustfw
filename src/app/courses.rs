@@ -214,10 +214,11 @@ impl App {
     }
 
     /// Bytes of course files read per pass: as much as the scan of stock's rides while no ride runs (about 40 ms
-    /// on the unit), and as little as it reads in a ride ([`App::SCAN_RIDING`]: 16 KB, a few ms), so a course picked
+    /// on the unit), and 4 KB in a ride or while its save runs, so a course picked
     /// in a ride never holds the recorder's pass up.
     fn course_bytes(&self) -> u32 {
-        if self.ride.state() == ride::State::Idle { Self::SCAN_IDLE } else { Self::SCAN_RIDING }
+        // a ride until it is saved (the save and its read-back are the riskiest moment): 4 KB a pass, one chunk
+        if self.ride_settled() { Self::SCAN_IDLE } else { 4096 }
     }
 
     /// The course files go on being read, a bounded amount per pass: the course to follow (then COURSE ON and the
@@ -227,7 +228,7 @@ impl App {
         let budget = self.course_bytes();
         // in a ride, never in a pass where the recorder has card work (a checkpoint, a start, a save): the course waits
         // a pass, the records do not
-        let (rec, riding) = (&self.rec, self.ride.state() != ride::State::Idle);
+        let (rec, riding) = (&self.rec, !self.ride_settled());
         if riding && [&rec.full, &rec.clean].iter().any(|r| r.due() || r.pending()) {
             return;
         }
