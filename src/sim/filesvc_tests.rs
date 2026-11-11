@@ -915,15 +915,19 @@ fn with_no_known_parameters_the_preferred_ones_are_sent_back() {
     assert!(r.interval_ms == super::ble_sim::HVN_MS && r.latency == 6, "PPCP back, not the fast ones (audit P3)");
 }
 
-/// The chip answers BUSY to the parameter and PHY calls for 1.5 s after a short READ's boost: the give-back is tried
+/// The chip answers BUSY to the parameter and PHY calls for 4 s once boosted a short READ's boost: the give-back is tried
 /// again by time, and the link is normal within seconds (audit P3: 20 tries in a second were spent, the link stayed fast).
 #[test]
 fn a_restore_refused_busy_is_tried_again_by_time() {
     let (mut sim, mut app, control, _, _) = fast_unit(247, 2000, |_| {});
-    sim.nordic.params_busy_until = sim.ms + 1500;
     start_read(&mut sim, control, 1, BIG);
-    run(&mut sim, &mut app, 5000);
-    assert!(radio_normal(&sim) && !app.phone.files.boosted, "still fast");
+    while !app.phone.files.boosted && sim.ms < 20_000 {
+        run(&mut sim, &mut app, 10);
+    }
+    assert!(!radio_normal(&sim), "boosted");
+    sim.nordic.params_busy_until = sim.ms + 4000; // the give-back meets pending procedures
+    run(&mut sim, &mut app, 15_000);
+    assert!(radio_normal(&sim) && !app.phone.files.boosted, "given back");
 }
 
 #[test]

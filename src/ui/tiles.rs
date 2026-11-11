@@ -678,6 +678,9 @@ impl Ign {
             if let Some(s) = t.3.and_then(|s| self.tiles.get_mut(s)) {
                 s.used = self.tick;
             }
+            if let Some(s) = self.tiles.iter_mut().find(|s| s.bad && s.key == (z, t.0, t.1)) {
+                s.used = self.tick; // a damaged tile still in view is not the first slot to be reused
+            }
         }
         for k in 0..v.n {
             let Some(&(x, y, _, None)) = v.tiles.get(k) else { continue };
@@ -1996,6 +1999,9 @@ pub(crate) mod tests {
         let first = b.stats.bytes_read;
         b.render(&mut Ram(img, 0), AREA, View { cx: 90, ..v }, ORIGIN);
         assert!(first > 0 && b.stats.bytes_read == 0, "{first} then {:?}", b.stats);
+        // a damaged tile still in view counts as used now: it is not the first slot reused for a new tile
+        let bad: std::vec::Vec<u32> = b.ign.tiles.iter().filter(|s| s.bad).map(|s| s.used).collect();
+        assert!(!bad.is_empty() && bad.iter().all(|&u| u == b.ign.tick), "{bad:?} at {}", b.ign.tick);
     }
 
     /// A tile's files in memory.

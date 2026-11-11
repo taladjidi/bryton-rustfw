@@ -137,12 +137,14 @@ impl App {
         match storage::workout_file::calendar(vol, self.date, zones) {
             Ok(c) => self.plan.calendar = c,
             Err(fat::Error::NotFound) => self.plan.calendar = Default::default(), // no workout folder: none planned
-            Err(_) => {
+            Err(fat::Error::Io) => {
                 // a card error that may pass: keep the day unread so `refresh_calendar` tries again, later
-                self.plan.retry_ms = self.gps.ms.saturating_add(RETRY_MS);
+                self.plan.retry_ms = self.up_ms.saturating_add(RETRY_MS);
                 return;
             }
+            Err(_) => self.plan.calendar = Default::default(),
         }
+        self.plan.retry_ms = 0;
         (self.plan.day, self.plan.zones) = (Some(self.date), zones);
         self.plan.done_key = None;
     }
@@ -153,7 +155,7 @@ impl App {
     pub(crate) fn refresh_calendar(&mut self, b: &mut impl Board, asked: bool) {
         let zones = self.settings.zones();
         let stale = self.plan.day != Some(self.date) || self.plan.zones != zones;
-        if stale && !self.emmc.lent() && (asked || self.gps.ms >= CALENDAR_MS.max(self.plan.retry_ms)) {
+        if stale && !self.emmc.lent() && (asked || self.gps.ms >= CALENDAR_MS && self.up_ms >= self.plan.retry_ms) {
             self.load_calendar(b);
         }
     }

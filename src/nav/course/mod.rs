@@ -93,6 +93,8 @@ pub const SEARCH_CHUNKS: usize = 4;
 const TIE_M: u32 = 20;
 /// A step between two fixes of at least 5 m (squared) tells the rider's direction; less is jitter.
 const MOVING_M2: i64 = 25;
+/// Fixes in a row moving against the pass before the other leg of the same road is taken.
+const OPP_FIXES: u8 = 3;
 
 /// Decimetres to FIT's altitude ((m + 500) x 5), as kept.
 fn enc(dm: i32) -> u16 {
@@ -407,6 +409,8 @@ pub struct Tracker {
     speed: u32,
     /// Fixes in a row placed back before the last cue passed ([`cues::BACK_FIXES`]).
     back_s: u8,
+    /// Fixes in a row whose movement runs against the pass the rider is placed on (out-and-back: the other leg).
+    opp: u8,
     /// The last fix on the course's plane (metres), for [`Course::to_start`].
     here: (i32, i32),
 }
@@ -429,6 +433,7 @@ impl Tracker {
             cue_said: 0,
             speed: 0,
             back_s: 0,
+            opp: 0,
             here: (0, 0),
         }
     }
@@ -1022,18 +1027,35 @@ impl Course {
         t.here = p;
         let segs = self.len - 1;
         let window = t.seg.saturating_sub(BEHIND)..(t.seg + AHEAD).min(segs);
-        let mut hit = self.nearest_toward(p, core::slice::from_ref(&window), t.along_m, &mut t.examined, dir);
+        // the plain nearest pass, and the one going the rider's way: the latter wins only as a near-equal tie-break
+        let any = self.nearest(p, core::slice::from_ref(&window), t.along_m, &mut t.examined);
+        // the directed scan only when the nearest pass runs against the movement (the cost of following a course)
+        let against = |h: Hit| dir.is_some_and(|_| self.on_segment_toward(h.seg, p, dir).is_none());
+        let toward = match (dir, any) {
+            (Some(_), Some(a)) if against(a) => self.nearest_toward(p, &[window], t.along_m, &mut t.examined, dir),
+            (_, a) => a,
+        };
+        let tie =
+            |d: Option<Hit>, a: Option<Hit>| d.filter(|d| a.is_none_or(|a| d.off_m <= a.off_m.saturating_add(TIE_M)));
+        let mut hit = tie(toward, any).or(any);
+        // moving against the pass for OPP_FIXES in a row: look for the same road's other leg
+        if dir.is_some() {
+            t.opp = if toward.is_none() && any.is_some() { t.opp.saturating_add(1) } else { 0 };
+        }
         let lost = t.off_m.is_none() || hit.is_none_or(|h| h.off_m > LOST_M);
-        if lost && t.lost_s.is_multiple_of(SEARCH_S) {
-            let wide = self.search(p, t.along_m, &mut t.examined, dir);
-            if let Some(w) = wide.filter(|w| hit.is_none_or(|h| w.off_m.saturating_add(TIE_M) < h.off_m)) {
+        let flip = t.opp >= OPP_FIXES;
+        if (lost && t.lost_s.is_multiple_of(SEARCH_S)) || flip {
+            let wide_any = self.search(p, t.along_m, &mut t.examined, None);
+            let wide_dir = dir.and_then(|_| self.search(p, t.along_m, &mut t.examined, dir));
+            let wide = tie(wide_dir, wide_any).or(wide_any);
+            if flip {
+                t.opp = 0;
+                hit = tie(wide_dir, hit).or(hit);
+            } else if let Some(w) = wide.filter(|w| hit.is_none_or(|h| w.off_m.saturating_add(TIE_M) < h.off_m)) {
                 hit = Some(w);
             }
         }
         t.lost_s = if lost { t.lost_s.saturating_add(1) } else { 0 };
-        if hit.is_none() && dir.is_some() {
-            hit = self.nearest(p, &[window], t.along_m, &mut t.examined); // riding the course backwards: any pass
-        }
         let h = hit?;
         (t.seg, t.along_m, t.off_m) = (h.seg, h.along_m, Some(h.off_m));
         t.joined |= h.off_m <= BACK_M;
@@ -1521,6 +1543,25 @@ pub(crate) mod tests {
             c.follow(&mut t, lat, lon);
         }
         assert!(t.along_m.abs_diff(6005 - 1460) <= 4, "on the way back: {t:?}");
+        // one 8 m jitter while stopped on the way out does not change legs, nor raise an alarm
+        let mut t = Tracker::default();
+        for k in 0..8 {
+            let (lat, lon) = fix(1000.0 + 8.0 * f64::from(k), 2.0);
+            c.follow(&mut t, lat, lon);
+        }
+        for x in [1064.0, 1056.0, 1064.0, 1064.0] {
+            let (lat, lon) = fix(x, 2.0);
+            assert_ne!(c.follow(&mut t, lat, lon), Some(Event::Off));
+            assert!(t.along_m.abs_diff(1064) <= 12, "jitter: {t:?}");
+        }
+        // a U-turn mid-leg of a course with no second pass: no jump, no alarm
+        let c1 = course(&lines(&[(0.0, 0.0, 0.0), (3000.0, 0.0, 0.0)], 10.0));
+        let mut t = Tracker::default();
+        for x in (0..1500).step_by(8).chain((1000..1500).rev().step_by(8)) {
+            let (lat, lon) = fix(f64::from(x), 2.0);
+            assert_ne!(c1.follow(&mut t, lat, lon), Some(Event::Off));
+            assert!(t.along_m.abs_diff(x as u32) <= 12, "u-turn at {x}: {t:?}");
+        }
     }
 
     /// A loop that starts and ends at the same place: at the start, the start; near the end, the end.
