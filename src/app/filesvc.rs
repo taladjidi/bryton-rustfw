@@ -668,8 +668,8 @@ impl Phone {
 impl App {
     /// The phone wrote Control: a command to answer. Only on the encrypted link (the stack enforces it too).
     pub(crate) fn files_command(&mut self, b: &mut impl Board, written: &[u8]) {
-        // rides are GPS tracks: the bond, not just an encrypted link (Just Works pairing during the PAIR window)
-        if !self.phone.secure || self.phone.stored.bond.is_none() {
+        // rides are GPS tracks: the bond's own link, not just an encrypted one (Just Works pairing in the PAIR window)
+        if !self.phone.owners_link() {
             return;
         }
         let (busy, now) = (!self.ride_settled() || self.emmc.lent(), self.up_ms);
@@ -1016,7 +1016,7 @@ impl App {
         } else if svc.boosted && (!svc.active() || !fast_ok) {
             self.unboost(b, conn); // the answer ended (or the row went off): the normal parameters, whatever the way
         }
-        if !self.phone.secure || self.phone.stored.bond.is_none() || !self.phone.files.active() {
+        if !self.phone.owners_link() || !self.phone.files.active() {
             return;
         }
         if !matches!(self.phone.files.job, Job::Idle) && (!self.ride_settled() || self.emmc.lent()) {
@@ -1044,8 +1044,13 @@ impl App {
             }
             let svc = &mut self.phone.files;
             let frame = svc.out.get(..svc.out_len).unwrap_or(&[]);
-            if ble::notify(b, &mut self.rx, conn, data, frame).is_err() {
-                if matches!(svc.job, Job::Read { .. }) {
+            let refused_unsent = self.rx.stalled || self.rx.broken; // `call` sends nothing then
+            if let Err(e) = ble::notify(b, &mut self.rx, conn, data, frame) {
+                if e == nrf::Error::Timeout && !refused_unsent && matches!(svc.job, Job::Read { .. }) {
+                    // the frame may have gone (its answer late) or not: never sent twice, END says what was taken
+                    // and the phone asks again from what it holds
+                    svc.abort(Status::Ok);
+                } else if matches!(svc.job, Job::Read { .. }) {
                     svc.info.full = svc.info.full.saturating_add(1);
                 }
                 break; // the queue is full (or Data is not subscribed): the same frame next pass

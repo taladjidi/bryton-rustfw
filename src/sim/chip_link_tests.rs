@@ -289,8 +289,8 @@ fn nine_pairings_in_a_row_never_exceed_8_live_contexts() {
     assert!((1..=8).contains(&most), "{most} live contexts at most");
 }
 
-/// A call timed out; its answer arrives while the next call's send is held by CTS (the in-flight event frame keeps
-/// the response waiting). The drain in `send` swallows it, so the next call gets its own answer.
+/// A call timed out; its answer waits behind an event frame in flight. The next call waits for it (the event kept, the
+/// answer dropped) before it sends, so it gets its own answer.
 #[test]
 fn a_late_answer_arriving_while_the_send_is_held_is_swallowed() {
     let mut s = chip();
@@ -304,16 +304,16 @@ fn a_late_answer_arriving_while_the_send_is_held_is_swallowed() {
     assert_eq!(rx.late, None);
 }
 
-/// A send that fails leaves the swallow armed: the late answer may still come.
+/// A late answer that never comes is waited for once: the call fails without sending (nothing may be sent while an
+/// earlier answer may still come), and the swallow is dropped, so the next call is clean.
 #[test]
-fn a_failed_send_keeps_the_late_answer_armed() {
+fn a_late_answer_that_never_comes_fails_one_call_unsent() {
     let mut s = chip();
     s.nordic.hung = true;
     let mut rx = nrf::Rx::new();
     rx.late = Some(0x61);
-    // longer than the TX FIFO and the 4 bytes a hung chip takes: the send fails
     assert_eq!(nrf::call(&mut s, &mut rx, &WRITE20, &mut [0; 8]), Err(nrf::Error::Timeout));
-    assert_eq!(rx.late, Some(0x61));
+    assert_eq!((rx.late, s.nordic.hung_rx), (None, 0), "unsent, and not armed again");
 }
 
 /// A frame cut short (the chip holds CTS for ever mid-payload) leaves the chip mis-framed: no later frame is sent to

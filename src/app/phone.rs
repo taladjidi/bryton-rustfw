@@ -142,6 +142,9 @@ pub struct Phone {
     /// How long the link has been up (a link left unencrypted is dropped: [`UNSECURED_MS`]).
     link_ms: u32,
     pub(crate) secure: bool,
+    /// This link's key is the bond's: the stored key was given for it (SEC_INFO_REQUEST) or the bond was made on it.
+    /// A link encrypted by a pairing that stored no bond (Just Works in the PAIR window) is secure, not keyed.
+    keyed: bool,
     /// Our attributes: the HID report and its CCCD, the battery level and its CCCD.
     report: (u16, u16),
     battery: (u16, u16),
@@ -209,6 +212,7 @@ impl Default for Phone {
             conn: None,
             link_ms: 0,
             secure: false,
+            keyed: false,
             report: (0, 0),
             battery: (0, 0),
             types: [0; 8],
@@ -285,6 +289,11 @@ impl Phone {
         self.stored.bond.is_some()
     }
 
+    /// The link is the bonded phone's, encrypted with the bond's key: what the bond's data (files, CCCDs) needs.
+    pub(crate) fn owners_link(&self) -> bool {
+        self.secure && self.keyed && self.bonded()
+    }
+
     /// The CCCDs to enable, in order: the Data Source before the Notification Source (so an answer has somewhere
     /// to go), AMS, the time.
     fn subscriptions(&self) -> [usize; 5] {
@@ -338,7 +347,8 @@ impl Phone {
 
     /// The link is gone: what belonged to it.
     fn unlink(&mut self) {
-        (self.conn, self.secure, self.disc, self.busy, self.n_ops) = (None, false, Disc::Idle, false, 0);
+        (self.conn, self.secure, self.keyed, self.disc, self.busy, self.n_ops) =
+            (None, false, false, Disc::Idle, false, 0);
         (self.h, self.tried, self.call, self.release) = ([0; 12], 0, None, false);
         self.held = None;
         (self.asking, self.app_out) = (None, false);
@@ -522,6 +532,15 @@ impl App {
     /// A phone setting changed: written with the bond.
     pub(crate) fn phone_changed(&mut self) {
         self.phone.save = true;
+    }
+
+    /// A pairing ended without a bond: the link it encrypted is dropped, since its key is not the bond's (a stranger
+    /// pairing Just Works without bonding in the PAIR window would otherwise keep an encrypted link).
+    fn pairing_left_no_bond(&mut self, b: &mut impl Board, conn: u16) {
+        if Some(conn) == self.phone.conn {
+            let _ = ble::disconnect(b, &mut self.rx, conn);
+        }
+        self.say("PAIRING FAILED");
     }
 
     /// The PHONE menu's FORGET: the link dropped, the bond erased.
@@ -755,13 +774,17 @@ impl App {
             Event::SecParamsRequest { conn } => {
                 // pairing: while asked for (PAIR), or with no bond yet (then the unit advertises only after PAIR)
                 let ok = self.phone.pairing || !self.phone.bonded();
+                self.phone.keyed &= Some(conn) != self.phone.conn; // a new pairing: its key is not the bond's yet
                 let _ = ble::sec_params_reply(b, rx, conn, ok);
             }
             Event::SecInfoRequest { conn, .. } => {
                 let key = self.phone.stored.bond.map(|d| (d.key.ltk, d.key.flags));
+                if Some(conn) == self.phone.conn {
+                    self.phone.keyed = key.is_some(); // the link can only reach level 2 with this key
+                }
                 let _ = ble::sec_info_reply(b, rx, conn, key);
             }
-            Event::AuthStatus { status: 0, bonded: true, own, peer, .. } => {
+            Event::AuthStatus { conn, status: 0, bonded: true, own, peer } => {
                 // our LTK (legacy pairing), or with LESC the one key both sides share
                 let key = own.filter(|k| !k.is_empty()).or(peer.filter(|k| !k.is_empty()));
                 if let Some(key) = key {
@@ -772,14 +795,15 @@ impl App {
                         bond.attrs_len = n as u8; // CCCDs the phone set before the keys came
                     }
                     self.phone.stored.bond = Some(bond);
-                    (self.phone.save, self.phone.pairing) = (true, false);
-                    self.notice("PHONE PAIRED");
+                    (self.phone.save, self.phone.pairing, self.phone.keyed) = (true, false, true);
+                    return self.notice("PHONE PAIRED");
                 }
+                self.pairing_left_no_bond(b, conn);
             }
-            Event::AuthStatus { .. } => self.say("PAIRING FAILED"),
+            Event::AuthStatus { conn, .. } => self.pairing_left_no_bond(b, conn),
             Event::ConnSecUpdate { conn, level } if level >= 2 && Some(conn) == self.phone.conn => {
                 self.phone.secure = true;
-                if let Some(d) = self.phone.stored.bond {
+                if let Some(d) = self.phone.stored.bond.filter(|_| self.phone.keyed) {
                     let _ =
                         ble::sys_attr_set(b, rx, conn, Some(d.attrs.get(..usize::from(d.attrs_len)).unwrap_or(&[])));
                 }
@@ -789,7 +813,7 @@ impl App {
                 }
             }
             Event::SysAttrMissing { conn } => {
-                let attrs = self.phone.stored.bond.filter(|_| self.phone.secure);
+                let attrs = self.phone.stored.bond.filter(|_| self.phone.owners_link());
                 let _ = ble::sys_attr_set(
                     b,
                     rx,
@@ -801,7 +825,7 @@ impl App {
                 self.phone.battery_sent = None; // the level again, in case it was its CCCD
                 // the CCCDs kept with the bond, for the next link: the bonded phone's only (an unencrypted peer is
                 // a stranger, whose writes would switch the owner's notifications off and wear the card)
-                if self.phone.secure
+                if self.phone.owners_link()
                     && let Some(d) = &mut self.phone.stored.bond
                 {
                     let mut attrs = [0; ph::ATTRS];

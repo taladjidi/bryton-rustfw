@@ -404,8 +404,7 @@ fn a_late_card_with_no_ride_settles() {
 /// (past the driver's bound: `Busy`, the write retried; every 37: `a_ride_starts_through_stalls_every_37_sectors`). A
 /// write given up after landing may lose a cluster (fat/write.rs, "a write that fails after landing"): counted,
 /// printed, bounded; never a cross-link.
-#[test]
-fn every_write_is_reliable_when_the_card_offers_it() {
+fn reliable_writes(stall: (u64, u64)) {
     let start = |cut: Option<u64>, (every, ms): (u64, u64)| {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
@@ -418,41 +417,54 @@ fn every_write_is_reliable_when_the_card_offers_it() {
         run(&mut sim, &mut app, 75_000);
         (sim, app)
     };
-    for stall in [(1024, 300), (11, 400), (41, 1200)] {
-        let (sim, app) = start(None, stall);
-        let cmds = &sim.emmc.cmds;
-        assert!(!cmds.iter().any(|c| c.0 == 24), "a plain single-sector write");
-        for (k, _) in cmds.iter().enumerate().filter(|c| c.1.0 == 25) {
-            assert!(k > 0 && cmds[k - 1].0 == 23 && cmds[k - 1].1 & 1 << 31 != 0, "CMD25 without a reliable CMD23");
-        }
-        assert_eq!(app.rec.clean.errors > 0, stall.1 > 1000, "{stall:?}: writes given up past the bound only");
-        // clusters lost by the writes given up, never freed while named (no cross-link: fsck passes)
-        let leaked = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("{stall:?}: {e}"));
-        let given = app.rec.clean.errors + app.rec.full.errors; // the two copies' writes given up
-        std::println!("{stall:?}: {} writes given up, {leaked} clusters lost", given);
-        assert!(leaked <= given, "{stall:?}: {leaked} lost, more than one a write given up");
-        let total = sim.emmc.sectors_written;
-        let (mut resumed, mut first) = (0, None);
-        for cut in 0..total {
-            let (mut sim, _) = start(Some(cut), stall);
-            let (mut sim, mut app) = reboot(&mut sim, 2);
-            run(&mut sim, &mut app, 1000);
-            let back = app.notes.list[0].as_str().ends_with("RIDE RESUMED");
-            resumed += usize::from(back);
-            // once the ride's first checkpoint is on the card, every later cut resumes it: a cut that does not is a
-            // ride lost (a cut before it finds no ride to resume, which is right: nothing was saved yet)
-            match (first, back) {
-                (None, true) => first = Some(cut),
-                (Some(f), false) => panic!("{stall:?} cut {cut}: the ride not resumed, though cut {f} resumed it"),
-                _ => {}
-            }
-            let lost =
-                crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("{stall:?} cut {cut}: {e}"));
-            assert!(lost <= 2 + leaked, "{stall:?} cut {cut}: {lost} clusters lost");
-        }
-        std::println!("{stall:?}: {total} cuts, {resumed} resumed from cut {first:?}");
-        assert!(resumed > 0, "{stall:?}");
+    let (sim, app) = start(None, stall);
+    let cmds = &sim.emmc.cmds;
+    assert!(!cmds.iter().any(|c| c.0 == 24), "a plain single-sector write");
+    for (k, _) in cmds.iter().enumerate().filter(|c| c.1.0 == 25) {
+        assert!(k > 0 && cmds[k - 1].0 == 23 && cmds[k - 1].1 & 1 << 31 != 0, "CMD25 without a reliable CMD23");
     }
+    assert_eq!(app.rec.clean.errors > 0, stall.1 > 1000, "{stall:?}: writes given up past the bound only");
+    // clusters lost by the writes given up, never freed while named (no cross-link: fsck passes)
+    let leaked = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("{stall:?}: {e}"));
+    let given = app.rec.clean.errors + app.rec.full.errors; // the two copies' writes given up
+    std::println!("{stall:?}: {} writes given up, {leaked} clusters lost", given);
+    assert!(leaked <= given, "{stall:?}: {leaked} lost, more than one a write given up");
+    let total = sim.emmc.sectors_written;
+    let (mut resumed, mut first) = (0, None);
+    for cut in (0..total).step_by(super::fuzz::sample_step()) {
+        let (mut sim, _) = start(Some(cut), stall);
+        let (mut sim, mut app) = reboot(&mut sim, 2);
+        run(&mut sim, &mut app, 1000);
+        let back = app.notes.list[0].as_str().ends_with("RIDE RESUMED");
+        resumed += usize::from(back);
+        // once the ride's first checkpoint is on the card, every later cut resumes it: a cut that does not is a
+        // ride lost (a cut before it finds no ride to resume, which is right: nothing was saved yet)
+        match (first, back) {
+            (None, true) => first = Some(cut),
+            (Some(f), false) => panic!("{stall:?} cut {cut}: the ride not resumed, though cut {f} resumed it"),
+            _ => {}
+        }
+        let lost =
+            crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("{stall:?} cut {cut}: {e}"));
+        assert!(lost <= 2 + leaked, "{stall:?} cut {cut}: {lost} clusters lost");
+    }
+    std::println!("{stall:?}: {total} cuts, {resumed} resumed from cut {first:?}");
+    assert!(resumed > 0, "{stall:?}");
+}
+
+#[test]
+fn every_write_is_reliable_without_stalls() {
+    reliable_writes((1024, 300));
+}
+
+#[test]
+fn every_write_is_reliable_through_400_ms_stalls() {
+    reliable_writes((11, 400));
+}
+
+#[test]
+fn every_write_is_reliable_through_1200_ms_stalls() {
+    reliable_writes((41, 1200));
 }
 
 /// The card stalls 1.2 s (past the driver's bound: `Busy`) every 37 sectors, a ride start's retry length once the

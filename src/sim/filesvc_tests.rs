@@ -232,6 +232,52 @@ fn read_a_ride_whole_and_report_the_speed() {
     assert!((250..=400).contains(&rate), "{rate} B/s");
 }
 
+/// One notification of a READ answered after its time-out (the chip slow for a pass, 600 ms): the frame went, and is
+/// never sent again; the answer ends there, and the phone (as app/core does: an END whose count is not what it got
+/// drops the answer and asks again from what it kept) ends with the file, no byte twice in any answer.
+#[test]
+fn a_notify_answered_late_is_never_sent_twice() {
+    let (mut sim, mut app, control, data) = paired();
+    let [(name, file), _] = rides();
+    let (mut kept, mut seq, mut slowed) = (Vec::new(), 1u8, false);
+    while kept.len() < file.len() && seq < 20 {
+        let off = kept.len();
+        let mut f = [0; 20];
+        let n = Command::Read { seq, offset: off as u32, name }.encode(&mut f);
+        sim.nordic.phone_write(control, &f[..n]);
+        let (mut got, mut end) = (Vec::new(), None);
+        for _ in 0..300 {
+            if !slowed && off + got.len() > file.len() / 2 {
+                sim.nordic.slow_ms = 600;
+                pass(&mut sim, &mut app, 100);
+                (sim.nordic.slow_ms, slowed) = (0, true);
+                assert_eq!(app.rx.failed, Some((0xa6, u32::MAX)), "a notification timed out");
+            } else {
+                pass(&mut sim, &mut app, 100);
+            }
+            for p in drain(&mut sim, data) {
+                match Frame::parse(&p) {
+                    Some(Frame::Chunk { seq: s, data }) if s == seq => got.extend(data),
+                    Some(Frame::End { seq: s, status, count }) if s == seq => end = Some((status, count)),
+                    _ => {}
+                }
+            }
+            if end.is_some() {
+                break;
+            }
+        }
+        assert_eq!(file.get(off..off + got.len()), Some(&got[..]), "answer {seq}: no frame twice, none missing");
+        let (status, count) = end.expect("an END");
+        assert_eq!(status, Status::Ok);
+        if count as usize == got.len() {
+            kept.extend(got);
+        }
+        seq += 1;
+    }
+    assert!(slowed);
+    assert_eq!(kept, file);
+}
+
 #[test]
 fn read_from_an_offset_resumes() {
     let (mut sim, mut app, control, data) = paired();
@@ -360,6 +406,28 @@ fn a_folder_with_a_ride_name_is_not_a_ride() {
     assert!(!a.entries.iter().any(|e| &e.0 == b"251028080000"));
     let a = ask(&mut sim, &mut app, control, data, Command::Read { seq: 2, offset: 0, name: *b"251028080000" }, 5000);
     assert_eq!(a.end.map(|e| e.0), Some(Status::NotFound));
+}
+
+/// The owner is bonded and opens PAIR; a stranger connects first and pairs Just Works without bonding: its link is
+/// encrypted (level 2) and the owner's bond exists, yet it gets no file (review 2026-11-11: it could read every ride).
+#[test]
+fn a_stranger_pairing_without_bonding_in_the_pair_window_gets_no_file() {
+    let (mut sim, mut app, _, data) = paired();
+    let owners = app.phone.stored.bond.map(|d| d.key);
+    drop_link(&mut sim, u64::MAX);
+    run(&mut sim, &mut app, 500);
+    let mut stranger = PhoneSim::new(false);
+    (stranger.no_bond, stranger.connect_at) = (true, sim.ms + 500);
+    sim.nordic.phone = Some(stranger);
+    app.activate(&mut sim, Menu::Phone, 1); // PAIR
+    run(&mut sim, &mut app, 3000);
+    assert!(sim.nordic.got.iter().any(|p| p[..2] == [0, 0x7f]), "the stranger paired");
+    assert_eq!(app.phone.stored.bond.map(|d| d.key), owners, "the owner's bond is kept");
+    assert_eq!(app.phone.conn, None, "the link its pairing encrypted is dropped");
+    // a write that reached the app before the drop: the link was secure, but not with the bond's key
+    (app.phone.conn, app.phone.secure) = (Some(0), true);
+    app.files_command(&mut sim, &[1, 1]);
+    assert!(drain(&mut sim, data).is_empty() && !app.phone.files.active(), "nothing served");
 }
 
 #[test]

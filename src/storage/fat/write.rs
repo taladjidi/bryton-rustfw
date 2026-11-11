@@ -323,6 +323,19 @@ impl Fat {
         Ok(self.fsinfo_read(d)?.map(|(free, _, _)| free).filter(|&n| n <= self.clusters))
     }
 
+    /// [`Fat::free_clusters`]; when FSInfo's count is unknown (0xffffffff, as a formatter may leave it) the FAT is
+    /// counted once ([`Fat::sync_fats`], which writes it). None only without an FSInfo: no room can be promised.
+    pub fn free_clusters_counted(&mut self, d: &mut impl DiskWrite) -> Result<Option<u32>, Error> {
+        if let Some(n) = self.free_clusters(d)? {
+            return Ok(Some(n));
+        }
+        if self.fsinfo == 0 {
+            return Ok(None); // no FSInfo sector: a count would have nowhere to go, and would be read again each time
+        }
+        self.sync_fats(d)?;
+        self.free_clusters(d)
+    }
+
     /// The hint where to look for a free cluster: FSInfo's, else the start.
     fn hint(&self, d: &mut impl Disk) -> Result<u32, Error> {
         Ok(self.fsinfo_read(d)?.map_or(2, |(_, next, _)| next))
@@ -2482,8 +2495,7 @@ pub(crate) mod tests {
     /// it on cluster 0, every later `ensure_dir` Corrupt); made again after it, nothing more lost. In the root, in a
     /// workout's calendar (a day), with its entry spilling into its parent's next sector and into a new cluster.
     /// check.sh's fsck reads the cut between its entry written deleted and made live (`mkdir_cut_lost1`).
-    #[test]
-    fn a_torn_mkdir_leaves_no_folder_or_a_whole_one() {
+    fn torn_mkdir(case: usize) {
         let spc = Fat::mount(&mut Ram(image(), 0)).unwrap().spc;
         let filled = |at: u32| {
             let mut d = Ram(image(), 0);
@@ -2496,7 +2508,8 @@ pub(crate) mod tests {
             (filled(0), "Spill", "Courses", 1),
             (filled(spc - 1), "Spill", "Courses", 2),
         ];
-        for (base, parent, name, more) in cases {
+        {
+            let (base, parent, name, more) = cases[case].clone();
             let lost0 = fsck(&base).unwrap();
             assert_eq!(make_in(&mut Ram(base.clone(), 0), parent, "x").map(|f| f.dir), Ok(true));
             let mut whole = Torn { ram: Ram(base.clone(), 0), budget: u32::MAX, keep: 0, cut_at: 0 };
@@ -2564,6 +2577,27 @@ pub(crate) mod tests {
             }
             assert!(absent > 0 && live > 0, "{parent}/{name}: {absent} absent, {live} live");
         }
+    }
+
+    // one test a case, so the four run in parallel
+    #[test]
+    fn a_torn_mkdir_in_the_root() {
+        torn_mkdir(0);
+    }
+
+    #[test]
+    fn a_torn_mkdir_in_a_workout_calendar() {
+        torn_mkdir(1);
+    }
+
+    #[test]
+    fn a_torn_mkdir_spilling_into_a_new_sector() {
+        torn_mkdir(2);
+    }
+
+    #[test]
+    fn a_torn_mkdir_spilling_into_a_new_cluster() {
+        torn_mkdir(3);
     }
 
     /// Every write lands between the first FAT sector and the volume's last sector, both included: never the boot

@@ -184,8 +184,11 @@ impl App {
             return;
         }
         // ANT wanted (a key) but not up, or a channel not reopened: a restart on a damaged link failed: another
+        // the phone's set-up owed is no reason while a ride is open: a reset closes the sensors' channels for a second
+        // or two, and an extra must not cost the ride (it times out at each start on some chips: one reset per backoff,
+        // review 2026-11-11). The reset that sets it up again comes once the ride is saved.
         let ant_down = (self.ant_key.is_some() && !self.ant && !self.watch.refused)
-            || self.watch.phone_owed
+            || (self.watch.phone_owed && self.ride_settled())
             || self.watch.owed.iter().any(|&s| s != Sensor::Off);
         let broken = self.ble.is_none() || ant_down || self.rx.broken || self.rx.strikes >= 2 || self.rx.timeouts >= 2;
         if !broken {

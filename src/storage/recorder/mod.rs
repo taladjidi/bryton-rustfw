@@ -1174,14 +1174,7 @@ impl Recorder {
         let t = dos_time(now);
         let mut fat = Fat::mount(d)?;
         let low = |fat: &mut Fat, d: &mut _| -> Result<bool, Error> {
-            let free = match fat.free_clusters(d)? {
-                Some(n) => Some(n),
-                // FSInfo's count unknown (0xffffffff, as a formatter may leave it): counted once, which writes it
-                None => {
-                    fat.sync_fats(d)?;
-                    fat.free_clusters(d)?
-                }
-            };
+            let free = fat.free_clusters_counted(d)?;
             // still unknown (no FSInfo at all): the reserve cannot be kept, so no full copy
             Ok(free.is_none_or(|n| u64::from(n) * u64::from(fat.cluster_bytes()) < FULL_RESERVE))
         };
