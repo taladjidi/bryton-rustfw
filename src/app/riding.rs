@@ -374,6 +374,7 @@ impl App {
                 self.rec.full.pause(t, words);
             }
             ride::Event::Resume => {
+                self.radio.wake_rested(); // the channels resting search again, as at a Start
                 self.rec.clean.resume(t);
                 self.rec.full.resume(t);
             }
