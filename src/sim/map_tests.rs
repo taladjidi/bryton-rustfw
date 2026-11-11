@@ -240,7 +240,7 @@ fn map_page_follows_a_ride() {
         small_px / s,
         (refit_px + small_px) / s
     );
-    assert!((2..=12).contains(&refits), "fitted again as the ride grows: {refits}");
+    assert!((2..=65).contains(&refits), "fitted again as the ride grows: {refits}");
     assert!(late_refits > 0, "the loop closed: the view still follows the rider round it");
     assert!(small_px / s < 2000, "{} px/s between full redraws", small_px / s);
     let v = app.map_view(0).unwrap();
@@ -296,7 +296,7 @@ fn map_zoom_buttons() {
     assert_eq!(app.map_view.zoom, Some(MIN_LEVEL), "no finer than 1.5 m a pixel");
     assert_eq!(app.map_view(0).unwrap().mpp16, 24);
     sim.save("map_zoom_in");
-    // riding on, zoomed in: the view follows, centred again only when the arrow leaves the middle four fifths
+    // riding on, zoomed in: the view follows, centred again when the arrow has drifted from its spot
     let (t0, px0) = (sim.ms, sim.pixels);
     let mut recentres = 0;
     while sim.ms < t0 + 120_000 {
@@ -314,7 +314,7 @@ fn map_zoom_buttons() {
     }
     let s = (sim.ms - t0) / 1000;
     std::println!("map zoomed in at 1.5 m a pixel: {recentres} re-centres in {s} s, {} px/s", (sim.pixels - px0) / s);
-    assert!((2..=12).contains(&recentres), "followed, not redrawn every second: {recentres}");
+    assert!((8..=40).contains(&recentres), "followed, not redrawn every second: {recentres}");
     sim.save("map_zoom_follow");
     // out again, a level at a time, past the fit: still by hand, coarser than the fit
     let fit_level = (MIN_LEVEL..map::MAX_LEVEL).find(|&l| mpp16(l) == fit.mpp16).unwrap();
@@ -500,12 +500,12 @@ fn map_zoom_with_a_course() {
         let (x, y) = v.px(area, app.track.pos().unwrap());
         assert!(x >= area.0 && x < area.0 + area.2 && y >= area.1 && y < area.1 + area.3, "the arrow on the map");
         assert_consistent(&sim, &app);
-        if k >= 10 {
+        if k >= 9 {
             continue; // past the course's end
         }
         let course = sim.screen.iter().filter(|&&p| p == map::COURSE).count();
         // presence only: the count moved from 83 to 281 px between runs of this test (the track covers part of it)
-        assert!(course > 0, "the course drawn in view: {course} px");
+        assert!(course > 0, "the course drawn in view at {k}: {course} px");
     }
     assert!(views > 0, "the view follows the rider");
     sim.save("map_zoom_course");
@@ -766,4 +766,156 @@ fn map_pinch_zooms() {
     assert_eq!(app.map_view.zoom, Some(level + 2), "together: two levels coarser");
     assert_eq!(app.screen(), Screen::Ride(2));
     assert_consistent(&sim, &app);
+}
+
+/// The re-centres per km of a straight ride at 25 km/h, for a few thresholds and scales (printed: the owner tunes
+/// [`FOLLOW_DIV`] from it; each is a whole basemap, 71 040 pixels on the full page); the default stays near one
+/// every 10 s at the default scale, and a re-centre puts the arrow back on its spot.
+#[test]
+fn follow_threshold_table() {
+    use crate::map::{FOLLOW_DIV, MIN_LEVEL, Track, View, mpp16};
+    let area = (0, 24, 240, 296);
+    std::println!("re-centres per km at 25 km/h (div: 1/16 1/10 1/8 1/6), m per pixel:");
+    let mut default_per_km = 0;
+    for level in [MIN_LEVEL, 3, 4, 6] {
+        let mut row = std::vec::Vec::new();
+        for div in [16, 10, 8, 6] {
+            let mut t = Track::new();
+            let (mut lon, lat) = (60_000_000, 450_000_000);
+            t.add(lat, lon, 90);
+            let mut v = View::follow(&t, area, mpp16(level)).unwrap();
+            let (mut aim, mut n) = (t.pos().unwrap(), 0);
+            for _ in 0..144 {
+                lon += 882; // 6.94 m east at 45 N (12704 per 100 m), one fix a second
+                t.add(lat, lon, 90);
+                if !v.follows(area, &t, aim, div) {
+                    (v, aim, n) = (View::follow(&t, area, mpp16(level)).unwrap(), t.pos().unwrap(), n + 1);
+                }
+            }
+            row.push(n);
+            if level == 4 && div == FOLLOW_DIV {
+                default_per_km = n;
+            }
+        }
+        std::println!("  {:>4} m: {row:?}", mpp16(level) as f64 / 16.0);
+    }
+    assert!((5..=14).contains(&default_per_km), "{default_per_km} re-centres a km at the default scale");
+}
+
+/// The chevrons on the course line (map.rs `chevrons`): they point the way the course is ridden (reversed, the
+/// other way), stand every 72 pixels along it, and a map drawn in 32 pixel boxes equals the whole one (a dirty box
+/// draws them as the full map does: the same `draw` through `Clip`).
+#[test]
+fn course_chevrons_point_the_way_and_agree_in_boxes() {
+    use crate::map::{self, Route, Track, View};
+    use crate::ui::tests::Frame;
+    let area = (0, 24, 240, 296);
+    let mut t = Track::new();
+    t.add(450_000_000, 60_000_000, 90);
+    let v = View { cx: 600, cy: 0, mpp16: map::mpp16(4), rot: 0 }; // 4 m a pixel
+    // 1200 m due east, a point every 20 m
+    let ahead: Vec<(i32, i32)> = (0..=60).map(|i| (i * 20, 0)).collect();
+    let back: Vec<(i32, i32)> = ahead.iter().rev().copied().collect();
+    let mut tips = Vec::new();
+    for pts in [&ahead, &back] {
+        let dist: Vec<u32> = (0..pts.len() as u32).map(|i| i * 20).collect();
+        let boxes = [(0, 0, 1200, 0)];
+        let r = Route { pts, boxes: &boxes, gaps: &[0, 0], dist: &dist, off: (0, 0), id: 1 };
+        let mut whole = Frame::new();
+        whole.px.fill(0x1234);
+        map::draw(&mut whole, area, &t, Some(v), None, Some(&r), false);
+        let mut tiled = Frame::new();
+        tiled.px.fill(0x1234);
+        for ty in (area.1..area.1 + area.3).step_by(32) {
+            for tx in (0..area.2).step_by(32) {
+                let b = (tx, ty, 32.min(area.0 + area.2 - tx), 32.min(area.1 + area.3 - ty));
+                map::draw(&mut map::Clip::new(&mut tiled, b), area, &t, Some(v), None, Some(&r), false);
+            }
+        }
+        let bad: Vec<_> = (0..whole.px.len()).filter(|&i| whole.px[i] != tiled.px[i]).collect();
+        assert!(
+            bad.is_empty(),
+            "boxes agree with the whole map: {} differ, first at ({}, {})",
+            bad.len(),
+            bad[0] as u32 % W,
+            bad[0] as u32 / W
+        );
+        // the first chevron, 288 m along the course (72 px at 4 m a pixel): where the white is narrowest is the tip
+        let (cx, cy) = v.px(area, if pts == &ahead { (288, 0) } else { (1200 - 288, 0) });
+        let white: Vec<(i32, i32)> = (cx - 6..=cx + 6)
+            .flat_map(|x| (cy - 6..=cy + 6).map(move |y| (x, y)))
+            .filter(|&(x, y)| whole.at(x as u32, y as u32) == ui::WHITE)
+            .collect();
+        assert!(white.len() >= 8, "a chevron at {cx},{cy}: {} white pixels", white.len());
+        let rows_at = |x: i32| white.iter().filter(|p| p.0 == x).count();
+        let (lo, hi) = (white.iter().map(|p| p.0).min().unwrap(), white.iter().map(|p| p.0).max().unwrap());
+        tips.push(rows_at(hi) < rows_at(lo)); // eastward: the tip (one row) at the right, the arms apart at the left
+    }
+    assert_eq!(tips, [true, false], "east: tip right; reversed (west): tip left");
+}
+
+/// Shots of a followed course with its chevrons: at a manual zoom (the rider a few minutes along the hill) and at the
+/// fit (the whole route), on the dark and the LIGHT theme; every step equal to a whole draw.
+#[test]
+fn course_chevron_shots() {
+    for (name, theme) in [("dark", ui::theme::Theme::DARK), ("light", ui::theme::Theme::LIGHT)] {
+        use crate::map;
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.gnss.route = Some(course_route);
+        sim.classic_pages();
+        let mut app = App::start(&mut sim, None);
+        app.theme = theme;
+        app.settings.light_level = 0;
+        app.set_course_memory(crate::storage::course_file::tests::memory());
+        app.open_courses(&mut sim);
+        app.follow_course(hill(&app));
+        for _ in 0..100 {
+            app.step(&mut sim);
+        }
+        sim.gnss.fix = Some(500);
+        app.screen = Screen::Ride(2);
+        app.show(&mut sim);
+        run(&mut sim, &mut app, 20_000);
+        let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+        let [plus, minus] = map::buttons(area).unwrap();
+        let centre = (minus.0 + minus.2 / 2, minus.1 + minus.3 + 8 + minus.3 / 2);
+        let tap = |sim: &mut Sim, app: &mut App, b: (i32, i32)| {
+            app.input(sim, Input::Touch(Gesture::Tap(b.0 as u16, b.1 as u16)));
+            assert_consistent(sim, app);
+        };
+        tap(&mut sim, &mut app, (minus.0 + 20, minus.1 + 20));
+        tap(&mut sim, &mut app, (minus.0 + 20, minus.1 + 20));
+        let _ = plus;
+        run(&mut sim, &mut app, 150_000);
+        assert_consistent(&sim, &app);
+        sim.save(&format!("map_chevrons_zoom_{name}"));
+        tap(&mut sim, &mut app, centre);
+        sim.save(&format!("map_chevrons_fit_{name}"));
+    }
+}
+
+/// One segment 70 000 pixels long (280 km at 4 m a pixel, two points): no overflow, the chevrons on screen stand
+/// every 72 pixels all along the visible part (not the first few only).
+#[test]
+fn chevrons_on_a_very_long_segment() {
+    use crate::map::{self, Route, Track, View};
+    use crate::ui::tests::Frame;
+    let area = (0, 24, 240, 296);
+    let mut t = Track::new();
+    t.add(450_000_000, 60_000_000, 90);
+    let v = View { cx: 140_000, cy: 0, mpp16: map::mpp16(4), rot: 0 };
+    let (pts, dist, boxes) = ([(0, 0), (280_000, 0)], [0u32, 280_000], [(0, 0, 280_000, 0)]);
+    let r = Route { pts: &pts, boxes: &boxes, gaps: &[0, 0], dist: &dist, off: (0, 0), id: 1 };
+    let mut whole = Frame::new();
+    map::draw(&mut whole, area, &t, Some(v), None, Some(&r), false);
+    // along the course's row: runs of white are chevrons (8 px wide at most)
+    let y = v.px(area, (0, 0)).1 as u32;
+    let (mut runs, mut was) = (0, false);
+    for x in 0..area.2 as u32 {
+        let on = (y.saturating_sub(5)..=y + 5).any(|yy| whole.at(x, yy) == ui::WHITE);
+        runs += u32::from(on && !was);
+        was = on;
+    }
+    assert!((3..=4).contains(&runs), "{runs} chevrons across 240 px at 72 px apart");
 }

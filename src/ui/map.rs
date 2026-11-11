@@ -10,9 +10,9 @@
 //!   step doubles, so a ride of any length fits, evenly spaced. No heap.
 //! - **Zoom:** with a position and no zoom set by hand, the view is the default one: the level whose pixel is nearest
 //!   1 km over the map's smaller side ([`default_mpp16`], 4 m a pixel on the full-page map, 960 m across), centred a
-//!   third of the map ahead of the rider as at a manual level ([`View::follow`]). It is drawn again (one full
-//!   redraw) only when the rider leaves the middle four fifths (`View::follows`), so a ride out redraws each time
-//!   it does. With a course followed, the crosshair toggles between that view and the whole route (the fit) and back. Without a position (no fix
+//!   quarter of the map's smaller side ahead of the rider as at a manual level ([`View::follow`]). It is drawn again
+//!   (one full redraw) only when the arrow has drifted more than 1/[`FOLLOW_DIV`] of that side from its spot
+//!   (`View::follows`), so a ride out redraws each time it does. With a course followed, the crosshair toggles between that view and the whole route (the fit) and back. Without a position (no fix
 //!   yet, indoors) the view fits the track in the middle two thirds of the map, at a scale of 2^k or 1.5 x 2^k metres
 //!   per pixel, and the course with it; a loop is drawn once there.
 //! - **Manual zoom:** a map box at least [`ZOOM_BOX`] (the full-page map) has "+" and "-" buttons top right
@@ -20,14 +20,22 @@
 //!   level ([`zoom`]) from the one shown, finer or coarser than the default alike (indoors the fit is already the
 //!   finest it takes, [`FIT_LEVEL`]: the owner's "+" and "-" did nothing, 2026-10-25), from [`MIN_LEVEL`] (1.5 m a
 //!   pixel: IGN's zoom 16 drawn about 1:1 in France) to [`MAX_LEVEL`]. At a manual level the view follows the rider
-//!   ([`View::follow`]): it is centred a third of the map ahead of them, and centred again only when the arrow
-//!   leaves the middle four fifths, so the basemap is drawn once per re-centre, not every second. The third
+//!   ([`View::follow`]): it is centred a quarter of the map's smaller side ahead of them, so the arrow stands in
+//!   the lower part with the way ahead above it (Garmin's), and centred again only when the arrow has drifted
+//!   1/[`FOLLOW_DIV`] of that side (30 pixels) from that spot, so it never nears an edge (a U-turn leaves it 30 pixels
+//!   short of the edge at worst) and the basemap is drawn once per re-centre, not every second. The spot is the
+//!   rider's place when the view was made (`Shown::aim`), so a heading that wavers moves nothing. The same goes
+//!   for the default view; the fit (no position, or the whole route) keeps its own rule ([`View::fit`]). The third
 //!   button, a crosshair under "-", shown at any manual level, goes back to the automatic view (with a course, to
 //!   the route and back, see above).
 //! - **Pan:** at a manual level, a drag on the map moves it with the finger ([`pan`]), once at the release (one
 //!   basemap per view, no redraw while the finger moves), at most [`PAN_SCREENS`] maps' widths past the track and
 //!   the course. The view then stays where it was put ([`Zoom::centre`]) instead of following; "+" and "-" zoom
 //!   around the centre of the view panned to; the crosshair goes back to the fit.
+//! - **Chevrons:** a course's line carries small white chevrons with a black outline, 8 pixels, every 72 pixels
+//!   along it (at multiples of that distance in course metres, `Route::dist`, so they stay put as the view moves),
+//!   pointing the way it is ridden (a reversed course has its points reversed). Drawn in [`draw`] after each
+//!   segment, so a dirty box paints them as the full map does; at the fit too.
 //! - **Redraw:** otherwise only the box around the new segment and the arrow's old and new places is drawn, from
 //!   the state, through [`Clip`]: the same [`draw`] paints the whole map, a dirty box, or one screenshot row (each
 //!   segment is a run per row, clipped to [`Canvas::clip`]), so they agree by construction.
@@ -60,6 +68,13 @@ pub const ZOOM_BOX: (i32, i32) = (200, 200);
 const BUTTON: i32 = 48;
 /// The gap between two buttons, pixels (adjacent targets with opposite meanings: a glove must not hit both).
 const GAP: i32 = 8;
+/// A followed view is made again when the arrow has drifted more than 1/`FOLLOW_DIV` of the map's smaller side from
+/// its spot (30 pixels on the full page). Each re-centre is a whole basemap; the table of re-centres per km for
+/// 1/16, 1/10 and 1/6 is in `follow_threshold_table` (tests).
+pub const FOLLOW_DIV: i32 = 8;
+/// The distance between two chevrons on the course, pixels, and a chevron's half size.
+const CHEVRON_GAP: i64 = 72;
+const CHEVRON: i32 = 4;
 /// A panned view's centre stays within this many map widths (or heights) of the track and the course.
 pub const PAN_SCREENS: i32 = 2;
 
@@ -144,6 +159,8 @@ pub struct Route<'a> {
     pub boxes: &'a [(i32, i32, i32, i32)],
     /// Bit `i`: no segment into point `i` (a gap in the course, [`crate::course::is_gap`]).
     pub gaps: &'a [u32],
+    /// Metres along the course at each point: the chevrons stand at multiples of a spacing along it.
+    pub dist: &'a [u32],
     /// The course's origin on the track's plane, metres.
     pub off: (i32, i32),
     /// Changes with the course.
@@ -383,12 +400,12 @@ impl View {
         Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16, rot: 0 })
     }
 
-    /// The view of `track` in `area` at `mpp16`, zoomed in: centred a quarter of the map ahead of the rider (behind
-    /// them is where they have been), so the arrow crosses the middle part before the next re-centre; None before a
-    /// position.
+    /// The view of `track` in `area` at `mpp16`, zoomed in: centred a quarter of the map's smaller side ahead of the
+    /// rider (behind them is where they have been), so the arrow stands in the lower part, the way ahead above it
+    /// ([`FOLLOW_DIV`] says how far it may drift from there); None before a position.
     pub fn follow(track: &Track, area: Rect, mpp16: i64) -> Option<View> {
         let p = track.pos?;
-        let ahead = if track.stale { 0 } else { i64::from(area.2.min(area.3) / 3) * mpp16 / 16 };
+        let ahead = if track.stale { 0 } else { i64::from(area.2.min(area.3) / 4) * mpp16 / 16 };
         // heading up, "ahead" is the top of the map, which may lag the heading by a step
         let dir = if track.up { usize::from(track.rot) } else { Arrow::dir(track.heading) };
         let at = |s: i32| (i64::from(s) * ahead / 256) as i32;
@@ -419,13 +436,14 @@ impl View {
         (area.0 + area.2 / 2 + px(dx * c - dy * s), area.1 + area.3 / 2 - px(dx * s + dy * c))
     }
 
-    /// Zoomed in, the arrow is still in the middle four fifths of the map: no need to centre again (each re-centre
-    /// is a whole basemap, review 2026-11-01 finding 60: the arrow travels 1.3x as far between two).
-    pub(crate) fn follows(&self, area: Rect, track: &Track) -> bool {
+    /// Zoomed in, the arrow has not drifted more than 1/`div` of the map's smaller side from its spot (the rider's
+    /// place when the view was made, `aim`: the view put the arrow at the same spot of the screen each time). A
+    /// re-centre is a whole basemap, so `div` trades smoothness for cost ([`FOLLOW_DIV`]).
+    pub(crate) fn follows(&self, area: Rect, track: &Track, aim: (i32, i32), div: i32) -> bool {
         let Some(p) = track.pos else { return true };
-        let (x, y) = self.px(area, p);
-        let (mx, my) = (area.2 / 10, area.3 / 10);
-        inside((area.0 + mx, area.1 + my, area.2 - 2 * mx, area.3 - 2 * my), x, y)
+        let r = i64::from(area.2.min(area.3) / div.max(1)) * self.mpp16 / 16;
+        let (dx, dy) = (i64::from(p.0) - i64::from(aim.0), i64::from(p.1) - i64::from(aim.1));
+        dx * dx + dy * dy <= r * r
     }
 
     /// The position is still well inside the map and clear of the buttons ([`under_buttons`]): no need to fit
@@ -492,6 +510,8 @@ pub struct Shown {
     panned: bool,
     /// Drawn as the default view ([`Shown::of`]'s `follow`).
     followed: bool,
+    /// The rider's place when the view was made: where the arrow's spot is ([`View::follows`]).
+    aim: (i32, i32),
 }
 
 impl Shown {
@@ -513,7 +533,17 @@ impl Shown {
         let arrow = view.and_then(|v| Arrow::of(&v, area, track));
         let route = route.map(|r| r.id);
         let (zoomed, panned) = (zoomed.is_some(), centre.is_some());
-        Shown { view, points: track.len, thinned: track.thinned, arrow, route, zoomed, panned, followed: follow }
+        Shown {
+            view,
+            points: track.len,
+            thinned: track.thinned,
+            arrow,
+            route,
+            zoomed,
+            panned,
+            followed: follow,
+            aim: track.pos.unwrap_or_default(),
+        }
     }
 
     /// A course is drawn: its crosshair shows ([`button_at`]).
@@ -718,6 +748,81 @@ fn segment(c: &mut impl Canvas, k: Rect, a: (i32, i32), b: (i32, i32), color: u1
     }
 }
 
+/// The chevrons on segment `i` of the course (from point `i` to `i + 1`, drawn from `a` to `b`): one at each multiple
+/// of [`CHEVRON_GAP`] pixels' worth of metres along the course that falls in it, so they stand where the course is
+/// whatever box is redrawn, and point the way it is ridden. White with a black outline, over the violet line. Only
+/// the ones near the box `k` are worked out, so a segment of any length costs what shows of it.
+fn chevrons(c: &mut impl Canvas, k: Rect, area: Rect, v: &View, r: &Route, i: usize, (a, b): ((i32, i32), (i32, i32))) {
+    let m = 2 * CHEVRON;
+    if a.0.max(b.0).saturating_add(m) < k.0
+        || a.0.min(b.0) >= k.0 + k.2 + m
+        || a.1.max(b.1).saturating_add(m) < k.1
+        || a.1.min(b.1) >= k.1 + k.3 + m
+    {
+        return; // the segment is away from the box: the common case
+    }
+    let (Some(&d0), Some(&d1)) = (r.dist.get(i), r.dist.get(i + 1)) else { return };
+    let gap = u32::try_from(CHEVRON_GAP * v.mpp16 / 16).unwrap_or(u32::MAX).max(1);
+    let (n0, n1) = (d0.checked_div(gap).unwrap_or(0), d1.checked_div(gap).unwrap_or(0)); // u32: a hardware divide
+    if n1 <= n0 {
+        return;
+    }
+    // the way: the segment's own pixels, or the points around it when it is shorter than a chevron
+    let (mut lo, mut hi) = (i, i + 1);
+    let at = |j: usize| r.pts.get(j).map(|q| v.px(area, (q.0 + r.off.0, q.1 + r.off.1)));
+    for step in 0..16 {
+        let (Some(p), Some(q)) = (at(lo), at(hi)) else { break };
+        if (q.0 - p.0).abs().saturating_add((q.1 - p.1).abs()) >= 3 * CHEVRON {
+            break;
+        }
+        if step % 2 == 0 && hi + 1 < r.pts.len() { hi += 1 } else { lo = lo.saturating_sub(1) }
+    }
+    let (Some(p), Some(q)) = (at(lo), at(hi)) else { return };
+    // clamped: a long sparse segment at a fine zoom is far off screen, its direction only needs the ratio
+    let (dx, dy) = (i64::from(q.0 - p.0).clamp(-30_000, 30_000), i64::from(q.1 - p.1).clamp(-30_000, 30_000));
+    let len = i64::from(crate::math::isqrt(((dx * dx + dy * dy) / 16).min(i64::from(i32::MAX)) as i32)) * 4;
+    if len == 0 {
+        return;
+    }
+    let (ux, uy) = ((dx * 256).checked_div(len).unwrap_or(0), (dy * 256).checked_div(len).unwrap_or(0)); // unit vector, x256
+    let (span, den) = (i64::from(d1 - d0), 1.max(i64::from(d1 - d0)));
+    // the metres along the segment (from `d0`) at which it is inside the box and its margin, per axis
+    let (mut from, mut to) = (0i64, span);
+    for (a, b, lo, hi) in [(a.0, b.0, k.0 - m, k.0 + k.2 + m), (a.1, b.1, k.1 - m, k.1 + k.3 + m)] {
+        let w = i64::from(b) - i64::from(a);
+        if w == 0 {
+            if !(lo..=hi).contains(&a) {
+                return;
+            }
+            continue;
+        }
+        let at = |e: i32| ((i64::from(e) - i64::from(a)) * span).checked_div(w).unwrap_or(0);
+        let (t0, t1) = (at(lo), at(hi));
+        (from, to) = (from.max(t0.min(t1) - 1), to.min(t0.max(t1) + 1));
+    }
+    let g = i64::from(gap);
+    let first = ((i64::from(d0) + from).max(0) + g - 1).checked_div(g).unwrap_or(0);
+    let last = (i64::from(d0) + to).checked_div(g).unwrap_or(0);
+    for n in first.max(i64::from(n0) + 1)..=last.min(i64::from(n1)) {
+        let t = n * g - i64::from(d0);
+        let along = |from: i32, to: i32| from + (i64::from(to - from) * t).checked_div(den).unwrap_or(0) as i32;
+        let m = (along(a.0, b.0), along(a.1, b.1));
+        let s = CHEVRON;
+        let (ux, uy) = (ux as i32, uy as i32);
+        let tip = (m.0 + ux * s / 256, m.1 + uy * s / 256);
+        let back = (m.0 - ux * s / 256, m.1 - uy * s / 256);
+        let arms = [(back.0 - uy * s / 256, back.1 + ux * s / 256), (back.0 + uy * s / 256, back.1 - ux * s / 256)];
+        for (ox, oy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            for e in arms {
+                segment(c, k, (tip.0 + ox, tip.1 + oy), (e.0 + ox, e.1 + oy), ui::BLACK);
+            }
+        }
+        for e in arms {
+            segment(c, k, tip, e, ui::WHITE);
+        }
+    }
+}
+
 /// A filled triangle, one run per row, kept to `k`.
 fn triangle(c: &mut impl Canvas, k: Rect, v: [(i32, i32); 3], color: u16) {
     let top = v.iter().map(|p| p.1).min().unwrap_or(0).max(k.1);
@@ -845,7 +950,11 @@ pub fn draw(
             let cs = [(b.0, b.1), (b.2, b.1), (b.0, b.3), (b.2, b.3)].map(|q| v.px(area, (q.0 + o.0, q.1 + o.1)));
             let (x0, x1) = (cs.iter().map(|q| q.0).min().unwrap_or(0), cs.iter().map(|q| q.0).max().unwrap_or(0));
             let (y0, y1) = (cs.iter().map(|q| q.1).min().unwrap_or(0), cs.iter().map(|q| q.1).max().unwrap_or(0));
-            if x1 + 2 < k.0 || x0 >= k.0 + k.2 || y1 + 2 < k.1 || y0 >= k.1 + k.3 {
+            if x1 + 2 * CHEVRON < k.0
+                || x0 >= k.0 + k.2 + 2 * CHEVRON
+                || y1 + 2 * CHEVRON < k.1
+                || y0 >= k.1 + k.3 + 2 * CHEVRON
+            {
                 continue;
             }
             // the chunk's points and the first of the next (the segment between them)
@@ -859,6 +968,7 @@ pub fn draw(
                     at = Some(b);
                     if !crate::course::is_gap(r.gaps, from + j + 1) {
                         segment(&mut c, k, a, b, COURSE);
+                        chevrons(&mut c, k, area, &v, r, from + j, (a, b));
                     }
                 }
             }
@@ -951,8 +1061,8 @@ pub fn refit(
     }
     match zoomed {
         Some(m) if !shown.zoomed || v.mpp16 != m || shown.panned != centre.is_some() => true,
-        Some(_) => centre.map_or(!v.follows(area, track), |c| c != (v.cx, v.cy)),
-        None if shown.followed => shown.zoomed || !v.follows(area, track),
+        Some(_) => centre.map_or(!v.follows(area, track, shown.aim, FOLLOW_DIV), |c| c != (v.cx, v.cy)),
+        None if shown.followed => shown.zoomed || !v.follows(area, track, shown.aim, FOLLOW_DIV),
         None => shown.zoomed || !v.keeps(area, track),
     }
 }
@@ -1091,7 +1201,7 @@ mod tests {
 
     /// The fitted view puts every point of the track inside the map, away from the edge.
     /// The default view in a box 75 pixels high follows a straight ride with about 1 km of height, and refits as the
-    /// rider leaves the middle four fifths (5 minutes at 8 m/s north).
+    /// arrow drifts from its spot (5 minutes at 8 m/s north).
     #[test]
     fn default_view_in_a_small_box_on_a_straight_ride() {
         let area = (0, 24, 240, 75);
@@ -1111,7 +1221,7 @@ mod tests {
         let v = shown.view.unwrap();
         let height = v.mpp16 * 75 / 16;
         assert!((700..=1400).contains(&height), "{height} m high");
-        assert!((3..=8).contains(&refits), "{refits} refits");
+        assert!((3..=25).contains(&refits), "{refits} refits");
     }
 
     /// Indoors flips the view to the fit and back: one refit each way, none while it stays.

@@ -603,8 +603,12 @@ fn ride_menu() {
     assert_eq!(app.screen(), Screen::Ride(0));
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Ride(0), 0));
-    let base = ["PAUSE", "END RIDE", "INDOOR", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"];
-    assert_eq!(labels(&app), base, "no workout, no course: their rows not shown; no page edited while recording");
+    let base = ["PAUSE", "END RIDE", "COURSES", "INDOOR", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"];
+    assert_eq!(
+        labels(&app),
+        base,
+        "no workout, no course: their rows not shown (COURSES picks one); no page edited while recording"
+    );
     run(&mut sim, &mut app, 1100);
     assert_consistent(&sim, &app);
     sim.save("ride_menu");
@@ -613,9 +617,9 @@ fn ride_menu() {
     // BRIGHTNESS: in place
     to_row(&mut sim, &mut app, Row::Set(Setting::Light));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((sim.light_level, app.screen()), (100, Screen::Menu(Menu::Ride(0), 3)), "AUTO by default, then 100 %");
+    assert_eq!((sim.light_level, app.screen()), (100, Screen::Menu(Menu::Ride(0), 4)), "AUTO by default, then 100 %");
     // SENSORS, ALL SETTINGS: their menus, Back to the ride menu's row, then to the page
-    for (row, m, at) in [(Row::Open(Menu::Sensors), Menu::Sensors, 4), (Row::Open(Menu::Main), Menu::Main, 5)] {
+    for (row, m, at) in [(Row::Open(Menu::Sensors), Menu::Sensors, 5), (Row::Open(Menu::Main), Menu::Main, 6)] {
         back(&mut sim, &mut app, 1);
         hold_page(&mut sim, &mut app);
         to_row(&mut sim, &mut app, row);
@@ -683,7 +687,10 @@ fn ride_menu() {
     assert_eq!((app.screen(), app.notes.text.as_str()), (Screen::Ride(COURSE), "COURSE ON"));
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Ride(COURSE), 0));
-    assert_eq!(labels(&app), ["PAUSE", "END RIDE", "COURSE", "INDOOR", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"]);
+    assert_eq!(
+        labels(&app),
+        ["PAUSE", "END RIDE", "COURSE", "COURSES", "INDOOR", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"]
+    );
     to_row(&mut sim, &mut app, Row::Ride(RideRow::StopCourse));
     app.press(&mut sim, Press::Short(Key::Start));
     assert!(app.courses.as_deref().unwrap().on.is_none(), "not followed");

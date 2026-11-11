@@ -2388,7 +2388,7 @@ fn menu_tree_by_chance_part_3() {
 }
 
 /// The menus and events `menu_tree_by_chance` must reach, and the part (0 to 3) whose seeds reach them.
-const MENU_TREE_OWNED: [(&str, u32); 32] = [
+const MENU_TREE_OWNED: [(&str, u32); 33] = [
     ("Settings", 0),
     ("Alerts", 0),
     ("Display", 0),
@@ -2402,7 +2402,7 @@ const MENU_TREE_OWNED: [(&str, u32); 32] = [
     ("CourseNow", 0),
     ("auto scrolled", 0),
     ("Bike", 1),
-    ("Gps", 3),
+    ("Gps", 1),
     ("Phone", 1),
     ("Steps", 1),
     ("WorkoutNow", 2),
@@ -2420,7 +2420,8 @@ const MENU_TREE_OWNED: [(&str, u32); 32] = [
     ("shown", 3),
     ("moved", 3),
     ("renamed", 3),
-    ("ride a course picked", 3),
+    ("ride a course picked", 0),
+    ("course picked in a ride", 0),
 ];
 /// A part reaches an owned key at least this many times.
 const MENU_TREE_MIN: u32 = 1;
@@ -2464,6 +2465,7 @@ fn menu_tree_ownership_is_complete() {
         "renamed",
         "auto scrolled",
         "ride a course picked",
+        "course picked in a ride",
     ];
     for k in need {
         let owners = MENU_TREE_OWNED.iter().filter(|o| o.0 == k).count();
@@ -2542,10 +2544,17 @@ fn menu_tree_by_chance(part: u32) {
             if heard {
                 app.radio.heard_ms[crate::sensors::Kind::Trainer as usize] = 0;
             }
+            let loading = app.courses.as_deref().is_some_and(|c| c.loading());
             app.input(&mut sim, i);
             if heard {
                 app.radio.heard_ms[crate::sensors::Kind::Trainer as usize] = u32::MAX;
             }
+            // COURSES in a ride menu: a course picked while the ride is open
+            *reached.entry("course picked in a ride".into()).or_default() += u32::from(
+                !loading
+                    && app.ride.state() != ride::State::Idle
+                    && app.courses.as_deref().is_some_and(|c| c.loading()),
+            );
             *reached.entry("ride a course picked".into()).or_default() +=
                 u32::from(app.courses.as_deref().is_some_and(|c| c.ride_it));
             if matches!(app.screen(), Screen::End(_)) && b % 4 != 0 {
