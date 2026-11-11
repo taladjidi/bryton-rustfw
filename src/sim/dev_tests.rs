@@ -50,12 +50,26 @@ fn peek_and_poke_registers_only() {
         "peek 0xe000e33c 2",
         "peek 0x",
         "poke 0x40013000",
+        // what could brick the unit or lose its clock: the flash controller (KEYR, OPTKEYR, CR, OPTSR), the
+        // watchdogs (a start lasts until a power cycle), RCC_BDCR (BDRST wipes the backup registers, stops the RTC)
+        "poke 0x52002004 1",
+        "poke 0x52002008 1",
+        "poke 0x5200201c 1",
+        "poke 0x58004800 1",
+        "poke 0x58004c00 1",
+        "poke 0x50003000 1",
+        "poke 0x40002c00 1",
+        "poke 0x58024470 1",
     ] {
         pc.got.clear();
         s.feed(format!("{bad}\n").as_bytes(), &app, Stats::default(), &mut pc);
         assert!(pc.got.starts_with(b"err usage"), "{bad}");
     }
     assert_eq!(pc.regs.len(), 1);
+    // read only there: still peeked
+    pc.got.clear();
+    s.feed(b"peek 0x52002004\npeek 0x58024470\n", &app, Stats::default(), &mut pc);
+    assert_eq!(pc.peeked, [0x4001_3010, 0x4001_3014, 0x5200_2004, 0x5802_4470]);
 }
 
 #[test]

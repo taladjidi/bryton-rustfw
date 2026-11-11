@@ -405,7 +405,9 @@ pub fn stop(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport)
 // and stores into `r` (in the DTCM: `stop` checks), no call, no constant table (the literals LLVM puts beside the
 // code are in .itcm too), checked in the ELF by tools/stack_check.py. No exception can fetch a vector from the SDRAM
 // meanwhile: PRIMASK is set (reset's `cpsid i`), so a pending IRQ only ends WFI, and no fault can occur (the
-// accesses are to fixed registers; `r` is a valid reference).
+// accesses are to fixed registers; `r` is a valid reference). PRIMASK does not mask NMI: its one source here, the HSE
+// clock security system, is off (RCC_CR HSECSSON, bit 19, read clear on the unit, BOARD.md 8; only software sets it,
+// RM0399 RCC_CR, and this firmware never does).
 #[unsafe(link_section = ".itcm")]
 #[inline(never)]
 fn stop_itcm(deep: bool, svos: u32, r: &mut bryton_rustfw::stopbench::StopReport) {

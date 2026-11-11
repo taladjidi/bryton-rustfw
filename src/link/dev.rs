@@ -152,7 +152,7 @@ pub const IO: [core::ops::RangeInclusive<u32>; 52] = [
     0x5800_4800..=0x5800_4ffc, // IWDG1
     0x5800_5400..=0x5800_57fc, // SAI4
     0x5802_0000..=0x5802_2bfc, // GPIOA
-    0x5802_4400..=0x5802_4ffc, // CRC
+    0x5802_4400..=0x5802_4ffc, // RCC, PWR, CRC
     0x5802_5400..=0x5802_5bfc, // BDMA
     0x5802_6000..=0x5802_67fc, // ADC3
     0x5802_7000..=0x5802_73fc, // RAMECC3
@@ -168,6 +168,31 @@ pub const IO: [core::ops::RangeInclusive<u32>; 52] = [
 /// ```
 pub fn io(a: u32) -> bool {
     IO.iter().any(|r| r.contains(&a))
+}
+
+/// The [`IO`] registers `poke` may not write, `peek` still reads them: what one wrong address could make
+/// unrecoverable (RM0399 memory map; stm32h747xx.h `*_BASE`). The flash controller (FLASH_R_BASE: KEYR, OPTKEYR, CR,
+/// OPTSR can erase the bootloader or change the boot address or the read protection), the four watchdogs (WWDG2,
+/// WWDG1, IWDG1 and IWDG2: a started IWDG stops only at a power cycle) and RCC_BDCR (RCC_BASE + 0x70: BDRST wipes the
+/// backup registers and stops the RTC, a wrong RTCSEL holds until that reset; BOARD.md 8).
+pub const NO_POKE: [core::ops::RangeInclusive<u32>; 5] = [
+    0x4000_2c00..=0x4000_2ffc, // WWDG2
+    0x5000_3000..=0x5000_33fc, // WWDG1
+    0x5200_2000..=0x5200_23fc, // FLASH_R
+    0x5800_4800..=0x5800_4ffc, // IWDG1, IWDG2
+    0x5802_4470..=0x5802_4470, // RCC_BDCR
+];
+
+/// `a` may be poked: aligned, in an [`IO`] block, and not in [`NO_POKE`].
+///
+/// ```
+/// use bryton_rustfw::dev::poke_ok;
+/// assert!(poke_ok(0x4001_3014) && poke_ok(0x5802_446c) && poke_ok(0x5800_4050));
+/// assert!(!poke_ok(0x5200_2008) && !poke_ok(0x5802_4470) && !poke_ok(0x5800_4800) && !poke_ok(0x5000_3000));
+/// assert!(!poke_ok(0x4001_3016) && !poke_ok(0x2000_0000));
+/// ```
+pub fn poke_ok(a: u32) -> bool {
+    a.is_multiple_of(4) && io(a) && !NO_POKE.iter().any(|r| r.contains(&a))
 }
 
 /// Memory `peek` may read too (never `poke`: that could change running code or the app's state): the DTCM (data
@@ -630,11 +655,11 @@ impl Session {
                 _ => h.send(b"err usage: peek <addr: IO, DTCM, SDRAM, NVIC, ICSR; aligned> [n 1..64]\n"),
             },
             Some(b"poke") => match (words.next().and_then(parse), words.next().and_then(parse)) {
-                (Some(a), Some(v)) if a % 4 == 0 && io(a) => {
+                (Some(a), Some(v)) if poke_ok(a) => {
                     h.poke(a, v);
                     h.send(b"ok\n");
                 }
-                _ => h.send(b"err usage: poke <addr: a peripheral block (dev.rs IO), aligned> <value>\n"),
+                _ => h.send(b"err usage: poke <addr: a peripheral block (dev.rs IO, not NO_POKE), aligned> <value>\n"),
             },
             Some(b"key") => match (words.next().and_then(crate::Key::from_name), words.next()) {
                 (Some(k), None) => {
