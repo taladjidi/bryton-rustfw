@@ -273,9 +273,14 @@ impl App {
     /// after the start, and none of AUTO OFF's reasons to stay on but the cable and movement (`App::keep_on`: the
     /// recorder holding anything, a resume or the full copy pending, the ride marked open on the card, a file waiting
     /// to be written, stock's scan, a call). The card has no operation in flight between passes (every eMMC command ends inside the step)
-    /// and the panel's DMA is the board's to check. A ride open stops by its own rules: [`App::ride_stop_ok`].
+    /// and the panel's DMA is the board's to check. No wake broken since the last Stop report ([`stopbench::broke`], as
+    /// [`App::ride_stop_ok`]): a wake broken every time would reset the unit every minute, AUTO OFF's count with it,
+    /// until its battery is flat. A ride open stops by its own rules: [`App::ride_stop_ok`].
     pub fn stop_ok(&self, b: &mut impl Board) -> bool {
-        self.pass_ms() == IDLE_POLL_MS && self.up_ms >= STOP_AFTER_BOOT_MS && self.keep_on(b) & KEEP_STOP == 0
+        self.pass_ms() == IDLE_POLL_MS
+            && self.up_ms >= STOP_AFTER_BOOT_MS
+            && self.keep_on(b) & KEEP_STOP == 0
+            && !stopbench::broke(b.backup_read(stopbench::BKP[0]))
     }
 
     /// The sleep after this ride pass may be Stop (docs/power.md "Stop mode", phase 2b; the main loop adds the board's

@@ -723,7 +723,7 @@ fn dev_link_ride_open() {
 /// the size bounds. Every address the computer saw peeked or poked is aligned and inside the ranges, and each command
 /// is reached over the seeds (a regression of a bound, or of a parser, would pass word soup).
 fn dev_link_lines(app: &crate::App) {
-    use crate::dev::{Effect, MEMORY, Session, Stats, io};
+    use crate::dev::{Effect, MEMORY, Session, Stats, io, poke_ok};
     let addrs = ["0xfffffffc", "0x5ffffffc", "0x584244a8", "0x40000000", "0x40000002", "0x1fffffff", "0x2001fffc"];
     let addrs = [
         addrs.as_slice(),
@@ -737,6 +737,10 @@ fn dev_link_lines(app: &crate::App) {
             "0x580244a8",
             "0x5c001004",
             "0x40002800",
+            "0x52002008",
+            "0x58024470",
+            "0x58004800",
+            "0x50003000",
         ],
     ]
     .concat();
@@ -775,7 +779,7 @@ fn dev_link_lines(app: &crate::App) {
     for &a in pc.peeked.iter().chain(pc.regs.keys()) {
         assert!(a % 4 == 0 && (io(a) || MEMORY.iter().any(|r| r.contains(&a))), "{a:#x} reached the board");
     }
-    assert!(pc.regs.keys().all(|&a| io(a)), "a poke outside IO");
+    assert!(pc.regs.keys().all(|&a| poke_ok(a)), "a poke outside IO, or where it could brick the unit");
     // uploads: sizes at the bounds, a good image (tag, size word, SP, reset vector) and a short one
     for size in [155u32, 156, 157, 4096, 1 << 20, (1 << 20) + 1, 0, u32::MAX] {
         let mut img = std::vec![0u8; size.min(1 << 20) as usize];

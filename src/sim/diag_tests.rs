@@ -301,6 +301,49 @@ fn fault_log_waits_for_the_resumed_ride() {
     assert_eq!(files(&sim.emmc.image, "Rustfw/Log"), None, "read-only: never written");
 }
 
+/// Faults in a row with a ride open: the resume is tried after one fault only, so a resume that faults every time
+/// cannot park the unit (hw.rs parks past 3 in a row). From 2 in a row the ride is not resumed but kept on the card,
+/// and said; the next ride's start names it as it is, nothing of it lost. A boot that finds more than 3 in a row
+/// was parked and restarted from outside (the four-button restart: hw.rs never resets past 3), so it gets three
+/// fresh tries; its marker is kept for the log.
+#[test]
+fn faults_in_a_row_keep_the_ride_on_the_card_unresumed() {
+    for (faults, count_after) in [(2, 2), (3, 3), (4, 0), (0xff, 0)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 2000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 70_000);
+        let old = app.rec.clean.name();
+        let word = (1..faults).fold(marker(0, Kind::Stack, 0), |w, _| marker(w, Kind::Stack, 0));
+        assert_eq!(word & 0xff, faults);
+        let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, word);
+        assert_eq!(sim.backup[FAULT_BKP], word & !0xff | count_after, "{faults} in a row");
+        run(&mut sim, &mut app, 5000);
+        let said = |app: &App, s: &str| app.notes.list.iter().any(|n| n.as_str().ends_with(s));
+        assert!(said(&app, "RIDE NOT RESUMED") && !said(&app, " RIDE RESUMED"), "{faults} in a row");
+        assert_eq!(app.ride.state(), ride::State::Idle);
+        let times = |sim: &Sim| {
+            let dir = super::recorder_tests::places(sim, old)[0].first().copied().expect("the ride on the card");
+            let path = std::format!("{dir}/{}.fit", core::str::from_utf8(&old).unwrap());
+            super::recorder_tests::record_times(&sim.emmc.image, &path).len()
+        };
+        let kept = times(&sim);
+        assert!(kept >= 60, "{kept} records kept");
+        // a new ride: the old one named as it is, its records all there
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 70_000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 10_000);
+        assert!(app.ride_settled() && app.rec.clean.name() != old);
+        assert_eq!(times(&sim), kept, "{faults} in a row");
+        assert_eq!(fsck(&sim.emmc.image), Ok(0));
+    }
+    // one fault: resumed as before (fault_log_waits_for_the_resumed_ride)
+}
+
 /// A log of `size` bytes of `x` lines on the test card.
 fn with_log(size: u32) -> Vec<u8> {
     let mut d = Ram(crate::fat::tests::image(), 0);

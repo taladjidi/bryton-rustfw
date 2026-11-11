@@ -113,7 +113,8 @@ The point of this project is a firmware in safe Rust.
   - Raw pointers appear only in hw.rs.
 - **Panics:** no `unwrap` / indexing that can fail on the firmware path, unless it is provably in range. A panic
   marks the fault and resets the unit (hw.rs `default_handler`), so a ride resumes from its checkpoint. The unit
-  parks after 3 resets in a row without a minute of running. Since 2026-10-31 the release image has no panic site, and the gate (`tools/panics.py --max 0`) keeps it so.
+  parks after 3 resets in a row without a minute of running; from 2 in a row a ride open is kept on the card, not
+  resumed (the resume may be what faults), and a restart out of the park gives three fresh tries (lib.rs `begin`). Since 2026-10-31 the release image has no panic site, and the gate (`tools/panics.py --max 0`) keeps it so.
 
 ## Layout: logic in the library, transport in the board
 
