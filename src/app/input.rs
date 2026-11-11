@@ -318,7 +318,7 @@ impl App {
         self.depth = self.depth.saturating_sub(1);
         self.screen = match self.under.get(self.depth) {
             Some(&Screen::Ride(n)) if !self.page_on(n) => Screen::Main,
-            Some(&s) if self.depth > 0 || matches!(s, Screen::Main | Screen::Ride(_) | Screen::Summary) => s,
+            Some(&s) if self.depth > 0 || matches!(s, Screen::Main | Screen::Ride(_)) => s,
             _ => Screen::Main,
         };
         self.menu.chosen = false;
@@ -671,11 +671,11 @@ impl App {
             Input::Next | Input::Touch(Gesture::Swipe(Dir::Up)) => top + 1,
             Input::Prev | Input::Touch(Gesture::Swipe(Dir::Down)) => top.saturating_sub(1),
             Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => {
-                self.close();
+                self.close_laps();
                 return self.show(b);
             }
             Input::Touch(Gesture::Tap(x, y)) if inside(ui::BACK_TAP, x, y) => {
-                self.close();
+                self.close_laps();
                 return self.show(b);
             }
             _ => return,

@@ -358,8 +358,12 @@ pub struct App {
     save_drawn: ui::card::Save,
     /// The recording stopped on a full card: the save that follows is partial.
     save_part: bool,
+    /// A partial save came during the ride (the card filled, what reached it was saved at once).
+    part_saved: bool,
     /// Lap was pressed on the summary: its laps open once the history has the ride.
     laps_wanted: bool,
+    /// The history was scanned for the laps asked for (a ride it lacks then is said, not waited for).
+    laps_scanned: bool,
     /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the one tone player
     /// (alerts, courses, workouts).
     alerts: alerts::Alerts,
@@ -586,7 +590,9 @@ impl App {
             save: ui::card::Save::Saving,
             save_drawn: ui::card::Save::Saving,
             save_part: false,
+            part_saved: false,
             laps_wanted: false,
+            laps_scanned: false,
             new_ride: false,
             drawn: Default::default(),
             ride: ride::Ride::new(),

@@ -2458,3 +2458,44 @@ fn summary_is_not_saved_without_a_writable_card_or_behind_a_save() {
     never_saved(&mut sim, &mut app, 20_000);
     assert_eq!(app.save_now(), Save::Failed("NOT RECORDED"));
 }
+
+/// Laps left by Back do not leave an old summary to come back: a later `close()` goes to the overview. A partial
+/// save's marks are cleared by the next ride's start and used once by its end.
+#[test]
+fn summary_laps_leave_nothing_behind_and_part_marks_do_not_leak() {
+    use crate::ui::card::Save;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.save_part = true; // a ride the card filled under, never ended here
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    assert!(!app.save_part && !app.part_saved, "the start clears the last ride's partial marks");
+    app.part_saved = true; // a partial save came during this ride
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    assert_eq!(app.save_now(), Save::Part, "read at the end, once");
+    assert!(!app.part_saved);
+    for _ in 0..80 {
+        run(&mut sim, &mut app, 100);
+        if app.ride_settled() {
+            break;
+        }
+    }
+    run(&mut sim, &mut app, 6000);
+    app.save = Save::Saved;
+    app.press(&mut sim, Press::Short(Key::Lap));
+    for _ in 0..60 {
+        if app.screen() == Screen::Laps(0) {
+            break;
+        }
+        run(&mut sim, &mut app, 100);
+    }
+    assert_eq!(app.screen(), Screen::Laps(0));
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Summary);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main);
+    app.close();
+    assert_eq!(app.screen(), Screen::Main, "no old summary comes back");
+}

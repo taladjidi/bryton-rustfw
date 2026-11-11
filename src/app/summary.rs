@@ -15,6 +15,8 @@ impl App {
     pub(crate) fn save_now(&self) -> Save {
         match self.save {
             Save::Saved if self.rec.full.phase() != recorder::Phase::Done => Save::Copying,
+            // a card that failed once is retried: not a failure to say in red until it is stuck
+            Save::Saving if self.rec.clean.failing() => Save::Retry,
             s => s,
         }
     }
@@ -22,7 +24,7 @@ impl App {
     /// A save that ends with nothing said is not a save: its recorder is done or stuck and no `Saved` came.
     pub(crate) fn save_settle(&mut self) {
         let done = self.rec.clean.phase() == recorder::Phase::Done;
-        if self.save == Save::Saving && (done || self.rec.clean.stuck() || self.rec.clean.failing()) {
+        if self.save == Save::Saving && (done || self.rec.clean.stuck() || self.rec.clean.fails() >= 3) {
             self.save = Save::Failed("NOT SAVED: CARD");
         }
     }
@@ -77,6 +79,16 @@ impl App {
         }
     }
 
+    /// Back from the laps: the screen below, and the summary when it opened them (not [`App::close`]'s own guess: a
+    /// stale entry there once brought an old summary back).
+    pub(crate) fn close_laps(&mut self) {
+        let from_summary = self.depth == 1 && self.under.first() == Some(&Screen::Summary);
+        self.close();
+        if from_summary {
+            self.screen = Screen::Summary;
+        }
+    }
+
     /// Page on the summary: the card and the totals in turn.
     pub(crate) fn summary_flip(&mut self, b: &mut impl Board) {
         self.summary_page = if self.summary_page == PAGE_TOTALS { PAGE_CARD } else { PAGE_TOTALS };
@@ -86,10 +98,10 @@ impl App {
     /// Lap on the summary: the laps of the ride, read from its saved file as a past ride's. Only once it is saved and
     /// the card is free; they open from [`App::laps_step`] when the history has the ride (one scan, not one a press).
     pub(crate) fn summary_laps(&mut self) {
-        if self.save_now() != Save::Saved || !self.ride_settled() {
+        if !matches!(self.save_now(), Save::Saved | Save::NoFullCopy | Save::Part) || !self.ride_settled() {
             return self.say(if matches!(self.save, Save::Failed(_)) { "NOT ON THE CARD" } else { "SAVING: WAIT" });
         }
-        self.laps_wanted = true;
+        (self.laps_wanted, self.laps_scanned) = (true, false);
         self.laps_step();
     }
 
@@ -107,8 +119,13 @@ impl App {
             self.laps_wanted = false;
             self.past.start(&r, self.settings.ftp, self.settings.imperial); // App::step_past opens the list
             self.say("READING RIDE");
-        } else if self.stock.status() == stock::Status::Idle {
+        } else if self.stock.status() != stock::Status::Running && !self.laps_scanned {
+            self.laps_scanned = true;
             self.rescan();
+        } else if self.laps_scanned && self.stock.status() != stock::Status::Running {
+            // scanned, and the ride is not in it
+            (self.laps_wanted, self.laps_scanned) = (false, false);
+            self.say("NO LAPS IN HISTORY");
         }
     }
 }

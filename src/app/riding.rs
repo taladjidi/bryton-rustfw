@@ -170,8 +170,11 @@ impl App {
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
         // recorded: a ride the recorder holds (not one started and ended behind the last one's save, nothing of it kept)
-        let recorded = matches!(self.rec.clean.phase(), recorder::Phase::Starting | recorder::Phase::Recording)
-            && !self.rec.clean.pending();
+        // (or one the card filled under: its partial save is under way, or came during the ride)
+        let recorded = !self.rec.clean.pending()
+            && (matches!(self.rec.clean.phase(), recorder::Phase::Starting | recorder::Phase::Recording)
+                || self.save_part
+                || self.part_saved);
         // the trips get it once this ride's save is done ([`SettingsStore::done`])
         self.settings_store.ended(self.ride.dist_m(), self.ride.timer_s());
         self.recorder(ev);
@@ -180,6 +183,8 @@ impl App {
             Save::Failed("NOT RECORDED")
         } else if !self.card_writable {
             Save::Failed("NOT SAVED: CARD")
+        } else if core::mem::take(&mut self.part_saved) {
+            Save::Part
         } else {
             Save::Saving
         };
@@ -245,7 +250,6 @@ impl App {
         use recorder::{GaveUp, Outcome};
         match clean.or(full) {
             Some(GaveUp::Named(Outcome::Saved(_))) => {
-                self.save = ui::card::Save::Saved;
                 self.settings_store.done(true);
                 self.notice("RIDE SAVED");
             }
@@ -364,6 +368,7 @@ impl App {
         self.profile_to_recorders(); // a change while paused, before the pause's or the end's messages
         match ev {
             ride::Event::Start => {
+                (self.save_part, self.part_saved) = (false, false); // the last ride's partial save is not this one's
                 // a ride the boot has not reopened yet (the card failed then) is resumed in this one's place
                 self.rec.clean.start(t, recorder::ride_name(local), self.rec.resume_pending);
                 if !self.rec.clean.starting() {
@@ -583,11 +588,17 @@ impl App {
                 let now = self.now_s();
                 self.alt.ride_start(now);
                 self.notice("RIDE RESUMED");
+                if self.screen == Screen::Summary {
+                    self.save = Save::Failed("NOT RECORDED"); // the summary's ride is not the one reopened
+                }
             }
             recorder::Outcome::Saved(_) => {
                 // this ride's own save (the card of one ended behind another's save said NOT RECORDED: the other's
                 // Saved is not its)
-                if !recovering && (self.save == Save::Saving || self.save == Save::Failed("NOT SAVED: CARD")) {
+                if !recovering && self.ride.state() != ride::State::Idle {
+                    // during the ride: the card filled and what reached it is saved already
+                    self.part_saved |= core::mem::take(&mut self.save_part);
+                } else if !recovering && (self.save == Save::Saving || self.save == Save::Failed("NOT SAVED: CARD")) {
                     self.save = if core::mem::take(&mut self.save_part) { Save::Part } else { Save::Saved };
                 }
                 self.notice("RIDE SAVED");
@@ -610,7 +621,7 @@ impl App {
             }
             recorder::Outcome::Kept(_) => {
                 self.settings_store.done(false);
-                self.save = Save::Failed("NOT SAVED: CARD");
+                (self.save, self.save_part) = (Save::Failed("NOT SAVED: CARD"), false);
                 // not in \Activities: left in \Rustfw\Rides as it was, or named there again (damaged, or the card
                 // kept failing)
                 self.alarm_notice("SAVE FAILED: KEPT IN RUSTFW/RIDES");

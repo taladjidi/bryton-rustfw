@@ -45,6 +45,8 @@ pub enum Save {
     Saving,
     /// The ride is in the activities folder, read back; the full copy is done.
     Saved,
+    /// Being saved, the card failed and is tried again.
+    Retry,
     /// Saved; the full copy is still being written.
     Copying,
     /// Saved; the full copy could not be.
@@ -74,6 +76,7 @@ pub fn draw_title_line(c: &mut impl Canvas, date: &str, save: Option<Save>) {
             at(amber, 76, W - 78, Align::Right, "COPY...");
         }
         Some(Save::Saving) => at(amber, 0, W, Align::Centre, "SAVING..."),
+        Some(Save::Retry) => at(amber, 0, W, Align::Centre, "SAVING: CARD RETRY"),
         Some(Save::NoFullCopy) => at(amber, 0, W, Align::Centre, "SAVED, NO FULL COPY"),
         Some(Save::Part) => at(amber, 0, W, Align::Centre, "SAVED: PART"),
         Some(Save::Failed(why)) => at(red, 0, W, Align::Centre, why),
