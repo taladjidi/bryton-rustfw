@@ -360,6 +360,10 @@ pub struct App {
     save_part: bool,
     /// A partial save came during the ride (the card filled, what reached it was saved at once).
     part_saved: bool,
+    /// The full copy was lost during this ride (its save says NO FULL COPY).
+    full_kept: bool,
+    /// The recording stopped and its mid-ride save was Kept (in the rides folder): the end says NOT SAVED.
+    kept_mid: bool,
     /// Lap was pressed on the summary: its laps open once the history has the ride.
     laps_wanted: bool,
     /// The history was scanned for the laps asked for (a ride it lacks then is said, not waited for).
@@ -591,6 +595,8 @@ impl App {
             save_drawn: ui::card::Save::Saving,
             save_part: false,
             part_saved: false,
+            full_kept: false,
+            kept_mid: false,
             laps_wanted: false,
             laps_scanned: false,
             new_ride: false,
