@@ -732,6 +732,12 @@ impl App {
                 if matches!(row, Some(menu::Row::Past(_))) {
                     return ui::draw_workout_row(c, slot, (label.as_str(), value.as_str()), i == sel, &[], false);
                 }
+                // a course: its name over its length, the whole name to tell the courses apart; a tick marks the one
+                // followed (green alone is no mark for a colour-blind rider)
+                if matches!(row, Some(menu::Row::Course(_))) {
+                    let on = color == ui::GREEN;
+                    return ui::draw_workout_row(c, slot, (label.as_str(), value.as_str()), i == sel, &[], on);
+                }
                 ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel && !inert);
                 if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =
                     self.row(menu, i)
@@ -764,7 +770,7 @@ impl App {
                 let cut = ui::menu_label_w(label.as_str(), value.as_str()) < ui::menu_label_w(label.as_str(), "");
                 // the two-line rows are drawn whole: their value and colour are part of the head
                 let sensor = matches!(self.row(menu, i), Some(menu::Row::Sensor(_)));
-                let workout = sensor || matches!(self.row(menu, i), Some(menu::Row::Workout(_)));
+                let workout = sensor || matches!(self.row(menu, i), Some(menu::Row::Workout(_) | menu::Row::Course(_)));
                 if let Some(menu::Row::Sensor(k)) = self.row(menu, i)
                     && let Some(&kind) = Kind::ALL.get(k)
                 {
@@ -866,7 +872,7 @@ impl App {
             }
             Some(Row::OldRide(k)) => self.read_old_ride(k),
             Some(Row::Storage(_)) => {}
-            Some(Row::Ride(r)) => self.activate_ride(r),
+            Some(Row::Ride(r)) => self.activate_ride(r, menu, sel),
             Some(Row::Past(n)) => {
                 let Some(&r) = self.stock.index.get(n) else { return };
                 self.past.start(&r, self.settings.ftp, self.settings.imperial); // read over the next passes (App::step_past)
@@ -1011,7 +1017,7 @@ impl App {
             }
             // a set's page list: the editor works on that set (while a ride is open, on the ride's own only)
             Menu::PageList(set) if self.ride.state() != ride::State::Idle && set != self.ride_profile().page_set() => {
-                self.say("THE RIDE'S SET")
+                self.say("THE RIDE'S SET\nOPEN THAT ONE")
             }
             m => {
                 if let Menu::PageList(set) = m {
@@ -1026,7 +1032,7 @@ impl App {
     }
 
     /// Select on a row of the ride menu that acts on the ride, the workout or the course.
-    fn activate_ride(&mut self, r: menu::RideRow) {
+    fn activate_ride(&mut self, r: menu::RideRow, menu: Menu, sel: usize) {
         use menu::RideRow;
         match r {
             RideRow::Pause => {
@@ -1050,6 +1056,9 @@ impl App {
                 self.leave_menus();
             }
             RideRow::StopWorkout => {
+                if !self.confirmed(menu, sel, "STOP WORKOUT") {
+                    return;
+                }
                 if self.ramp_running() {
                     self.finish_ramp(); // the cool-down plays, the result shows
                 } else {
@@ -1059,6 +1068,9 @@ impl App {
                 self.leave_menus();
             }
             RideRow::StopCourse => {
+                if !self.confirmed(menu, sel, "STOP FOLLOWING") {
+                    return;
+                }
                 self.stop_course();
                 self.leave_menus();
             }
@@ -1067,6 +1079,10 @@ impl App {
                 self.leave_menus();
             }
             RideRow::BackToStart => {
+                // a course followed would be replaced: ask first
+                if self.page_on(COURSE) && !self.confirmed(menu, sel, "REPLACE COURSE") {
+                    return;
+                }
                 self.back_to_start();
                 self.leave_menus();
             }
@@ -1108,7 +1124,7 @@ impl App {
             return;
         }
         if !self.menu.editing && self.frozen_in_ride(s) {
-            self.say("NOT DURING A RIDE");
+            self.say("NOT DURING A RIDE\nTRY AFTER THE RIDE");
             return;
         }
         if s.number().is_some() {

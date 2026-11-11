@@ -137,7 +137,7 @@ fn refused_while_riding() {
     run(&mut sim, &mut app, 3500); // the ready card first
     app.open_powercal();
     assert_ne!(app.screen(), Screen::PowerCal);
-    assert_eq!(app.notes.text.as_str(), "NO CALIBRATION RIDING");
+    assert_eq!(app.notes.text.as_str(), "STOP TO CALIBRATE");
     assert!(requests(&sim).is_empty());
     app.press(&mut sim, Press::Short(Key::Start)); // paused
     app.open_powercal();

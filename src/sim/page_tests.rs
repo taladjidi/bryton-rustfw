@@ -1200,7 +1200,10 @@ fn the_pages_menu_edits_the_set_it_names() {
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(ride::Profile::Indoor)));
     press(&mut sim, &mut app, Key::Start);
-    assert_eq!((app.notes.text.as_str(), app.pages_set == ride::Profile::Indoor), ("THE RIDE'S SET", false));
+    assert_eq!(
+        (app.notes.text.as_str(), app.pages_set == ride::Profile::Indoor),
+        ("THE RIDE'S SET\nOPEN THAT ONE", false)
+    );
 }
 
 /// A hold on a box of an indoor page edits the indoor set (the page is indoor's), kept it is written, the road pages

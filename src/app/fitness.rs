@@ -142,7 +142,7 @@ impl App {
         what.push_str(from);
         what.push_str(")");
         if ftp && self.frozen_in_ride(menu::Setting::Ftp) {
-            return self.notice("NOT DURING A RIDE"); // the ride's TSS and zone times keep one FTP
+            return self.notice("NOT DURING A RIDE\nTRY AFTER THE RIDE"); // the ride's TSS and zone times keep one FTP
         }
         if !self.confirmed(menu, sel, what.as_str()) {
             return;

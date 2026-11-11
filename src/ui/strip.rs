@@ -5,6 +5,10 @@ use super::*;
 /// Height of the status strip; an orange line follows it.
 pub const STRIP_H: u32 = 22;
 
+/// The tap target that opens the menu from a page: the clock, 44 px high like every touch target (it covers the top
+/// 22 px of the fields under the strip; the touch lock stops a stray touch).
+pub const MENU_TAP: (u32, u32, u32, u32) = ((W - 120) / 2, 0, 120, 44);
+
 /// USB dev link state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UsbDot {

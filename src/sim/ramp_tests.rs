@@ -41,7 +41,7 @@ fn needs_a_trainer() {
     sim.own_settings();
     let mut app = App::start(&mut sim, None);
     start(&mut sim, &mut app);
-    assert_eq!(app.notes.text.as_str(), "NEEDS TRAINER");
+    assert_eq!(app.notes.text.as_str(), "NEEDS TRAINER\nPAIR ONE: SENSORS");
     assert_eq!((app.ride.state(), app.plan.player, app.ramp.run.is_none()), (ride::State::Idle, None, true));
 }
 
@@ -189,6 +189,7 @@ fn stop_workout_in_the_ramp_plays_the_cool_down() {
     ride(&mut sim, &mut app, 3);
     app.press(&mut sim, Press::Long(Key::Page));
     super::tests::to_row(&mut sim, &mut app, Row::Ride(crate::menu::RideRow::StopWorkout));
+    app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.plan.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));

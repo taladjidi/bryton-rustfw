@@ -560,6 +560,7 @@ fn the_ftms_release_is_resent_a_few_times_at_most() {
     app.press(&mut sim, Press::Long(Key::Page));
     super::tests::to_row(&mut sim, &mut app, crate::menu::Row::Ride(crate::menu::RideRow::StopWorkout));
     app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 60_000);
     assert_eq!(release(&sim) - before, usize::from(crate::trainer::RELEASE_TRIES));
 }

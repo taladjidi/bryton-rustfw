@@ -2401,7 +2401,7 @@ const MENU_TREE_OWNED: [(&str, u32); 33] = [
     ("Ride", 0),
     ("CourseNow", 0),
     ("auto scrolled", 0),
-    ("Bike", 1),
+    ("Bike", 0),
     ("Gps", 3),
     ("Phone", 1),
     ("Steps", 1),
@@ -2720,7 +2720,7 @@ fn history_by_chance() {
                 assert_eq!(app.stock.index.len() + 1, rows, "seed {seed} step {k}: the list at once");
                 deletes += 1;
             }
-            refused += u32::from(riding && app.notes.text.as_str() == "NOT DURING A RIDE");
+            refused += u32::from(riding && app.notes.text.as_str() == "NOT DURING A RIDE\nTRY AFTER THE RIDE");
             if app.ride.state() != crate::ride::State::Idle && r % 5 == 0 {
                 app.ride = crate::ride::Ride::default();
             }

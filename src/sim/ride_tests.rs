@@ -1171,7 +1171,7 @@ fn ftp_row_is_refused_in_a_ride() {
     super::menu_tests::to_row(&mut sim, &mut app, crate::menu::Row::Set(crate::menu::Setting::Ftp));
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Short(Key::Page)); // a step if the row were being edited
-    assert_eq!((app.settings.ftp, app.notes.text.as_str()), (ftp, "NOT DURING A RIDE"));
+    assert_eq!((app.settings.ftp, app.notes.text.as_str()), (ftp, "NOT DURING A RIDE\nTRY AFTER THE RIDE"));
 }
 
 /// An FTP the ramp test found during the ride is held until the ride is over, then set: the result is not lost.

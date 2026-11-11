@@ -108,11 +108,10 @@ impl Run {
         if !touch {
             return self.key(Press::Long(Key::Page));
         }
-        // a ride page: swipes up (MORE, then the overview) to where the gear is
-        for _ in 0..3 {
-            if self.app.screen() != Screen::Main {
-                self.touch(Gesture::Swipe(Dir::Up));
-            }
+        // a ride is open: the clock of the strip; else the overview's gear
+        if self.app.ride.state() != ride::State::Idle {
+            let t = ui::MENU_TAP;
+            return self.touch(Gesture::Tap((t.0 + t.2 / 2) as u16, (t.1 + t.3 / 2) as u16));
         }
         let t = ui::GEAR_TAP;
         self.touch(Gesture::Tap((t.0 + t.2 / 2) as u16, (t.1 + t.3 / 2) as u16));
@@ -189,17 +188,17 @@ fn tasks() -> Vec<Task> {
             r.path(false, &[Row::Open(Menu::History)]);
             done(&r, on(&r, Menu::History), "history")
         }),
-        t("phone pairing, keys", IDLE, 18, || {
+        t("phone pairing, keys", IDLE, 8, || {
             let mut r = Run::new(false);
             r.path(false, &[Row::Open(Menu::Phone), Row::Open(Menu::Sensors), Row::Open(Menu::Phone)]);
             done(&r, on(&r, Menu::Phone), "phone")
         }),
-        t("phone pairing, touch", IDLE, 4, || {
+        t("phone pairing, touch", IDLE, 3, || {
             let mut r = Run::new(false);
             r.path(true, &[Row::Open(Menu::Phone), Row::Open(Menu::Sensors), Row::Open(Menu::Phone)]);
             done(&r, on(&r, Menu::Phone), "phone")
         }),
-        t("GPS status, keys", IDLE, 16, || {
+        t("GPS status, keys", IDLE, 17, || {
             let mut r = Run::new(false);
             r.path(false, &[Row::Open(Menu::Settings), Row::Open(Menu::System), Row::Open(Menu::Gps)]);
             done(&r, on(&r, Menu::Gps), "gps")
@@ -209,7 +208,7 @@ fn tasks() -> Vec<Task> {
             r.path(false, &[Row::Open(Menu::Courses), Row::Open(Menu::Main), Row::Open(Menu::Courses), Row::Course(0)]);
             done(&r, r.app.page_on(COURSE), "course")
         }),
-        t("course in a ride, touch", RIDING, 7, || {
+        t("course in a ride, touch", RIDING, 5, || {
             let mut r = Run::new(true);
             r.path(true, &[Row::Open(Menu::Courses), Row::Open(Menu::Main), Row::Open(Menu::Courses), Row::Course(0)]);
             done(&r, r.app.page_on(COURSE), "course")
@@ -220,13 +219,13 @@ fn tasks() -> Vec<Task> {
             r.path(false, &[w[0], w[1], w[2], Row::Workout(0), Row::WorkoutStart]);
             done(&r, r.app.workout_running(), "workout")
         }),
-        t("workout in a ride, touch", RIDING, 9, || {
+        t("workout in a ride, touch", RIDING, 7, || {
             let mut r = Run::new(true);
             let w = [Row::Open(Menu::Workouts), Row::Open(Menu::Main), Row::Open(Menu::Workouts)];
             r.path(true, &[w[0], w[1], w[2], Row::Workout(0), Row::WorkoutStart]);
             done(&r, r.app.workout_running(), "workout")
         }),
-        t("stop following, keys", RIDING, 5, || {
+        t("stop following, keys", RIDING, 6, || {
             let mut r = Run::new(true);
             r.follow();
             r.path(
@@ -246,7 +245,7 @@ fn tasks() -> Vec<Task> {
             r.path(false, &[Row::Open(Menu::Sensors)]);
             done(&r, on(&r, Menu::Sensors), "sensors")
         }),
-        t("menu from a ride page, touch", RIDING, 3, || {
+        t("menu from a ride page, touch", RIDING, 1, || {
             let mut r = Run::new(true);
             r.open_menu(true);
             done(&r, matches!(r.app.screen(), Screen::Menu(Menu::Ride(_), _)), "menu")
@@ -275,4 +274,70 @@ fn tasks_stay_within_their_tap_budget() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("taps.txt"), out).unwrap();
     assert!(failed.is_empty(), "longer than the budget: {failed:?}");
+}
+
+/// The refusals say what to do, in two lines the banner holds (shots: target/sim/refusal_N.bmp).
+#[test]
+fn refusals_fit_the_banner() {
+    let mut r = Run::new(false);
+    for (i, text) in [
+        "NO COURSE\nSEND ONE FROM APP",
+        "NEEDS TRAINER\nPAIR ONE: SENSORS",
+        "NOT DURING A RIDE\nTRY AFTER THE RIDE",
+        "THE RIDE'S SET\nOPEN THAT ONE",
+        "MENU: HOLD PAGE\nOR TAP THE CLOCK",
+        "STOP FOLLOWING?\nSTART: YES BACK: NO",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        r.app.say(text);
+        run(&mut r.sim, &mut r.app, 50);
+        r.sim.save(&format!("refusal_{i}"));
+    }
+}
+
+/// The menu by touch from a page while recording: a tap in the clock's 44 px box opens the ride menu, one outside
+/// does not, a locked screen ignores both, and a hold says how to reach the menu. Taps scattered round the box
+/// (a structured fuzz: inside, edges, outside, locked or not) never stop the ride, and the box is reached.
+#[test]
+fn the_clock_opens_the_menu_while_recording_and_a_stray_touch_does_not() {
+    let t = ui::MENU_TAP;
+    let mut opened = 0;
+    for seed in 1..=40u32 {
+        let mut r = Run::new(true);
+        run(&mut r.sim, &mut r.app, 10_000); // the banners go: a tap that clears one only clears it
+        let locked = seed % 4 == 0;
+        if locked {
+            r.app.press(&mut r.sim, Press::Chord);
+        }
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = |m: u32| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x % m
+        };
+        // the edges of the box, one pixel in and one out, and anywhere
+        let (px, py) = match seed % 3 {
+            0 => (t.0 + next(t.2), next(t.3)),
+            1 => (t.0 + t.2 - (next(2)), t.3 - next(3)),
+            _ => (next(ui::W), next(120)),
+        };
+        let inside = px >= t.0 && px < t.0 + t.2 && py < t.1 + t.3;
+        r.touch(Gesture::Tap(px as u16, py as u16));
+        let menu = matches!(r.app.screen(), Screen::Menu(Menu::Ride(_), _));
+        if inside && !locked {
+            assert!(menu, "seed {seed}: ({px}, {py}) is in the box: {:?}", r.app.screen());
+            opened += 1;
+        } else if locked {
+            assert!(!menu, "seed {seed}: locked");
+        }
+        assert_eq!(r.app.ride.state(), ride::State::Running, "seed {seed}: the ride goes on");
+    }
+    assert!(opened >= 8, "the fuzz reached the box {opened} times");
+    // a hold while recording: told, not ignored
+    let mut r = Run::new(true);
+    r.touch(Gesture::Hold(120, 200));
+    assert!(r.app.notes.text.as_str().starts_with("MENU: HOLD PAGE"), "{:?}", r.app.notes.text.as_str());
 }

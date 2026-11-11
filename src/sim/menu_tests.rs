@@ -487,7 +487,7 @@ fn menu_tree_reaches_everything() {
     for m in [Menu::Workouts, Menu::Courses, Menu::History, Menu::Stock] {
         assert!(menus.iter().any(|&(x, _)| x == m), "{m:?} reached");
     }
-    assert_eq!(menu::MAIN.len(), ui::MENU_ROWS + 2, "the main menu: a screen, then SETTINGS and PLACES scroll in");
+    assert_eq!(menu::MAIN.len(), ui::MENU_ROWS + 3, "the main menu: a screen, then three more scroll in");
     // whole on the row: label and value side by side, numbers at the end of their range, and edited
     let whole = |label: &str, value: &str| {
         assert!(ui::LABEL.width(label) <= ui::menu_label_w(label, value), "{label} {value}: the label cut");
@@ -525,7 +525,10 @@ fn menu_tree_reaches_everything() {
         if app.screen() != Screen::Menu(m, 0) {
             // COURSES and PLACES without a card: said, not opened
             let said = (m, app.notes.text.as_str());
-            assert!(matches!(said, (Menu::Courses, "NO COURSE") | (Menu::Places, "PLACES NOT READ")), "{said:?}");
+            assert!(
+                matches!(said, (Menu::Courses, "NO COURSE\nSEND ONE FROM APP") | (Menu::Places, "PLACES NOT READ")),
+                "{said:?}"
+            );
             while app.screen() != Screen::Main {
                 app.press(&mut sim, Press::Short(Key::Back));
             }
@@ -668,6 +671,8 @@ fn ride_menu() {
     hold_page(&mut sim, &mut app);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::StopWorkout));
     app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.notes.text.as_str().starts_with("STOP "), "asks first: {:?}", app.notes.text.as_str());
+    app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(
         (app.plan.player.is_none(), app.screen(), app.notes.text.as_str()),
         (true, Screen::Ride(0), "WORKOUT STOPPED")
@@ -692,6 +697,8 @@ fn ride_menu() {
         ["PAUSE", "END RIDE", "COURSE", "COURSES", "WORKOUTS", "SENSORS", "BRIGHTNESS", "INDOOR", "MAIN MENU"]
     );
     to_row(&mut sim, &mut app, Row::Ride(RideRow::StopCourse));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.notes.text.as_str().starts_with("STOP "), "asks first: {:?}", app.notes.text.as_str());
     app.press(&mut sim, Press::Short(Key::Start));
     assert!(app.courses.as_deref().unwrap().on.is_none(), "not followed");
     assert_eq!((app.screen(), app.notes.text.as_str()), (Screen::Ride(0), "COURSE OFF"), "its page gone: the first");

@@ -902,9 +902,9 @@ fn no_spin_down_while_riding() {
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 1500);
     app.press(&mut sim, Press::Long(Key::Start)); // riding, Start held is the mode (item 5), not a calibration
-    assert!(!app.notes.list[0].as_str().contains("NO CALIBRATION"));
+    assert!(!app.notes.list[0].as_str().contains("STOP TO CALIBRATE"));
     tap(&mut sim, &mut app, Button::Calibrate);
-    assert!(app.notes.list[0].as_str().contains("NO CALIBRATION"), "{}", app.notes.list[0].as_str());
+    assert!(app.notes.list[0].as_str().contains("STOP TO CALIBRATE"), "{}", app.notes.list[0].as_str());
     run(&mut sim, &mut app, 2000);
     assert!(sim.nordic.trainer.cal_requests.is_empty());
     assert!(!app.trainer.calibrating());
@@ -1344,6 +1344,7 @@ pub(super) fn release_after(sim: &mut Sim, app: &mut App, how: Ends, erg: fn(&Si
             app.press(sim, Press::Long(Key::Page));
             super::tests::to_row(sim, app, Row::Ride(RideRow::StopWorkout));
             app.press(sim, Press::Short(Key::Start));
+            app.press(sim, Press::Short(Key::Start));
             assert!(app.plan.player.is_none(), "stopped");
         }
         Ends::EndRide => {
@@ -1503,6 +1504,7 @@ fn a_release_whose_failure_is_lost_is_sent_again() {
     sim.nordic.ack_lost = 1;
     app.press(&mut sim, Press::Long(Key::Page));
     super::tests::to_row(&mut sim, &mut app, Row::Ride(RideRow::StopWorkout));
+    app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
     assert_eq!(sim.nordic.ack_lost, 0, "the release went and was lost");
@@ -1748,7 +1750,7 @@ fn ride_a_course_needs_a_trainer() {
     let mut app = App::start(&mut sim, None);
     app.set_course_memory(crate::storage::course_file::tests::memory());
     app.pick_course(&mut sim);
-    assert_eq!(app.notes.text.as_str(), "NEEDS TRAINER");
+    assert_eq!(app.notes.text.as_str(), "NEEDS TRAINER\nPAIR ONE: SENSORS");
     assert!(!matches!(app.screen(), Screen::Menu(Menu::Courses, _)));
 }
 

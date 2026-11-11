@@ -17,7 +17,7 @@ impl App {
     /// Opens the calibration screen, unless a ride runs.
     pub(crate) fn open_powercal(&mut self) {
         if self.ride.state() == ride::State::Running {
-            return self.say("NO CALIBRATION RIDING");
+            return self.say("STOP TO CALIBRATE");
         }
         self.powercal.reset();
         self.powercal_shown = None;
@@ -29,7 +29,7 @@ impl App {
         if self.powercal.asking() {
             self.powercal.reset();
         } else if self.ride.state() == ride::State::Running {
-            self.say("NO CALIBRATION RIDING");
+            self.say("STOP TO CALIBRATE");
         } else if !self.radio.paired_heard(Kind::Power) {
             self.say("NO POWER METER HEARD");
         } else {

@@ -321,13 +321,13 @@ used: GNSS GPS-only (cyclic tracking draws the same 5 mA with any set, docs/powe
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | down on the overview before a ride: the quick panel; down on a ride page: the media remote; up on a ride page: MORE, then the overview | the next / previous screen of rows (up closes the quick panel) | one step up / down |
 | hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
-| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
+| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records; the clock of the status strip (a 120 x 44 px box at the top), the menu, also while a ride records | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
 Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs). **Touch safety:** while a ride
 records (not paused), a tap or a hold on a page does nothing but the map's buttons: no menu, no graph changed (a wet
-glove, rain); swipes still turn pages and the keys do everything. TOUCH in SETTINGS > DISPLAY (ON / OFF) switches gestures off
+glove, rain); swipes still turn pages and the keys do everything. A hold says "MENU: HOLD PAGE OR TAP THE CLOCK"; the clock's box is the one touch way into the menu, and the touch lock stops it. TOUCH in SETTINGS > DISPLAY (ON / OFF) switches gestures off
 altogether, for rain: the keys only, the call's buttons included; the touch lock (Back and Lap held together 1 s) is the
 quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent one.
 
@@ -491,6 +491,7 @@ MENU
      |             BIKES > ACTIVE BIKE, BIKE 1 to 3 > ODO, a part > SERVICE, RESET
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >,
                    SCREENSHOT
+ +- PHONE >        the phone link (also in SENSORS)
  +- PLACES >       SAVE PLACE, then the favourite places (distance and bearing from here) -> ALTITUDE (typed), DELETE
 ```
 

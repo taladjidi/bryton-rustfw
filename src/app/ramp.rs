@@ -22,7 +22,7 @@ impl App {
     /// Starts the ramp test: the workout, and the ride if none runs. Indoors only: a trainer must be heard.
     pub(crate) fn start_ramp(&mut self) {
         if !self.trainer_heard() {
-            return self.say("NEEDS TRAINER");
+            return self.say("NEEDS TRAINER\nPAIR ONE: SENSORS");
         }
         if self.workout_running() {
             return self.say("WORKOUT RUNNING");

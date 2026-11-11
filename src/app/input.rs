@@ -532,6 +532,11 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.wkt_avg_at(x, y) => {
                 return self.cycle_wkt_avg(b);
             }
+            // a tap on the clock of the strip opens the menu, even while recording: a 44 px target, and the touch lock above
+            // stops a stray touch. The only touch way in from a ride page (the hold is ignored while recording)
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if inside(ui::MENU_TAP, x, y) => {
+                self.open(Screen::Menu(self.menu_root(), 0))
+            }
             // a tap on a TRAINER MODE / TARGET field opens the trainer screen, even while recording (the touch lock
             // above is what stops a stray touch)
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.trainer_field_at(x, y) => {
@@ -549,7 +554,11 @@ impl App {
             (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if recording && inside(ui::GEAR_TAP, x, y) => {
                 self.open(Screen::Menu(self.menu_root(), 0))
             }
-            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..))) if recording => return,
+            // a hold says how to reach the menu instead of nothing (the rider tried the hold: stock's way)
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Hold(..))) if recording => {
+                return self.say("MENU: HOLD PAGE\nOR TAP THE CLOCK");
+            }
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..))) if recording => return,
             // a tap on a graph shows the next plot, until the unit is switched off (the page as kept is not changed: a
             // stray touch never edits it for good); a hold switches between the last minutes and the whole ride
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..)))
