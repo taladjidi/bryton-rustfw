@@ -30,6 +30,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
     the ride card, the basemap, `render_row` (screenshots). `src/app/fields.rs`: a ride field's text and colour, number
     formatting. `graphs.rs`: the graph fields and the course profile.
+  - `summary.rs`: the ride summary after SAVE: the save state on its title line (from the recorders' phase), the
+    totals card (Page) and the laps (Lap).
   - `more.rs`: MORE, a denser variant of each ride page (swipe up shows it, swipe down or Back returns): the rider's own
     (the editor edits it, kept in `pages.bin` after the first CRC) or `Page::more_of`; "MORE" in the strip.
   - `menus.rs`: `Menu`, each menu's rows and the text that depends on state (the fixed text is `Row::label` in ui/menu.rs), `activate` (what a

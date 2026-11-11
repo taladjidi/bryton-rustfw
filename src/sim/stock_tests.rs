@@ -470,13 +470,13 @@ fn ride_history() {
     let stats: Vec<_> = card.stats.iter().map(|(l, v)| std::format!("{l} {}", v.as_str())).collect();
     let want = [
         "TIME 0:30".into(),
-        "KM 14.4".into(),
-        "KMH 28.8".into(),
-        "ASC 80".into(),
-        std::format!("NP {np}"),
-        "W 260".into(),
-        "HR 140".into(),
-        "MAX 140".into(),
+        "DIST KM 14.4".into(),
+        "AVG KM/H 28.8".into(),
+        "ASC M 80".into(),
+        std::format!("NP W {np}"),
+        "AVG W 260".into(),
+        "AVG HR 140".into(),
+        "MAX HR 140".into(),
         std::format!("TSS {tss}"),
         "KJ 468".into(),
     ];

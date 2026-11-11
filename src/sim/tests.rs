@@ -2283,3 +2283,51 @@ fn max_hr_left_unchanged_stays_from_age() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert!(app.settings.max_hr_age, "entered and left without a step");
 }
+
+/// The summary says where the save is, from the recorders: SAVING... until both copies are done, then SAVED; Page
+/// shows the totals and back, Lap the laps once the history has the ride, and Back returns to the card.
+#[test]
+fn summary_shows_the_save_and_pages() {
+    use crate::ui::card::Save;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Summary);
+    assert_eq!(app.save_now(), Save::Saving, "the recorders still hold the ride");
+    sim.save("summary_saving_dark");
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.save_now(), Save::Saved);
+    assert_eq!(app.save_drawn, Save::Saved, "the title line was drawn again when the state changed");
+    sim.save("summary_saved_dark");
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.summary_page, 1);
+    sim.save("summary_totals_dark");
+    app.theme = ui::theme::Theme::LIGHT;
+    app.repaint(&mut sim);
+    sim.save("summary_totals_light");
+    app.press(&mut sim, Press::Short(Key::Page));
+    sim.save("summary_saved_light");
+    app.theme = ui::theme::Theme::DARK;
+    app.repaint(&mut sim);
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.summary_page, 0);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    run(&mut sim, &mut app, 3000);
+    if app.screen() != Screen::Laps(0) {
+        // the history had not read the ride: Lap started that, and asks again
+        app.press(&mut sim, Press::Short(Key::Lap));
+        run(&mut sim, &mut app, 3000);
+    }
+    assert_eq!(app.screen(), Screen::Laps(0));
+    sim.save("summary_laps_dark");
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Summary);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main);
+}

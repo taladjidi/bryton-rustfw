@@ -169,6 +169,7 @@ impl App {
         self.settings_store.ended(self.ride.dist_m(), self.ride.timer_s());
         self.recorder(ev);
         self.plan.player = None;
+        (self.save_failed, self.summary_page, self.save_drawn) = (false, 0, ui::card::Save::Saving);
         (self.depth, self.screen) = (0, Screen::Summary);
     }
 
@@ -589,6 +590,7 @@ impl App {
             }
             recorder::Outcome::Kept(_) => {
                 self.settings_store.done(false);
+                self.save_failed = true;
                 // not in \Activities: left in \Rustfw\Rides as it was, or named there again (damaged, or the card
                 // kept failing)
                 self.alarm_notice("SAVE FAILED: KEPT IN RUSTFW/RIDES");
@@ -608,6 +610,7 @@ impl App {
             self.alarm_notice("NOT RECORDING: CARD"); // the ride started behind the last one's save, now stuck
         }
         self.step_full(b, local);
+        self.save_redraw(b);
         // a card error of either copy (GIVE UP SAVE's too) since the last pass: a FAT sector may have reached the
         // first copy only, so the next settings.bin or pages.bin write compares the copies first
         let errors = self.rec.clean.errors.saturating_add(self.rec.full.errors);

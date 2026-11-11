@@ -215,12 +215,17 @@ impl App {
         if !self.past.reading() {
             return;
         }
-        if !matches!(self.screen, Screen::Menu(Menu::History | Menu::Storage, _)) {
+        if !matches!(self.screen, Screen::Menu(Menu::History | Menu::Storage, _) | Screen::Summary) {
             return self.past.stop();
         }
         match self.past.step(&mut emmc::Volume(&mut self.emmc, b), Self::SCAN_IDLE) {
             Some(Ok(())) => {
-                self.open(Screen::Past);
+                if self.screen == Screen::Summary {
+                    // the ride just ended asked for its laps: the list, and Back returns to the card
+                    (self.summary_page, self.screen) = (crate::app::summary::PAGE_LAPS, Screen::Laps(0));
+                } else {
+                    self.open(Screen::Past);
+                }
                 self.show(b);
                 // the read is done: its banner would stay over the ride's date
                 if self.notes.ms.is_some() && self.notes.text.as_str() == "READING RIDE" {

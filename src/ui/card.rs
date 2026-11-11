@@ -34,6 +34,60 @@ pub struct Card {
     pub title: Line<20>,
     /// Label and value, in reading order (left column, then right, row by row).
     pub stats: [(&'static str, Line<10>); STATS],
+    /// The save state of the ride just ended, on the title line (None: a past ride's card).
+    pub save: Option<Save>,
+}
+
+/// Where the ride just ended is: read from the recorder's phase and outcome, never from a timer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Save {
+    /// Being written and read back (both copies).
+    Saving,
+    /// Both copies done.
+    Saved,
+    /// Not saved, and why.
+    Failed(&'static str),
+}
+
+/// The save state's box on the title line: the right end, the date moves left beside it.
+const SAVE_BOX: (u32, u32, u32) = (148, PAGE_Y + 8, W - 150);
+
+/// Draws the save state alone (the text clears its box): the only redraw when the state changes.
+pub fn draw_save(c: &mut impl Canvas, save: Save) {
+    let (text, fg) = match save {
+        Save::Saving => ("SAVING...", super::ACCENT),
+        Save::Saved => ("SAVED", super::GREEN),
+        Save::Failed(why) => (why, super::RED),
+    };
+    let style = Style { fg, scale: 1, ..LABEL };
+    text::draw_in(c, &style, SAVE_BOX.0, SAVE_BOX.1, SAVE_BOX.2, Align::Right, text);
+}
+
+/// The second card of the ride just ended: the totals the first leaves out, label and value per row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Totals {
+    /// Rows, top to bottom.
+    pub rows: [(&'static str, Line<10>); TOTALS],
+}
+
+/// Rows on the second card.
+pub const TOTALS: usize = 8;
+const TOTAL_H: u32 = 26;
+
+/// Draws the second card under the title: one column, the label small and grey, the value at 2x.
+pub fn draw_totals(c: &mut impl Canvas, t: &Totals, title: &Card) {
+    let grey = Style { fg: super::GREY, ..LABEL };
+    let small = Style { scale: 1, ..grey };
+    text::draw_in(c, &grey, 4, PAGE_Y + 2, 144, Align::Left, title.title.as_str());
+    if let Some(save) = title.save {
+        draw_save(c, save);
+    }
+    for (i, (label, value)) in t.rows.iter().enumerate() {
+        let y = MAP.1 + 4 + i as u32 * TOTAL_H;
+        text::draw_in(c, &small, 8, y + (LABEL.height() - small.height()) / 2, 110, Align::Left, label);
+        text::draw_in(c, &LABEL, W - 8 - 100, y, 100, Align::Right, value.as_str());
+        c.fill(8, y + TOTAL_H - 3, W - 16, 1, super::DARK);
+    }
 }
 
 /// A ride's numbers, as a card shows them (None: "--").
@@ -225,7 +279,7 @@ pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top
 
 impl Card {
     /// No title, no numbers.
-    pub const EMPTY: Card = Card { title: Line::new(), stats: [("", Line::new()); STATS] };
+    pub const EMPTY: Card = Card { title: Line::new(), stats: [("", Line::new()); STATS], save: None };
 
     /// The card of a ride with these numbers: "23 OCT 09:12", then time, distance, speed, ascent, NP, power,
     /// heart rate, TSS, work.
@@ -263,17 +317,17 @@ impl Card {
         let w = |v: Option<u16>| num(v.map(u32::from));
         card.stats = [
             ("TIME", time),
-            (if imperial { "MI" } else { "KM" }, km),
-            (if imperial { "MPH" } else { "KMH" }, speed),
+            (if imperial { "DIST MI" } else { "DIST KM" }, km),
+            (if imperial { "AVG MPH" } else { "AVG KM/H" }, speed),
             if imperial {
-                ("ASC", num(s.ascent_m.map(|m| crate::feet(m.min(i32::MAX as u32) as i32) as u32)))
+                ("ASC FT", num(s.ascent_m.map(|m| crate::feet(m.min(i32::MAX as u32) as i32) as u32)))
             } else {
-                ("ASC", num(s.ascent_m))
+                ("ASC M", num(s.ascent_m))
             },
-            ("NP", w(s.np)),
-            ("W", w(s.avg_power)),
-            ("HR", w(s.avg_hr)),
-            ("MAX", w(s.max_hr)),
+            ("NP W", w(s.np)),
+            ("AVG W", w(s.avg_power)),
+            ("AVG HR", w(s.avg_hr)),
+            ("MAX HR", w(s.max_hr)),
             ("TSS", num(s.tss)),
             ("KJ", num(s.kj)),
         ];
@@ -292,7 +346,12 @@ pub fn draw(
 ) {
     map::draw(c, map::area(MAP), track, view, base, None, false);
     let grey = Style { fg: super::GREY, ..LABEL };
-    text::draw_in(c, &grey, 0, PAGE_Y + 2, W, Align::Centre, card.title.as_str());
+    if let Some(save) = card.save {
+        text::draw_in(c, &grey, 4, PAGE_Y + 2, 144, Align::Left, card.title.as_str());
+        draw_save(c, save);
+    } else {
+        text::draw_in(c, &grey, 0, PAGE_Y + 2, W, Align::Centre, card.title.as_str());
+    }
     let (x, y, w, h) = ELEV;
     super::draw_graph(c, (x, y, w, h), elev);
     c.fill(x, y + h, w, 1, super::DARK);
@@ -301,7 +360,9 @@ pub fn draw(
         // 12 px between the columns: the left value's right edge is not the right label's left edge
         let (cx, cy) = (col * W / 2 + 2 + col * 4, STATS_Y + row * STAT_H);
         let cw = W / 2 - 8;
-        text::draw_in(c, &grey, cx, cy, cw - VALUE_W, Align::Left, label);
+        // labels at 1x: "AVG KM/H" is 48 px, the 2x one would not fit the 52 px beside the value
+        let small = Style { scale: 1, ..grey };
+        text::draw_in(c, &small, cx, cy + (LABEL.height() - small.height()) / 2, cw - VALUE_W, Align::Left, label);
         text::draw_in(c, &LABEL, cx + cw - VALUE_W, cy, VALUE_W, Align::Right, value.as_str());
     }
 }
@@ -318,8 +379,12 @@ mod tests {
         for v in ["109.3", "999.9", "9999", "1234.", "99:59", "187"] {
             assert!(LABEL.width(v) <= VALUE_W, "{v}");
         }
-        for l in ["TIME", "KM", "MI", "KMH", "MPH", "ASC", "NP", "W", "HR", "MAX", "TSS", "KJ"] {
-            assert!(LABEL.width(l) <= cw - VALUE_W, "{l}");
+        let small = Style { scale: 1, ..LABEL };
+        for l in [
+            "TIME", "DIST KM", "DIST MI", "AVG KM/H", "AVG MPH", "ASC M", "ASC FT", "NP W", "AVG W", "AVG HR",
+            "MAX HR", "TSS", "KJ",
+        ] {
+            assert!(small.width(l) <= cw - VALUE_W, "{l}");
         }
         let mut card = Card::default();
         card.title.push_str("30 OCT 10:17");

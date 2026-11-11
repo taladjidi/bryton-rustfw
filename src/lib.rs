@@ -351,6 +351,11 @@ pub struct App {
     new_ride: bool,
     /// The card's map and elevation profile as drawn (set when the card is shown).
     summary: Option<(map::Shown, GraphShown)>,
+    /// The summary's page ([`app::summary`]): the card, the totals, the laps opened from it; the save state last drawn
+    /// on it; a recorder said the ride was kept unsaved.
+    summary_page: u8,
+    save_drawn: ui::card::Save,
+    save_failed: bool,
     /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the one tone player
     /// (alerts, courses, workouts).
     alerts: alerts::Alerts,
@@ -573,6 +578,9 @@ impl App {
             alert: alerts::Queue::default(),
             tones: Tones::default(),
             summary: None,
+            summary_page: 0,
+            save_drawn: ui::card::Save::Saving,
+            save_failed: false,
             new_ride: false,
             drawn: Default::default(),
             ride: ride::Ride::new(),
