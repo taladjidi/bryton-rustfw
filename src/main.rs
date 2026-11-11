@@ -704,6 +704,9 @@ fn rtc_running() -> bool {
 /// seen on the unit.
 fn rtc_start() {
     modify(PWR_CR1, 0, 1 << 8); // DBP
+    // read back set before the first BDCR write, at most 100 ms (HAL_RCC_OscConfig, `RCC_DBP_TIMEOUT_VALUE`)
+    let t0 = cycles();
+    while rd(PWR_CR1) & (1 << 8) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 10 {}
     if rd(RCC_BDCR) & 1 == 0 {
         modify(RCC_BDCR, 0, 3 << 3); // LSEDRV highest, as stock
     }

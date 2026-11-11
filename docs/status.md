@@ -455,7 +455,7 @@ Details: timer stop_all and start events with timer_trigger auto at each stop an
 
 **Faults in a row with a ride open (2026-11-11, lib.rs `begin`)**
 
-Seen: simulator (`faults_in_a_row_keep_the_ride_on_the_card_unresumed`): from 2 faults in a row the ride is not resumed (RIDE NOT RESUMED), kept on the card and named as it is at the next ride's start; a boot that finds more than 3 in a row (a restart out of the park) clears the count.
+Seen: simulator (`faults_in_a_row_keep_the_ride_on_the_card_unresumed`): from 2 faults in a row the ride is not resumed (NOT RESUMED: NEXT START SAVES IT), kept on the card, and the next Start saves it as it is into `\Activities` (never resumes it, however recent: storage/recorder/mod.rs `decline`) and records the new ride under its own name; a boot that finds more than 3 in a row (a restart out of the park) clears the count. Not done: saving it by itself once the unit has run a minute (stock and the phone see it only after the next Start). That save runs the same code as the resume up to its checkpoint, and the decline is in RAM only, so a fault there would come back at every Start; a decline kept across resets (in the ride's backup register) comes first.
 
 On the unit, silent: after a four-button restart, a `tools/dev.py peek` of backup register 29 (RTC_BKP29R, 0x580040c4: 0xfa in the top byte after a fault): whether the restart keeps the backup registers (inferred: the backup domain survives a reset). The RCC_RSR read after one such restart (2026-10-25, bryton-S510-mods FLASHLOG #77: 0x01560000) has SFTRSTF (bit 24) set beside PINRSTF, so the reset flags cannot tell it from a fault's reset: the count past 3 is what does.
 

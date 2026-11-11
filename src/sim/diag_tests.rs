@@ -303,7 +303,8 @@ fn fault_log_waits_for_the_resumed_ride() {
 
 /// Faults in a row with a ride open: the resume is tried after one fault only, so a resume that faults every time
 /// cannot park the unit (hw.rs parks past 3 in a row). From 2 in a row the ride is not resumed but kept on the card,
-/// and said; the next ride's start names it as it is, nothing of it lost. A boot that finds more than 3 in a row
+/// and said; the next ride's start saves it as it is (never resumes it, however recent), nothing of it lost, and the
+/// new ride gets its own name. With no ride open, nothing is said. A boot that finds more than 3 in a row
 /// was parked and restarted from outside (the four-button restart: hw.rs never resets past 3), so it gets three
 /// fresh tries; its marker is kept for the log.
 #[test]
@@ -318,11 +319,16 @@ fn faults_in_a_row_keep_the_ride_on_the_card_unresumed() {
         let old = app.rec.clean.name();
         let word = (1..faults).fold(marker(0, Kind::Stack, 0), |w, _| marker(w, Kind::Stack, 0));
         assert_eq!(word & 0xff, faults);
-        let (mut sim, mut app) = faulted(core::mem::take(&mut sim.emmc.image), sim.backup, word);
+        // the clock goes on: the boot 4 minutes after the old ride's last record, well within RESUME_S
+        let (img, backup) = (core::mem::take(&mut sim.emmc.image), sim.backup);
+        let mut sim = Sim::new(9, 5, 0);
+        (sim.emmc.image, sim.backup) = (img, backup);
+        sim.backup[FAULT_BKP] = word;
+        let mut app = App::start(&mut sim, None);
         assert_eq!(sim.backup[FAULT_BKP], word & !0xff | count_after, "{faults} in a row");
         run(&mut sim, &mut app, 5000);
         let said = |app: &App, s: &str| app.notes.list.iter().any(|n| n.as_str().ends_with(s));
-        assert!(said(&app, "RIDE NOT RESUMED") && !said(&app, " RIDE RESUMED"), "{faults} in a row");
+        assert!(said(&app, NOT_RESUMED) && !said(&app, " RIDE RESUMED"), "{faults} in a row");
         assert_eq!(app.ride.state(), ride::State::Idle);
         let times = |sim: &Sim| {
             let dir = super::recorder_tests::places(sim, old)[0].first().copied().expect("the ride on the card");
@@ -337,12 +343,21 @@ fn faults_in_a_row_keep_the_ride_on_the_card_unresumed() {
         app.press(&mut sim, Press::Short(Key::Start));
         save_ride(&mut sim, &mut app);
         run(&mut sim, &mut app, 10_000);
+        assert!(!said(&app, " RIDE RESUMED"), "{faults} in a row: resumed at the Start");
         assert!(app.ride_settled() && app.rec.clean.name() != old);
         assert_eq!(times(&sim), kept, "{faults} in a row");
+        assert_eq!(super::recorder_tests::places(&sim, old)[0], ["Activities"], "{faults} in a row");
         assert_eq!(fsck(&sim.emmc.image), Ok(0));
     }
-    // one fault: resumed as before (fault_log_waits_for_the_resumed_ride)
+    // one fault: resumed as before (fault_log_waits_for_the_resumed_ride). No ride open: nothing said
+    let (mut sim, mut app) =
+        faulted(crate::fat::tests::image(), [0; 32], marker(marker(0, Kind::Panic, 1), Kind::Panic, 1));
+    run(&mut sim, &mut app, 5000);
+    assert!(!app.notes.list.iter().any(|n| n.as_str().ends_with(NOT_RESUMED)));
 }
+
+/// What the unit says of a ride it did not resume after faults in a row.
+const NOT_RESUMED: &str = "NOT RESUMED: NEXT START SAVES IT";
 
 /// A log of `size` bytes of `x` lines on the test card.
 fn with_log(size: u32) -> Vec<u8> {

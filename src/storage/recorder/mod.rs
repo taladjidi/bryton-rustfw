@@ -475,6 +475,8 @@ pub struct Recorder {
     fails: u32,
     /// The boot's marker said a ride was open: a ride left unfinished is resumed whatever its age ([`RESUME_S`]).
     resume_old: bool,
+    /// [`Recorder::decline`]: the ride left open is never resumed, whatever its age or the marker.
+    declined: bool,
     /// The ride ended is discarded: saved into `\Rustfw\Discarded` (module doc).
     discard: bool,
     /// The full copy's RR intervals not yet in an `hrv` message, oldest first ([`Recorder::beat`]).
@@ -589,6 +591,7 @@ impl Recorder {
             wait: 0,
             fails: 0,
             resume_old: false,
+            declined: false,
             discard: false,
             beats: [0; BEATS_QUEUED],
             beats_n: 0,
@@ -718,6 +721,13 @@ impl Recorder {
         if self.room() < LOW + Writer::END_BYTES {
             self.want = true;
         }
+    }
+
+    /// The ride left open is not to be resumed (the boot's faults in a row: the resume may be what faults): the next
+    /// [`Recorder::start`] saves it as it is, whatever its age and `resume_old`, and records the new ride under its
+    /// own name. Kept until that save is done or given up.
+    pub fn decline(&mut self) {
+        self.declined = true;
     }
 
     /// A new ride at FIT time `time`, named after its local start: the file's first bytes, in RAM (the file is
@@ -1206,10 +1216,11 @@ impl Recorder {
             if let Some(r) = best.filter(|r| r.phase != Phase::Done && !own(r)) {
                 // what the last run left unfinished comes first (the boot did not finish it: its marker was lost, or
                 // the card failed then): one writer, one ride. A ride in progress goes on in place of this one if
-                // the marker said so or it stopped a moment ago; else it is saved as it is
+                // the marker said so or it stopped a moment ago, unless declined ([`Recorder::decline`]); else it is
+                // saved as it is
                 let last = Writer::from_record(&r.fit).map_or(0, |w| w.last_time());
                 let resume = match self.kind {
-                    Kind::Clean => self.resume_old || self.last_rec.wrapping_sub(last) <= RESUME_S,
+                    Kind::Clean => !self.declined && (self.resume_old || self.last_rec.wrapping_sub(last) <= RESUME_S),
                     // the clean copy decided first ([`Recorder::io_after`]): its name is the ride left open if it
                     // carries that one on
                     Kind::Full => r.name == self.name,
@@ -1244,6 +1255,7 @@ impl Recorder {
                     Err(_) => told = Outcome::Kept(r.name),
                 }
                 (self.seq, self.errors) = (self.seq.max(old.seq), self.errors.max(old.errors));
+                self.declined = false; // that ride saved or kept as it is: a later one left open is resumed again
             }
             if self.file.is_none() {
                 // a name free in this copy's folder and in both saved and both discarded folders, so that the two

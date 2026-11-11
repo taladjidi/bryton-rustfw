@@ -641,8 +641,9 @@ impl App {
             b.backup_write(FAULT_BKP, fault & !0xff);
         }
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame); after
-        // 2 faults in a row the resume may be what faults, so it is not tried: the ride stays on the card, named as it
-        // is at the next ride's start (storage/recorder/mod.rs `io`), and the unit is not parked
+        // 2 faults in a row the resume may be what faults, so it is not tried, at the boot nor at the next Start: the
+        // ride stays on the card, saved as it is at the next ride's start (storage/recorder/mod.rs `decline`), and
+        // the unit is not parked
         self.card_writable = b.emmc_writable();
         self.awake_at = self.prof.clock.us(b);
         let marker = b.backup_read(RIDE_BKP) == RIDE_OPEN;
@@ -650,7 +651,10 @@ impl App {
         let open = self.card_writable && (marker || probe != Some(false));
         self.rec.resume_if(open && faults < 2);
         if open && faults >= 2 {
-            self.notice("RIDE NOT RESUMED");
+            self.rec.clean.decline();
+            if marker || probe == Some(true) {
+                self.notice("NOT RESUMED: NEXT START SAVES IT"); // known open, not an unread record
+            }
         }
         // for stock's import: a ride known open (the marker, or its record read so), none, or unknown (the record
         // not read: the import waits, `first_import`)
