@@ -2106,6 +2106,7 @@ impl bryton_rustfw::LoopBoard for S510 {
         low_power(ms, mode)
     }
     const RIDE_STOP_BUILT: bool = POWER_STEPS & RIDE_STOP != 0;
+    const POWER_STEPS: u32 = POWER_STEPS;
     fn idle_stop(&mut self, ms: u32, ride: bool) -> (u32, u32) {
         idle_stop(ms, self.dma.as_ref().is_some_and(|d| d.busy()), ride, self.marks)
     }

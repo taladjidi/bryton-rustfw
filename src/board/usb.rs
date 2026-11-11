@@ -396,7 +396,8 @@ impl UsbLink for Link {
     /// its protocol.
     fn poll(&mut self, s: &mut Session, app: &mut App, board: &mut impl Board, stats: Stats) -> Effect {
         let mut effect = Effect::None;
-        if self.dev.poll(&mut [&mut self.cdc, &mut self.msc]) {
+        // bytes a command with an effect left in the session run without waiting for a USB event
+        if self.dev.poll(&mut [&mut self.cdc, &mut self.msc]) || s.pending() {
             let mut buf = [0u8; 512];
             if core::mem::take(&mut self.msc.reset) {
                 app.drive_reset();
@@ -416,6 +417,10 @@ impl UsbLink for Link {
                 self.worked = true;
             }
             while effect == Effect::None {
+                if s.pending() {
+                    effect = s.feed(&[], app, stats, self);
+                    continue;
+                }
                 match self.cdc.read_packet(&mut buf) {
                     Ok(n) if n > 0 => {
                         self.dead = false;

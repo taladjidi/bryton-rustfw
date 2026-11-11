@@ -1,15 +1,17 @@
 //! The USB dev link protocol, firmware side, free of any transport: bytes from the computer go into
 //! [`Session::feed`], answers go out through [`Host::send`]. `tools/dev.py` is the other end.
 //!
-//! Commands, one per line:
+//! Commands, one per line, several to a packet if need be: the bytes after a command with an effect wait in the
+//! session ([`Session::pending`]) and run on the next poll.
 //! - `where`: `where TITLE|row/rows|LABEL` (row from 0) in a menu, else `where OVERVIEW`, `RIDE n` or
 //!   `SCREEN name`; read-only (tools/walk.py moves the cursor by name).
-//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending, card writes yes|no, ride stop built yes|no, usb recoveries <n>` (CPU awake in the app's work, last second).
+//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille ... auto off held <n>, ride idle|running|paused|ending, card writes yes|no, ride stop built yes|no, power steps 0x<8 hex> (main.rs `POWER_STEPS`), usb recoveries <n>` (CPU awake in the app's work, last second).
 //! - `bat`: the battery history, one line a minute, oldest first: millivolts, ` c` while charging; then `end`.
 //! - `shot`: `shot 240 320`, then 240 x 320 RGB565 pixels, big endian, row by row (what the app drew).
 //! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (tools/pack.py, without its
 //!   trailer) and the firmware stores them in SDRAM; `sum` is their additive sum. Answer `ok` and the firmware
-//!   runs the image ([`Effect::Run`]), or `err <reason>`.
+//!   runs the image ([`Effect::Run`]), or `err <reason>`. `err ride open` when a ride started during the upload: a
+//!   run would take it back to its last checkpoint.
 //! - `key <page|lap|start|back> [long]`: `ok`, then the app acts as if the key was pressed, or held
 //!   ([`Effect::Key`]), to script tests on the unit.
 //! - `emmc`: identifies the eMMC if needed ([`Effect::Emmc`]) and answers `emmc <SEC_COUNT> <B> <OS start> <rel>`, four
@@ -33,8 +35,9 @@
 //!   the time `system_off` took, `fresh` when the chip was up and asked at once (`reset`: reset first, it was not), each
 //!   cts `1` when the chip's RTS was low (it takes bytes), `0` released (BOARD.md 11 "Power off").
 //! - `bench stall <seconds>` (1 to 120; test only, never on a real ride): sleeps that long in one go, WFI, with nothing else run ([`Effect::BenchStall`],
-//!   `bench_stall`), and answers `stall <ms>` (the sleep as the board timed it). Allowed while a ride is open: the
-//!   recorder must take the gap on its RTC seconds (the stall path of `catch_up_seconds`, docs/status.md).
+//!   `bench_stall`), and answers `stall <ms>` (the sleep as the board timed it). Allowed while a ride is open, up to
+//!   [`RIDE_STALL_MAX_S`] (`err ride open` above): the recorder must take the gap on its RTC seconds (the stall path
+//!   of `catch_up_seconds`, docs/status.md), and a longer one would leave seconds without records.
 //! - `bench srefresh <ms>` (1 to 30000; no ride open): the SDRAM in self-refresh around one CSleep WFI of `ms`, ended by
 //!   the RTC wake-up timer, the image's CRC compared before and after ([`Effect::BenchSrefresh`], main.rs `low_power`,
 //!   docs/power.md "Stop mode" step 1); answers [`stopbench::send`]'s line, `srefresh ok ...` when all went right.
@@ -52,6 +55,8 @@
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
 //!   only, through the firmware's own FAT reader (storage/fat.rs): `tools/dev.py get` copies a file off the unit.
+//!   `ls`, `get` and `emmc` answer `err ride open` while a ride runs or waits to be saved: a card read in the pass
+//!   stalls the recorder, and a read error makes the card layer forget the card.
 //! - `find <lba> <count> <lo> <hi>`: reads `count` sectors (at most 65536) from `lba` ([`Effect::Find`]) and answers a
 //!   line `<lba hex> <hits hex>` for each sector holding 8 or more little-endian u32 values in `lo..=hi` at any byte
 //!   offset (FIT timestamps of a time window: carving a lost ride's records from free space), at most 512 lines,
@@ -226,6 +231,8 @@ pub struct Stats {
     pub stops: [u32; 6],
     /// The build has the ride's Stop (main.rs `POWER_STEPS` bit 6; off by default in the card-writing build).
     pub ride_stop: bool,
+    /// The build's main.rs `POWER_STEPS`, so a variant build shows in `info`.
+    pub power_steps: u32,
     /// Since boot, the soft reconnects the loop made on its own after a Stop with the cable in or a long stall left the
     /// link not up (main_loop.rs `recover`); the bench's quiet drops hide the rest.
     pub usb_recoveries: u32,
@@ -409,6 +416,13 @@ pub enum Effect {
     StackFault,
 }
 
+/// The longest `bench stall` while a ride is open, s: the recorder's catch-up writes a record for each second of a
+/// gap up to this long, so the test loses nothing (the owner's cap, 2026-11-11).
+pub const RIDE_STALL_MAX_S: u32 = 5;
+
+/// The bytes a packet may hold (a high-speed bulk packet): what [`Session`] keeps after a command with an effect.
+const REST: usize = 512;
+
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
 const HEAD: usize = 0x9c;
 
@@ -435,6 +449,9 @@ pub struct Session {
     path_len: usize,
     /// The line in progress passed the buffer: it is answered `err line too long`, not run cut.
     overflow: bool,
+    /// The bytes after a command with an effect, fed first on the next call ([`Session::pending`]).
+    rest: [u8; REST],
+    rest_len: usize,
 }
 
 impl Default for Session {
@@ -446,7 +463,16 @@ impl Default for Session {
 impl Session {
     /// Waiting for a command.
     pub const fn new() -> Self {
-        Session { line: [0; 64], len: 0, load: None, path: [0; 64], path_len: 0, overflow: false }
+        Session {
+            line: [0; 64],
+            len: 0,
+            load: None,
+            path: [0; 64],
+            path_len: 0,
+            overflow: false,
+            rest: [0; REST],
+            rest_len: 0,
+        }
     }
 
     /// The path of the last `ls` or `get`.
@@ -454,8 +480,15 @@ impl Session {
         core::str::from_utf8(self.path.get(..self.path_len).unwrap_or(&[])).unwrap_or("")
     }
 
-    /// Takes bytes from the computer; `stats` is for `info`.
-    pub fn feed(&mut self, mut data: &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
+    /// Bytes a command with an effect left unread: the link calls [`Session::feed`] (with no new bytes) until none
+    /// are, before it reads the next packet.
+    pub fn pending(&self) -> bool {
+        self.rest_len > 0
+    }
+
+    /// Takes bytes from the computer; `stats` is for `info`. Returns at the first command with an effect, the bytes
+    /// after it kept for the next call ([`Session::pending`]).
+    pub fn feed(&mut self, data: &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
         // the clock is the main loop's: `load` sees a gap between packets, not the time of the connection
         if self.load.take_if(|l| stats.uptime_ms.wrapping_sub(l.seen_ms) > LOAD_STALL_MS).is_some() {
             (self.len, self.overflow) = (0, false);
@@ -464,10 +497,35 @@ impl Session {
         if let Some(l) = &mut self.load {
             l.seen_ms = stats.uptime_ms;
         }
+        let mut held = [0u8; REST];
+        let n = core::mem::take(&mut self.rest_len);
+        held.iter_mut().zip(&self.rest).take(n).for_each(|(o, &b)| *o = b);
+        let mut first = held.get(..n).unwrap_or(&[]);
+        let mut data = data;
+        let mut effect = self.eat(&mut first, app, stats, h);
+        if effect == Effect::None {
+            effect = self.eat(&mut data, app, stats, h);
+        }
+        for left in [first, data] {
+            let end = self.rest_len + left.len();
+            match self.rest.get_mut(self.rest_len..end) {
+                Some(slot) => {
+                    slot.copy_from_slice(left);
+                    self.rest_len = end;
+                }
+                // only a caller that feeds more while bytes are pending gets here (the link never does)
+                None => h.send(b"err input lost\n"),
+            }
+        }
+        effect
+    }
+
+    /// Runs `data` up to the first command with an effect; `data` is left at the bytes after it.
+    fn eat(&mut self, data: &mut &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
         while !data.is_empty() {
             if let Some(l) = &mut self.load {
                 let n = data.len().min((l.size - l.got) as usize);
-                let (chunk, rest) = data.split_at_checked(n).unwrap_or((data, &[]));
+                let (chunk, rest) = data.split_at_checked(n).unwrap_or((*data, &[]));
                 h.stage(l.got, chunk);
                 for (i, &b) in chunk.iter().enumerate() {
                     if let Some(slot) = l.head.get_mut(l.got as usize + i) {
@@ -476,7 +534,7 @@ impl Session {
                     l.acc = l.acc.wrapping_add(u32::from(b));
                 }
                 l.got += n as u32;
-                data = rest;
+                *data = rest;
                 if let Some(l) = self.load.take_if(|l| l.got == l.size) {
                     match check_image(&l.head, l.size) {
                         _ if l.acc != l.sum => h.send(b"err checksum\n"),
@@ -485,6 +543,9 @@ impl Session {
                             h.send(why.as_bytes());
                             h.send(b"\n");
                         }
+                        // `load` was taken with no ride: one started during the upload stays (a run would take it
+                        // back to its last checkpoint)
+                        Ok(()) if !app.ride_settled() => h.send(b"err ride open\n"),
                         Ok(()) => {
                             h.send(b"ok\n");
                             return Effect::Run(l.size);
@@ -494,7 +555,7 @@ impl Session {
                 continue;
             }
             let Some((&b, rest)) = data.split_first() else { break };
-            data = rest;
+            *data = rest;
             if b == b'\n' || b == b'\r' {
                 let effect = if core::mem::take(&mut self.overflow) {
                     h.send(b"err line too long\n");
@@ -523,12 +584,16 @@ impl Session {
             None => {}
             // a RAM run mid-ride loses up to 60 s of it; the card commands stall the loop (and the recorder) for
             // seconds; a poke can hit the card's controller: all wait for a settled ride, as wtest does
-            // the one bench a ride allows: the stall is the test of the recorder's gap, and it writes nothing
+            // the one bench a ride allows: the stall is the test of the recorder's gap, and it writes nothing; up to
+            // RIDE_STALL_MAX_S, which the recorder's catch-up fills with records
             Some(b"bench") if line.starts_with(b"bench stall ") => match words.nth(1).and_then(parse) {
+                Some(secs @ 1..=120) if secs > RIDE_STALL_MAX_S && !app.ride_settled() => h.send(b"err ride open\n"),
                 Some(secs @ 1..=120) => return Effect::BenchStall(secs),
                 _ => h.send(b"err usage: bench stall <1..120>\n"),
             },
-            Some(b"load" | b"reset" | b"find" | b"bench" | b"sector" | b"poke") if !app.ride_settled() => {
+            Some(b"load" | b"reset" | b"find" | b"bench" | b"sector" | b"poke" | b"ls" | b"get" | b"emmc")
+                if !app.ride_settled() =>
+            {
                 h.send(b"err ride open\n");
             }
             Some(b"info") => {
@@ -579,6 +644,8 @@ impl Session {
                 h.send(b", card writes ");
                 h.send(app.card_writes_word());
                 h.send(if stats.ride_stop { b", ride stop built yes" } else { b", ride stop built no" });
+                h.send(b", power steps 0x");
+                h.send(&hex(stats.power_steps)[..8]);
                 h.send(b", usb recoveries ");
                 h.send(decimal(u64::from(stats.usb_recoveries), &mut [0; 20]));
                 let (mtu, ext, l) = app.phone_link();

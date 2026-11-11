@@ -17,6 +17,9 @@
   depends on the rate. 0 or unset: off. An experiment; never install it.
 - `DIAG_STOP=N cargo build --release` (src/main.rs `STOP`): stops at boot stage N, to see where a boot stops
   (docs/devloop.md, layer 6). Diagnostic only.
+- `tools/pack.py` refuses to pack with `EMMC_WRITE=1` and `DIAG_STOP`, `USB_HS` or `USB_PACE_US` in the environment
+  (`PACK_VARIANT=1` packs such a variant on purpose), and prints a `POWER_STEPS` it sees with `EMMC_WRITE=1`;
+  `tools/dev.py info` shows the running build's `power steps`.
 
 rustup installs the pinned toolchain and target on first use. `cargo test-host` alone runs the tests and draws
 the screens through a simulated panel into `target/sim/*.bmp`. `tools/pack.py` re-checks what the stock updater checks

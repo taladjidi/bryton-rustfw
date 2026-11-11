@@ -197,7 +197,7 @@ seconds, and the run ends with all of them and a total:
   tests wrote: `fsck_msdos -n` / `fsck.vfat -n` (an independent FAT checker) on the volumes in `target/fat/*.img` (`*_lost.img`: a cut that leaves a lost chain on purpose, orphan clusters allowed and nothing else),
   `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python; on main or `--full` they and the fsck tool are required) and `tools/walk.py selftest`;
-- **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `sync.py`, `assist.py`, `segments.py`,
+- **lane P, the Python self-tests:** `lint.py`, `numbers.py`, `dev.py`, `pack.py`, `sync.py`, `assist.py`, `segments.py`,
   `s810_probe.py`, `route_pack.py`, `ign_pack.py`, `review.py`, `map_pack.py`, `iaprecover.py`, `fetch_firmware.py` and
   `theme.py selftest`, and
   `tools/font.py` regenerating `src/ui/fonts.rs` into a temporary file with `cmp` failing on a diff (skipped without PIL);

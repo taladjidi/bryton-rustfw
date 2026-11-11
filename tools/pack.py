@@ -8,6 +8,12 @@ The stock updater (BOARD.md 10) takes IMG.bin as a raw image, skipping gunzip, w
 4 bytes to be the additive sum (mod 2^32, little endian) of all the other bytes. It writes the file to the eMMC OS
 area and reads it back to check that sum; the bootloader then copies 6 MB of that area to SDRAM 0xd0000000 and
 jumps to the reset vector, without any check. Every rule is re-checked here before writing.
+
+A ride build (EMMC_WRITE=1 in the environment) is refused with a diagnostic build flag also set (DIAG_STOP stops the
+boot and waits for a cable; USB_HS and USB_PACE_US are USB experiments, docs/install.md "never install"), unless
+PACK_VARIANT=1 says it is meant; POWER_STEPS (a planned variant, docs/status.md) is printed, never silent.
+
+  python3 tools/pack.py selftest
 """
 import os, struct, sys
 
@@ -16,6 +22,18 @@ ELF = os.path.join(ROOT, 'target', 'thumbv7em-none-eabihf', 'release', 'bryton-r
 OUT = os.path.join(ROOT, 'out')
 BASE, SPAN = 0xd0000000, 0x00100000           # load address, and the 1 MB image (link.x SDRAM region)
 MIN_SIZE = 0x100001
+NEVER_RIDE = ('DIAG_STOP', 'USB_HS', 'USB_PACE_US')   # set at all (even empty or 0): the build is a variant
+
+
+def ride_flags(env):
+    """(refused, noted): the diagnostic flags a ride build (EMMC_WRITE=1) carries; both empty for any other build."""
+    try:
+        ride = int(env.get('EMMC_WRITE', '0'), 0) == 1
+    except ValueError:
+        ride = False
+    if not ride:
+        return [], []
+    return [v for v in NEVER_RIDE if v in env], [v for v in ('POWER_STEPS',) if v in env]
 
 
 def load_segments(path):
@@ -34,6 +52,12 @@ def load_segments(path):
 
 
 def main():
+    refused, noted = ride_flags(os.environ)
+    if refused and os.environ.get('PACK_VARIANT') != '1':
+        sys.exit(f'pack.py: a ride build (EMMC_WRITE=1) with {" ".join(refused)} set: it must not be installed. '
+                 'Unset them, or PACK_VARIANT=1 to pack this variant on purpose')
+    for v in refused + noted:
+        print(f'pack.py: ride build variant: {v}={os.environ[v]}')
     raw = bytearray(SPAN)
     end = 0
     for paddr, data in load_segments(ELF):
@@ -66,5 +90,16 @@ def main():
           f'IMG.bin {len(img)} B, sum {img[-4:].hex()} -> {OUT}')
 
 
+def selftest():
+    assert ride_flags({}) == ([], [])
+    assert ride_flags({'DIAG_STOP': '3', 'USB_HS': '1', 'POWER_STEPS': '0'}) == ([], [])   # not a ride build
+    assert ride_flags({'EMMC_WRITE': '0', 'DIAG_STOP': '3'}) == ([], [])
+    assert ride_flags({'EMMC_WRITE': 'x', 'DIAG_STOP': '3'}) == ([], [])
+    assert ride_flags({'EMMC_WRITE': '1'}) == ([], [])
+    assert ride_flags({'EMMC_WRITE': '1', 'DIAG_STOP': '', 'USB_PACE_US': '0'}) == (['DIAG_STOP', 'USB_PACE_US'], [])
+    assert ride_flags({'EMMC_WRITE': '0x1', 'USB_HS': '1', 'POWER_STEPS': '127'}) == (['USB_HS'], ['POWER_STEPS'])
+    print('pack.py selftest: ok')
+
+
 if __name__ == '__main__':
-    main()
+    selftest() if sys.argv[1:] == ['selftest'] else main()
