@@ -833,6 +833,10 @@ impl App {
                 return self.select_row(b, menu, row, armed.filter(|&a| a == (menu, row)));
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
+            // Back on a sensor row that asks "OK?" refuses the device (the search stops); else it leaves
+            (Screen::Menu(menu, sel), Input::Back) if self.cancel_found(b, menu, sel) => {
+                return self.update_menu_rows(b, menu, sel);
+            }
             (Screen::Menu(..), Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
             _ => return,
         }

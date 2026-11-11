@@ -1113,14 +1113,15 @@ impl Nearby {
     pub fn add(&mut self, r: &AdvReport) -> bool {
         let known = self.devices.iter().take(self.count).position(|d| d.addr == r.addr);
         // full: a device louder than the weakest one takes its place (addresses that change fill the list at home)
-        let weakest = (0..self.count).min_by_key(|&i| self.devices.get(i).map_or(0, |d| d.rssi));
         let slot = match known {
             Some(i) => Some(i),
             None if self.count < Self::MAX => {
                 self.count += 1;
                 Some(self.count - 1)
             }
-            None => weakest.filter(|&i| self.devices.get(i).is_some_and(|d| d.rssi < r.rssi)),
+            None => (0..self.count)
+                .min_by_key(|&i| self.devices.get(i).map_or(0, |d| d.rssi))
+                .filter(|&i| self.devices.get(i).is_some_and(|d| d.rssi < r.rssi)),
         };
         let new = known.is_none() && slot.is_some();
         let Some(d) = slot.and_then(|i| self.devices.get_mut(i)) else {

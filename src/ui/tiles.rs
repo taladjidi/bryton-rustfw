@@ -301,7 +301,10 @@ impl Basemap {
         }
         self.stats = Stats::default();
         self.map = match self.draw(d, area, view, origin) {
-            Ok(drawn) => drawn,
+            Ok(drawn) => {
+                self.io_errors = 0;
+                drawn
+            }
             Err(e) => {
                 // the card or the volume, three reads in a row: not again this power-up; a damaged file is not that
                 self.io_errors = self.io_errors.saturating_add(u8::from(e == fat::Error::Io));
@@ -309,9 +312,6 @@ impl Basemap {
                 false
             }
         };
-        if self.map {
-            self.io_errors = 0;
-        }
         self.drawn = Some((area, view, origin));
     }
 

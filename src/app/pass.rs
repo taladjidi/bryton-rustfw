@@ -59,10 +59,10 @@ impl App {
             {
                 *self.radio.found.at_mut(kind) = Some(id);
                 let mut l = Line::<40>::new();
-                l.push_str(kind.name());
+                l.push_str(kind.short());
                 l.push_str(" ");
                 l.push_u32(u32::from(id.device));
-                l.push_str(" FOUND\nSTART ON ITS ROW");
+                l.push_str(" FOUND\nSTART: PAIR"); // the longest, SPD+CAD 65535, with the notes' time: 37 of 40
                 self.notice(l.as_str());
             }
         }

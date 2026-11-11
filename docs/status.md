@@ -1233,6 +1233,11 @@ Seen: simulator. On the unit: the 44 px touch box with a glove, the gauge's zone
 **The flattened menus and the quick panel (f935c0f), and refactors B1 to B3**
 Only booted and profiled. Seen 2026-11-01 (main 51ad015, `tools/walk.py --build out/IMG.bin --rides`, RAM run): 132 paths, 53 walked (the menus, the sub-struct screens and the four ride pages), 79 refused by the walk's own rules (62 imperial, 5 rows not on the unit, 4 KEYS, 4 rows that act, 2 INDOOR, 2 NEARBY), 0 title drift, 0 failed, no reset or fault, the ride idle at the end, 1.04 % awake idle on the overview, 1 489 s.
 
+**Touch chip not ready at boot (audit D9)**
+The retry (`touch_health`) runs from the touch poll, which reads only after an INT or while a finger is down: a chip that
+never raises INT after a failed init is never retried, and the first tap after it is ready is used up by the init. Seen
+in the simulator only; on the unit: boot with the chip slow (or its reset held) and tap.
+
 Still to see: the imperial pages (a human check).
 
 ### Seen on the unit

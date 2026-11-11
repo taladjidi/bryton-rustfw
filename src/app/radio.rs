@@ -107,6 +107,7 @@ impl App {
         *self.radio.misses.at_mut(kind) = 0; // the rider's action: from the first rest again
         *self.radio.sensors.at_mut(kind) = Sensor::Off;
         *self.radio.heard_ms.at_mut(kind) = u32::MAX;
+        *self.radio.found.at_mut(kind) = None; // a device a search heard before is not this search's
         self.decoders.forget_ids(kind); // the percent and maker of the sensor it was
         let id = match want {
             Sensor::Off => None,
@@ -208,7 +209,10 @@ impl App {
         {
             if self.radio.sensors.at(kind) == Sensor::Search {
                 // a wildcard search hears any sensor near: only its number is taken, to ask the rider
-                self.radio.ask |= 1 << ch;
+                // (not while one waits for the rider: each ask is a blocking command to the chip)
+                if self.radio.found.at(kind).is_none() {
+                    self.radio.ask |= 1 << ch;
+                }
                 return false;
             }
             if self.radio.heard_ms.at(kind) >= sensors::STALE_MS {

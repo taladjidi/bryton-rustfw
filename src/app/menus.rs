@@ -1100,7 +1100,9 @@ impl App {
         }
         if s.number().is_some() {
             self.menu.editing = !self.menu.editing;
-            self.menu.max_hr_start = self.settings.max_hr;
+            if self.menu.editing {
+                self.menu.max_hr_start = self.settings.max_hr;
+            }
             if self.menu.editing && s == menu::Setting::Altitude {
                 match self.screen {
                     Screen::Menu(Menu::Place(k), _) => self.place_alt_edit_start(k), // the place's altitude
@@ -1135,6 +1137,14 @@ impl App {
         self.plan.top = None; // the next-step strip comes back at the next pass
         ui::draw_strip(&mut Panel(b, (0, ui::H), self.look()), &self.strip);
         self.show(b);
+    }
+
+    /// Back on a sensor row whose search heard a device: refused, the search stops. False: nothing to refuse.
+    pub(crate) fn cancel_found(&mut self, b: &mut impl Board, menu: Menu, sel: usize) -> bool {
+        let Some(menu::Row::Sensor(k)) = self.row(menu, sel) else { return false };
+        let Some(&kind) = Kind::ALL.get(k).filter(|&&kind| self.radio.found.at(kind).is_some()) else { return false };
+        self.set_sensor(b, kind, Sensor::Off);
+        true
     }
 
     /// Select on an ANT+ sensor: pair, stop, search again, forget.
