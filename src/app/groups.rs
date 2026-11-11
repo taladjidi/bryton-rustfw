@@ -666,6 +666,32 @@ mod tests {
     }
 
     #[test]
+    fn a_limit_alert_and_a_workout_step_in_one_second_both_show() {
+        for first_step in [true, false] {
+            let mut n = Notices::new();
+            let (step, alert) = (("STEP 2", Banner::Ride), ("POWER HIGH", Banner::Warn));
+            for (t, k) in if first_step { [step, alert] } else { [alert, step] } {
+                n.say(t, k);
+            }
+            assert_eq!(n.text.as_str(), "POWER HIGH", "the alert is up");
+            n.ms = None;
+            n.show_waiting();
+            assert_eq!(n.text.as_str(), "STEP 2", "and the step after it");
+        }
+    }
+
+    #[test]
+    fn auto_paused_waits_behind_a_lap_summary() {
+        let mut n = Notices::new();
+        n.say("LAP 1", Banner::Summary);
+        n.say("AUTO PAUSED", Banner::Auto);
+        assert_eq!(n.text.as_str(), "LAP 1", "the summary stays");
+        n.ms = None;
+        n.show_waiting();
+        assert_eq!(n.text.as_str(), "AUTO PAUSED");
+    }
+
+    #[test]
     fn notices_come_newest_first() {
         let mut n = Notices::new();
         for t in ["a", "b", "c"] {

@@ -185,7 +185,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   aerobic threshold of patch P9; only with the strap's beats). A limit alerts once its value has stayed past it for
   5 s (not on one sample), re-arms once the value is back inside by 5 % of the limit (at least 1), and says at most
   once a minute; no reading from a sensor, no alert; only while the ride runs (not paused, not outside a ride).
-  Each is a red banner ("POWER HIGH", "POWER LOW", "CADENCE HIGH", "CADENCE UNDER", "SPEED HIGH", "SPEED LOW",
+  Each is an orange banner, ranked over what the ride says (only HEART RATE HIGH is a red alarm) ("POWER HIGH", "POWER LOW", "CADENCE HIGH", "CADENCE UNDER", "SPEED HIGH", "SPEED LOW",
   "HEART RATE LOW", "DFA A1 LOW") with the same three beeps and queue. Reminders by distance (every N km, 1 to 99), kcal and kJ
   (every N, steps of 10) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
   step (the first second of a ride, and a step set mid-ride, do not fire). Speed limits are in km/h whatever the units.
@@ -214,7 +214,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
-  switches off). No time in front: the strip shows it. Banners have a rank: an alarm, then a turn now, then what
+  switches off). No time in front: the strip shows it. Banners have a rank: an alarm, then a turn now, then the limit alerts, then what
   the ride says (a workout step, a reminder, a climb), then a turn ahead, then the rest. A lower one never covers
   a higher one; the other waits (one at most, the higher kept) and shows next, so an alarm and a workout step
   said in the same second both show. A newer one of the same rank replaces the one up, which does not come back,
@@ -321,13 +321,15 @@ used: GNSS GPS-only (cyclic tracking draws the same 5 mA with any set, docs/powe
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | down on the overview before a ride: the quick panel; down on a ride page: the media remote; up on a ride page: MORE, then the overview | the next / previous screen of rows (up closes the quick panel) | one step up / down |
 | hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
-| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
+| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records; the clock of the status strip (its cell with a margin, 24 px high, over the strip only): the menu, also while a ride records; a tap that only clears a banner or wakes the screen does not open it | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
 Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs). **Touch safety:** while a ride
-records (not paused), a tap or a hold on a page does nothing but the map's buttons: no menu, no graph changed (a wet
-glove, rain); swipes still turn pages and the keys do everything. TOUCH in SETTINGS > DISPLAY (ON / OFF) switches gestures off
+records (not paused), a tap or a hold on a page does nothing, except the map's buttons and the clock of the status strip
+(the menu); no graph is changed (a wet glove, rain). A hold says "MENU: HOLD PAGE OR TAP THE CLOCK"; swipes still turn pages
+and the keys do everything. STOP FOLLOWING, STOP WORKOUT and BACK TO START over a followed course ask first (START: YES,
+BACK: NO); the question goes with its banner, so a later Start does not answer it. TOUCH in SETTINGS > DISPLAY (ON / OFF) switches gestures off
 altogether, for rain: the keys only, the call's buttons included; the touch lock (Back and Lap held together 1 s) is the
 quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent one.
 
@@ -491,6 +493,7 @@ MENU
      |             BIKES > ACTIVE BIKE, BIKE 1 to 3 > ODO, a part > SERVICE, RESET
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >,
                    SCREENSHOT
+ +- PHONE >        the phone link (also in SENSORS)
  +- PLACES >       SAVE PLACE, then the favourite places (distance and bearing from here) -> ALTITUDE (typed), DELETE
 ```
 
@@ -525,14 +528,17 @@ MENU
    +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
    +- WORKOUT >        while a step runs: NEXT STEP (makes a lap, through `step_lap`, as the Lap key does), STOP WORKOUT (the ride goes on)
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on), REVERSE COURSE
+   +- COURSES >        pick or switch a course (not on a virtual ride, which picks through WORKOUTS > RIDE A COURSE)
+   +- WORKOUTS >       the planned workouts, RAMP TEST, RIDE A COURSE
+   +- SENSORS >        the same menu as off the ride
+   +- BRIGHTNESS       changed in place
    +- BACK TO START    once the ride has a track: the ride's own breadcrumb followed back as a course (replaces the one followed)
    +- TRAINER CONTROL  with a trainer paired: its screen (mode, target)
+   +- POWER CURVE      with a power meter paired
    +- INDOOR ON / OFF  the ride's profile by hand, for this ride
-   +- BRIGHTNESS       changed in place
-   +- SENSORS >        the same menu as off the ride
    +- EDIT THIS PAGE > paused only: the page editor on the page (the overview: its fields; the course page has none)
    +- SAVE PLACE       stopped only: here, as a favourite place (written once the ride is saved)
-   +- ALL SETTINGS >   the full menu above
+   +- MAIN MENU >      the home menu above
   ```
   An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when
   that page is gone, as the course page once the course stops). A row that goes while its menu shows (WORKOUT when
@@ -888,6 +894,7 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
   LAP KM, AUTO PAUSE km/h), the trainer screen and the stats and storage figures of SETTINGS. Feet are 4 or 5 digits where metres were 3 or 4: the
   value takes a smaller size past the box's width, as every long value does.
   ![Imperial units](img/imperial-units.png)
+- **AUTO PAUSED / RESUMED:** when auto-pause stops the timer, or ends, and it holds for 3 s in a row, a banner says so with the pause or start tone (a stop-and-go flicker and a pause by hand say nothing; under a lap summary or an alarm it waits, silent).
 - **SOUND** (DISPLAY, ON): OFF drops every tone the app plays (alerts, course and workout tones, the start and pause beeps) and cuts
   the one sounding. The alerts' banners still show. It also silences the heart rate alarm, the off-course alarm and the low battery tone: only
   the banner shows. The power-on and power-off melodies stay (they play before the settings are read and after the screen is off). There is no key click: this unit's keys have no beep today, so a key click was not added.

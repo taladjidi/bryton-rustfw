@@ -124,8 +124,8 @@ fn workout_from_the_calendar() {
     assert_eq!(row(&app, Menu::Steps, 0), "0:20 100-120W");
     assert_eq!(row(&app, Menu::Steps, 5), "LAP OPEN");
     assert_eq!(row(&app, Menu::Steps, 6), "");
-    for _ in 0..4 {
-        app.press(&mut sim, Press::Short(Key::Back)); // WORKOUTS, ALL SETTINGS, the ride menu, out
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back)); // WORKOUTS, the ride menu, out
     }
     assert_eq!(app.screen(), Screen::Ride(0));
     for _ in 0..3 {

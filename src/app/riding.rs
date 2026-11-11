@@ -651,7 +651,7 @@ impl App {
 
     /// AUTO PAUSED / RESUMED, said when the ride has been auto-paused (or moving again) for [`AUTO_SAY_S`] seconds in
     /// a row, so a stop-and-go flicker says nothing; a manual pause or no ride says nothing and resets it.
-    fn auto_pause_notice(&mut self) {
+    pub(crate) fn auto_pause_notice(&mut self) {
         let (said, n) = self.rec.auto_said;
         if self.ride.state() != ride::State::Running {
             self.rec.auto_said = (false, 0);
@@ -661,8 +661,12 @@ impl App {
             self.rec.auto_said = (said, n + 1);
         } else {
             self.rec.auto_said = (!said, 0);
-            self.tones.play(if said { &BEEP_START } else { &BEEP_PAUSE });
-            self.say(if said { "RESUMED" } else { "AUTO PAUSED" });
+            let text = if said { "RESUMED" } else { "AUTO PAUSED" };
+            self.say_as(text, Banner::Auto);
+            // the tone only with its text: a banner waiting behind a summary or an alarm is silent
+            if self.notes.text.as_str() == text && self.notes.kind == Banner::Auto {
+                self.tones.play(if said { &BEEP_START } else { &BEEP_PAUSE });
+            }
         }
     }
 

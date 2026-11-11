@@ -1174,7 +1174,7 @@ fn ftp_row_is_refused_in_a_ride() {
     super::menu_tests::to_row(&mut sim, &mut app, crate::menu::Row::Set(crate::menu::Setting::Ftp));
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Short(Key::Page)); // a step if the row were being edited
-    assert_eq!((app.settings.ftp, app.notes.text.as_str()), (ftp, "NOT DURING A RIDE"));
+    assert_eq!((app.settings.ftp, app.notes.text.as_str()), (ftp, "NOT DURING A RIDE\nTRY AFTER THE RIDE"));
 }
 
 /// An FTP the ramp test found during the ride is held until the ride is over, then set: the result is not lost.
@@ -1197,4 +1197,54 @@ fn a_held_ramp_ftp_is_set_when_the_ride_is_over() {
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.ride.state(), ride::State::Idle);
     assert_eq!((app.settings.ftp, app.ramp.held), (255, None), "set once the ride is over");
+}
+
+/// AUTO PAUSED / RESUMED: said once after 3 s in a row, never for a stop under 3 s, never repeated while it holds,
+/// nothing extra for a pause by hand; the timer is the ride's own (the debounce does not move it).
+#[test]
+fn auto_pause_banners_are_debounced_and_said_once() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 8000);
+    // the banner texts seen, second by second, while a stretch runs: (AUTO PAUSED, RESUMED) counts of new banners
+    let mut said = (0, 0);
+    let step = |sim: &mut Sim, app: &mut App, said: &mut (u32, u32), fix: i32, s: u32| {
+        sim.gnss.fix = Some(fix);
+        for _ in 0..s {
+            let before = app.rec.auto_said;
+            run(sim, app, 1000);
+            if before.0 != app.rec.auto_said.0 {
+                match app.notes.text.as_str() {
+                    "AUTO PAUSED" => said.0 += 1,
+                    "RESUMED" => said.1 += 1,
+                    t => panic!("a flip said {t}"),
+                }
+            }
+        }
+    };
+    step(&mut sim, &mut app, &mut said, 0, 2); // a stop under 3 s
+    step(&mut sim, &mut app, &mut said, 8000, 6);
+    assert_eq!((said, app.rec.auto_said.0), ((0, 0), false), "a short stop says nothing");
+    let timer = app.ride.timer_s();
+    step(&mut sim, &mut app, &mut said, 0, 12); // a long stop: one banner
+    assert_eq!((said, app.rec.auto_said.0), ((1, 0), true), "AUTO PAUSED once, not repeated");
+    assert!(app.ride.timer_s() <= timer + 4, "the timer stopped with the stop, not with the banner");
+    let stopped = app.ride.timer_s();
+    step(&mut sim, &mut app, &mut said, 0, 5);
+    assert_eq!(app.ride.timer_s(), stopped, "the timer stays stopped");
+    step(&mut sim, &mut app, &mut said, 8000, 12);
+    assert_eq!((said, app.rec.auto_said.0), ((1, 1), false), "RESUMED once");
+    // a pause by hand and its resume: nothing from the auto-pause
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Paused);
+    step(&mut sim, &mut app, &mut said, 0, 8);
+    app.press(&mut sim, Press::Short(Key::Start));
+    step(&mut sim, &mut app, &mut said, 8000, 8);
+    assert_eq!(said, (1, 1), "nothing extra");
 }

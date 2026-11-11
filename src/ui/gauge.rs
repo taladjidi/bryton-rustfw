@@ -181,3 +181,23 @@ pub fn draw_gauge_marker(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: Opt
         draw_gauge_columns(c, bar, &g, m.saturating_sub(MARK_W / 2 + 1), m + MARK_W / 2 + 1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pacer's title ("TOP 6:15") and target ("317W"): 2x white in a box that holds both, else 1x white centred in
+    /// the row; white is the theme's text colour, readable on the background in both themes.
+    #[test]
+    fn the_title_is_2x_when_it_fits_and_1x_centred_when_not() {
+        let (wide, dy) = gauge_title_style(240, "TOP 6:15", "317W");
+        assert_eq!((wide.scale, wide.fg, dy), (LABEL.scale, WHITE, 4));
+        let (narrow, dy) = gauge_title_style(120, "TOP 6:15", "317W");
+        assert_eq!((narrow.scale, narrow.fg), (1, WHITE));
+        assert_eq!(dy, 4 + (LABEL.height() - narrow.height()) / 2, "centred in the title row");
+        assert_eq!(gauge_title_style(120, "TOP", "").0.fg, GREY, "no tag: the plain title");
+        for t in [crate::ui::Theme::DARK, crate::ui::Theme::LIGHT] {
+            assert_ne!(t.ink(WHITE), t.ink(BLACK), "the title reads on the background");
+        }
+    }
+}

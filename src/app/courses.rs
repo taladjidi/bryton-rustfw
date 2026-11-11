@@ -76,10 +76,10 @@ impl App {
     /// shows ([`App::step_courses`]).
     #[inline(never)]
     pub(crate) fn open_courses(&mut self, b: &mut impl Board) {
-        let Some(c) = self.courses.as_deref_mut() else { return self.say("NO COURSE") };
+        let Some(c) = self.courses.as_deref_mut() else { return self.say("NO COURSE\nSEND ONE FROM APP") };
         c.ride_it = false;
         if c.open(&mut emmc::Volume(&mut self.emmc, b)).is_err() || c.list.is_empty() {
-            self.say("NO COURSE");
+            self.say("NO COURSE\nSEND ONE FROM APP");
         }
         self.open(Screen::Menu(Menu::Courses, 0));
     }
@@ -125,7 +125,7 @@ impl App {
     /// RIDE A COURSE (WORKOUTS): lists the courses; the one picked is ridden on the trainer ([`App::begin_virtual`]).
     pub(crate) fn pick_course(&mut self, b: &mut impl Board) {
         if !self.trainer_heard() {
-            return self.say("NEEDS TRAINER");
+            return self.say("NEEDS TRAINER\nPAIR ONE: SENSORS");
         }
         if self.workout_running() {
             return self.say("WORKOUT RUNNING");

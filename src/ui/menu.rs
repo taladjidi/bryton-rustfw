@@ -613,7 +613,7 @@ impl Row {
     pub fn label(self) -> Option<&'static str> {
         use RideRow as R;
         Some(match self {
-            Row::Open(Menu::Main) => "ALL SETTINGS",
+            Row::Open(Menu::Main) => "MAIN MENU",
             Row::Open(Menu::Page(crate::OVERVIEW)) => "OVERVIEW",
             Row::Open(Menu::Page(crate::QUICK)) => "QUICK FIELDS",
             Row::Open(Menu::Page(_)) => return None,
@@ -875,13 +875,14 @@ pub const FITNESS: [StockRow; 20] = {
 };
 
 /// The main menu (off a ride): what to ride (workouts, courses, segments), what was ridden, then the set-up; seven rows, the list scrolls.
-pub const MAIN: [Row; 8] = [
+pub const MAIN: [Row; 9] = [
     Row::Open(Menu::Workouts),
     Row::Open(Menu::Courses),
     Row::Open(Menu::Segments),
     Row::Open(Menu::History),
     Row::Open(Menu::Pages),
     Row::Open(Menu::Sensors),
+    Row::Open(Menu::Phone),
     Row::Open(Menu::Settings),
     Row::Open(Menu::Places),
 ];

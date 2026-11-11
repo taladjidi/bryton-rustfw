@@ -171,7 +171,7 @@ impl Alert {
     ];
 
     /// Whether this one is an alarm (red): the heart rate over its limit. The other limits are orange, red being for
-    /// alarms only.
+    /// alarms only (shown as Banner::Warn).
     pub fn alarm(self) -> bool {
         self == Alert::HrHigh
     }

@@ -126,7 +126,7 @@ pub struct LinkInfo {
     /// See `bytes`.
     pub sent: u32,
     /// See `bytes`. Confirmations the unit saw: an event the pass drops while a command waits is not counted, so this
-    /// can fall short of `sent` (the simulator: 433 of 488).
+    /// can fall short of `sent` (the simulator: 433 of 488), and exceed it by one END per window.
     pub hvn: u32,
     /// See `bytes`. Frames the stack refused because its queue was full (the chip is the limit, not the unit's loop);
     /// 0 with a slow READ means the queue ran empty, so the unit's pacing or the UART is the limit.

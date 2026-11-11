@@ -17,7 +17,7 @@ impl App {
         let why = match () {
             _ if self.emmc.lent() => "USB DRIVE ON",
             _ if !self.card_writable => "CARD READ ONLY",
-            _ if !self.ride_settled() => "NOT DURING A RIDE",
+            _ if !self.ride_settled() => "NOT DURING A RIDE\nTRY AFTER THE RIDE",
             _ => {
                 self.leave_menus();
                 self.shot_due = true;

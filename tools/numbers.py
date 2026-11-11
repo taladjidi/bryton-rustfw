@@ -16,6 +16,8 @@ A marker is `<!-- n:NAME -->TEXT<!-- /n -->`; only TEXT changes, the text around
                the host tests of `cargo test-host` (unit and simulator tests, ignored ones included in `tests`),
                the ignored ones, and the doc tests, listed by libtest (no test is run here)
   rust_lines   lines of src/**/*.rs
+  taps         the weighted total of actions over the rider's tasks, from target/sim/taps.txt (written by
+               src/sim/task_tests.rs in `cargo test-host`; a task in a ride weighs 2)
 KB is 1000 bytes, as the README has always counted it. Build first: `cargo build --release` (the ELF), then the
 tests are listed from the same test profile as `cargo test-host`, so nothing is rebuilt for another profile.
 Standard library only: the ELF's symbol table is read here, so no nm is needed on a clean machine.
@@ -65,7 +67,7 @@ def fmt_lines(n):
 
 FORMAT = {'image': fmt_bytes, 'axi_free': fmt_bytes, 'app': fmt_bytes, 'courses': fmt_bytes,
           'ahead': fmt_bytes, 'scan_cache': fmt_bytes, 'tests': fmt_count, 'tests_ignored': fmt_count,
-          'doctests': fmt_count, 'rust_lines': fmt_lines}
+          'doctests': fmt_count, 'rust_lines': fmt_lines, 'taps': fmt_count}
 
 
 def elf_symbols(path):
@@ -118,7 +120,30 @@ def values():
     v['doctests'] = len(cargo_list('--doc', '--', '--list'))
     v['rust_lines'] = sum(sum(1 for _ in open(f, encoding='utf-8')) for f in
                           glob.glob(os.path.join(ROOT, 'src', '**', '*.rs'), recursive=True))
+    taps = taps_total()
+    if taps is None:
+        print('numbers.py: no target/sim/taps.txt, taps skipped', file=sys.stderr)
+    else:
+        v['taps'] = taps
     return v
+
+
+def taps_total():
+    '''Sum of actions x weight over target/sim/taps.txt ("task | actions | budget | weight" lines); None when the
+    file is not there (cargo test-host not run yet), like the other optional values.'''
+    path = os.path.join(ROOT, 'target', 'sim', 'taps.txt')
+    if not os.path.exists(path):
+        return None
+    total = 0
+    for n, ln in enumerate(open(path, encoding='utf-8'), 1):
+        if not ln.strip() or ln.startswith('#'):
+            continue
+        try:
+            r = ln.split(' | ')
+            total += int(r[1]) * int(r[3])
+        except (IndexError, ValueError):
+            sys.exit(f'numbers.py: {path} line {n} is not "task | actions | budget | weight": {ln.strip()!r}')
+    return total
 
 
 def texts(vals):

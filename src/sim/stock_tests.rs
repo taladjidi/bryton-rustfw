@@ -618,12 +618,12 @@ fn delete_rides() {
     let ev = app.ride.start_pause();
     app.recorder(ev);
     app.press(&mut sim, Press::Long(Key::Start));
-    assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE");
+    assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE\nTRY AFTER THE RIDE");
     assert_eq!(app.screen(), Screen::Past);
     app.ride = crate::ride::Ride::default();
     app.rec.resume_pending = true;
     app.press(&mut sim, Press::Long(Key::Start));
-    assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE", "a ride waiting");
+    assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE\nTRY AFTER THE RIDE", "a ride waiting");
     assert!(file(&sim.emmc.image, "Activities/261001070000.fit").is_some());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }

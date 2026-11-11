@@ -246,7 +246,7 @@ impl App {
     /// power curve without it at once; back to the list. Never while a ride runs or waits to be saved or resumed.
     pub(crate) fn delete_past(&mut self, b: &mut impl Board) {
         if !self.ride_settled() {
-            return self.notice("NOT DURING A RIDE");
+            return self.notice("NOT DURING A RIDE\nTRY AFTER THE RIDE");
         }
         if !self.card_writable || self.emmc.lent() {
             return self.notice("CARD BUSY");
