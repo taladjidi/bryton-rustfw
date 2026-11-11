@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (`SETTINGS_LEN` now, with BATTERY SAVER at 172, STEEP DESCENT at 171, GNSS SYSTEMS at 170, LEVEL STEP and SLOPE SCALE at 168, 169, MAP at 167, TIME ZONE and SUMMER TIME at 165, 166, CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 158 and its six fields at 159..164, the Di2 teeth at 156 and 157, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (`SETTINGS_LEN` now, with MAP AT TURN at 173, BATTERY SAVER at 172, STEEP DESCENT at 171, GNSS SYSTEMS at 170, LEVEL STEP and SLOPE SCALE at 168, 169, MAP at 167, TIME ZONE and SUMMER TIME at 165, 166, CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 158 and its six fields at 159..164, the Di2 teeth at 156 and 157, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -1350,6 +1350,26 @@ mod day_night_file_tests {
         wild[28 + 170] = 9;
         recrc(&mut wild);
         assert_eq!(read(&wild), Some(0), "a byte out of range");
+    }
+
+    /// MAP AT TURN (byte 173, after BATTERY SAVER): kept; an older file (173 bytes) reads everything else and MAP AT
+    /// TURN on, and so does a byte out of range.
+    #[test]
+    fn map_at_turn_round_trip_and_older_files_read_on() {
+        let d = Settings::from_word(0);
+        let s = Settings { map_turn: false, saver: SaverMode::Auto, ..d };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(sec[28 + 173], 0);
+        let read = |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| c.settings);
+        assert_eq!(read(&sec), Some(s));
+        let mut old = sec;
+        old[6..8].copy_from_slice(&173u16.to_le_bytes());
+        recrc(&mut old);
+        assert_eq!(read(&old), Some(Settings { map_turn: true, ..s }), "a 173-byte file");
+        let mut wild = sec;
+        wild[28 + 173] = 9;
+        recrc(&mut wild);
+        assert_eq!(read(&wild), Some(Settings { map_turn: true, ..s }), "a byte out of range");
     }
 
     /// BATTERY SAVER (byte 172, after STEEP DESCENT): kept; an older file (172 bytes), or a byte out of range, reads OFF.

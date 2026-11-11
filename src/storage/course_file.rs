@@ -193,6 +193,14 @@ impl List {
         }
     }
 
+    /// Course `i` as not measured (a test: a length still to read when the list opens again).
+    #[cfg(test)]
+    pub fn unmeasure(&mut self, i: usize) {
+        if let Some(e) = self.e.get_mut(i) {
+            e.measured = false;
+        }
+    }
+
     /// The first course whose length is not known yet.
     fn unmeasured(&self) -> Option<usize> {
         self.e.get(..self.len)?.iter().position(|e| !e.measured)

@@ -1833,6 +1833,24 @@ fn courses_sorted_by_the_way_to_their_start() {
     let sub = app.course_sub(0, "5.0 KM");
     assert!(sub.as_str().ends_with(" AWAY") && sub.as_str().starts_with("5.0 KM "), "{}", sub.as_str());
     assert!(sub.as_str().len() <= 16, "{}", sub.as_str());
+    // a start 300 m away reads in km with a decimal, not in metres
+    let start = app.courses.as_deref().unwrap().list.get(0).unwrap().start().unwrap();
+    app.courses.as_deref_mut().unwrap().from = Some((start.0 + 27_000, start.1));
+    let near = app.course_sub(0, "5.0 KM");
+    assert_eq!(near.as_str(), "5.0 KM 0.3 AWAY");
+    app.courses.as_deref_mut().unwrap().from = Some(from);
+    // opened again with a length still to measure: the sort waits, and every length stays with its own file
+    let lens: Vec<_> = (0..c_len(&app)).map(|i| entry(&app, i)).collect();
+    app.courses.as_deref_mut().unwrap().list.unmeasure(0);
+    app.press(&mut sim, Press::Short(Key::Back));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1500);
+    let mut after: Vec<_> = (0..c_len(&app)).map(|i| entry(&app, i)).collect();
+    let mut before = lens;
+    before.sort();
+    after.sort();
+    assert_eq!(before, after, "each length with its own file");
     assert_consistent(&sim, &app);
     sim.save("courses_by_distance");
 
@@ -1903,4 +1921,13 @@ fn map_at_turn_comes_and_goes() {
             assert_consistent(&sim, &app);
         }
     }
+}
+
+fn c_len(app: &App) -> usize {
+    app.courses.as_deref().unwrap().list.len()
+}
+
+fn entry(app: &App, i: usize) -> (std::string::String, bool, Option<u32>) {
+    let e = app.courses.as_deref().unwrap().list.get(i).unwrap();
+    (std::format!("{}{}", e.name(), e.gpx), e.measured, e.dist_m)
 }
