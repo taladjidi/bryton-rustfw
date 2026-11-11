@@ -207,22 +207,24 @@ impl Fat {
     }
 
     /// Counts the free clusters (FAT entries of 0) from cluster `*next` on, at most `sectors` FAT sectors a call: the
-    /// count so far is `*free`, and `*next` starts at 2. True once all are counted. Reads the first FAT copy only.
+    /// count so far is `*free`, and `*next` starts at 2. True once all are counted. Reads the first FAT copy only,
+    /// eight sectors a command (`FREE_RUN`, as the free cluster search).
     pub fn count_free(&self, d: &mut impl Disk, next: &mut u32, free: &mut u32, sectors: u32) -> Result<bool, Error> {
         let (per, end) = (SECTOR_U32 / 4, self.clusters + 2);
-        for _ in 0..sectors {
-            if *next >= end {
-                break;
-            }
-            let mut s = [0u8; SECTOR];
-            self.read(d, self.fat_start + *next / per, &mut s)?;
-            let stop = (*next / per + 1).saturating_mul(per).min(end);
+        let mut buf = [0u8; write::FREE_RUN as usize * SECTOR];
+        let mut left = sectors;
+        while left > 0 && *next < end {
+            let first = *next / per;
+            let n = ((end - 1) / per - first + 1).min(write::FREE_RUN).min(left);
+            let run = buf.get_mut(..n as usize * SECTOR).ok_or(Error::Corrupt)?;
+            self.read(d, self.fat_start + first, run)?;
+            let stop = (first + n).saturating_mul(per).min(end);
             for c in *next..stop {
-                if u32_at(&s, (c % per) as usize * 4) & 0x0fff_ffff == 0 {
+                if u32_at(run, ((c - first * per) * 4) as usize) & 0x0fff_ffff == 0 {
                     *free += 1;
                 }
             }
-            *next = stop;
+            (*next, left) = (stop, left - n);
         }
         Ok(*next >= end)
     }

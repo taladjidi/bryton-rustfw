@@ -273,6 +273,86 @@ fn damaged_copies() {
     assert_eq!(file(&sim3).map(|c| c.settings.ftp), Some(300), "written again");
 }
 
+/// A settings file there that this build cannot use (both copies damaged, a copy of another version, another size) is
+/// never written over: "SETTINGS DAMAGED" said, the file renamed settings.bad whole, then the registers' settings
+/// written as a new settings.bin. One left all zeros (the recorder's `make_kept`) is no file: no notice, no
+/// settings.bad. A start that may not write the card leaves the file as it is.
+#[test]
+fn an_unusable_settings_file_is_set_aside_not_overwritten() {
+    let c = SettingsCopy { seq: 4, words: some().register_words(), settings: Settings { ftp: 222, ..some() } };
+    let sector = c.to_sector();
+    let mut flipped = [sector, sector].concat();
+    (flipped[40], flipped[512 + 40]) = (flipped[40] ^ 1, flipped[512 + 40] ^ 1);
+    let mut v2 = sector;
+    crate::copies::seal(&mut v2, b"RSET", 2, crate::storage::bytes::le16(&sector, 6).unwrap(), 4);
+    let v2 = [v2, [0; 512]].concat();
+    let long: Vec<u8> = [sector, sector].concat().into_iter().chain([7; 476]).collect();
+    let zeros = std::vec![0u8; 1024];
+    for (name, bytes) in [("flipped", &flipped), ("version 2", &v2), ("1500 bytes", &long), ("zeros", &zeros)] {
+        for writable in [true, false] {
+            let mut d = Ram(crate::fat::tests::image(), 0);
+            crate::fat::tests::put_file(&mut d, crate::recorder::DIR, crate::SETTINGS_FILE, bytes);
+            let mut sim = Sim::new(9, 0, 0);
+            sim.emmc.image = d.0;
+            set_registers(&mut sim, some());
+            let mut app = App::start(&mut sim, None);
+            app.card_writable = writable;
+            run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+            if writable {
+                settle(&mut sim, &mut app);
+            }
+            let said = app.notes.list.iter().any(|n| n.as_str().ends_with("SETTINGS DAMAGED"));
+            let mut d = Ram(sim.emmc.image.clone(), 0);
+            let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+            let bad = read_all(&mut fat, &mut d, "Rustfw/settings.bad").ok();
+            let bin = read_all(&mut fat, &mut d, "Rustfw/settings.bin").ok();
+            assert_eq!(said, name != "zeros", "{name}, writable {writable}: the notice");
+            assert_eq!(app.settings.ftp, some().ftp, "{name}, writable {writable}: the registers' settings");
+            if name == "zeros" || !writable {
+                assert!(bad.is_none(), "{name}, writable {writable}: nothing set aside");
+            } else {
+                assert_eq!(bad.as_ref(), Some(bytes), "{name}: set aside whole");
+            }
+            if writable {
+                assert_eq!(file(&sim).map(|c| c.settings.ftp), Some(some().ftp), "{name}: the registers' copy");
+            } else {
+                assert_eq!(bin.as_ref(), Some(bytes), "{name}, read only: the file as it was");
+            }
+            assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "{name}, writable {writable}");
+        }
+    }
+}
+
+/// The three set-aside names taken already: the unusable file stays as it is and nothing is written over it (never an
+/// older one replaced), "SETTINGS DAMAGED" said; the registers' settings in use.
+#[test]
+fn with_every_set_aside_name_taken_the_file_stays() {
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    for (k, name) in crate::SETTINGS_BAD.iter().enumerate() {
+        crate::fat::tests::put_file(&mut d, crate::recorder::DIR, name, &[k as u8 + 1; 1024]);
+    }
+    let bytes = [0x5au8; 1024];
+    crate::fat::tests::put_file(&mut d, crate::recorder::DIR, crate::SETTINGS_FILE, &bytes);
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = d.0;
+    set_registers(&mut sim, some());
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+    for _ in 0..20 {
+        run(&mut sim, &mut app, 200);
+    }
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("SETTINGS DAMAGED")));
+    assert_eq!(app.settings.ftp, some().ftp);
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    assert_eq!(read_all(&mut fat, &mut d, "Rustfw/settings.bin"), Ok(bytes.to_vec()), "left as it was");
+    for (k, name) in crate::SETTINGS_BAD.iter().enumerate() {
+        let v = read_all(&mut fat, &mut d, &std::format!("Rustfw/{name}")).unwrap();
+        assert!(v == [k as u8 + 1; 1024], "{name} kept");
+    }
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
 /// A power cut after every sector of a write of the settings: the first (the file created, the migration) and later
 /// ones (a copy over the older). The next start, with the registers as the change left them, has the new settings;
 /// with them lost, the file's old or new, never the defaults once a copy was whole; the volume stays clean for fsck.

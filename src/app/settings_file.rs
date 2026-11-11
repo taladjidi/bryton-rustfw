@@ -37,8 +37,11 @@
 //! A read that fails for any reason but "no file" is tried again: it never counts as no file, which would write a
 //! first copy beside a newer one.
 //!
-//! No file (the first start of a build with it), or no whole copy: the registers' settings are written as its first
-//! copy, once (the migration). A build that may not write the card reads the file but never writes it.
+//! No file (the first start of a build with it, or one left empty or all zeros: a cut while it was made, the recorder's
+//! `make_kept`): the registers' settings are written as its first copy, once (the migration). A file there with no
+//! copy this build reads (both damaged, another size, another build's version) is never written over: "SETTINGS
+//! DAMAGED" is said, it is renamed `settings.bad` (or `.bad.2`, `.bad.3`: never one replaced) when the settings may
+//! next be written, then the migration; with all three there, it stays and nothing is written. A build that may not write the card reads the file but never writes it.
 
 use crate::copies::{self, CRC_AT};
 use crate::text::Face;
@@ -47,6 +50,9 @@ use menu::Setting;
 
 /// The file's name, in this firmware's folder ([`crate::recorder::DIR`]).
 pub const SETTINGS_FILE: &str = "settings.bin";
+/// Where a settings file this build cannot read is set aside (module doc), the first name free; with all three
+/// taken it is left where it is and nothing is written (the phone app's `.fit.bad` rule).
+pub const SETTINGS_BAD: [&str; 3] = ["settings.bad", "settings.bad.2", "settings.bad.3"];
 
 const MAGIC: &[u8; 4] = b"RSET";
 const VERSION: u16 = 1;
@@ -399,6 +405,8 @@ pub(crate) struct SettingsStore {
     pub(crate) import_pending: bool,
     /// Its tries that the card did not answer ([`IMPORT_TRIES`]).
     pub(crate) import_tries: u8,
+    /// The file is there with no copy this build reads: set aside ([`SETTINGS_BAD`]) before the first write.
+    pub(crate) damaged: bool,
 }
 
 impl SettingsStore {
@@ -536,6 +544,7 @@ impl App {
             && self.gps.ms >= st.retry_ms
             && !self.bikes_due()
             && self.fats_ready(b, CopyFile::Settings)
+            && (!st.damaged || self.set_aside_settings(b))
         {
             self.save_settings(b);
         }
@@ -586,6 +595,27 @@ impl App {
             return;
         };
         let Some(c) = whole.then(|| SettingsCopy::newest(&file)).flatten() else {
+            // there, not empty and not all zeros, and no copy read: kept, set aside before the migration writes
+            let damaged = if whole {
+                file.iter().any(|&x| x != 0)
+            } else {
+                match self.copies_size(b, SETTINGS_FILE) {
+                    Ok(n) => n > 0,
+                    Err(fat::Error::NotFound) => false,
+                    Err(e) => {
+                        // not known: read again later, as a failed read ([`copies::Copies::read`])
+                        let st = &mut self.settings_store.file;
+                        (st.loaded, st.dirty) = (false, false);
+                        let _ = st.read(Err(e), false, false);
+                        return;
+                    }
+                }
+            };
+            if damaged {
+                self.notice("SETTINGS DAMAGED");
+            }
+            let st = &mut self.settings_store;
+            st.damaged = damaged;
             st.file.dirty = self.card_writable; // the migration: the registers' settings as the first copy
             if self.card_writable && self.settings.register_words() != regs {
                 self.write_settings_registers(b); // an earlier build's words: this build's, as the copy has them
@@ -631,6 +661,31 @@ impl App {
                 self.font_changed(b);
             }
         }
+    }
+
+    /// The file no copy of which this build reads renamed [`SETTINGS_BAD`] (module doc): true once done, else said and
+    /// tried again a minute later.
+    fn set_aside_settings(&mut self, b: &mut impl Board) -> bool {
+        let t = fat::write::dos_time(self.rec_time().0);
+        let mut d = emmc::Volume(&mut self.emmc, b);
+        let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
+            let dir = fat.open(&mut d, recorder::DIR)?;
+            fat.set_aside(&mut d, dir, SETTINGS_FILE, &SETTINGS_BAD, t)
+        });
+        if r == Ok(true) {
+            self.settings_store.damaged = false;
+            return true;
+        }
+        if r == Ok(false) {
+            // every name taken: the file stays, nothing written until a person clears one
+            self.settings_store.file.dirty = false;
+            self.notice("SETTINGS DAMAGED");
+            return false;
+        }
+        self.fats_unsure();
+        self.notice("SETTINGS NOT SAVED");
+        self.settings_store.retry_ms = self.gps.ms.saturating_add(60_000);
+        false
     }
 
     /// Writes the settings over the file's older copy (the file created with both if needed).

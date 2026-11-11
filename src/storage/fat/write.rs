@@ -72,7 +72,7 @@ use super::{
 /// End of chain, as written.
 const EOC: u32 = 0x0fff_ffff;
 /// FAT sectors a free cluster search reads per command (4 KB on the stack).
-const FREE_RUN: u32 = 8;
+pub(crate) const FREE_RUN: u32 = 8;
 /// Directory entries in a sector.
 const ENTRIES: usize = SECTOR / 32;
 /// Directory attribute.
@@ -220,16 +220,18 @@ impl Fat {
     /// Sets FAT entries in order, each FAT sector written to every FAT copy before the next sector is touched.
     fn set_entries(&mut self, d: &mut impl DiskWrite, changes: &[(u32, u32)]) -> Result<(), Error> {
         let mut dirty = false;
+        let mut loaded = None;
         for &(c, v) in changes {
             if !self.valid(c) {
                 return Err(Error::Corrupt);
             }
             let lba = self.fat_start + c / (SECTOR_U32 / 4);
-            if self.cached != Some(lba) {
+            if loaded != Some(lba) {
                 if dirty {
                     self.flush_fat(d)?;
                 }
-                self.entry(d, c)?; // loads the sector
+                self.load_to_change(d, c)?;
+                loaded = Some(lba);
             }
             let at = (c as usize % (SECTOR / 4)) * 4;
             let keep = u32_at(&self.sector, at) & 0xf000_0000; // the top 4 bits are reserved: kept
@@ -239,6 +241,22 @@ impl Fat {
             dirty = true;
         }
         if dirty { self.flush_fat(d) } else { Ok(()) }
+    }
+
+    /// The FAT sector of `cluster` loaded to be changed and written to every copy: the first FAT's, mended from the
+    /// second's when it is not sane ([`Fat::mend`]: a cut tore it while it was written, a card without reliable write,
+    /// and nothing since made the copies equal): written as it is, it would replace the good copy.
+    fn load_to_change(&mut self, d: &mut impl DiskWrite, cluster: u32) -> Result<(), Error> {
+        self.entry(d, cluster)?; // loads the first FAT's sector
+        let Some(lba) = self.cached.filter(|_| self.fats > 1) else { return Ok(()) };
+        let mut other = [0u8; SECTOR];
+        self.read(d, lba + self.fat_size, &mut other)?;
+        let first = (lba - self.fat_start) * (SECTOR_U32 / 4);
+        let mut s = self.sector;
+        if self.mend(first, &mut s, &other) {
+            self.sector = s;
+        }
+        Ok(())
     }
 
     fn flush_fat(&mut self, d: &mut impl DiskWrite) -> Result<(), Error> {
@@ -255,7 +273,9 @@ impl Fat {
 
     /// A free cluster from `from` on (wrapping), the volume's clusters at most, the FAT read [`FREE_RUN`] sectors a
     /// command (the eMMC's multi-block read): on a nearly full volume one per sector was thousands of commands.
-    /// Reads the first FAT, as [`Fat::entry`] does; its cached sector is never dirty here (`set_entries` flushes).
+    /// Reads the first FAT, as [`Fat::entry`] does; its cached sector is never dirty here (`set_entries` flushes). A
+    /// free entry in a sector that is not sane is not taken: a cut tore it, and the other copy may have the cluster
+    /// in use.
     fn find_free(&self, d: &mut impl Disk, from: u32) -> Result<u32, Error> {
         let per = SECTOR_U32 / 4;
         let end = self.clusters + 2; // clusters 2..end
@@ -270,7 +290,10 @@ impl Fat {
             let stop = ((first + n) * per).min(end);
             while c < stop && left > 0 {
                 if u32_at(run, ((c - first * per) * 4) as usize) & 0x0fff_ffff == 0 {
-                    return Ok(c);
+                    let at = ((c / per - first) * SECTOR_U32) as usize;
+                    if self.sane(c / per * per, run.get(at..at + SECTOR).ok_or(Error::Corrupt)?) {
+                        return Ok(c);
+                    }
                 }
                 (c, left) = (c + 1, left - 1);
             }
@@ -324,13 +347,15 @@ impl Fat {
     }
 
     /// [`Fat::free_clusters`]; when FSInfo's count is unknown (0xffffffff, as a formatter may leave it) the FAT is
-    /// counted once ([`Fat::sync_fats`], which writes it). None only without an FSInfo: no room can be promised.
+    /// counted once ([`Fat::sync_fats`], which writes it). None without an FSInfo, or with one torn elsewhere than
+    /// sector 1 (never made again there): no room can be promised.
     pub fn free_clusters_counted(&mut self, d: &mut impl DiskWrite) -> Result<Option<u32>, Error> {
         if let Some(n) = self.free_clusters(d)? {
             return Ok(Some(n));
         }
-        if self.fsinfo == 0 {
-            return Ok(None); // no FSInfo sector: a count would have nowhere to go, and would be read again each time
+        if self.fsinfo != 1 && self.fsinfo_read(d)?.is_none() {
+            // a count would have nowhere to go, and the whole FAT would be read again at each call
+            return Ok(None);
         }
         self.sync_fats(d)?;
         self.free_clusters(d)
@@ -920,6 +945,52 @@ impl Fat {
         Ok(())
     }
 
+    /// File `name` in `dir` renamed the first of `bad` not taken, its chain untouched (a file this firmware will not
+    /// read, kept for a person to look at): linked to its chain first, then `name` removed, so a cut leaves the file
+    /// under one name or two, never under none; a call after a cut between finds the name on the same chain (its size
+    /// made `name`'s) and only removes `name`. Never an older one removed or freed: with every name of `bad` taken,
+    /// false and nothing written. True when done, or when `name` is not there. Only for a file nothing writes while it
+    /// waits for this: two names on one chain last until the next call. On a card without reliable write a cut that
+    /// tears the directory sector inside one of its writes may garble the entries beside it there (in `\Rustfw`:
+    /// ride.rec's), as any write of that folder's entries may; this unit's card has it (emmc.rs, "Reliable write").
+    pub fn set_aside(
+        &mut self,
+        d: &mut impl DiskWrite,
+        dir: File,
+        name: &str,
+        bad: &[&str],
+        time: (u16, u16),
+    ) -> Result<bool, Error> {
+        let h = match self.locate(d, dir, name) {
+            Err(Error::NotFound) => return Ok(true),
+            other => other?,
+        };
+        if h.first != 0 {
+            let (mut linked, mut free) = (None, None);
+            for &b in bad {
+                match self.locate(d, dir, b) {
+                    Ok(o) if o.first == h.first => {
+                        linked = Some(o); // linked before a cut
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(Error::NotFound) => free = free.or(Some(b)),
+                    Err(e) => return Err(e),
+                }
+            }
+            match (linked, free) {
+                (Some(mut o), _) if o.size != h.size => self.set_size(d, &mut o, h.size, time)?,
+                (Some(_), _) => {}
+                (None, Some(b)) => {
+                    self.link(d, dir, b, &h, time)?;
+                }
+                (None, None) => return Ok(false),
+            }
+        }
+        self.remove(d, &h)?;
+        Ok(true)
+    }
+
     /// Makes the entry of `name` that [`Fat::remove`] marked deleted in `dir` (on the chain from `first`, `size`
     /// bytes) live again, taking no cluster: the first bytes written back, the long name's ordinals and the 8.3
     /// entry's first character, which the long name's checksum fixes (each of the 256 values gives another sum). The
@@ -1116,19 +1187,42 @@ impl Fat {
     /// sector torn by a cut mid-write (garbage, which a card without reliable write may leave: emmc.rs) almost
     /// never is: one entry in 2^28 values is a cluster of a 470 k cluster volume, and 128 entries a sector.
     fn sane(&self, first: u32, s: &[u8]) -> bool {
-        s.as_chunks::<4>().0.iter().zip(0u32..).all(|(e, i)| {
-            let (c, v) = (first + i, u32::from_le_bytes(*e) & 0x0fff_ffff);
-            !self.valid(c) || v == 0 || self.valid(v) || v >= 0x0fff_fff7
-        })
+        s.as_chunks::<4>().0.iter().zip(0u32..).all(|(e, i)| self.entry_sane(first + i, e))
+    }
+
+    /// Whether FAT entry `e` of cluster `c` holds what a FAT holds ([`Fat::sane`]'s rule for one entry).
+    fn entry_sane(&self, c: u32, e: &[u8; 4]) -> bool {
+        let v = u32::from_le_bytes(*e) & 0x0fff_ffff;
+        !self.valid(c) || v == 0 || self.valid(v) || v >= 0x0fff_fff7
+    }
+
+    /// The first FAT's sector `one` (its first entry cluster `first`'s) mended from the other copy's `other` when it
+    /// is not sane (a cut tore it): entry by entry, `other`'s where `one`'s is not sane or is free (a torn entry may
+    /// read 0, and the cluster be in use: a free taken back costs a lost cluster at most, a use dropped a cross-link),
+    /// `one`'s elsewhere, so an allocation it holds that a later cut kept out of `other` is not undone. A sane sector
+    /// is left as it is (`other` one write behind). True if anything changed.
+    fn mend(&self, first: u32, one: &mut [u8], other: &[u8]) -> bool {
+        if self.sane(first, one) {
+            return false;
+        }
+        let mut changed = false;
+        for ((x, y), i) in one.as_chunks_mut::<4>().0.iter_mut().zip(other.as_chunks::<4>().0).zip(0u32..) {
+            let free = u32::from_le_bytes(*x) & 0x0fff_ffff == 0;
+            if *x != *y && (free || !self.entry_sane(first + i, x)) && self.entry_sane(first + i, y) {
+                *x = *y;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Makes every FAT copy equal to the first (only the sectors that differ are written), and FSInfo's free count
-    /// the true one: after a cut (module doc). A sector of the first FAT that is not sane (`Fat::sane`) where the
-    /// second's is (the cut tore it) takes the second's instead. Reads the whole FAT: about 15 MB on the unit's
-    /// volume, so only when a cut may have happened. The free clusters.
+    /// the true one: after a cut (module doc). A sector of the first FAT that is not sane (`Fat::sane`: the cut tore
+    /// it) is mended from the second's first (`Fat::mend`, as a write's does). Reads the whole FAT: about 15 MB on
+    /// the unit's volume, so only when a cut may have happened. The free clusters.
     pub fn sync_fats(&mut self, d: &mut impl DiskWrite) -> Result<u32, Error> {
         let (mut sector, mut free) = (0, 0u32);
-        while sector < self.fat_size {
+        while sector < self.fat_sectors() {
             let (next, n) = self.sync_fats_from(d, sector, u32::MAX)?;
             (sector, free) = (next, free + n);
         }
@@ -1137,9 +1231,10 @@ impl Fat {
         Ok(free)
     }
 
-    /// Sectors in one FAT copy.
+    /// Sectors of one FAT copy that hold the volume's clusters: the boot sector's FAT size may be far larger (an odd
+    /// or hostile volume), and a sync bounded by it would read, and may write, the whole card in one call.
     pub fn fat_sectors(&self) -> u32 {
-        self.fat_size
+        (self.clusters + 2).div_ceil(SECTOR_U32 / 4).min(self.fat_size)
     }
 
     /// [`Fat::sync_fats`]'s copy for the FAT sectors from `sector` on, `max` of them at most, so it can be spread
@@ -1151,7 +1246,7 @@ impl Fat {
         let mut other = [0u8; RUN as usize * SECTOR];
         let mut free = 0u32;
         let mut sector = sector;
-        let end = sector.saturating_add(max).min(self.fat_size);
+        let end = sector.saturating_add(max).min(self.fat_sectors());
         while sector < end {
             let k = RUN.min(end - sector);
             let len = k as usize * SECTOR;
@@ -1165,12 +1260,12 @@ impl Fat {
                         continue;
                     }
                     let first = (sector + j) * (SECTOR_U32 / 4);
-                    if !self.sane(first, x) && self.sane(first, y) {
-                        // the first FAT's sector torn by a cut while it was written: the copy is the one before it
-                        self.write(d, self.fat_start + sector + j, y)?;
-                        x.copy_from_slice(y);
+                    if self.mend(first, x, y) {
+                        // the first FAT's sector torn by a cut while it was written: its torn entries the copy's
+                        self.write(d, self.fat_start + sector + j, x)?;
                         self.cached = None;
-                    } else {
+                    }
+                    if x != y {
                         self.write(d, lba + j, x)?;
                     }
                 }
@@ -2696,8 +2791,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// FAT changes in one sector: the sector read once and written once to each FAT copy (not once a change: more
-    /// writes, more sectors a cut can tear), both entries in it, the top 4 bits of each kept (fatgen103), nothing
+    /// FAT changes in one sector: the sector read once a FAT copy (the second to check the first is not torn) and
+    /// written once to each (not once a change: more writes, more sectors a cut can tear), both entries in it, the top 4 bits of each kept (fatgen103), nothing
     /// else in the FAT changed.
     #[test]
     fn set_entries_writes_a_fat_sector_once() {
@@ -2713,13 +2808,141 @@ pub(crate) mod tests {
         fat.entry(&mut d, 5).unwrap(); // another FAT sector cached
         d.0.1 = 0;
         fat.set_entries(&mut d, &[(a, EOC), (b, 0x0123_4567)]).unwrap();
-        assert_eq!((d.0.1, d.1), (1, fat.fats), "one read, one write a FAT copy");
+        assert_eq!((d.0.1, d.1), (fat.fats, fat.fats), "one read, one write a FAT copy");
         let img = &d.0.0;
         for f in 0..fat.fats {
             assert_eq!((u32_at(img, at(f, a)), u32_at(img, at(f, b))), (EOC, 0xa123_4567), "FAT {f}");
         }
         let changed: Vec<usize> = (0..img.len()).filter(|&i| img[i] != before[i]).map(|i| i / 4 * 4).collect();
         assert!(changed.iter().all(|&i| [at(0, a), at(0, b), at(1, a), at(1, b)].contains(&i)), "{changed:?}");
+    }
+
+    /// Two cuts and no sync between (the review of 2026-11-11, F1): the first left an allocation in the first FAT's
+    /// sector only (mid.bin's cluster, its entry written: the second FAT one write behind), the second tore that
+    /// sector (garbage in some entries, and other.bin's entry read as free). Then:
+    /// - a free cluster search takes none of that sector (its free entry may be in use in the other copy);
+    /// - the next write that changes an entry there (before.bin grown), or a sync, mends it entry by entry from the
+    ///   second FAT: the garbage and the free read entry the second's, mid.bin's allocation the first's (taking the
+    ///   second's whole sector would undo it).
+    ///
+    /// Both copies end equal and sane, every file whole.
+    #[test]
+    fn a_torn_first_fat_sector_is_mended_not_copied_over_the_second() {
+        use super::super::tests::{put_file, read_all};
+        let per = SECTOR_U32 / 4;
+        for grow in [true, false] {
+            let mut d = Ram(image(), 0);
+            put_file(&mut d, "Own", "before.bin", &[3; 40_000]);
+            put_file(&mut d, "Own", "other.bin", &[6; 512]);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let dir = fat.open(&mut d, "Own").unwrap();
+            let first = fat.locate(&mut d, dir, "before.bin").unwrap().first;
+            let other = fat.locate(&mut d, dir, "other.bin").unwrap().first;
+            let lba = (fat.fat_start + first / per) as usize;
+            let second = lba + fat.fat_size as usize;
+            let behind = d.0[second * SECTOR..][..SECTOR].to_vec();
+            put_file(&mut d, "Own", "mid.bin", &[8; 512]);
+            fat.forget();
+            let mid = fat.locate(&mut d, dir, "mid.bin").unwrap().first;
+            assert!(
+                [first, other, mid].iter().all(|&c| c / per == first / per && c % per < 120),
+                "one sector: {first} {other} {mid}"
+            );
+            d.0[second * SECTOR..][..SECTOR].copy_from_slice(&behind); // the first cut: the second FAT behind
+            for k in 120..per as usize {
+                d.0[lba * SECTOR + 4 * k..][..4].copy_from_slice(&0x0abc_dea0u32.to_le_bytes()); // out of the volume
+            }
+            let at = lba * SECTOR + (other % per) as usize * 4;
+            d.0[at..at + 4].fill(0); // the second cut: other.bin's entry torn to free
+            let mut fat = Fat::mount(&mut d).unwrap();
+            if grow {
+                let mut h = fat.locate(&mut d, dir, "before.bin").unwrap();
+                let at = h.clusters * fat.spc;
+                fat.write_sectors(&mut d, &mut h, at, &[3; SECTOR]).unwrap();
+                assert!(h.last / per != first / per, "the new cluster outside the torn sector");
+                fat.set_size(&mut d, &mut h, (at + 1) * SECTOR_U32, T).unwrap();
+            } else {
+                fat.sync_fats(&mut d).unwrap();
+            }
+            let (one, two) = (&d.0[lba * SECTOR..][..SECTOR], &d.0[second * SECTOR..][..SECTOR]);
+            assert_eq!(one, two, "grow {grow}: the copies equal");
+            assert!(fat.sane(first / per * per, two), "grow {grow}: sane");
+            assert_eq!(fsck(&d.0), Ok(0), "grow {grow}");
+            assert_eq!(read_all(&mut fat, &mut d, "Own/other.bin"), Ok(std::vec![6; 512]), "grow {grow}");
+            assert_eq!(read_all(&mut fat, &mut d, "Own/mid.bin"), Ok(std::vec![8; 512]), "grow {grow}");
+            let before = read_all(&mut fat, &mut d, "Own/before.bin").unwrap();
+            assert!(before[..40_000].iter().all(|&b| b == 3), "grow {grow}");
+        }
+    }
+
+    /// A free cluster search does not take a free entry of a FAT sector that is not sane (F1's review): with every
+    /// other sector full, the card is full.
+    #[test]
+    fn find_free_skips_a_torn_sector() {
+        let mut d = Ram(image(), 0);
+        let fat = Fat::mount(&mut d).unwrap();
+        let per = SECTOR_U32 / 4;
+        let c = fat.find_free(&mut d, 2).unwrap();
+        let lba = (fat.fat_start + c / per) as usize * SECTOR;
+        let at = lba + 4 * (c % per + 1) as usize;
+        d.0[at..at + 4].copy_from_slice(&0x0abc_dea0u32.to_le_bytes()); // the sector torn: garbage after `c`
+        assert!(fat.find_free(&mut d, 2).unwrap() / per != c / per, "a cluster of the torn sector taken");
+    }
+
+    /// `sync_fats` reads the FAT sectors that hold the volume's clusters, not the boot sector's FAT size: a volume
+    /// that says its FATs are half the card (an odd or hostile one) costs no more than an honest one (F3).
+    #[test]
+    fn sync_fats_is_bounded_by_the_clusters() {
+        let mut d = Ram(image(), 0);
+        let fat = Fat::mount(&mut d).unwrap();
+        let honest = fat.fat_sectors();
+        let reserved = u32::from(u16::from_le_bytes([d.0[14], d.0[15]]));
+        let total = u32::from_le_bytes(d.0[32..36].try_into().unwrap());
+        let huge = (total - reserved - 8 * u32::from(d.0[13])) / 2; // room for the root and a few clusters left
+        d.0[36..40].copy_from_slice(&huge.to_le_bytes());
+        let mut fat = Fat::mount(&mut d).unwrap();
+        assert!(fat.fat_sectors() <= fat.clusters() / 128 + 1 && fat.fat_sectors() <= honest.max(1), "bounded");
+        d.1 = 0;
+        fat.sync_fats(&mut d).unwrap();
+        let reads = d.1;
+        assert!(reads <= 2 * (fat.clusters() / 128 + 1) + 4, "{reads} reads");
+    }
+
+    /// An FSInfo whose signatures are gone where no formatter puts it (not sector 1, never written again there): the
+    /// free count is unknown at once, without reading the whole FAT at every call (the recorder's full copy, a
+    /// screenshot and a workout ask at each write); at sector 1 it is counted once and written back.
+    #[test]
+    fn a_torn_fsinfo_elsewhere_than_sector_1_is_not_counted_at_every_call() {
+        let mut d = Ram(image(), 0);
+        d.0[48..50].copy_from_slice(&2u16.to_le_bytes()); // FSInfo at sector 2, which holds no signatures
+        let mut fat = Fat::mount(&mut d).unwrap();
+        d.1 = 0;
+        assert_eq!(fat.free_clusters_counted(&mut d), Ok(None));
+        assert!(d.1 <= 2, "{} reads", d.1);
+        let mut d = Ram(image(), 0);
+        d.0[SECTOR..SECTOR + 4].fill(0); // sector 1's signature torn
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let n = fat.free_clusters_counted(&mut d).unwrap();
+        assert!(n.is_some(), "counted");
+        d.1 = 0;
+        assert_eq!(fat.free_clusters_counted(&mut d).unwrap(), n);
+        assert!(d.1 <= 2, "written back: {} reads", d.1);
+    }
+
+    /// The free count reads the FAT eight sectors a command, as the free cluster search (F4), whatever the slice
+    /// asked for, and counts the same as one sector at a time.
+    #[test]
+    fn count_free_reads_runs() {
+        let mut d = Ram(image(), 0);
+        let fat = Fat::mount(&mut d).unwrap();
+        d.1 = 0;
+        let (mut next, mut free) = (2, 0);
+        assert!(fat.count_free(&mut d, &mut next, &mut free, u32::MAX).unwrap());
+        assert!(d.1 <= fat.fat_sectors() / FREE_RUN + 1, "{} reads", d.1);
+        let (mut next, mut by3) = (2, 0);
+        while !fat.count_free(&mut d, &mut next, &mut by3, 3).unwrap() {}
+        assert_eq!(by3, free);
+        assert_eq!(Some(free), fat.free_clusters(&mut d).unwrap(), "FSInfo's count");
     }
 
     /// The long name pieces a remove marks stop at the first that is not one of its own: another entry (even one
@@ -2803,5 +3026,78 @@ pub(crate) mod tests {
         let (e, n) = dir_entries("abcdefghijklmn", short, ARCHIVE, 7, 0, T);
         assert_eq!((n, e[0][0], e[1][0]), (3, 0x42, 0x01));
         assert_eq!((unit(&e[0], 0), unit(&e[0], 1), unit(&e[0], 2)), (u16::from(b'n'), 0, 0xffff));
+    }
+
+    /// [`Fat::set_aside`] cut after every sector it writes, then called again (the next start's try), with none, one
+    /// or two of the names taken: the file ends under the first free name whole, `name` gone, the older ones
+    /// untouched (never freed), both FATs equal, no cluster lost. A call after it writes nothing; with all three
+    /// names taken the first call writes nothing and says so.
+    #[test]
+    fn set_aside_cut_at_every_sector() {
+        use super::super::tests::{put_file, read_all};
+        const BAD: [&str; 3] = ["settings.bad", "settings.bad.2", "settings.bad.3"];
+        let data: Vec<u8> = (0..40_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        for older in [0, 1, 2, 3] {
+            let mut d = Ram(image(), 0);
+            for (k, b) in BAD.iter().take(older).enumerate() {
+                put_file(&mut d, "Own", b, &[k as u8 + 1; 20_000]);
+            }
+            put_file(&mut d, "Own", "settings.bin", &data);
+            let base = d.0.clone();
+            let dir = Fat::mount(&mut d).unwrap().open(&mut d, "Own").unwrap();
+            if older == BAD.len() {
+                assert_eq!(Fat::mount(&mut d).unwrap().set_aside(&mut d, dir, "settings.bin", &BAD, T), Ok(false));
+                assert!(d.0 == base, "all three taken: nothing written");
+                continue;
+            }
+            let mut total = 0;
+            for cut in 0.. {
+                let mut c = Cut(Ram(base.clone(), 0), cut);
+                let mut fat = Fat::mount(&mut c).unwrap();
+                let done = fat.set_aside(&mut c, dir, "settings.bin", &BAD, T).is_ok();
+                let mut d = c.0;
+                if !done {
+                    let mut fat = Fat::mount(&mut d).unwrap();
+                    fat.sync_fats(&mut d).unwrap(); // the app's after a failed write (editor.rs `fats_unsure`)
+                    assert_eq!(fat.set_aside(&mut d, dir, "settings.bin", &BAD, T), Ok(true), "cut {cut}");
+                }
+                let mut fat = Fat::mount(&mut d).unwrap();
+                let path = std::format!("Own/{}", BAD[older]);
+                assert_eq!(read_all(&mut fat, &mut d, &path).as_deref(), Ok(&data[..]), "{older} cut {cut}");
+                for (k, b) in BAD.iter().take(older).enumerate() {
+                    let v = read_all(&mut fat, &mut d, &std::format!("Own/{b}")).unwrap();
+                    assert!(v == [k as u8 + 1; 20_000], "{older} cut {cut}: {b} kept");
+                }
+                assert_eq!(fat.locate(&mut d, dir, "settings.bin").err(), Some(Error::NotFound), "cut {cut}");
+                assert_eq!(fsck(&d.0), Ok(0), "{older} cut {cut}");
+                let again = d.0.clone();
+                assert_eq!(fat.set_aside(&mut d, dir, "settings.bin", &BAD, T), Ok(true));
+                assert!(d.0 == again, "{older} cut {cut}: a second call writes nothing");
+                if done {
+                    total = cut;
+                    break;
+                }
+            }
+            assert!(total >= 2, "{total} sectors");
+        }
+    }
+
+    /// A cut between the link and the remove that left the new name's size other than the file's (a torn entry):
+    /// the next call makes it the file's before the old name goes, so fsck finds no size against its chain.
+    #[test]
+    fn set_aside_after_a_cut_gives_the_new_name_the_files_size() {
+        use super::super::tests::{put_file, read_all};
+        let data = [5u8; 40_000];
+        let mut d = Ram(image(), 0);
+        put_file(&mut d, "Own", "settings.bin", &data);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Own").unwrap();
+        let h = fat.locate(&mut d, dir, "settings.bin").unwrap();
+        let o = fat.link(&mut d, dir, "settings.bad", &h, T).unwrap();
+        let at = o.entry_lba as usize * SECTOR + usize::from(o.slot) * 32 + 28;
+        d.0[at..at + 4].copy_from_slice(&100_000u32.to_le_bytes()); // past the chain
+        assert_eq!(fat.set_aside(&mut d, dir, "settings.bin", &["settings.bad"], T), Ok(true));
+        assert_eq!(read_all(&mut fat, &mut d, "Own/settings.bad"), Ok(data.to_vec()));
+        assert_eq!(fsck(&d.0), Ok(0));
     }
 }
